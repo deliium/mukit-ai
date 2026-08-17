@@ -1,0 +1,17 @@
+# Python 3.14-compatible backend dependencies
+
+# Web Framework
+fastapi==0.141.1
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12
+
+# Music Processing
+music21==10.1.0
+
+# Utilities
+python-dotenv==1.0.1
+aiofiles==24.1.0
+pydantic==2.13.4
+
+# Additional utilities
+python-json-logger==2.0.7
