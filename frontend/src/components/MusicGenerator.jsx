@@ -1,6 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import styled from 'styled-components';
-import axios from 'axios';
+import { generateLlmMusicJson } from '../api/musicApi.js';
+import NotationViewer from './NotationViewer.jsx';
+import PlaybackControls from './PlaybackControls.jsx';
+import PromptJsonEditor from './PromptJsonEditor.jsx';
+import { useMusicStore } from '../store/musicStore.js';
 
 const Container = styled.div`
   h2 {
@@ -43,6 +47,23 @@ const Select = styled.select`
   border-radius: 8px;
   font-size: 1rem;
   background: white;
+  transition: border-color 0.3s ease;
+
+  &:focus {
+    outline: none;
+    border-color: #667eea;
+  }
+`;
+
+const TextArea = styled.textarea`
+  width: 100%;
+  min-height: 90px;
+  padding: 12px;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-family: inherit;
+  resize: vertical;
   transition: border-color 0.3s ease;
 
   &:focus {
@@ -110,23 +131,6 @@ const GeneratedMusic = styled.div`
   border: 1px solid #e0e7ff;
 `;
 
-const DownloadButton = styled.a`
-  display: inline-block;
-  background: #10b981;
-  color: white;
-  text-decoration: none;
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-weight: 500;
-  margin-top: 10px;
-  transition: all 0.3s ease;
-
-  &:hover {
-    background: #059669;
-    transform: translateY(-1px);
-  }
-`;
-
 const ParameterGrid = styled.div`
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -137,172 +141,188 @@ const ParameterGrid = styled.div`
   }
 `;
 
-const MusicGenerator = ({ modelLoaded }) => {
-  const [length, setLength] = useState(100);
-  const [temperature, setTemperature] = useState(0.8);
-  const [seedNotes, setSeedNotes] = useState('');
-  const [format, setFormat] = useState('midi');
-  const [generating, setGenerating] = useState(false);
-  const [message, setMessage] = useState('');
-  const [generatedFile, setGeneratedFile] = useState(null);
+const MusicGenerator = () => {
+  const availableLlmModels = useMusicStore((state) => state.availableLlmModels);
+  const selectedProvider = useMusicStore((state) => state.selectedProvider);
+  const selectedModel = useMusicStore((state) => state.selectedModel);
+  const prompt = useMusicStore((state) => state.prompt);
+  const generatedMusicJson = useMusicStore((state) => state.generatedMusicJson);
+  const generationStatus = useMusicStore((state) => state.generationStatus);
+  const uiError = useMusicStore((state) => state.uiError);
+  const warnings = useMusicStore((state) => state.warnings);
+  const setSelectedLlmModel = useMusicStore((state) => state.setSelectedLlmModel);
+  const updatePrompt = useMusicStore((state) => state.updatePrompt);
+  const startGeneration = useMusicStore((state) => state.startGeneration);
+  const completeGeneration = useMusicStore((state) => state.completeGeneration);
+  const failGeneration = useMusicStore((state) => state.failGeneration);
 
-  const handleGenerate = async () => {
-    if (!modelLoaded) {
-      setMessage({
-        type: 'error',
-        text: 'Model not loaded. Please train the model first.'
-      });
+  const handleGenerateLlmJson = async () => {
+    if (!availableLlmModels.length) {
+      failGeneration('No LLM providers configured. Set OPENAI_API_KEY or DEEPSEEK_API_KEY on the backend.');
       return;
     }
 
-    setGenerating(true);
-    setMessage('');
+    startGeneration();
+    const requestData = buildLlmRequest(prompt, selectedProvider, selectedModel);
+    console.debug('[MusicGenerator] LLM generation requested', {
+      provider: selectedProvider,
+      model: selectedModel,
+      genre: prompt.genre,
+      mood: prompt.mood,
+    });
 
     try {
-      const requestData = {
-        length: parseInt(length),
-        temperature: parseFloat(temperature),
-        format: format
-      };
-
-      // Parse seed notes if provided
-      if (seedNotes.trim()) {
-        const notes = seedNotes.split(',').map(note => {
-          const trimmed = note.trim();
-          return trimmed ? parseInt(trimmed) : null;
-        }).filter(note => note !== null && note >= 0 && note <= 127);
-        
-        if (notes.length > 0) {
-          requestData.seed_notes = notes;
-        }
-      }
-
-      const response = await axios.post('/generate-music', requestData);
-      
-      setMessage({
-        type: 'success',
-        text: 'Music generated successfully!'
-      });
-      
-      setGeneratedFile({
-        filename: response.data.filename,
-        downloadUrl: `/download/${response.data.filename}`
+      const response = await generateLlmMusicJson(requestData);
+      completeGeneration({
+        music: response.music,
+        musicxml: response.musicxml,
+        warnings: response.warnings,
       });
     } catch (error) {
-      setMessage({
-        type: 'error',
-        text: `Generation failed: ${error.response?.data?.detail || error.message}`
-      });
-    } finally {
-      setGenerating(false);
+      failGeneration(error.message);
     }
   };
 
   return (
     <Container>
-      <h2>🎹 Generate Music</h2>
-      
-      <ParameterGrid>
+      <h2>LLM JSON Composer</h2>
+        {!availableLlmModels.length && (
+          <StatusMessage className="info">
+            Configure OPENAI_API_KEY or DEEPSEEK_API_KEY on the backend to enable LLM generation.
+          </StatusMessage>
+        )}
+
+        {availableLlmModels.length > 0 && (
+          <FormGroup>
+            <Label htmlFor="llmModel">Provider / Model</Label>
+            <Select
+              id="llmModel"
+              value={`${selectedProvider}:${selectedModel}`}
+              onChange={(event) => {
+                const [provider, model] = event.target.value.split(':');
+                setSelectedLlmModel(provider, model);
+              }}
+            >
+              {availableLlmModels.map((model) => (
+                <option key={`${model.provider}:${model.model}`} value={`${model.provider}:${model.model}`}>
+                  {model.display_name || `${model.provider} (${model.model})`}
+                </option>
+              ))}
+            </Select>
+          </FormGroup>
+        )}
+
+        <ParameterGrid>
+          <FormGroup>
+            <Label htmlFor="genre">Genre</Label>
+            <Input id="genre" value={prompt.genre} onChange={(event) => updatePrompt('genre', event.target.value)} />
+          </FormGroup>
+          <FormGroup>
+            <Label htmlFor="mood">Mood</Label>
+            <Input id="mood" value={prompt.mood} onChange={(event) => updatePrompt('mood', event.target.value)} />
+          </FormGroup>
+          <FormGroup>
+            <Label htmlFor="key">Key</Label>
+            <Input id="key" value={prompt.key} onChange={(event) => updatePrompt('key', event.target.value)} placeholder="C minor" />
+          </FormGroup>
+          <FormGroup>
+            <Label htmlFor="timeSignature">Time Signature</Label>
+            <Input id="timeSignature" value={prompt.time_signature} onChange={(event) => updatePrompt('time_signature', event.target.value)} />
+          </FormGroup>
+          <FormGroup>
+            <Label htmlFor="tempoMin">Tempo Min</Label>
+            <Input id="tempoMin" type="number" min="40" max="240" value={prompt.tempo_min} onChange={(event) => updatePrompt('tempo_min', event.target.value)} />
+          </FormGroup>
+          <FormGroup>
+            <Label htmlFor="tempoMax">Tempo Max</Label>
+            <Input id="tempoMax" type="number" min="40" max="240" value={prompt.tempo_max} onChange={(event) => updatePrompt('tempo_max', event.target.value)} />
+          </FormGroup>
+        </ParameterGrid>
+
         <FormGroup>
-          <Label htmlFor="length">Length (notes)</Label>
-          <Input
-            id="length"
-            type="number"
-            min="10"
-            max="500"
-            value={length}
-            onChange={(e) => setLength(e.target.value)}
-            placeholder="Number of notes to generate"
-          />
+          <Label htmlFor="instruments">Instruments / Tracks</Label>
+          <Input id="instruments" value={prompt.instruments} onChange={(event) => updatePrompt('instruments', event.target.value)} placeholder="piano,bass,strings" />
         </FormGroup>
 
         <FormGroup>
-          <Label htmlFor="temperature">Creativity Level</Label>
-          <Select
-            id="temperature"
-            value={temperature}
-            onChange={(e) => setTemperature(e.target.value)}
-          >
-            <option value="0.1">Conservative (0.1)</option>
-            <option value="0.3">Low (0.3)</option>
-            <option value="0.5">Medium (0.5)</option>
-            <option value="0.8">High (0.8)</option>
-            <option value="1.0">Very High (1.0)</option>
-            <option value="1.5">Extreme (1.5)</option>
-          </Select>
+          <Label htmlFor="sections">Sections / Bars</Label>
+          <Input id="sections" value={prompt.sections} onChange={(event) => updatePrompt('sections', event.target.value)} placeholder="intro:4,verse:8,chorus:8" />
         </FormGroup>
-      </ParameterGrid>
 
-      <FormGroup>
-        <Label htmlFor="format">Output Format</Label>
-        <Select
-          id="format"
-          value={format}
-          onChange={(e) => setFormat(e.target.value)}
-        >
-          <option value="midi">MIDI (.mid) - For DAWs and music software</option>
-          <option value="musicxml">MusicXML (.xml) - For MuseScore and sheet music editors</option>
-        </Select>
-        <small style={{ color: '#6b7280', fontSize: '0.8rem' }}>
-          {format === 'musicxml' 
-            ? '🎼 Perfect for viewing and editing in MuseScore! Shows actual sheet music notation.'
-            : '🎵 Standard MIDI format for use in digital audio workstations and music software.'
-          }
-        </small>
-      </FormGroup>
+        <ParameterGrid>
+          <FormGroup>
+            <Label htmlFor="complexity">Complexity</Label>
+            <Select id="complexity" value={prompt.complexity} onChange={(event) => updatePrompt('complexity', event.target.value)}>
+              <option value="simple">Simple</option>
+              <option value="moderate">Moderate</option>
+              <option value="complex">Complex</option>
+            </Select>
+          </FormGroup>
+          <FormGroup>
+            <Label htmlFor="durationBars">Duration Bars</Label>
+            <Input id="durationBars" type="number" min="1" max="512" value={prompt.duration_bars} onChange={(event) => updatePrompt('duration_bars', event.target.value)} />
+          </FormGroup>
+        </ParameterGrid>
 
-      <FormGroup>
-        <Label htmlFor="seedNotes">Seed Notes (optional)</Label>
-        <Input
-          id="seedNotes"
-          type="text"
-          value={seedNotes}
-          onChange={(e) => setSeedNotes(e.target.value)}
-          placeholder="e.g., 60, 64, 67 (MIDI note numbers, comma-separated)"
-        />
-        <small style={{ color: '#6b7280', fontSize: '0.8rem' }}>
-          MIDI note numbers (0-127). Leave empty for random generation.
-        </small>
-      </FormGroup>
+        <FormGroup>
+          <Label htmlFor="instructions">Freeform Instructions</Label>
+          <TextArea id="instructions" value={prompt.instructions} onChange={(event) => updatePrompt('instructions', event.target.value)} placeholder="Add arrangement, texture, or reference notes" />
+        </FormGroup>
 
-      {message && (
-        <StatusMessage className={message.type}>
-          {message.text}
-        </StatusMessage>
-      )}
+        {uiError && <StatusMessage className="error">{uiError}</StatusMessage>}
+        {warnings.map((warning) => (
+          <StatusMessage key={warning} className="info">{warning}</StatusMessage>
+        ))}
 
-      <Button 
-        onClick={handleGenerate} 
-        disabled={generating || !modelLoaded}
-      >
-        {generating ? 'Generating Music...' : 'Generate Music'}
-      </Button>
+        <Button onClick={handleGenerateLlmJson} disabled={generationStatus === 'loading' || !availableLlmModels.length}>
+          {generationStatus === 'loading' ? 'Generating JSON...' : 'Generate LLM Music JSON'}
+        </Button>
 
-      {generatedFile && (
-        <GeneratedMusic>
-          <h4>🎵 Generated Music</h4>
-          <p>Your music has been generated successfully!</p>
-          <DownloadButton 
-            href={generatedFile.downloadUrl}
-            download={generatedFile.filename}
-          >
-            📥 Download {format === 'musicxml' ? 'MusicXML File' : 'MIDI File'}
-          </DownloadButton>
-          {format === 'musicxml' && (
-            <p style={{ fontSize: '0.9rem', color: '#6b7280', marginTop: '10px' }}>
-              💡 <strong>Tip:</strong> Open this file in MuseScore to view and edit the sheet music notation!
-            </p>
-          )}
-        </GeneratedMusic>
-      )}
-
-      {!modelLoaded && (
-        <StatusMessage className="info">
-          <strong>Note:</strong> Please train the model first before generating music.
-        </StatusMessage>
-      )}
+        {generatedMusicJson && (
+          <GeneratedMusic>
+            <h4>Generated Music JSON</h4>
+            <PromptJsonEditor />
+            <NotationViewer />
+            <PlaybackControls />
+          </GeneratedMusic>
+        )}
     </Container>
   );
 };
+
+function buildLlmRequest(prompt, selectedProvider, selectedModel) {
+  return {
+    selection: {
+      provider: selectedProvider || null,
+      model: selectedModel || null,
+    },
+    options: {
+      max_retries: 1,
+    },
+    prompt: {
+      genre: prompt.genre,
+      mood: prompt.mood,
+      key: prompt.key || null,
+      time_signature: prompt.time_signature,
+      tempo_min: Number(prompt.tempo_min),
+      tempo_max: Number(prompt.tempo_max),
+      instruments: prompt.instruments.split(',').map((instrument) => instrument.trim()).filter(Boolean),
+      sections: parseSections(prompt.sections),
+      complexity: prompt.complexity,
+      duration_bars: Number(prompt.duration_bars),
+      instructions: prompt.instructions || null,
+    },
+  };
+}
+
+function parseSections(value) {
+  return value
+    .split(',')
+    .map((section) => {
+      const [type, bars] = section.split(':').map((part) => part.trim());
+      return type && bars ? { type, bars: Number(bars) } : null;
+    })
+    .filter(Boolean);
+}
 
 export default MusicGenerator;

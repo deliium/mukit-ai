@@ -8,6 +8,12 @@ python-multipart==0.0.12
 # Music Processing
 music21==10.1.0
 
+# LLM Music Generation
+langchain>=0.3.27
+langgraph>=0.6.0
+langchain-openai>=0.3.28
+openai>=1.99.0
+
 # Utilities
 python-dotenv==1.0.1
 aiofiles==24.1.0
@@ -15,3 +21,7 @@ pydantic==2.13.4
 
 # Additional utilities
 python-json-logger==2.0.7
+
+# Testing
+pytest>=8.3.0
+httpx>=0.28.0

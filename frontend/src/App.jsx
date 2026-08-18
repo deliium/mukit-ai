@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import styled from 'styled-components';
-import axios from 'axios';
 import MusicGenerator from './components/MusicGenerator.jsx';
-import TrainingDataUploader from './components/TrainingDataUploader.jsx';
 import Header from './components/Header.jsx';
+import { getHealth, getLlmModels } from './api/musicApi.js';
+import { useMusicStore } from './store/musicStore.js';
 
 const AppContainer = styled.div`
   min-height: 100vh;
@@ -14,14 +14,6 @@ const AppContainer = styled.div`
 const MainContent = styled.div`
   max-width: 1200px;
   margin: 0 auto;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 30px;
-  
-  @media (max-width: 768px) {
-    grid-template-columns: 1fr;
-    gap: 20px;
-  }
 `;
 
 const Card = styled.div`
@@ -65,28 +57,33 @@ const StatusDot = styled.div`
 `;
 
 function App() {
-  const [apiStatus, setApiStatus] = useState('checking');
-  const [modelLoaded, setModelLoaded] = useState(false);
+  const apiStatus = useMusicStore((state) => state.apiStatus);
+  const setApiStatus = useMusicStore((state) => state.setApiStatus);
+  const setAvailableLlmModels = useMusicStore((state) => state.setAvailableLlmModels);
+  const setUiError = useMusicStore((state) => state.setUiError);
 
-  useEffect(() => {
-    checkApiStatus();
-  }, []);
-
-  const checkApiStatus = async () => {
+  const checkApiStatus = useCallback(async () => {
     try {
-      const response = await axios.get('/health');
+      await getHealth();
       setApiStatus('healthy');
-      setModelLoaded(response.data.model_loaded);
+
+      const modelResponse = await getLlmModels();
+      setAvailableLlmModels(modelResponse.models, {
+        defaultProvider: modelResponse.default_provider,
+        defaultModel: modelResponse.default_model,
+      });
+      console.debug('[App] Startup health/model discovery completed');
     } catch (error) {
       setApiStatus('error');
-      console.error('API health check failed:', error);
+      setUiError(error.message);
+      console.error('[App] Health/model discovery failed', { message: error.message });
     }
-  };
+  }, [setApiStatus, setAvailableLlmModels, setUiError]);
 
-  const handleModelTrained = () => {
-    setModelLoaded(true);
+  useEffect(() => {
+    console.debug('[App] Startup health/model discovery started');
     checkApiStatus();
-  };
+  }, [checkApiStatus]);
 
   return (
     <AppContainer>
@@ -100,18 +97,14 @@ function App() {
         </StatusIndicator>
         {apiStatus === 'healthy' && (
           <p style={{ marginTop: '10px', color: '#666' }}>
-            Model Status: {modelLoaded ? 'Loaded and Ready' : 'Not Loaded - Please train the model'}
+            LLM model discovery is available through the configured backend providers.
           </p>
         )}
       </StatusCard>
 
       <MainContent>
         <Card>
-          <TrainingDataUploader onModelTrained={handleModelTrained} />
-        </Card>
-        
-        <Card>
-          <MusicGenerator modelLoaded={modelLoaded} />
+          <MusicGenerator />
         </Card>
       </MainContent>
     </AppContainer>

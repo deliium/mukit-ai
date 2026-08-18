@@ -1,21 +1,21 @@
 # 🎵 AI Music Composer
 
-A full-stack application that composes music from MIDI training data. The system analyzes MIDI files and generates new musical compositions using a lightweight statistical note-transition model compatible with Python 3.14.
+A full-stack LLM music composer that generates structured music JSON through a LangChain/LangGraph-backed FastAPI service. The React frontend lets users choose a configured provider/model, edit the returned JSON, render notation from backend MusicXML, and preview simple chord playback in the browser.
 
 ## 🚀 Features
 
-- **AI-Powered Music Generation**: Learns note-transition patterns and generates new compositions
-- **MIDI File Processing**: Upload your own MIDI files for training or use built-in sample data
-- **Interactive Web Interface**: Beautiful React frontend with drag-and-drop file upload
-- **Customizable Parameters**: Control music length, creativity level, and starting notes
-- **Real-time Generation**: Generate and download MIDI files instantly
+- **LLM JSON Composition**: Generate structured music JSON with OpenAI or DeepSeek-compatible providers
+- **Prompt Controls**: Configure genre, mood, key, meter, tempo range, instruments, sections, complexity, duration, and freeform instructions
+- **Editable JSON Workflow**: Review and edit generated sections, tracks, harmony, tempo, key, and meter
+- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and preview chords with Tone.js
 
 ## 🏗️ Architecture
 
 - **Backend**: FastAPI with Python
 - **Frontend**: React with styled-components
-- **Music Model**: Python 3.14-compatible statistical note-transition model
-- **Music Processing**: music21 library for MIDI handling
+- **Music Processing**: music21 library for MusicXML rendering
+- **LLM Orchestration**: LangChain/LangGraph with OpenAI-compatible chat providers
+- **Frontend State**: Zustand store for API status, LLM models, generation output, notation, and playback state
 
 ## 📋 Prerequisites
 
@@ -43,7 +43,20 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Start the FastAPI server:
+4. Optional: configure LLM providers:
+```bash
+export OPENAI_API_KEY="..."
+export OPENAI_MODEL="gpt-4o-mini"
+export DEEPSEEK_API_KEY="..."
+export DEEPSEEK_MODEL="deepseek-chat"
+export DEFAULT_LLM_PROVIDER="openai"
+export LLM_REQUEST_TIMEOUT_SECONDS="60"
+export LLM_TEMPERATURE="0.7"
+```
+
+If no provider key is configured, `/llm/models` returns an empty list and LLM generation returns `503` with a clear message.
+
+5. Start the FastAPI server:
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8888
 ```
@@ -71,49 +84,58 @@ The frontend will be available at `http://localhost:3000`
 
 ## 🎼 Usage
 
-### 1. Training the Model
+### LLM JSON Composition
 
-1. **Upload Training Data**: 
-   - Drag and drop MIDI files (.mid or .midi) into the upload area
-   - Or click to select files from your computer
-   - The system will use sample data if no files are uploaded
-
-2. **Train the Model**:
-   - Click "Train Model" to start training
-   - Training typically takes 5-10 minutes depending on your hardware
-   - The model will be automatically saved after training
-
-### 2. Generating Music
-
-1. **Set Parameters**:
-   - **Length**: Number of notes to generate (10-500)
-   - **Creativity Level**: Controls randomness (0.1 = conservative, 1.5 = very creative)
-   - **Seed Notes**: Optional starting notes (MIDI numbers 0-127, comma-separated)
-
-2. **Generate**: Click "Generate Music" to create new compositions
-
-3. **Download**: Download the generated MIDI file to use in your music software
-
-## 🎹 MIDI Note Reference
-
-Common MIDI note numbers for reference:
-- C4 (Middle C): 60
-- D4: 62
-- E4: 64
-- F4: 65
-- G4: 67
-- A4: 69
-- B4: 71
-- C5: 72
+1. Configure `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or both on the backend.
+2. Start the backend and frontend.
+3. Choose the provider/model in the LLM JSON Composer panel.
+4. Set prompt parameters such as genre, mood, key, time signature, tempo range, instruments, sections, complexity, duration, and freeform instructions.
+5. Click "Generate LLM Music JSON".
+6. Edit the returned JSON in the browser. Invalid edits show a client-side validation error.
+7. Review notation rendered from backend MusicXML.
+8. Use Play/Stop to preview simple chord playback from the generated or edited JSON.
 
 ## 🔧 API Endpoints
 
 - `GET /` - API status
 - `GET /health` - Health check
-- `POST /upload-training-data` - Upload MIDI files for training
-- `POST /train-model` - Train the music composer model
-- `POST /generate-music` - Generate new music
-- `GET /download/{filename}` - Download generated MIDI files
+- `GET /llm/models` - Return configured LLM provider/model options
+- `POST /llm/generate-music-json` - Generate validated music JSON and derived MusicXML
+
+Example LLM request:
+
+```json
+{
+  "selection": { "provider": "openai", "model": "gpt-4o-mini" },
+  "options": { "max_retries": 1 },
+  "prompt": {
+    "genre": "ambient",
+    "mood": "cinematic",
+    "tempo_min": 80,
+    "tempo_max": 120,
+    "key": "C minor",
+    "time_signature": "4/4",
+    "instruments": ["piano", "bass", "strings"],
+    "sections": [{ "type": "intro", "bars": 4 }, { "type": "verse", "bars": 8 }],
+    "complexity": "moderate",
+    "duration_bars": 12,
+    "instructions": "Use a sparse, moody progression."
+  }
+}
+```
+
+Example music JSON shape returned in `music`:
+
+```json
+{
+  "tempo": 92,
+  "key": "C minor",
+  "time_signature": "4/4",
+  "sections": [{ "type": "intro", "bars": 4 }],
+  "tracks": [{ "instrument": "piano", "role": "harmony" }],
+  "harmony": [{ "bar": 1, "chord": "Cm" }]
+}
+```
 
 ## 📁 Project Structure
 
@@ -124,57 +146,75 @@ mukit-ai/
 │   │   ├── __init__.py
 │   │   ├── main.py              # FastAPI application
 │   │   ├── schemas.py           # Pydantic models
-│   │   └── models/
-│   │       ├── __init__.py
-│   │       └── music_composer.py # Music model implementation
+│   │   ├── llm_settings.py      # LLM provider environment settings
+│   │   └── services/            # LLM generation and MusicXML rendering
 │   ├── requirements.txt
-│   ├── training_data/           # Uploaded MIDI files
-│   └── models/                  # Saved model files
+│   └── tests/                   # Backend unit tests
 ├── frontend/
 │   ├── public/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── Header.js
-│   │   │   ├── MusicGenerator.js
-│   │   │   └── TrainingDataUploader.js
-│   │   ├── App.js
-│   │   ├── index.js
+│   │   │   ├── Header.jsx
+│   │   │   ├── MusicGenerator.jsx
+│   │   │   ├── NotationViewer.jsx
+│   │   │   ├── PlaybackControls.jsx
+│   │   │   └── PromptJsonEditor.jsx
+│   │   ├── api/musicApi.js
+│   │   ├── store/musicStore.js
+│   │   ├── App.jsx
+│   │   ├── index.jsx
 │   │   └── index.css
 │   └── package.json
+├── docs/
+│   └── testing.md
 └── README.md
 ```
 
-## 🧠 Model Architecture
+## ✅ Testing
 
-The music composer uses a persisted statistical note-transition model:
+Backend tests:
 
-- **Input**: MIDI notes and rests extracted from training files
-- **Training**: N-gram transition counts over note sequences
-- **Generation**: Weighted random sampling with temperature control
-- **Output**: MIDI or MusicXML stream generated through music21
+```bash
+cd backend
+../.venv/bin/python -m pytest
+```
 
-## 🎯 Training Process
+Frontend build:
 
-1. **Data Preprocessing**: MIDI files are parsed and converted to note sequences
-2. **Sequence Creation**: Sliding window approach creates input-target pairs
-3. **Model Training**: The composer learns weighted next-note transitions
-4. **Generation**: The trained model generates new sequences note by note
+```bash
+cd frontend
+npm run build
+```
+
+Frontend manual smoke checks are documented in `docs/testing.md`.
+
+## Logging And Secret Handling
+
+Backend LLM settings and generation code use Python `logging` and intentionally log provider names, model names, request lifecycle events, validation retry counts, and sanitized error details. API key values are never logged. Frontend API/store code uses `console.debug`, `console.warn`, and `console.error` for request intent, state transitions, JSON validation, notation rendering, and playback events without logging secrets.
+
+## 🧠 Generation Architecture
+
+- **Model discovery**: `GET /llm/models` exposes only providers with configured API keys.
+- **Prompt orchestration**: the backend builds a strict JSON-only prompt and runs it through a LangGraph flow.
+- **Validation**: Pydantic validates tempo, key, meter, sections, tracks, and harmony before any response is returned.
+- **MusicXML rendering**: validated JSON is converted to deterministic MusicXML with music21 for notation preview.
+- **Frontend preview**: the browser edits JSON, renders MusicXML with OSMD, and schedules simple chord playback with Tone.js.
 
 ## 🔍 Troubleshooting
 
 ### Common Issues
 
-1. **Model not loading**: Ensure the model has been trained first
-2. **Training fails**: Check that MIDI files are valid and not corrupted
-3. **Generation errors**: Verify model is loaded and parameters are valid
-4. **CORS errors**: Ensure backend is running on port 8888
+1. **No LLM models visible**: Set `OPENAI_API_KEY` or `DEEPSEEK_API_KEY` before starting the backend
+2. **Generation returns 503**: No provider key is configured in the backend environment
+3. **Invalid LLM JSON**: The backend validates model output and retries once by default; check backend logs for sanitized validation details
+4. **Notation does not render**: Confirm the response includes `musicxml` and the edited JSON still matches the expected shape
+5. **Playback fails**: Browser audio requires a user gesture; click Play directly and check that harmony entries contain supported chord names
 
 ### Performance Tips
 
-- Use GPU acceleration for faster training (if available)
-- Limit training data size for initial testing
-- Adjust sequence length based on your music style
-- Use appropriate creativity levels for your use case
+- Keep prompt instructions specific and concise.
+- Use narrower tempo and section constraints for more predictable output.
+- Add frontend code splitting before production deployment if bundle size becomes a concern.
 
 ## 🤝 Contributing
 
@@ -190,14 +230,17 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🙏 Acknowledgments
 
-- [music21](https://web.mit.edu/music21/) for MIDI processing
+- [music21](https://web.mit.edu/music21/) for MusicXML rendering
 - [FastAPI](https://fastapi.tiangolo.com/) for the backend API
 - [React](https://reactjs.org/) for the frontend interface
+- [LangChain](https://www.langchain.com/) and [LangGraph](https://www.langchain.com/langgraph) for LLM orchestration
+- [OpenSheetMusicDisplay](https://opensheetmusicdisplay.org/) for notation rendering
+- [Tone.js](https://tonejs.github.io/) for browser audio playback
 
 ## 🔮 Future Enhancements
 
-- Support for multiple instruments
-- Real-time audio playback
+- Richer multi-instrument arrangement controls
+- Code-split notation/playback bundles
 - Advanced music theory constraints
 - Style transfer between different musical genres
 - Collaborative composition features

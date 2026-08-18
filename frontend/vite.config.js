@@ -11,23 +11,7 @@ export default defineConfig({
         target: 'http://localhost:8888',
         changeOrigin: true
       },
-      '/upload-training-data': {
-        target: 'http://localhost:8888',
-        changeOrigin: true
-      },
-      '/train-model': {
-        target: 'http://localhost:8888',
-        changeOrigin: true
-      },
-      '/clear-model': {
-        target: 'http://localhost:8888',
-        changeOrigin: true
-      },
-      '/generate-music': {
-        target: 'http://localhost:8888',
-        changeOrigin: true
-      },
-      '/download': {
+      '/llm': {
         target: 'http://localhost:8888',
         changeOrigin: true
       }
