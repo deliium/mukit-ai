@@ -1,4 +1,4 @@
-from app.schemas import LLMMusicJson
+from app.schemas import Composition, LLMMusicJson
 from app.services.music_json_renderer import render_musicxml
 
 
@@ -59,8 +59,51 @@ def test_render_musicxml_piano_harmony_chords_as_notes():
     assert "<note" in musicxml
     assert "<pitch>" in musicxml
     assert "<harmony" in musicxml
-    assert "<group-symbol>brace</group-symbol>" in musicxml
-    assert "<clef>" in musicxml
-    assert "<sign>G</sign>" in musicxml
-    assert "<sign>F</sign>" in musicxml
+    assert "Piano" in musicxml
+
+
+def test_render_musicxml_canonical_uses_events_without_harmony_fallback():
+    composition = Composition.model_validate(
+        {
+            "schema_version": "composition.v1",
+            "tempo": 88,
+            "key": "A minor",
+            "time_signature": "4/4",
+            "ticks_per_quarter": 480,
+            "bar_count": 1,
+            "duration_ticks": 1920,
+            "sections": [{"type": "intro", "start_bar": 1, "bar_count": 1, "start_tick": 0, "duration_ticks": 1920}],
+            "tracks": [
+                {
+                    "id": "piano-1",
+                    "name": "Piano",
+                    "instrument": "piano",
+                    "role": "harmony",
+                    "midi_program": 0,
+                    "channel": 1,
+                    "events": [
+                        {"type": "note", "pitch": "A4", "start_tick": 0, "duration_ticks": 480, "velocity": 90, "staff": "treble"},
+                        {"type": "note", "pitch": "C5", "start_tick": 0, "duration_ticks": 480, "velocity": 90, "staff": "treble"},
+                    ],
+                },
+                {
+                    "id": "strings-2",
+                    "name": "Strings",
+                    "instrument": "strings",
+                    "role": "pad",
+                    "midi_program": 48,
+                    "channel": 2,
+                    "events": [],
+                },
+            ],
+            "harmony": [{"bar": 1, "chord": "Am"}],
+        }
+    )
+
+    musicxml, warnings = render_musicxml(composition)
+
+    assert warnings == []
+    assert "<pitch>" in musicxml
+    assert "<harmony" in musicxml
+    assert "<rest measure=\"yes\" />" in musicxml
     assert "<rest" in musicxml

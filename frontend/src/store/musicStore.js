@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 
 const initialPrompt = {
   genre: 'ambient',
@@ -69,11 +70,18 @@ export const useMusicStore = create((set, get) => ({
   },
 
   completeGeneration: ({ music, musicxml, warnings = [] }) => {
+    const validation = validateMusicJson(music);
     console.debug('[musicStore] LLM generation completed', {
       hasMusic: Boolean(music),
+      schemaVersion: music?.schema_version || 'legacy',
+      canonical: isCanonicalComposition(music),
       musicXmlLength: musicxml?.length || 0,
       warningCount: warnings.length,
+      valid: validation.valid,
     });
+    if (!validation.valid) {
+      console.error('[musicStore] Generated music JSON failed validation', { message: validation.message });
+    }
     set({
       generatedMusicJson: music,
       editedMusicJson: music,
@@ -90,7 +98,13 @@ export const useMusicStore = create((set, get) => ({
   },
 
   setEditedMusicJson: (editedMusicJson) => {
-    console.debug('[musicStore] Edited music JSON changed', { hasJson: Boolean(editedMusicJson) });
+    const validation = editedMusicJson ? validateMusicJson(editedMusicJson) : { valid: false };
+    console.debug('[musicStore] Edited music JSON changed', {
+      hasJson: Boolean(editedMusicJson),
+      schemaVersion: editedMusicJson?.schema_version || 'legacy',
+      canonical: isCanonicalComposition(editedMusicJson),
+      valid: validation.valid,
+    });
     set({ editedMusicJson });
   },
 

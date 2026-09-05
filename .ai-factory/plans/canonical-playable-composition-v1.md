@@ -84,31 +84,31 @@ Created: 2026-09-05
   Dependency: Task 1.
 
 ### Phase 3: Rendering And Playback From Canonical Events
-- [ ] Task 7: Refactor `backend/app/services/music_json_renderer.py` to consume `Composition` canonical events only.
+- [x] Task 7: Refactor `backend/app/services/music_json_renderer.py` to consume `Composition` canonical events only.
   Deliverable: MusicXML rendering reads `track.events` and inserts rests only for empty tick ranges; it does not call harmony-to-note fallback once canonical events exist.
   Behavior: harmony may render chord symbols; tracks with no events render rests/empty measures, not invented notes; polyphonic simultaneous notes render as chords when compatible and as voices when overlaps require independent durations.
   Logging: INFO log render start/end with schema version; DEBUG log per-track event grouping, rests inserted, polyphony grouping, and measure boundaries; WARN log notation-only limitations without changing audible data.
   Dependency: Tasks 1 and 2.
 
-- [ ] Task 8: Refactor `frontend/src/components/PlaybackControls.jsx` to schedule browser playback from canonical `track.events` only.
+- [x] Task 8: Refactor `frontend/src/components/PlaybackControls.jsx` to schedule browser playback from canonical `track.events` only.
   Deliverable: Tone.js playback converts canonical ticks to seconds using `tempo` and `ticks_per_quarter`, supports overlapping notes/polyphony, applies velocity, and uses track metadata where practical.
   Behavior: remove harmony-derived audible fallback for canonical compositions; if a legacy object is loaded, trigger frontend normalization or show a clear error instead of inventing notes.
   Logging: DEBUG log schedule summaries by track and event counts; WARN log rejected legacy/harmony-only data; ERROR log scheduling/audio failures with sanitized context.
   Dependency: Tasks 1 and 3.
 
-- [ ] Task 9: Update frontend JSON handling in `frontend/src/store/musicStore.js`, `frontend/src/components/PromptJsonEditor.jsx`, and `frontend/src/api/musicApi.js`.
+- [x] Task 9: Update frontend JSON handling in `frontend/src/store/musicStore.js`, `frontend/src/components/PromptJsonEditor.jsx`, and `frontend/src/api/musicApi.js`.
   Deliverable: frontend validation enforces `schema_version`, timing fields, sections, tracks, events, pitch, velocity, duration, composition bounds, and track-local event shape; store records migration warnings and avoids mutating canonical timing on edit/reset.
   Behavior: loading, saving, and reloading editor JSON must preserve pitches, start ticks, durations, velocities, and track assignments exactly.
   Logging: DEBUG log validation outcomes and canonical shape summaries; WARN log migration-required or rejected JSON; ERROR log invalid edits with actionable messages.
   Dependency: Tasks 3, 5, and 8.
 
 ### Phase 4: Automated Tests
-- [ ] Task 10: Expand backend tests in `backend/tests/test_llm_music_generation.py`, `backend/tests/test_music_json_renderer.py`, and new tests such as `backend/tests/test_composition_schema.py` and `backend/tests/test_composition_normalizer.py`.
+- [x] Task 10: Expand backend tests in `backend/tests/test_llm_music_generation.py`, `backend/tests/test_music_json_renderer.py`, and new tests such as `backend/tests/test_composition_schema.py` and `backend/tests/test_composition_normalizer.py`.
   Deliverable: tests cover canonical timing in 4/4, 3/4, and 6/8; polyphony/simultaneous notes; rests as empty space; invalid pitch; invalid velocity; zero/negative duration; timing outside composition; duplicate/invalid tracks; malformed/non-contiguous sections; legacy migration; legacy harmony-only rejection; MusicXML using canonical events without harmony fallback; MIDI-ready mapping preserving velocity/channel/program.
   Logging: use pytest `caplog` where useful to assert key validation/migration logs are emitted without secrets or excessive raw JSON.
   Dependency: Tasks 1-7.
 
-- [ ] Task 11: Add frontend validation/playback tests if a test runner exists, or introduce the smallest practical frontend test setup; otherwise document manual smoke checks in `docs/testing.md`.
+- [x] Task 11: Add frontend validation/playback tests if a test runner exists, or introduce the smallest practical frontend test setup; otherwise document manual smoke checks in `docs/testing.md`.
   Deliverable: coverage for valid canonical JSON, invalid timing/velocity/pitch, legacy migration/rejection UI messages, and playback event scheduling from ticks preserving polyphony.
   Logging: tests assert validation failures produce actionable errors and playback does not fall back to harmony-derived notes for canonical compositions.
   Dependency: Tasks 8 and 9.

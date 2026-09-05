@@ -1,9 +1,11 @@
 import logging
 import re
 import tempfile
+from fractions import Fraction
 from pathlib import Path
 
-from ..schemas import LLMMusicJson, LLMMusicNoteItem, LLMMusicTrack
+from ..schemas import Composition, LLMMusicJson, LLMMusicNoteItem, LLMMusicTrack
+from .composition_timing import bar_duration_ticks
 
 
 logger = logging.getLogger(__name__)
@@ -14,16 +16,22 @@ class MusicJsonRenderError(RuntimeError):
     pass
 
 
-def render_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
-    logger.info("Music JSON to MusicXML conversion started")
+def render_musicxml(music: Composition | LLMMusicJson) -> tuple[str, list[str]]:
+    is_canonical = isinstance(music, Composition)
+    renderer_music = _composition_to_renderer_music(music) if is_canonical else music
+    logger.info(
+        "Music JSON to MusicXML conversion started",
+        extra={"schema_version": getattr(music, "schema_version", "legacy")},
+    )
     logger.debug(
         "Music JSON render metadata",
         extra={
-            "bar_count": _total_bars(music),
-            "chord_count": len(music.harmony),
-            "tempo": music.tempo,
-            "key": music.key,
-            "time_signature": music.time_signature,
+            "schema_version": getattr(music, "schema_version", "legacy"),
+            "bar_count": _total_bars(renderer_music),
+            "chord_count": len(renderer_music.harmony),
+            "tempo": renderer_music.tempo,
+            "key": renderer_music.key,
+            "time_signature": renderer_music.time_signature,
         },
     )
 
@@ -36,13 +44,15 @@ def render_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
 
     try:
         score = stream.Score(id="llm_music_json_score")
-        score.metadata = metadata.Metadata(title=f"LLM Generated Music JSON - {music.key} - {music.time_signature}")
+        score.metadata = metadata.Metadata(
+            title=f"LLM Generated Music JSON - {renderer_music.key} - {renderer_music.time_signature}"
+        )
 
-        harmony_by_bar = {item.bar: item.chord for item in music.harmony}
-        notes_by_track_staff_bar = _notes_by_track_staff_bar(music.notes)
-        total_bars = _total_bars(music)
+        harmony_by_bar = {item.bar: item.chord for item in renderer_music.harmony}
+        notes_by_track_staff_bar = _notes_by_track_staff_bar(renderer_music.notes)
+        total_bars = _total_bars(renderer_music)
 
-        for index, track in enumerate(music.tracks, start=1):
+        for index, track in enumerate(renderer_music.tracks, start=1):
             if _is_piano_track(track):
                 piano_parts = _piano_parts(
                     chord,
@@ -54,7 +64,7 @@ def render_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
                     note,
                     stream,
                     tempo,
-                    music,
+                    renderer_music,
                     track,
                     index,
                     total_bars,
@@ -79,10 +89,23 @@ def render_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
                 _append_chord_symbol(harmony, measure, chord_name, warnings)
                 measure_notes = notes_by_track_staff_bar.get((index, "treble", bar_number), [])
                 if measure_notes:
-                    _append_notes(chord, note, measure, measure_notes, _measure_quarter_length(music.time_signature))
+                    _append_notes(
+                        chord,
+                        note,
+                        measure,
+                        measure_notes,
+                        _measure_quarter_length(renderer_music.time_signature),
+                    )
                 else:
-                    element = _fallback_element_for_track(chord, harmony, note, track, chord_name, warnings)
-                    measure.append(element)
+                    if is_canonical:
+                        logger.debug(
+                            "Inserted rest for canonical track without events in measure",
+                            extra={"track_index": index, "bar_number": bar_number},
+                        )
+                        measure.append(note.Rest(quarterLength=_measure_quarter_length(renderer_music.time_signature)))
+                    else:
+                        element = _fallback_element_for_track(chord, harmony, note, track, chord_name, warnings)
+                        measure.append(element)
                 part.append(measure)
 
             score.append(part)
@@ -96,20 +119,74 @@ def render_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        logger.info("Music JSON to MusicXML conversion completed")
+        logger.info(
+            "Music JSON to MusicXML conversion completed",
+            extra={"schema_version": getattr(music, "schema_version", "legacy"), "warning_count": len(warnings)},
+        )
         return musicxml, warnings
     except Exception as exc:
         logger.error(
             "Music JSON to MusicXML conversion failed",
             extra={
                 "error_type": type(exc).__name__,
-                "tempo": music.tempo,
-                "key": music.key,
-                "time_signature": music.time_signature,
-                "track_count": len(music.tracks),
+                "schema_version": getattr(music, "schema_version", "legacy"),
+                "tempo": renderer_music.tempo,
+                "key": renderer_music.key,
+                "time_signature": renderer_music.time_signature,
+                "track_count": len(renderer_music.tracks),
             },
         )
         raise MusicJsonRenderError("Failed to render MusicXML from music JSON") from exc
+
+
+def _composition_to_renderer_music(composition: Composition) -> LLMMusicJson:
+    logger.debug(
+        "Converting canonical composition events for MusicXML renderer",
+        extra={
+            "schema_version": composition.schema_version,
+            "track_count": len(composition.tracks),
+            "event_count": sum(len(track.events) for track in composition.tracks),
+            "duration_ticks": composition.duration_ticks,
+        },
+    )
+    bar_ticks = bar_duration_ticks(composition.time_signature, composition.ticks_per_quarter)
+    notes = []
+    for track_index, track in enumerate(composition.tracks, start=1):
+        for event in track.events:
+            bar = (event.start_tick // bar_ticks) + 1
+            beat_offset_ticks = event.start_tick % bar_ticks
+            beat = Fraction(beat_offset_ticks, composition.ticks_per_quarter) + 1
+            duration = Fraction(event.duration_ticks, composition.ticks_per_quarter)
+            notes.append(
+                {
+                    "track": track_index,
+                    "staff": event.staff if event.staff in {"treble", "bass"} else "treble",
+                    "bar": bar,
+                    "beat": float(beat),
+                    "pitch": event.pitch,
+                    "duration": float(duration),
+                }
+            )
+
+    logger.debug(
+        "Converted canonical composition events for MusicXML renderer",
+        extra={
+            "track_ids": [track.id for track in composition.tracks],
+            "note_count": len(notes),
+            "harmony_count": len(composition.harmony),
+        },
+    )
+    return LLMMusicJson.model_validate(
+        {
+            "tempo": composition.tempo,
+            "key": composition.key,
+            "time_signature": composition.time_signature,
+            "sections": [{"type": section.type, "bars": section.bar_count} for section in composition.sections],
+            "tracks": [{"instrument": track.instrument, "role": track.role} for track in composition.tracks],
+            "harmony": [item.model_dump() for item in composition.harmony],
+            "notes": notes,
+        }
+    )
 
 
 def _total_bars(music: LLMMusicJson) -> int:

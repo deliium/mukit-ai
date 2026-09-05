@@ -2,6 +2,7 @@ import React from 'react';
 import { JsonEditor } from 'json-edit-react';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
+import { validateMusicJson } from '../utils/musicJsonValidation.js';
 
 const EditorShell = styled.div`
   margin-top: 20px;
@@ -87,33 +88,5 @@ const PromptJsonEditor = () => {
     </EditorShell>
   );
 };
-
-function validateMusicJson(value) {
-  if (!value || typeof value !== 'object') {
-    return { valid: false, message: 'Music JSON must be an object.' };
-  }
-  if (!Number.isFinite(value.tempo) || value.tempo < 40 || value.tempo > 240) {
-    return { valid: false, message: 'Tempo must be a number between 40 and 240.' };
-  }
-  if (!value.key || typeof value.key !== 'string') {
-    return { valid: false, message: 'Key is required.' };
-  }
-  if (!value.time_signature || typeof value.time_signature !== 'string') {
-    return { valid: false, message: 'Time signature is required.' };
-  }
-  if (!Array.isArray(value.sections) || value.sections.length === 0) {
-    return { valid: false, message: 'At least one section is required.' };
-  }
-  if (!Array.isArray(value.tracks) || value.tracks.length === 0) {
-    return { valid: false, message: 'At least one track is required.' };
-  }
-  if (!Array.isArray(value.harmony)) {
-    return { valid: false, message: 'Harmony must be an array.' };
-  }
-  if (value.notes !== undefined && !Array.isArray(value.notes)) {
-    return { valid: false, message: 'Notes must be an array.' };
-  }
-  return { valid: true, message: 'Edited JSON is valid for preview and playback.' };
-}
 
 export default PromptJsonEditor;

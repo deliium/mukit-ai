@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import * as Tone from 'tone';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
+import { buildCanonicalPlaybackEvents } from '../utils/playbackEvents.js';
 
 const Controls = styled.div`
   display: flex;
@@ -78,7 +79,7 @@ const PlaybackControls = () => {
 
       events.forEach((event) => {
         Tone.Transport.schedule((time) => {
-          synth.triggerAttackRelease(event.notes, event.duration, time);
+          synth.triggerAttackRelease(event.notes, event.duration, time, event.velocity);
         }, event.position);
       });
 
@@ -124,6 +125,10 @@ function stopPlayback(synthRef, setPlaybackStatus) {
 }
 
 function buildPlaybackEvents(musicJson) {
+  if (musicJson?.schema_version === 'composition.v1') {
+    return buildCanonicalPlaybackEvents(musicJson);
+  }
+
   if (Array.isArray(musicJson.notes) && musicJson.notes.length) {
     const beatsPerMeasure = measureQuarterLength(musicJson.time_signature);
     const quarterSeconds = 60 / Number(musicJson.tempo || 100);
@@ -142,6 +147,7 @@ function buildPlaybackEvents(musicJson) {
           beat,
           notes: [pitch],
           duration: duration * quarterSeconds,
+          velocity: 0.8,
           position: positionForNote(bar, beat, beatsPerMeasure, quarterSeconds),
           stopPosition: positionForNote(bar, beat + duration, beatsPerMeasure, quarterSeconds),
         };
@@ -172,6 +178,7 @@ function buildPlaybackEvents(musicJson) {
         beat: 1,
         notes,
         duration: '1m',
+        velocity: 0.7,
         position: `${bar - 1}:0:0`,
         stopPosition: `${bar}:0:0`,
       };

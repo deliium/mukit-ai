@@ -4,6 +4,7 @@ import pytest
 
 from app.llm_settings import LLMProviderSettings, LLMSettings, load_llm_settings
 from app.schemas import LLMMusicGenerationRequest, LLMMusicJson
+from app.services.composition_normalizer import normalize_composition_json
 from app.services import llm_music_generator
 from app.services.llm_music_generator import (
     InvalidLLMOutputError,
@@ -125,25 +126,29 @@ def test_generation_success_with_mocked_graph(monkeypatch):
 
     class FakeGraph:
         async def ainvoke(self, state):
-            return {
-                **state,
-                "music": LLMMusicJson.model_validate(
-                    {
-                        "tempo": 100,
-                        "key": "C major",
-                        "time_signature": "4/4",
-                        "sections": [{"type": "intro", "bars": 1}],
-                        "tracks": [{"instrument": "piano", "role": "harmony"}],
-                        "harmony": [{"bar": 1, "chord": "C"}],
-                    }
-                ),
-            }
+                return {
+                    **state,
+                    "music": normalize_composition_json(
+                        LLMMusicJson.model_validate(
+                            {
+                                "tempo": 100,
+                                "key": "C major",
+                                "time_signature": "4/4",
+                                "sections": [{"type": "intro", "bars": 1}],
+                                "tracks": [{"instrument": "piano", "role": "harmony"}],
+                                "harmony": [{"bar": 1, "chord": "C"}],
+                                "notes": [{"track": 1, "bar": 1, "beat": 1, "pitch": "C4", "duration": 1}],
+                            }
+                        )
+                    ),
+                }
 
     monkeypatch.setattr(llm_music_generator, "_build_generation_graph", lambda: FakeGraph())
 
     music, warnings, provider = asyncio.run(generate_music_json(request, settings))
 
     assert music.tempo == 100
+    assert music.schema_version == "composition.v1"
     assert warnings == []
     assert provider.provider == "openai"
 
