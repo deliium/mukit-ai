@@ -114,12 +114,12 @@ Created: 2026-09-05
   Dependency: Tasks 8 and 9.
 
 ### Phase 5: Documentation
-- [ ] Task 12: Update `README.md` with the Composition V1 JSON contract and API behavior.
+- [x] Task 12: Update `README.md` with the Composition V1 JSON contract and API behavior.
   Deliverable: example canonical JSON showing `schema_version`, `ticks_per_quarter`, section boundaries, track metadata, note events, polyphony, implicit rests, and harmony as non-audible metadata.
   Logging: documentation notes where backend and frontend structured logs surface validation, migration, rendering, and playback decisions.
   Dependency: Tasks 1-9.
 
-- [ ] Task 13: Update `docs/testing.md` and add a focused schema reference document such as `docs/composition-v1.md`.
+- [x] Task 13: Update `docs/testing.md` and add a focused schema reference document such as `docs/composition-v1.md`.
   Deliverable: test commands, manual smoke checks, migration examples, rejection examples, and acceptance criteria mapping for saved JSON determinism, reload invariance, MusicXML/MIDI/playback consumption, and validation coverage.
   Logging: document recommended `LOG_LEVEL=DEBUG` or browser console checks for diagnosing schema/migration/playback issues.
   Dependency: Tasks 10 and 11.

@@ -1,13 +1,13 @@
 # 🎵 AI Music Composer
 
-A full-stack LLM music composer that generates structured music JSON through a LangChain/LangGraph-backed FastAPI service. The React frontend lets users choose a configured provider/model, edit the returned JSON, render notation from backend MusicXML, and preview simple chord playback in the browser.
+A full-stack LLM music composer that generates canonical playable `composition.v1` JSON through a LangChain/LangGraph-backed FastAPI service. The React frontend lets users choose a configured provider/model, edit the returned JSON, render notation from backend MusicXML, and preview canonical note-event playback in the browser.
 
 ## 🚀 Features
 
 - **LLM JSON Composition**: Generate structured music JSON with OpenAI or DeepSeek-compatible providers
 - **Prompt Controls**: Configure genre, mood, key, meter, tempo range, instruments, sections, complexity, duration, and freeform instructions
-- **Editable JSON Workflow**: Review and edit generated sections, tracks, harmony, tempo, key, and meter
-- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and preview chords with Tone.js
+- **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
+- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play canonical track-local note events with Tone.js
 
 ## 🏗️ Architecture
 
@@ -93,7 +93,7 @@ The frontend will be available at `http://localhost:3000`
 5. Click "Generate LLM Music JSON".
 6. Edit the returned JSON in the browser. Invalid edits show a client-side validation error.
 7. Review notation rendered from backend MusicXML.
-8. Use Play/Stop to preview simple chord playback from the generated or edited JSON.
+8. Use Play/Stop to preview canonical note events from the generated or edited JSON.
 
 ## 🔧 API Endpoints
 
@@ -124,18 +124,45 @@ Example LLM request:
 }
 ```
 
-Example music JSON shape returned in `music`:
+`POST /llm/generate-music-json` returns canonical `composition.v1` JSON in `music` plus derived `musicxml`. Legacy LLM output with explicit notes is normalized before returning; harmony-only legacy output is rejected as non-playable.
+
+Example canonical music JSON shape returned in `music`:
 
 ```json
 {
+  "schema_version": "composition.v1",
   "tempo": 92,
   "key": "C minor",
   "time_signature": "4/4",
-  "sections": [{ "type": "intro", "bars": 4 }],
-  "tracks": [{ "instrument": "piano", "role": "harmony" }],
+  "ticks_per_quarter": 480,
+  "duration_ticks": 1920,
+  "bar_count": 1,
+  "sections": [
+    { "type": "intro", "start_bar": 1, "bar_count": 1, "start_tick": 0, "duration_ticks": 1920 }
+  ],
+  "tracks": [
+    {
+      "id": "piano-1",
+      "name": "Piano",
+      "instrument": "piano",
+      "role": "harmony",
+      "midi_program": 0,
+      "channel": 1,
+      "is_drum": false,
+      "volume": 100,
+      "pan": 0,
+      "events": [
+        { "type": "note", "pitch": "C4", "start_tick": 0, "duration_ticks": 480, "velocity": 84 },
+        { "type": "note", "pitch": "Eb4", "start_tick": 0, "duration_ticks": 480, "velocity": 80 },
+        { "type": "note", "pitch": "G4", "start_tick": 0, "duration_ticks": 480, "velocity": 80 }
+      ]
+    }
+  ],
   "harmony": [{ "bar": 1, "chord": "Cm" }]
 }
 ```
+
+`ticks_per_quarter`, `start_tick`, and `duration_ticks` are integer canonical timing fields measured from composition start. Polyphony is represented by multiple note events with the same `start_tick` or overlapping durations. Rests are implicit empty tick ranges. `harmony` is contextual metadata for chord symbols and analysis; canonical rendering and playback do not use harmony to invent audible notes.
 
 ## 📁 Project Structure
 
@@ -147,7 +174,7 @@ mukit-ai/
 │   │   ├── main.py              # FastAPI application
 │   │   ├── schemas.py           # Pydantic models
 │   │   ├── llm_settings.py      # LLM provider environment settings
-│   │   └── services/            # LLM generation and MusicXML rendering
+│   │   └── services/            # LLM generation, normalization, MusicXML, MIDI-ready mapping
 │   ├── requirements.txt
 │   └── tests/                   # Backend unit tests
 ├── frontend/
@@ -161,6 +188,7 @@ mukit-ai/
 │   │   │   └── PromptJsonEditor.jsx
 │   │   ├── api/musicApi.js
 │   │   ├── store/musicStore.js
+│   │   ├── utils/               # Frontend validation and playback event helpers
 │   │   ├── App.jsx
 │   │   ├── index.jsx
 │   │   └── index.css
@@ -179,26 +207,28 @@ cd backend
 ../.venv/bin/python -m pytest
 ```
 
-Frontend build:
+Frontend tests and build:
 
 ```bash
 cd frontend
+npm test
 npm run build
 ```
 
-Frontend manual smoke checks are documented in `docs/testing.md`.
+Additional manual smoke checks are documented in `docs/testing.md`.
 
 ## Logging And Secret Handling
 
-Backend LLM settings and generation code use Python `logging` and intentionally log provider names, model names, request lifecycle events, validation retry counts, and sanitized error details. API key values are never logged. Frontend API/store code uses `console.debug`, `console.warn`, and `console.error` for request intent, state transitions, JSON validation, notation rendering, and playback events without logging secrets.
+Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Python `logging` and intentionally log provider names, model names, schema version, normalization path, validation retry counts, event counts, timing summaries, and sanitized error details. API key values are never logged. Frontend API/store/validator/playback code uses `console.debug`, `console.warn`, and `console.error` for request intent, state transitions, JSON validation, canonical shape summaries, notation rendering, and playback scheduling without logging secrets.
 
 ## 🧠 Generation Architecture
 
 - **Model discovery**: `GET /llm/models` exposes only providers with configured API keys.
 - **Prompt orchestration**: the backend builds a strict JSON-only prompt and runs it through a LangGraph flow.
-- **Validation**: Pydantic validates tempo, key, meter, sections, tracks, and harmony before any response is returned.
-- **MusicXML rendering**: validated JSON is converted to deterministic MusicXML with music21 for notation preview.
-- **Frontend preview**: the browser edits JSON, renders MusicXML with OSMD, and schedules simple chord playback with Tone.js.
+- **Validation**: Pydantic validates `composition.v1` timing, sections, tracks, events, MIDI metadata, velocities, pitch range, and composition bounds before any response is returned.
+- **Normalization**: legacy LLM output with explicit notes is migrated to canonical track-local events; harmony-only legacy output is rejected with an actionable error.
+- **MusicXML rendering**: canonical note events are converted to deterministic MusicXML with music21 for notation preview; harmony remains chord-symbol metadata.
+- **Frontend preview**: the browser edits canonical JSON, renders MusicXML with OSMD, and schedules canonical note events from ticks with Tone.js.
 
 ## 🔍 Troubleshooting
 
@@ -206,9 +236,9 @@ Backend LLM settings and generation code use Python `logging` and intentionally 
 
 1. **No LLM models visible**: Set `OPENAI_API_KEY` or `DEEPSEEK_API_KEY` before starting the backend
 2. **Generation returns 503**: No provider key is configured in the backend environment
-3. **Invalid LLM JSON**: The backend validates model output and retries once by default; check backend logs for sanitized validation details
+3. **Invalid LLM JSON**: The backend validates canonical playable output and retries once by default; check backend logs for sanitized validation and normalization details
 4. **Notation does not render**: Confirm the response includes `musicxml` and the edited JSON still matches the expected shape
-5. **Playback fails**: Browser audio requires a user gesture; click Play directly and check that harmony entries contain supported chord names
+5. **Playback fails**: Browser audio requires a user gesture; click Play directly and check that canonical `tracks[].events[]` contain valid pitches, ticks, durations, and velocities
 
 ### Performance Tips
 
