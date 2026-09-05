@@ -1,11 +1,16 @@
+import logging
+from fractions import Fraction
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-import logging
+
 from .llm_settings import load_llm_settings
 from .schemas import (
+    Composition,
     LLMMusicGenerationRequest,
     LLMMusicGenerationResponse,
+    LLMMusicJson,
     LLMModelsResponse,
     LLMProviderModel,
 )
@@ -17,6 +22,7 @@ from .services.llm_music_generator import (
     generate_music_json,
 )
 from .services.music_json_renderer import MusicJsonRenderError, render_musicxml
+from .services.composition_timing import bar_duration_ticks
 
 
 logger = logging.getLogger(__name__)
@@ -90,19 +96,28 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
     try:
         settings = load_llm_settings()
         music, warnings, provider = await generate_music_json(request, settings)
-        musicxml, render_warnings = render_musicxml(music)
+        renderer_music = _composition_to_legacy_renderer_music(music)
+        musicxml, render_warnings = render_musicxml(renderer_music)
         all_warnings = [*warnings, *render_warnings]
         logger.info(
             "LLM music JSON request completed",
-            extra={"provider": provider.provider, "model": provider.model, "warning_count": len(all_warnings)},
+            extra={
+                "provider": provider.provider,
+                "model": provider.model,
+                "schema_version": music.schema_version,
+                "warning_count": len(all_warnings),
+            },
         )
         logger.debug(
             "LLM music JSON response shape",
             extra={
+                "schema_version": music.schema_version,
                 "sections": len(music.sections),
                 "tracks": len(music.tracks),
                 "harmony": len(music.harmony),
-                "notes": len(music.notes),
+                "track_ids": [track.id for track in music.tracks],
+                "events": sum(len(track.events) for track in music.tracks),
+                "duration_ticks": music.duration_ticks,
                 "musicxml_length": len(musicxml),
             },
         )
@@ -120,8 +135,8 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
         logger.warning("LLM provider unavailable", extra={"reason": "unsupported_provider"})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except InvalidLLMOutputError as exc:
-        logger.warning("Invalid LLM output could not be corrected")
-        raise HTTPException(status_code=502, detail="LLM returned invalid music JSON") from exc
+        logger.warning("Invalid or non-playable LLM output could not be corrected")
+        raise HTTPException(status_code=502, detail="LLM returned invalid or non-playable music JSON") from exc
     except MusicJsonRenderError as exc:
         logger.error("MusicXML rendering failed", extra={"error_type": type(exc).__name__})
         raise HTTPException(status_code=500, detail="Generated JSON could not be rendered as MusicXML") from exc
@@ -131,6 +146,58 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
             extra={"error_type": type(exc).__name__, "error_detail": str(exc)[:200]},
         )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _composition_to_legacy_renderer_music(composition: Composition) -> LLMMusicJson:
+    logger.debug(
+        "Adapting canonical composition for legacy MusicXML renderer",
+        extra={
+            "schema_version": composition.schema_version,
+            "track_count": len(composition.tracks),
+            "event_count": sum(len(track.events) for track in composition.tracks),
+            "duration_ticks": composition.duration_ticks,
+        },
+    )
+    bar_ticks = bar_duration_ticks(composition.time_signature, composition.ticks_per_quarter)
+    notes = []
+    for track_index, track in enumerate(composition.tracks, start=1):
+        for event in track.events:
+            bar = (event.start_tick // bar_ticks) + 1
+            beat_offset_ticks = event.start_tick % bar_ticks
+            beat = Fraction(beat_offset_ticks, composition.ticks_per_quarter) + 1
+            duration = Fraction(event.duration_ticks, composition.ticks_per_quarter)
+            notes.append(
+                {
+                    "track": track_index,
+                    "staff": event.staff if event.staff in {"treble", "bass"} else "treble",
+                    "bar": bar,
+                    "beat": float(beat),
+                    "pitch": event.pitch,
+                    "duration": float(duration),
+                }
+            )
+
+    logger.debug(
+        "Adapted canonical composition for legacy MusicXML renderer",
+        extra={"note_count": len(notes), "track_ids": [track.id for track in composition.tracks]},
+    )
+    return LLMMusicJson.model_validate(
+        {
+            "tempo": composition.tempo,
+            "key": composition.key,
+            "time_signature": composition.time_signature,
+            "sections": [
+                {"type": section.type, "bars": section.bar_count}
+                for section in composition.sections
+            ],
+            "tracks": [
+                {"instrument": track.instrument, "role": track.role}
+                for track in composition.tracks
+            ],
+            "harmony": [item.model_dump() for item in composition.harmony],
+            "notes": notes,
+        }
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8888)

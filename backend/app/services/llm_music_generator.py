@@ -5,7 +5,8 @@ from typing import Any, TypedDict
 from pydantic import ValidationError
 
 from ..llm_settings import LLMProviderSettings, LLMSettings, load_llm_settings
-from ..schemas import LLMMusicGenerationRequest, LLMMusicJson
+from ..schemas import Composition, LLMMusicGenerationRequest
+from .composition_normalizer import CompositionNormalizationError, normalize_composition_json
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ class _GenerationState(TypedDict, total=False):
     provider: LLMProviderSettings
     raw_output: str
     parsed_json: dict[str, Any]
-    music: LLMMusicJson
+    music: Composition
     retry_count: int
     warnings: list[str]
 
@@ -40,7 +41,7 @@ class _GenerationState(TypedDict, total=False):
 async def generate_music_json(
     request: LLMMusicGenerationRequest,
     settings: LLMSettings | None = None,
-) -> tuple[LLMMusicJson, list[str], LLMProviderSettings]:
+) -> tuple[Composition, list[str], LLMProviderSettings]:
     active_settings = settings or load_llm_settings()
     provider = _select_provider(request, active_settings)
     retry_limit = request.options.max_retries
@@ -69,6 +70,9 @@ async def generate_music_json(
                 extra={
                     "provider": provider.provider,
                     "model": _selected_model(request, provider),
+                    "schema_version": music.schema_version,
+                    "track_count": len(music.tracks),
+                    "event_count": sum(len(track.events) for track in music.tracks),
                     "validation_retry_count": state["retry_count"],
                 },
             )
@@ -81,8 +85,13 @@ async def generate_music_json(
                 )
                 raise
             state["retry_count"] += 1
-            state.setdefault("warnings", []).append("LLM returned invalid JSON; retried with correction prompt.")
-            logger.warning("Retrying invalid LLM JSON output", extra={"retry_count": state["retry_count"]})
+            state.setdefault("warnings", []).append(
+                "LLM returned invalid or non-playable JSON; retried with correction prompt."
+            )
+            logger.warning(
+                "Retrying invalid LLM JSON output",
+                extra={"retry_count": state["retry_count"], "reason": str(exc)[:200]},
+            )
         except LLMGenerationError:
             raise
         except Exception as exc:
@@ -168,16 +177,37 @@ def _parse_and_validate(state: _GenerationState) -> _GenerationState:
     raw_output = state.get("raw_output", "")
     try:
         parsed_json = _extract_json(raw_output)
-        music = LLMMusicJson.model_validate(parsed_json)
-    except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+        music = normalize_composition_json(parsed_json)
+    except (json.JSONDecodeError, ValidationError, CompositionNormalizationError, ValueError) as exc:
         logger.debug(
             "Invalid LLM music JSON",
             extra={"error_type": type(exc).__name__, "error_detail": str(exc)[:300]},
         )
-        raise InvalidLLMOutputError("LLM returned invalid music JSON") from exc
+        raise InvalidLLMOutputError(f"LLM returned invalid music JSON: {str(exc)[:200]}") from exc
 
-    logger.debug("Validated LLM music JSON", extra={"json_keys": sorted(parsed_json.keys())})
-    return {**state, "parsed_json": parsed_json, "music": music}
+    warnings = list(state.get("warnings", []))
+    normalization_path = "canonical" if parsed_json.get("schema_version") == music.schema_version else "legacy_migrated"
+    if normalization_path == "legacy_migrated":
+        warnings.append("LLM returned legacy music JSON; normalized to composition.v1.")
+    logger.info(
+        "Validated LLM music JSON as canonical composition",
+        extra={
+            "schema_version": music.schema_version,
+            "normalization_path": normalization_path,
+            "provider": state["provider"].provider,
+            "model": _selected_model(state["request"], state["provider"]),
+        },
+    )
+    logger.debug(
+        "Validated LLM music JSON",
+        extra={
+            "json_keys": sorted(parsed_json.keys()),
+            "track_ids": [track.id for track in music.tracks],
+            "event_count": sum(len(track.events) for track in music.tracks),
+            "duration_ticks": music.duration_ticks,
+        },
+    )
+    return {**state, "parsed_json": parsed_json, "music": music, "warnings": warnings}
 
 
 def _extract_json(raw_output: str) -> dict[str, Any]:
@@ -207,7 +237,8 @@ def _build_prompt(request: LLMMusicGenerationRequest, invalid_output: str | None
     correction = ""
     if invalid_output:
         correction = (
-            "\nThe previous response was invalid. Return corrected JSON only. "
+            "\nThe previous response was invalid or not playable. Return corrected JSON only. "
+            "It must include explicit note events with valid pitch, velocity, timing, and bounds. "
             "Do not include markdown fences, comments, or explanatory text."
         )
 
@@ -221,10 +252,10 @@ You are a music composition JSON generator. Return only valid JSON matching this
   "tracks": [{{"instrument": "piano", "role": "harmony"}}],
   "harmony": [{{"bar": 1, "chord": "Cm"}}],
   "notes": [
-    {{"track": 1, "staff": "treble", "bar": 1, "beat": 1, "pitch": "C4", "duration": 1}},
-    {{"track": 1, "staff": "treble", "bar": 1, "beat": 1, "pitch": "Eb4", "duration": 1}},
-    {{"track": 1, "staff": "treble", "bar": 1, "beat": 1, "pitch": "G4", "duration": 1}},
-    {{"track": 1, "staff": "bass", "bar": 1, "beat": 1, "pitch": "C3", "duration": 2}}
+    {{"track": 1, "staff": "treble", "bar": 1, "beat": 1, "pitch": "C4", "duration": 1, "velocity": 84}},
+    {{"track": 1, "staff": "treble", "bar": 1, "beat": 1, "pitch": "Eb4", "duration": 1, "velocity": 80}},
+    {{"track": 1, "staff": "treble", "bar": 1, "beat": 1, "pitch": "G4", "duration": 1, "velocity": 80}},
+    {{"track": 1, "staff": "bass", "bar": 1, "beat": 1, "pitch": "C3", "duration": 2, "velocity": 88}}
   ]
 }}
 
@@ -240,11 +271,14 @@ Constraints:
 - piano notation is rendered as two staves, treble clef and bass clef, joined by one brace with one piano title
 - harmony must contain chord names for the notation preview, one chord per harmonic change; these render as chord letters above the treble staff, not as noteheads
 - notes must contain the actual playable notes for the notation preview
+- notes are mandatory; harmony-only output is invalid because harmony is contextual metadata only
 - every note must reference an existing 1-based track number from tracks
 - every note pitch must use scientific pitch notation with octave, for example C4, F#3, Bb4
+- every note must include velocity in MIDI range 1-127
 - spell note pitches according to the selected key signature/tonality; use accidentals only for notes outside the key
 - keep piano treble staff notes mostly C4 through C6 and bass staff notes mostly C2 through B3 unless requested otherwise
 - duration is measured in quarter-note units: 1 = quarter, 2 = half, 4 = whole, 0.5 = eighth
+- generated output will be normalized into canonical composition.v1 with integer ticks_per_quarter, start_tick, duration_ticks, track metadata, and track-local note events
 - beat is 1-based within the bar; notes with the same track, bar, beat, and duration are rendered as a chord
 - notes must fit inside each bar according to time_signature
 - each bar on each piano staff must be rhythmically complete: in 4/4 every staff must total exactly 4 quarter-note units, in 3/4 exactly 3, in 6/8 exactly 3

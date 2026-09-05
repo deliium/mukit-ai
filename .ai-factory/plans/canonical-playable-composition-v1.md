@@ -65,19 +65,19 @@ Created: 2026-09-05
   Dependency: Tasks 1 and 2.
 
 ### Phase 2: Generation And API Integration
-- [ ] Task 4: Update `backend/app/services/llm_music_generator.py` to generate or normalize into canonical `Composition` while preserving the existing `/llm/generate-music-json` statistical flow as much as practical.
+- [x] Task 4: Update `backend/app/services/llm_music_generator.py` to generate or normalize into canonical `Composition` while preserving the existing `/llm/generate-music-json` statistical flow as much as practical.
   Deliverable: prompt/schema contract updated to require actual note events, velocity, deterministic timing, and track metadata, or a controlled legacy-output normalization step if keeping the LLM prompt close to current shape is safer.
   Behavior: retries should include validation feedback when note events are missing, invalid, or outside composition bounds; generation must not succeed with harmony-only playable content.
   Logging: INFO log provider/model/schema version and normalization path; DEBUG log sanitized prompt parameters and validation retry details; WARN log compatibility migration warnings.
   Dependency: Task 3.
 
-- [ ] Task 5: Update `backend/app/main.py` and response schemas to return canonical composition JSON and derived MusicXML without breaking provider/model/warnings behavior.
+- [x] Task 5: Update `backend/app/main.py` and response schemas to return canonical composition JSON and derived MusicXML without breaking provider/model/warnings behavior.
   Deliverable: response model uses `Composition` or a compatibility wrapper with a clearly named canonical field; endpoint errors distinguish invalid LLM output, migration rejection, and MusicXML rendering failure.
   Behavior: keep `/llm/models` unchanged and avoid changing unrelated statistical generation behavior.
   Logging: INFO log request completion with schema version and warning count; DEBUG log canonical response shape including track IDs, event count, duration ticks, and MusicXML length.
   Dependency: Task 4.
 
-- [ ] Task 6: Add MIDI-export-ready service boundaries even if a public MIDI endpoint is not added in this iteration.
+- [x] Task 6: Add MIDI-export-ready service boundaries even if a public MIDI endpoint is not added in this iteration.
   Deliverable: a backend helper module such as `backend/app/services/composition_midi.py` that consumes `Composition` and maps track metadata plus canonical note events into a MIDI-ready intermediate structure, or a minimal actual MIDI export if existing dependencies support it.
   Behavior: consume the same track-local note events as MusicXML/playback, preserve velocity, program, channel, start tick, and duration ticks.
   Logging: DEBUG log MIDI mapping summaries per track and ERROR log unsupported instrument/channel metadata.

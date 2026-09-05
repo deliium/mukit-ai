@@ -567,7 +567,7 @@ class LLMModelsResponse(BaseModel):
 
 
 class LLMMusicGenerationResponse(BaseModel):
-    music: LLMMusicJson
+    music: Composition
     provider: Literal["openai", "deepseek"]
     model: str
     musicxml: str | None = None
