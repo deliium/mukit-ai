@@ -95,6 +95,7 @@ const ComposerWorkspace = () => {
             key={tab.id}
             type="button"
             role="tab"
+            data-testid={`composer-tab-${tab.id}`}
             aria-selected={activeTab === tab.id}
             $active={activeTab === tab.id}
             onClick={() => onTabChange(tab.id)}

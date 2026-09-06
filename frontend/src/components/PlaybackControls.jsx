@@ -264,6 +264,7 @@ const PlaybackControls = () => {
         ) : (
           <Button
             type="button"
+            data-testid="playback-play"
             onClick={handlePlay}
             disabled={!editedMusicJson || playbackStatus === 'loading'}
           >

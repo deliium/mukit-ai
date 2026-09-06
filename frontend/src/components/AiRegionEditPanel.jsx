@@ -221,6 +221,7 @@ const AiRegionEditPanel = () => {
         </span>
       </Meta>
       <TextArea
+        data-testid="ai-edit-instruction"
         aria-label="AI edit instruction"
         value={aiEditInstruction}
         onChange={(event) => setAiEditInstruction(event.target.value)}
@@ -229,6 +230,7 @@ const AiRegionEditPanel = () => {
       <ButtonRow>
         <Button
           type="button"
+          data-testid="ai-edit-submit"
           onClick={handleSubmit}
           disabled={Boolean(disabledReason)}
           aria-label="Regenerate selection with AI edit"
@@ -245,8 +247,8 @@ const AiRegionEditPanel = () => {
       {aiEditStatus === 'success' && (
         <Status $tone="info">AI region edit applied. Use Undo/Redo to compare before/after.</Status>
       )}
-      {aiEditWarnings.map((warning) => (
-        <Status key={warning} $tone="warn">{warning}</Status>
+      {aiEditWarnings.map((warning, index) => (
+        <Status key={`${index}:${warning}`} $tone="warn">{warning}</Status>
       ))}
     </Panel>
   );

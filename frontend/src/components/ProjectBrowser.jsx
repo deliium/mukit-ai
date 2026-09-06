@@ -157,6 +157,7 @@ const ProjectBrowser = () => {
       <Toolbar>
         <Button
           type="button"
+          data-testid="new-project"
           disabled={Boolean(busyId)}
           onClick={() => {
             console.debug('[ProjectBrowser] New Project clicked');
@@ -266,6 +267,7 @@ const ProjectBrowser = () => {
               <Actions>
                 <Button
                   type="button"
+                  data-testid={`open-project-${project.id}`}
                   disabled={Boolean(busyId)}
                   onClick={() => {
                     console.debug('[ProjectBrowser] Open', { projectId: project.id });

@@ -839,6 +839,7 @@ const PianoRollEditor = () => {
             AI start bar
             <NumberInput
               id="ai-edit-start-bar"
+              data-testid="ai-edit-start-bar"
               type="number"
               min="1"
               max={metrics.barCount || 1}
@@ -855,6 +856,7 @@ const PianoRollEditor = () => {
             AI end bar
             <NumberInput
               id="ai-edit-end-bar"
+              data-testid="ai-edit-end-bar"
               type="number"
               min="1"
               max={metrics.barCount || 1}
@@ -914,7 +916,7 @@ const PianoRollEditor = () => {
               <option value="0.18">Detail</option>
             </Select>
           </ControlGroup>
-          <Button type="button" onClick={() => undoNoteEdit()} disabled={!noteEditUndoStack.length} aria-label="Undo note edit">
+          <Button type="button" data-testid="piano-roll-undo" onClick={() => undoNoteEdit()} disabled={!noteEditUndoStack.length} aria-label="Undo note edit">
             Undo
           </Button>
           <Button type="button" onClick={() => redoNoteEdit()} disabled={!noteEditRedoStack.length} aria-label="Redo note edit">
@@ -968,6 +970,7 @@ const PianoRollEditor = () => {
         </PitchGutter>
         <ScrollArea ref={scrollRef}>
           <GridCanvas
+            data-testid="piano-roll-grid"
             $width={metrics.totalWidth}
             $height={metrics.totalHeight}
             $barWidth={barWidth}

@@ -249,7 +249,10 @@ const MusicGenerator = () => {
               <strong>API is healthy, but no LLM providers are configured.</strong>
               <ol>
                 <li>Copy <code>.env.example</code> → <code>.env</code></li>
-                <li>Set at least one of <code>OPENAI_API_KEY</code> / <code>DEEPSEEK_API_KEY</code></li>
+                <li>
+                  Set <code>LLM_FAKE_MODE=1</code> for credit-free demos/tests, or set
+                  <code>OPENAI_API_KEY</code> / <code>DEEPSEEK_API_KEY</code> for real providers
+                </li>
                 <li>Run <code>docker compose up --build</code></li>
               </ol>
               Secrets stay on the backend only.
@@ -261,6 +264,7 @@ const MusicGenerator = () => {
               <Label htmlFor="llmModel">Provider / Model</Label>
               <Select
                 id="llmModel"
+                data-testid="llm-model-select"
                 value={`${selectedProvider}:${selectedModel}`}
                 disabled={generating}
                 onChange={(event) => {
@@ -335,11 +339,15 @@ const MusicGenerator = () => {
           </FormGroup>
 
           {uiError && <StatusMessage className="error">{uiError}</StatusMessage>}
-          {warnings.map((warning) => (
-            <StatusMessage key={warning} className="info">{warning}</StatusMessage>
+          {warnings.map((warning, index) => (
+            <StatusMessage key={`${index}:${warning}`} className="info">{warning}</StatusMessage>
           ))}
 
-          <Button onClick={handleGenerateLlmJson} disabled={generating || !llmReady}>
+          <Button
+            data-testid="generate-music"
+            onClick={handleGenerateLlmJson}
+            disabled={generating || !llmReady}
+          >
             {generating ? 'Generating composition…' : 'Generate LLM Music JSON'}
           </Button>
           {generating && (

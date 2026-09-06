@@ -79,7 +79,11 @@ const NotationViewer = () => {
       <h4>Notation Preview</h4>
       {!musicXml && <EmptyState>Generate LLM music JSON to render notation here.</EmptyState>}
       {error && <ErrorState>{error}</ErrorState>}
-      <ViewerFrame ref={containerRef} aria-label="Music notation preview" />
+      <ViewerFrame
+        ref={containerRef}
+        data-testid="notation-viewer"
+        aria-label="Music notation preview"
+      />
     </ViewerShell>
   );
 };

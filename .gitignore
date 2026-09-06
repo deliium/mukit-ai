@@ -61,6 +61,12 @@ frontend/yarn-error.log*
 frontend/.npm
 frontend/.eslintcache
 
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/playwright/.cache/
+
 # React build
 frontend/build/
 

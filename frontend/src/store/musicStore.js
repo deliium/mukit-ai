@@ -1059,6 +1059,11 @@ export const useMusicStore = create((set, get) => ({
   },
 }));
 
+// Expose store for Playwright E2E assertions (event counts, playback status).
+if (typeof window !== 'undefined') {
+  window.__MUKIT_MUSIC_STORE__ = useMusicStore;
+}
+
 function selectModel(models, defaults, state) {
   if (!models.length) {
     return { selectedProvider: '', selectedModel: '' };

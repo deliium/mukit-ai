@@ -119,6 +119,7 @@ const ProjectComposerBar = () => {
       <Group>
         <Button
           type="button"
+          data-testid="save-project"
           disabled={saveStatus === 'saving'}
           onClick={() => {
             console.debug('[ProjectComposerBar] Manual save', { projectId: currentProjectId });

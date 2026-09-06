@@ -120,6 +120,7 @@ const ExportControls = () => {
     <Controls>
       <ExportButton
         type="button"
+        data-testid="export-musicxml"
         disabled={!canExport}
         onClick={() => runExport('musicxml')}
       >
@@ -127,6 +128,7 @@ const ExportControls = () => {
       </ExportButton>
       <ExportButton
         type="button"
+        data-testid="export-midi"
         disabled={!canExport}
         onClick={() => runExport('midi')}
       >
@@ -134,6 +136,7 @@ const ExportControls = () => {
       </ExportButton>
       <ExportButton
         type="button"
+        data-testid="export-wav"
         disabled={!canExport}
         onClick={() => runExport('wav')}
       >
