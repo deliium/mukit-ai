@@ -13,6 +13,8 @@ services:
     environment:
       - PYTHONPATH=/app
       - PROJECT_DB_PATH=/data/projects.db
+      # Default FluidR3_GM path from Debian package fluid-soundfont-gm
+      - COMPOSITION_WAV_SOUNDFONT=/usr/share/sounds/sf2/FluidR3_GM.sf2
     command: uvicorn app.main:app --host 0.0.0.0 --port 8888 --reload
 
   frontend:

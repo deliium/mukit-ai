@@ -2,11 +2,15 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies including FluidSynth CLI and a legally
+# redistributable General MIDI SoundFont (Debian fluid-soundfont-gm /
+# FluidR3_GM). Used only for server-side WAV export; see docs for license.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libsndfile1 \
+    fluidsynth \
+    fluid-soundfont-gm \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching

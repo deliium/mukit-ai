@@ -19,6 +19,7 @@ from .schemas import (
     LLMProviderModel,
 )
 from .services.composition_midi import CompositionMidiError, render_midi
+from .services.composition_wav import CompositionWavError, load_wav_renderer_config, render_wav
 from .services.composition_planner import OversizedLLMGenerationRequestError
 from .services.llm_composition_editor import edit_composition_region
 from .services.llm_music_generator import (
@@ -386,6 +387,55 @@ async def export_midi(composition: Composition):
             extra={"format": "midi", "error_type": type(exc).__name__, **summary},
         )
         raise HTTPException(status_code=500, detail="Composition could not be rendered as MIDI") from exc
+
+
+@app.post("/export/wav")
+async def export_wav(composition: Composition):
+    """Render canonical Composition V1 JSON to a downloadable WAV file via FluidSynth."""
+    summary = _composition_export_summary(composition)
+    logger.info("WAV export request started", extra={"format": "wav", **summary})
+    config = load_wav_renderer_config()
+    logger.debug(
+        "WAV export renderer config",
+        extra={
+            "format": "wav",
+            "fluidsynth": config.fluidsynth_basename,
+            "soundfont": config.soundfont_basename,
+            "sample_rate": config.sample_rate,
+            "gain": config.gain,
+            "timeout_seconds": config.timeout_seconds,
+            "fluidsynth_exists": config.fluidsynth_exists,
+            "soundfont_exists": config.soundfont_exists,
+        },
+    )
+    try:
+        wav_bytes = render_wav(composition)
+        filename = _safe_export_filename(composition, "wav")
+        logger.info(
+            "WAV export request completed",
+            extra={"format": "wav", "byte_length": len(wav_bytes), **summary},
+        )
+        logger.debug(
+            "WAV export response metadata",
+            extra={"filename": filename, "byte_length": len(wav_bytes)},
+        )
+        return Response(
+            content=wav_bytes,
+            media_type="audio/wav",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except CompositionWavError as exc:
+        if exc.unavailable:
+            logger.warning(
+                "WAV export unavailable",
+                extra={"format": "wav", "error_type": type(exc).__name__, "detail": str(exc)[:200], **summary},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        logger.error(
+            "WAV export failed",
+            extra={"format": "wav", "error_type": type(exc).__name__, "detail": str(exc)[:200], **summary},
+        )
+        raise HTTPException(status_code=500, detail=str(exc)[:300]) from exc
 
 
 if __name__ == "__main__":
