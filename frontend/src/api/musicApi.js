@@ -142,6 +142,15 @@ export async function exportMidi(composition) {
   });
 }
 
+export async function exportWav(composition) {
+  return exportComposition(composition, {
+    endpoint: '/export/wav',
+    format: 'wav',
+    fallbackFilename: 'composition.wav',
+    expectedType: 'audio/wav',
+  });
+}
+
 async function exportComposition(composition, { endpoint, format, fallbackFilename, expectedType }) {
   const validation = validateMusicJson(composition);
   const eventCount = Array.isArray(composition?.tracks)

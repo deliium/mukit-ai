@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import styled from 'styled-components';
-import { exportMidi, exportMusicXml } from '../api/musicApi.js';
+import { exportMidi, exportMusicXml, exportWav } from '../api/musicApi.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { useMusicStore } from '../store/musicStore.js';
 
@@ -35,6 +35,13 @@ const Status = styled.div`
   width: 100%;
   font-size: 0.9rem;
   color: ${(props) => (props.$error ? '#991b1b' : '#065f46')};
+`;
+
+const Hint = styled.p`
+  width: 100%;
+  margin: 0;
+  font-size: 0.8rem;
+  color: #6b7280;
 `;
 
 const ExportControls = () => {
@@ -83,6 +90,14 @@ const ExportControls = () => {
           filename: result.filename,
         });
         setStatusMessage(`Downloaded ${result.filename} and refreshed notation preview`);
+      } else if (format === 'wav') {
+        const result = await exportWav(editedMusicJson);
+        console.debug('[ExportControls] WAV export state transition', {
+          format: 'wav',
+          filename: result.filename,
+          blobSize: result.blob?.size,
+        });
+        setStatusMessage(`Downloaded ${result.filename} (server-rendered WAV export)`);
       } else {
         const result = await exportMidi(editedMusicJson);
         setStatusMessage(`Downloaded ${result.filename}`);
@@ -113,6 +128,14 @@ const ExportControls = () => {
       >
         {exportStatus === 'loading' ? 'Exporting...' : 'Export MIDI'}
       </ExportButton>
+      <ExportButton
+        type="button"
+        disabled={!canExport}
+        onClick={() => runExport('wav')}
+      >
+        {exportStatus === 'loading' ? 'Exporting...' : 'Export WAV'}
+      </ExportButton>
+      <Hint>WAV is a server-side render/export, not browser preview playback.</Hint>
       {statusMessage && <Status $error={exportStatus === 'error'}>{statusMessage}</Status>}
     </Controls>
   );

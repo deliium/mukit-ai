@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+import pytest
+
 from app.schemas import Composition
 
 
@@ -476,3 +478,77 @@ def test_musicxml_matches_canonical_note_timing():
     musicxml, _warnings = render_musicxml(composition)
     actual = musicxml_note_tuples(musicxml, composition, include_velocity=False)
     assert_note_tuples_equal(expected, actual, source_format="musicxml")
+
+
+def test_wav_silence_and_multi_track_duration_anchored_to_midi(monkeypatch):
+    """WAV fidelity is anchored by reusing render_midi; duration/silence are service-level.
+
+    Exact PCM samples are not compared (FluidSynth is non-deterministic across hosts).
+    """
+    import io
+    import wave
+
+    from app.services import composition_wav as wav_module
+    from app.services.composition_wav import expected_duration_seconds, render_wav
+
+    composition = build_export_fidelity_composition()
+    expected = expected_duration_seconds(composition)
+    assert len(composition.tracks) >= 2, "multi-track fixture required for WAV duration coverage"
+    assert any(track.events for track in composition.tracks), "expected audible events"
+
+    silent_data = composition.model_dump()
+    for track in silent_data["tracks"]:
+        track["events"] = []
+    silent = Composition.model_validate(silent_data)
+    silent_wav = render_wav(silent)
+    assert silent_wav[:4] == b"RIFF" and silent_wav[8:12] == b"WAVE", "all-silence WAV must be valid RIFF/WAVE"
+    with wave.open(io.BytesIO(silent_wav), "rb") as wf:
+        silent_seconds = wf.getnframes() / float(wf.getframerate())
+    assert silent_seconds == pytest.approx(expected_duration_seconds(silent), abs=0.02), (
+        "all-silence WAV duration must match composition duration_ticks"
+    )
+
+    captured_midi: list[bytes] = []
+
+    def fake_midi(comp):
+        from app.services.composition_midi import render_midi
+
+        midi = render_midi(comp)
+        captured_midi.append(midi)
+        return midi
+
+    def fake_run(command, **_kwargs):
+        from pathlib import Path
+
+        wav_path = Path(command[command.index("-F") + 1])
+        # Simulate FluidSynth ending early (trailing silence needs padding).
+        n_frames = max(1, int(round(expected * 0.6 * 44100)))
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(44100)
+            wf.writeframes(b"\x00" * (n_frames * 4))
+        wav_path.write_bytes(buf.getvalue())
+
+        class Result:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+
+        return Result()
+
+    monkeypatch.setenv("FLUIDSYNTH_BIN", "/usr/bin/fluidsynth")
+    monkeypatch.setenv("COMPOSITION_WAV_SOUNDFONT", "/tmp/fake-for-test.sf2")
+    monkeypatch.setattr(wav_module, "render_midi", fake_midi)
+    monkeypatch.setattr(wav_module, "_ensure_renderer_available", lambda _config: None)
+    monkeypatch.setattr(wav_module.subprocess, "run", fake_run)
+
+    wav_bytes = render_wav(composition)
+    assert captured_midi and captured_midi[0][:4] == b"MThd", "WAV must reuse MIDI bytes for note fidelity"
+    assert wav_bytes[:4] == b"RIFF", "multi-track WAV must be valid RIFF/WAVE"
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        measured = wf.getnframes() / float(wf.getframerate())
+    assert measured == pytest.approx(expected, abs=0.05), (
+        "trailing-silence / multi-track WAV duration must match composition duration"
+    )
