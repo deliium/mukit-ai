@@ -108,9 +108,10 @@ Details: [docs/project-persistence.md](docs/project-persistence.md).
 4. Set prompt parameters such as genre, mood, key, time signature, tempo range, instruments, sections, complexity, duration, and freeform instructions.
 5. Click "Generate LLM Music JSON".
 6. Edit notes on the piano roll (or in the JSON editor). Invalid edits show a client-side validation error. Piano-roll undo/redo covers note edits only. Changes autosave when a project is open.
-7. Review notation rendered from backend MusicXML; piano-roll edits refresh notation via `POST /export/musicxml/preview` after a short debounce.
-8. Use Play/Stop to preview canonical note events from the generated or edited JSON; the piano-roll cursor follows playback position.
-9. Export MusicXML or MIDI from the edited canonical JSON; notation preview refreshes from the exported MusicXML.
+7. Optionally Shift+drag bars on the piano roll, enter an instruction, and use **Regenerate Selection / AI Edit** to change only the selected region. Failures leave the current composition unchanged; success supports undo/redo.
+8. Review notation rendered from backend MusicXML; piano-roll and AI edits refresh notation via `POST /export/musicxml/preview` after a short debounce.
+9. Use Play/Stop to preview canonical note events from the generated or edited JSON; the piano-roll cursor follows playback position.
+10. Export MusicXML or MIDI from the edited canonical JSON; notation preview refreshes from the exported MusicXML.
 
 ## 🔧 API Endpoints
 
@@ -118,6 +119,7 @@ Details: [docs/project-persistence.md](docs/project-persistence.md).
 - `GET /health` - Health check
 - `GET /llm/models` - Return configured LLM provider/model options
 - `POST /llm/generate-music-json` - Generate validated music JSON and derived MusicXML
+- `POST /llm/edit-composition-region` - Apply a validated `replace_region` AI edit to selected bars/tracks
 - `GET /projects` - List local project summaries
 - `POST /projects` - Create a local project
 - `GET /projects/{id}` - Open a project (migrates legacy composition JSON to `composition.v1` when needed)
@@ -151,6 +153,8 @@ Example LLM request:
 ```
 
 `POST /llm/generate-music-json` returns canonical `composition.v1` JSON in `music` plus derived `musicxml`. Legacy LLM output with explicit notes is normalized before returning; harmony-only legacy output is rejected as non-playable.
+
+`POST /llm/edit-composition-region` accepts an existing composition, bar/track selection, and instruction, then returns a validated `replace_region` `patch`, the applied `composition`, and preview `musicxml`. Outside-region notes and metadata stay unchanged unless the request explicitly expands scope. Invalid provider patches return `502` without mutating the input composition.
 
 Example canonical music JSON shape returned in `music`:
 

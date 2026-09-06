@@ -21,6 +21,39 @@ Required playable roles are melody, bass, and harmony/accompaniment note events.
 
 Useful log fields include `stage`, `provider`, `model`, `attempt`, section/track/event counts, diagnostic codes, and sanitized provider errors. API keys and full freeform prompts are never logged.
 
+## Partial Region Editing
+
+`POST /llm/edit-composition-region` edits an existing canonical Composition V1 document without regenerating the whole score.
+
+Request shape:
+
+- `composition`: current `composition.v1` document
+- `edit.instruction`: non-empty natural-language instruction
+- `edit.selection`: inclusive `start_bar` / `end_bar`, optional `track_ids`, optional section context
+- `edit.allow_harmony_changes` / `edit.allow_added_tracks`: explicit opt-ins (default `false`)
+- `selection` / `options`: same provider/model contract as full generation
+
+The edit service uses a focused LangGraph (`analyze_edit_scope` → `draft_region_patch` → `validate_patch` → optional `repair_patch` → `apply_patch`) that asks the provider for a **`replace_region` patch only**, never a full composition. Deterministic helpers in `composition_region_patch.py` apply the patch immutably:
+
+- Replace only in-region events for target tracks
+- Preserve outside-region notes and metadata (`tempo`, `key`, `time_signature`, `ticks_per_quarter`, `duration_ticks`, `bar_count`, `sections`)
+- Keep `harmony` unchanged unless `allow_harmony_changes` is true
+- Allow `added_tracks` (for example counter-melody) only when explicitly permitted and IDs/channels are unique
+
+Failures are non-destructive: invalid JSON, out-of-region events, preserved-region mutations, integrity failures, or repair exhaustion return HTTP `502` and leave the caller's composition unchanged. Successful responses include `composition`, explicit `patch`, `musicxml`, `provider`, `model`, and `warnings`.
+
+Supported edit examples:
+
+- regenerate / activate melody in the selected bars
+- simplify accompaniment
+- change bass line
+- add counter-melody (`allow_added_tracks: true`)
+- increase tension in the selected section (still defaults to note-only edits unless harmony scope is expanded)
+
+Frontend workflow: Shift+drag (or start/end controls) on the piano roll to select bars, choose current-track vs all-tracks scope, enter an instruction, then **Regenerate Selection / AI Edit**. Successful edits push one undo snapshot; failures do not mutate `editedMusicJson` or trigger autosave.
+
+Verbose logs stay count-based and sanitized (bar range, track counts, diagnostic codes). Raw prompts, full compositions, and API keys are never logged.
+
 ## Contract
 
 - `schema_version`: must be `composition.v1`.
@@ -74,7 +107,8 @@ Legacy music JSON has harmony/tracks but no note events; regenerate or add notes
 - Per-track mute, solo, and volume controls change routing gain only; they do not mutate the canonical composition JSON.
 - Unsupported instruments use an explicit fallback synth strategy (logged with track ID, instrument, role, program) rather than silently rewriting musical content.
 - The piano-roll editor (`frontend/src/components/PianoRollEditor.jsx`) edits the same Zustand `editedMusicJson` as the JSON editor: create/move/transpose/resize/delete notes on `tracks[].events[]` with snap (`1/4`, `1/8`, `1/16`), zoom, track focus, context tracks, and bounded undo/redo for note edits only.
-- After valid piano-roll note edits, the frontend debounces `POST /export/musicxml/preview` and updates `musicXml` so OSMD notation stays in sync without forcing a download.
+- AI region editing selects inclusive bars (Shift+drag or controls), defaults target tracks to the focused piano-roll track (or all tracks), and calls `POST /llm/edit-composition-region` via `AiRegionEditPanel`.
+- After valid piano-roll note edits or successful AI region edits, the frontend debounces/refreshes `POST /export/musicxml/preview` and updates `musicXml` so OSMD notation stays in sync without forcing a download.
 - Frontend Export MusicXML / Export MIDI actions download from the export endpoints using the current edited JSON and refresh the notation preview from the exported MusicXML.
 - Piano roll, JSON editor, MIDI/MusicXML export, playback, and notation all consume the same `tracks[].events[]`; harmony remains metadata only and never invents export or audible notes.
 
