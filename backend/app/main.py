@@ -11,6 +11,8 @@ from .llm_settings import load_llm_settings
 from .routers.projects import router as projects_router
 from .schemas import (
     Composition,
+    LLMCompositionEditRequest,
+    LLMCompositionEditResponse,
     LLMMusicGenerationRequest,
     LLMMusicGenerationResponse,
     LLMModelsResponse,
@@ -18,6 +20,7 @@ from .schemas import (
 )
 from .services.composition_midi import CompositionMidiError, render_midi
 from .services.composition_planner import OversizedLLMGenerationRequestError
+from .services.llm_composition_editor import edit_composition_region
 from .services.llm_music_generator import (
     InvalidLLMOutputError,
     LLMGenerationError,
@@ -187,6 +190,103 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
     except LLMGenerationError as exc:
         logger.error(
             "LLM music JSON request failed",
+            extra={"error_type": type(exc).__name__, "error_detail": str(exc)[:200]},
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/llm/edit-composition-region", response_model=LLMCompositionEditResponse)
+async def edit_llm_composition_region(request: LLMCompositionEditRequest):
+    """Apply an AI replace_region edit to a selected Composition V1 bar/track range."""
+    selection = request.edit.selection
+    logger.info(
+        "LLM composition region edit request started",
+        extra={
+            "provider": request.selection.provider,
+            "model": request.selection.model,
+            "start_bar": selection.start_bar,
+            "end_bar": selection.end_bar,
+            "target_track_count": len(selection.track_ids or []),
+            "bar_count": request.composition.bar_count,
+            "track_count": len(request.composition.tracks),
+            "instruction_length": len(request.edit.instruction),
+        },
+    )
+    logger.debug(
+        "LLM composition region edit request shape",
+        extra={
+            "schema_version": request.composition.schema_version,
+            "track_ids": selection.track_ids,
+            "section_type": selection.section_type,
+            "allow_harmony_changes": request.edit.allow_harmony_changes,
+            "allow_added_tracks": request.edit.allow_added_tracks,
+        },
+    )
+
+    try:
+        settings = load_llm_settings()
+        composition, patch, warnings, provider = await edit_composition_region(request, settings)
+        musicxml, render_warnings = render_musicxml(composition)
+        all_warnings = [*warnings, *render_warnings, *patch.warnings]
+        logger.info(
+            "LLM composition region edit request completed",
+            extra={
+                "provider": provider.provider,
+                "model": provider.model,
+                "schema_version": composition.schema_version,
+                "operation": patch.operation,
+                "start_bar": patch.start_bar,
+                "end_bar": patch.end_bar,
+                "warning_count": len(all_warnings),
+                "event_count": sum(len(track.events) for track in composition.tracks),
+            },
+        )
+        logger.debug(
+            "LLM composition region edit response shape",
+            extra={
+                "schema_version": composition.schema_version,
+                "replace_track_count": len(patch.replace_tracks),
+                "added_track_count": len(patch.added_tracks),
+                "has_harmony_patch": patch.harmony_patch is not None,
+                "musicxml_length": len(musicxml),
+                "track_ids": [track.id for track in composition.tracks],
+            },
+        )
+        return LLMCompositionEditResponse(
+            composition=composition,
+            patch=patch,
+            provider=provider.provider,
+            model=provider.model,
+            musicxml=musicxml,
+            warnings=all_warnings,
+        )
+    except NoLLMProviderConfiguredError as exc:
+        logger.warning(
+            "LLM region edit provider unavailable",
+            extra={"reason": "no_configured_providers"},
+        )
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except UnsupportedLLMProviderError as exc:
+        logger.warning(
+            "LLM region edit provider unavailable",
+            extra={"reason": "unsupported_provider"},
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except InvalidLLMOutputError as exc:
+        logger.warning(
+            "Invalid LLM region edit patch could not be corrected",
+            extra={"detail": str(exc)[:300]},
+        )
+        raise HTTPException(status_code=502, detail=str(exc)[:500]) from exc
+    except MusicJsonRenderError as exc:
+        logger.error(
+            "MusicXML rendering failed after successful region edit",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=500, detail="Edited composition could not be rendered as MusicXML") from exc
+    except LLMGenerationError as exc:
+        logger.error(
+            "LLM composition region edit request failed",
             extra={"error_type": type(exc).__name__, "error_detail": str(exc)[:200]},
         )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
