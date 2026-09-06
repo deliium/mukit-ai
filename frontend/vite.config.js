@@ -18,6 +18,14 @@ export default defineConfig({
       '/export': {
         target: 'http://localhost:8888',
         changeOrigin: true
+      },
+      '/projects': {
+        target: 'http://localhost:8888',
+        changeOrigin: true
+      },
+      '/ready': {
+        target: 'http://localhost:8888',
+        changeOrigin: true
       }
     }
   }

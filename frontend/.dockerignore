@@ -1,0 +1,11 @@
+node_modules
+dist
+build
+coverage
+.npm
+.eslintcache
+.env
+.env.*
+*.log
+.git
+.DS_Store

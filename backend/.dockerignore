@@ -1,0 +1,16 @@
+__pycache__
+*.py[cod]
+.pytest_cache
+.venv
+venv
+data
+*.db
+.env
+.env.*
+models/*.h5
+models/*.pkl
+training_data/*.mid
+training_data/*.midi
+.mypy_cache
+.ruff_cache
+*.egg-info
