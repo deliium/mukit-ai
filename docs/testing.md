@@ -16,6 +16,18 @@ Focused canonical coverage includes:
 - `backend/tests/test_composition_normalizer.py` for legacy migration, velocity defaults, canonical pass-through, and harmony-only rejection.
 - `backend/tests/test_composition_midi.py` for MIDI-ready timing, channel, program, and velocity preservation.
 - `backend/tests/test_music_json_renderer.py` for canonical MusicXML rendering from events without harmony fallback.
+- `backend/tests/test_composition_validator.py` for integrity diagnostics such as missing roles, empty/sparse tracks, pitch/range issues, and harmony-only rejection.
+- `backend/tests/test_llm_staged_composer.py` for mocked multi-stage sequencing, repair/retry, oversized request rejection, provider/model override, and actionable API errors.
+
+### Opt-in Real Provider Smoke Test
+
+Normal `pytest` skips real provider calls. To intentionally spend API credits on a small bounded staged composition:
+
+```bash
+RUN_LLM_SMOKE=1 LLM_SMOKE_PROVIDER=openai ../.venv/bin/python -m pytest tests/test_llm_real_provider_smoke.py
+```
+
+Requires the matching provider API key. The smoke test logs provider/model, bars, tracks, events, and validation outcome, and is skipped clearly when `RUN_LLM_SMOKE` is unset.
 
 ## Frontend Tests
 

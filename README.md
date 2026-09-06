@@ -224,9 +224,11 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 ## 🧠 Generation Architecture
 
 - **Model discovery**: `GET /llm/models` exposes only providers with configured API keys.
-- **Prompt orchestration**: the backend builds a strict JSON-only prompt and runs it through a LangGraph flow.
-- **Validation**: Pydantic validates `composition.v1` timing, sections, tracks, events, MIDI metadata, velocities, pitch range, and composition bounds before any response is returned.
-- **Normalization**: legacy LLM output with explicit notes is migrated to canonical track-local events; harmony-only legacy output is rejected with an actionable error.
+- **Prompt orchestration**: the backend runs a multi-stage LangGraph composer (form → harmony → melody → bass → accompaniment → assemble → validate → repair) that emits canonical note events rather than one full-score blob.
+- **Generation bounds**: initial LLM Composition V1 generation rejects requests above 32 bars or 6 non-drum instruments with HTTP `422` and an actionable message.
+- **Validation**: Pydantic schema checks plus deterministic integrity validation cover required roles, note density, pitch ranges, timing bounds, and harmony-only rejection. Failed stages repair using structured diagnostics until `max_retries` is exhausted; final failures return HTTP `502` with sanitized detail.
+- **Normalization**: legacy LLM output with explicit notes is still migrated to canonical track-local events when encountered; harmony-only legacy output is rejected with an actionable error.
+- **Testing**: normal backend tests mock providers. Opt-in real-provider smoke: `RUN_LLM_SMOKE=1 LLM_SMOKE_PROVIDER=openai ../.venv/bin/python -m pytest tests/test_llm_real_provider_smoke.py` from `backend/`.
 - **MusicXML rendering**: canonical note events are converted to deterministic MusicXML with music21 for notation preview; harmony remains chord-symbol metadata.
 - **Frontend preview**: the browser edits canonical JSON, renders MusicXML with OSMD, and schedules canonical note events from ticks with Tone.js.
 
@@ -236,7 +238,7 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 
 1. **No LLM models visible**: Set `OPENAI_API_KEY` or `DEEPSEEK_API_KEY` before starting the backend
 2. **Generation returns 503**: No provider key is configured in the backend environment
-3. **Invalid LLM JSON**: The backend validates canonical playable output and retries once by default; check backend logs for sanitized validation and normalization details
+3. **Invalid LLM JSON**: The staged composer validates and repairs using diagnostic codes; check backend logs for `stage`, diagnostic codes, retry counts, and sanitized provider errors (never API keys)
 4. **Notation does not render**: Confirm the response includes `musicxml` and the edited JSON still matches the expected shape
 5. **Playback fails**: Browser audio requires a user gesture; click Play directly and check that canonical `tracks[].events[]` contain valid pitches, ticks, durations, and velocities
 
