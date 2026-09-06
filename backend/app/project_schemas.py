@@ -40,7 +40,7 @@ def _contains_forbidden_secret_fields(payload: Any, *, path: str = "") -> list[s
 
 
 class ProjectGenerationMeta(BaseModel):
-    provider: Literal["openai", "deepseek"] | None = None
+    provider: Literal["openai", "deepseek", "fake"] | None = None
     model: str | None = Field(default=None, max_length=120)
     prompt: LLMPromptParameters | dict[str, Any] | None = None
 

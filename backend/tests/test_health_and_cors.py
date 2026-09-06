@@ -31,6 +31,7 @@ def test_ready_report_has_no_secret_fields(monkeypatch, tmp_path):
     monkeypatch.setenv("PROJECT_DB_PATH", str(tmp_path / "projects.db"))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_FAKE_MODE", raising=False)
 
     report = build_readiness_report()
     payload = str(report)
@@ -47,6 +48,7 @@ def test_ready_endpoint_ok_without_llm(monkeypatch, tmp_path):
     monkeypatch.setenv("PROJECT_DB_PATH", str(tmp_path / "ready.db"))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_FAKE_MODE", raising=False)
 
     report = asyncio.run(readiness_check())
     assert report["ready"] is True

@@ -24,13 +24,22 @@ class CanonicalNoteTuple(NamedTuple):
 def build_export_fidelity_composition() -> Composition:
     """Build a deterministic multi-track Composition for export fidelity checks.
 
-    Includes:
-    - 6/8 meter (non-4/4)
-    - two bars with an empty/rest gap in bar 1 of the melody
-    - polyphony (same start_tick, overlapping durations)
-    - non-zero note starts and varied durations/velocities
-    - distinct instruments, programs, channels, volume, and pan
+    Prefers the shared JSON fixture when present; falls back to the inline builder
+    so older checkouts without fixtures still work.
     """
+    try:
+        from app.services.fixture_compositions import (
+            FIXTURE_EXPORT_FIDELITY,
+            load_composition_fixture,
+        )
+
+        return load_composition_fixture(FIXTURE_EXPORT_FIDELITY)
+    except Exception:
+        return _build_export_fidelity_composition_inline()
+
+
+def _build_export_fidelity_composition_inline() -> Composition:
+    """Inline fallback matching ``composition_v1_export_fidelity.json``."""
     return Composition.model_validate(
         {
             "schema_version": "composition.v1",

@@ -28,6 +28,8 @@ services:
       DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-openai}
       LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-60}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
+      LLM_FAKE_MODE: ${LLM_FAKE_MODE:-0}
+      LLM_FAKE_MODEL: ${LLM_FAKE_MODEL:-fake-deterministic}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/health')"]
       interval: 15s

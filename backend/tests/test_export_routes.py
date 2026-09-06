@@ -1,14 +1,81 @@
 import asyncio
+import struct
+import wave
+from io import BytesIO
 
 from fastapi.testclient import TestClient
+from music21 import converter
 
 from app.main import app, export_midi, export_musicxml, export_musicxml_preview, export_wav
-from app.schemas import Composition
 from app.services.composition_wav import CompositionWavError
+from tests.fixtures.load_fixture import load_16bar_multitrack, load_export_fidelity
 from tests.test_export_fidelity import build_export_fidelity_composition
 
 
 client = TestClient(app)
+
+
+def _minimal_wav_bytes(*, duration_seconds: float = 0.25, sample_rate: int = 22050) -> bytes:
+    """Build a tiny valid mono PCM WAV for mocked export assertions."""
+    frame_count = max(1, int(duration_seconds * sample_rate))
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(b"\x00\x00" * frame_count)
+    return buffer.getvalue()
+
+
+def _assert_wav_header(payload: bytes) -> float:
+    assert payload[:4] == b"RIFF"
+    assert payload[8:12] == b"WAVE"
+    with wave.open(BytesIO(payload), "rb") as handle:
+        frames = handle.getnframes()
+        rate = handle.getframerate()
+        assert frames > 0
+        assert rate > 0
+        return frames / float(rate)
+
+
+def test_export_endpoints_nonempty_and_structurally_valid(monkeypatch, caplog):
+    composition = load_export_fidelity()
+    fake_wav = _minimal_wav_bytes(duration_seconds=0.5)
+    monkeypatch.setattr("app.main.render_wav", lambda _composition: fake_wav)
+
+    with caplog.at_level("INFO"):
+        musicxml = client.post("/export/musicxml", json=composition.model_dump(mode="json"))
+        midi = client.post("/export/midi", json=composition.model_dump(mode="json"))
+        wav = client.post("/export/wav", json=composition.model_dump(mode="json"))
+
+    assert musicxml.status_code == 200
+    assert len(musicxml.content) > 100
+    parsed = converter.parseData(musicxml.text)
+    assert parsed is not None
+    assert len(list(parsed.flatten().notes)) > 0
+
+    assert midi.status_code == 200
+    assert len(midi.content) > 20
+    assert midi.content[:4] == b"MThd"
+    format_type, track_count, division = struct.unpack(">HHH", midi.content[8:14])
+    assert format_type in {0, 1}
+    assert track_count >= 1
+    assert division > 0
+
+    assert wav.status_code == 200
+    assert len(wav.content) > 44
+    duration = _assert_wav_header(wav.content)
+    assert duration >= 0.4
+    assert "WAV export request completed" in caplog.text
+
+
+def test_export_16bar_fixture_midi_and_musicxml_nonempty():
+    composition = load_16bar_multitrack()
+    midi = client.post("/export/midi", json=composition.model_dump(mode="json"))
+    musicxml = client.post("/export/musicxml", json=composition.model_dump(mode="json"))
+    assert midi.status_code == 200 and midi.content[:4] == b"MThd" and len(midi.content) > 100
+    assert musicxml.status_code == 200 and len(musicxml.content) > 500
+    assert "score-partwise" in musicxml.text or "score-timewise" in musicxml.text
 
 
 def test_export_musicxml_endpoint_returns_attachment():
@@ -50,7 +117,7 @@ def test_export_midi_endpoint_returns_attachment():
 
 def test_export_wav_endpoint_returns_attachment(monkeypatch, caplog):
     composition = build_export_fidelity_composition()
-    fake_wav = b"RIFF....WAVEfmt " + b"\x00" * 40
+    fake_wav = _minimal_wav_bytes()
 
     monkeypatch.setattr("app.main.render_wav", lambda _composition: fake_wav)
 
@@ -63,6 +130,7 @@ def test_export_wav_endpoint_returns_attachment(monkeypatch, caplog):
     assert ".wav" in response.headers["content-disposition"]
     assert response.content == fake_wav
     assert "WAV export request completed" in caplog.text
+    _assert_wav_header(response.content)
 
 
 def test_export_wav_returns_503_when_renderer_unavailable(monkeypatch, caplog):
@@ -137,7 +205,7 @@ def test_export_midi_direct_handler_logs_completion(caplog):
 
 def test_export_wav_direct_handler_logs_completion(monkeypatch, caplog):
     composition = build_export_fidelity_composition()
-    monkeypatch.setattr("app.main.render_wav", lambda _c: b"RIFF....WAVE" + b"\x00" * 32)
+    monkeypatch.setattr("app.main.render_wav", lambda _c: _minimal_wav_bytes())
 
     with caplog.at_level("INFO"):
         response = asyncio.run(export_wav(composition))
