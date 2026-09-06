@@ -8,7 +8,10 @@ logger = logging.getLogger(__name__)
 
 OPENAI_PROVIDER = "openai"
 DEEPSEEK_PROVIDER = "deepseek"
-SUPPORTED_PROVIDERS = {OPENAI_PROVIDER, DEEPSEEK_PROVIDER}
+FAKE_PROVIDER = "fake"
+SUPPORTED_PROVIDERS = {OPENAI_PROVIDER, DEEPSEEK_PROVIDER, FAKE_PROVIDER}
+FAKE_MODE_ENV = "LLM_FAKE_MODE"
+FAKE_MODEL_DEFAULT = "fake-deterministic"
 
 
 @dataclass(frozen=True)
@@ -28,9 +31,16 @@ class LLMSettings:
     temperature: float
 
 
+def fake_mode_enabled(env: Mapping[str, str] | None = None) -> bool:
+    source = env if env is not None else os.environ
+    raw = (source.get(FAKE_MODE_ENV) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def load_llm_settings(env: Mapping[str, str] | None = None) -> LLMSettings:
     source = env if env is not None else os.environ
     requested_default = _normalized_provider(source.get("DEFAULT_LLM_PROVIDER"))
+    fake_enabled = fake_mode_enabled(source)
 
     logger.debug(
         "LLM env key presence (booleans only)",
@@ -43,6 +53,7 @@ def load_llm_settings(env: Mapping[str, str] | None = None) -> LLMSettings:
             "DEEPSEEK_BASE_URL": bool(source.get("DEEPSEEK_BASE_URL")),
             "LLM_REQUEST_TIMEOUT_SECONDS": bool(source.get("LLM_REQUEST_TIMEOUT_SECONDS")),
             "LLM_TEMPERATURE": bool(source.get("LLM_TEMPERATURE")),
+            FAKE_MODE_ENV: fake_enabled,
         },
     )
 
@@ -72,7 +83,40 @@ def load_llm_settings(env: Mapping[str, str] | None = None) -> LLMSettings:
     else:
         logger.debug("LLM provider key missing", extra={"provider": DEEPSEEK_PROVIDER})
 
-    default_provider = _select_default_provider(tuple(providers), requested_default)
+    if fake_enabled:
+        # Placeholder key never used for network calls; required by LLMProviderSettings shape.
+        providers.insert(
+            0,
+            LLMProviderSettings(
+                provider=FAKE_PROVIDER,
+                model=source.get("LLM_FAKE_MODEL", FAKE_MODEL_DEFAULT),
+                api_key="fake",
+            ),
+        )
+        logger.info(
+            "Fake LLM mode is active (deterministic, no API credits)",
+            extra={"provider": FAKE_PROVIDER, "model": source.get("LLM_FAKE_MODEL", FAKE_MODEL_DEFAULT)},
+        )
+        if openai_key or deepseek_key:
+            logger.warning(
+                "LLM_FAKE_MODE is set while real provider keys are present; "
+                "fake provider wins as default for tests/demos unless DEFAULT_LLM_PROVIDER "
+                "explicitly selects a real provider that remains configured",
+                extra={
+                    "fake_mode": True,
+                    "has_openai_key": bool(openai_key),
+                    "has_deepseek_key": bool(deepseek_key),
+                },
+            )
+
+    # When fake mode is on and the user did not request a specific default, prefer fake.
+    effective_requested = requested_default
+    if fake_enabled and requested_default is None:
+        effective_requested = FAKE_PROVIDER
+    elif fake_enabled and requested_default not in {p.provider for p in providers}:
+        effective_requested = FAKE_PROVIDER
+
+    default_provider = _select_default_provider(tuple(providers), effective_requested)
     providers_with_default = tuple(
         LLMProviderSettings(
             provider=provider.provider,
@@ -138,7 +182,8 @@ def _normalized_provider(value: str | None) -> str | None:
     normalized = value.strip().lower()
     if normalized in SUPPORTED_PROVIDERS:
         return normalized
-    return normalized
+    # Preserve unknown tokens so callers can surface UnsupportedLLMProviderError.
+    return normalized if normalized else None
 
 
 def _int_env(env: Mapping[str, str], name: str, default: int, minimum: int, maximum: int) -> int:

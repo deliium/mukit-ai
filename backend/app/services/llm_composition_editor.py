@@ -90,6 +90,23 @@ async def edit_composition_region(
     provider = _select_provider(request, active_settings)  # type: ignore[arg-type]
     model_name = _selected_edit_model(request, provider)
 
+    from .fake_llm import FakeLLMError, edit_fake_composition_region, is_fake_provider
+
+    if is_fake_provider(provider):
+        logger.info(
+            "Routing composition region edit to fake LLM provider",
+            extra={
+                "provider": provider.provider,
+                "model": model_name,
+                "start_bar": request.edit.selection.start_bar,
+                "end_bar": request.edit.selection.end_bar,
+            },
+        )
+        try:
+            return await edit_fake_composition_region(request, provider)
+        except FakeLLMError as exc:
+            raise InvalidLLMOutputError(str(exc)) from exc
+
     logger.info(
         "LLM composition region edit started",
         extra={

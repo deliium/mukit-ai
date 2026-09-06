@@ -536,7 +536,7 @@ class LLMPromptParameters(BaseModel):
 
 
 class LLMModelSelection(BaseModel):
-    provider: Literal["openai", "deepseek"] | None = None
+    provider: Literal["openai", "deepseek", "fake"] | None = None
     model: str | None = Field(default=None, max_length=120)
 
 
@@ -553,7 +553,7 @@ class LLMMusicGenerationRequest(BaseModel):
 
 
 class LLMProviderModel(BaseModel):
-    provider: Literal["openai", "deepseek"]
+    provider: Literal["openai", "deepseek", "fake"]
     model: str
     display_name: str
     is_default: bool = False
@@ -561,14 +561,14 @@ class LLMProviderModel(BaseModel):
 
 class LLMModelsResponse(BaseModel):
     models: list[LLMProviderModel]
-    default_provider: Literal["openai", "deepseek"] | None = None
+    default_provider: Literal["openai", "deepseek", "fake"] | None = None
     default_model: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
 class LLMMusicGenerationResponse(BaseModel):
     music: Composition
-    provider: Literal["openai", "deepseek"]
+    provider: Literal["openai", "deepseek", "fake"]
     model: str
     musicxml: str | None = None
     musicxml_filename: str | None = None
@@ -811,7 +811,7 @@ class LLMCompositionEditRequest(BaseModel):
 class LLMCompositionEditResponse(BaseModel):
     composition: Composition
     patch: CompositionRegionReplacementPatch
-    provider: Literal["openai", "deepseek"]
+    provider: Literal["openai", "deepseek", "fake"]
     model: str
     musicxml: str | None = None
     musicxml_filename: str | None = None

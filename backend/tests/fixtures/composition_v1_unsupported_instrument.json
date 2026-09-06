@@ -1,0 +1,128 @@
+{
+  "schema_version": "composition.v1",
+  "tempo": 100,
+  "key": "A minor",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "duration_ticks": 3840,
+  "bar_count": 2,
+  "sections": [
+    {
+      "type": "verse",
+      "start_bar": 1,
+      "bar_count": 2,
+      "start_tick": 0,
+      "duration_ticks": 3840
+    }
+  ],
+  "tracks": [
+    {
+      "id": "lead-1",
+      "name": "Quantum Lead",
+      "instrument": "quantum_theremin_xyz",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "is_drum": false,
+      "volume": 100,
+      "pan": 0,
+      "staff": "treble",
+      "events": [
+        {
+          "type": "note",
+          "pitch": "A4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 90,
+          "id": null,
+          "staff": null,
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "C5",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 88,
+          "id": null,
+          "staff": null,
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "E5",
+          "start_tick": 960,
+          "duration_ticks": 960,
+          "velocity": 94,
+          "id": null,
+          "staff": null,
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "A4",
+          "start_tick": 1920,
+          "duration_ticks": 1920,
+          "velocity": 86,
+          "id": null,
+          "staff": null,
+          "voice": null
+        }
+      ]
+    },
+    {
+      "id": "bass-1",
+      "name": "Bass",
+      "instrument": "electric_bass",
+      "role": "bass",
+      "midi_program": 33,
+      "channel": 2,
+      "is_drum": false,
+      "volume": 95,
+      "pan": 0,
+      "staff": "bass",
+      "events": [
+        {
+          "type": "note",
+          "pitch": "A2",
+          "start_tick": 0,
+          "duration_ticks": 960,
+          "velocity": 100,
+          "id": null,
+          "staff": null,
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "E2",
+          "start_tick": 960,
+          "duration_ticks": 960,
+          "velocity": 98,
+          "id": null,
+          "staff": null,
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "A2",
+          "start_tick": 1920,
+          "duration_ticks": 1920,
+          "velocity": 102,
+          "id": null,
+          "staff": null,
+          "voice": null
+        }
+      ]
+    }
+  ],
+  "harmony": [
+    {
+      "bar": 1,
+      "chord": "Am"
+    },
+    {
+      "bar": 2,
+      "chord": "E"
+    }
+  ]
+}

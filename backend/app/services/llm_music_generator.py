@@ -109,6 +109,22 @@ async def generate_music_json(
     enforce_llm_generation_bounds(request)
     provider = _select_provider(request, active_settings)
 
+    from .fake_llm import FakeLLMError, generate_fake_music_json, is_fake_provider
+
+    if is_fake_provider(provider):
+        logger.info(
+            "Routing music generation to fake LLM provider",
+            extra={
+                "provider": provider.provider,
+                "model": _selected_model(request, provider),
+                "duration_bars": request.prompt.duration_bars,
+            },
+        )
+        try:
+            return await generate_fake_music_json(request, provider)
+        except FakeLLMError as exc:
+            raise InvalidLLMOutputError(str(exc)) from exc
+
     logger.info(
         "LLM music generation started",
         extra={

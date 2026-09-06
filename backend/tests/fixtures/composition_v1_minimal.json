@@ -1,0 +1,70 @@
+{
+  "schema_version": "composition.v1",
+  "tempo": 120,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "duration_ticks": 1920,
+  "bar_count": 1,
+  "sections": [
+    {
+      "type": "intro",
+      "start_bar": 1,
+      "bar_count": 1,
+      "start_tick": 0,
+      "duration_ticks": 1920
+    }
+  ],
+  "tracks": [
+    {
+      "id": "melody-1",
+      "name": "Melody",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "is_drum": false,
+      "volume": 100,
+      "pan": 0,
+      "staff": "treble",
+      "events": [
+        {
+          "type": "note",
+          "pitch": "C4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 90,
+          "id": null,
+          "staff": null,
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "E4",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 88,
+          "id": null,
+          "staff": null,
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "G4",
+          "start_tick": 960,
+          "duration_ticks": 960,
+          "velocity": 92,
+          "id": null,
+          "staff": null,
+          "voice": null
+        }
+      ]
+    }
+  ],
+  "harmony": [
+    {
+      "bar": 1,
+      "chord": "C"
+    }
+  ]
+}

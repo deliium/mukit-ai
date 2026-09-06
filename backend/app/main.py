@@ -124,17 +124,30 @@ async def get_llm_models():
         extra={"providers": [provider.provider for provider in settings.providers]},
     )
 
+    from .services.fake_llm import FAKE_DISPLAY_NAME, is_fake_provider
+
     models = [
         LLMProviderModel(
             provider=provider.provider,
             model=provider.model,
-            display_name=f"{provider.provider.title()} ({provider.model})",
+            display_name=(
+                FAKE_DISPLAY_NAME
+                if is_fake_provider(provider)
+                else f"{provider.provider.title()} ({provider.model})"
+            ),
             is_default=provider.is_default,
         )
         for provider in settings.providers
     ]
     default_model = next((provider.model for provider in settings.providers if provider.is_default), None)
-    warnings = [] if models else ["No LLM providers configured. Set OPENAI_API_KEY or DEEPSEEK_API_KEY."]
+    warnings = (
+        []
+        if models
+        else [
+            "No LLM providers configured. Set OPENAI_API_KEY or DEEPSEEK_API_KEY, "
+            "or enable LLM_FAKE_MODE=1 for credit-free demos/tests."
+        ]
+    )
 
     return LLMModelsResponse(
         models=models,

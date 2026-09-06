@@ -13,7 +13,7 @@ from tests.test_llm_composition_editing import _melody_patch_payload
 
 
 def test_get_llm_models_no_providers(monkeypatch):
-    for key in ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "DEFAULT_LLM_PROVIDER"]:
+    for key in ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "DEFAULT_LLM_PROVIDER", "LLM_FAKE_MODE"]:
         monkeypatch.delenv(key, raising=False)
 
     response = asyncio.run(get_llm_models())
@@ -24,7 +24,7 @@ def test_get_llm_models_no_providers(monkeypatch):
 
 
 def test_generate_llm_music_json_no_provider(monkeypatch):
-    for key in ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "DEFAULT_LLM_PROVIDER"]:
+    for key in ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "DEFAULT_LLM_PROVIDER", "LLM_FAKE_MODE"]:
         monkeypatch.delenv(key, raising=False)
     request = LLMMusicGenerationRequest.model_validate({"prompt": {"genre": "ambient", "mood": "calm"}})
 
@@ -35,7 +35,7 @@ def test_generate_llm_music_json_no_provider(monkeypatch):
 
 
 def test_edit_llm_composition_region_no_provider(monkeypatch):
-    for key in ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "DEFAULT_LLM_PROVIDER"]:
+    for key in ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "DEFAULT_LLM_PROVIDER", "LLM_FAKE_MODE"]:
         monkeypatch.delenv(key, raising=False)
     request = LLMCompositionEditRequest.model_validate(
         {

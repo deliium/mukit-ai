@@ -1,0 +1,202 @@
+{
+  "schema_version": "composition.v1",
+  "tempo": 96,
+  "key": "G minor",
+  "time_signature": "6/8",
+  "ticks_per_quarter": 480,
+  "duration_ticks": 2880,
+  "bar_count": 2,
+  "sections": [
+    {
+      "type": "intro",
+      "start_bar": 1,
+      "bar_count": 1,
+      "start_tick": 0,
+      "duration_ticks": 1440
+    },
+    {
+      "type": "verse",
+      "start_bar": 2,
+      "bar_count": 1,
+      "start_tick": 1440,
+      "duration_ticks": 1440
+    }
+  ],
+  "tracks": [
+    {
+      "id": "melody-1",
+      "name": "Melody",
+      "instrument": "flute",
+      "role": "melody",
+      "midi_program": 73,
+      "channel": 1,
+      "is_drum": false,
+      "volume": 110,
+      "pan": -10,
+      "staff": "treble",
+      "events": [
+        {
+          "type": "note",
+          "pitch": "G5",
+          "start_tick": 240,
+          "duration_ticks": 240,
+          "velocity": 96,
+          "id": null,
+          "staff": "treble",
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "Bb5",
+          "start_tick": 720,
+          "duration_ticks": 480,
+          "velocity": 88,
+          "id": null,
+          "staff": "treble",
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "D5",
+          "start_tick": 1200,
+          "duration_ticks": 720,
+          "velocity": 100,
+          "id": null,
+          "staff": "treble",
+          "voice": null
+        }
+      ]
+    },
+    {
+      "id": "harmony-2",
+      "name": "Harmony",
+      "instrument": "piano",
+      "role": "harmony",
+      "midi_program": 0,
+      "channel": 2,
+      "is_drum": false,
+      "volume": 90,
+      "pan": 0,
+      "staff": "grand",
+      "events": [
+        {
+          "type": "note",
+          "pitch": "G3",
+          "start_tick": 0,
+          "duration_ticks": 1440,
+          "velocity": 70,
+          "id": null,
+          "staff": "bass",
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "Bb3",
+          "start_tick": 0,
+          "duration_ticks": 1440,
+          "velocity": 72,
+          "id": null,
+          "staff": "bass",
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "D4",
+          "start_tick": 0,
+          "duration_ticks": 720,
+          "velocity": 74,
+          "id": null,
+          "staff": "treble",
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "F4",
+          "start_tick": 1440,
+          "duration_ticks": 960,
+          "velocity": 78,
+          "id": null,
+          "staff": "treble",
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "A4",
+          "start_tick": 1680,
+          "duration_ticks": 720,
+          "velocity": 82,
+          "id": null,
+          "staff": "treble",
+          "voice": null
+        }
+      ]
+    },
+    {
+      "id": "bass-3",
+      "name": "Bass",
+      "instrument": "electric_bass",
+      "role": "bass",
+      "midi_program": 33,
+      "channel": 3,
+      "is_drum": false,
+      "volume": 100,
+      "pan": 12,
+      "staff": "bass",
+      "events": [
+        {
+          "type": "note",
+          "pitch": "G2",
+          "start_tick": 0,
+          "duration_ticks": 720,
+          "velocity": 101,
+          "id": null,
+          "staff": null,
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "D2",
+          "start_tick": 720,
+          "duration_ticks": 720,
+          "velocity": 95,
+          "id": null,
+          "staff": null,
+          "voice": null
+        },
+        {
+          "type": "note",
+          "pitch": "G2",
+          "start_tick": 1440,
+          "duration_ticks": 1440,
+          "velocity": 105,
+          "id": null,
+          "staff": null,
+          "voice": null
+        }
+      ]
+    },
+    {
+      "id": "pad-4",
+      "name": "Pad",
+      "instrument": "strings",
+      "role": "pad",
+      "midi_program": 48,
+      "channel": 4,
+      "is_drum": false,
+      "volume": 60,
+      "pan": -20,
+      "staff": null,
+      "events": []
+    }
+  ],
+  "harmony": [
+    {
+      "bar": 1,
+      "chord": "Gm"
+    },
+    {
+      "bar": 2,
+      "chord": "D"
+    }
+  ]
+}
