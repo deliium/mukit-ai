@@ -8,6 +8,7 @@ import uvicorn
 
 from .db import ensure_database
 from .llm_settings import load_llm_settings
+from .routers.projects import router as projects_router
 from .schemas import (
     Composition,
     LLMMusicGenerationRequest,
@@ -50,6 +51,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(projects_router)
 
 
 def _composition_export_summary(composition: Composition) -> dict:
