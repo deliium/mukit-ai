@@ -6,6 +6,7 @@ import PlaybackControls from './PlaybackControls.jsx';
 import PromptJsonEditor from './PromptJsonEditor.jsx';
 import ExportControls from './ExportControls.jsx';
 import PianoRollEditor from './PianoRollEditor.jsx';
+import ProjectComposerBar from './ProjectComposerBar.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const Container = styled.div`
@@ -179,6 +180,8 @@ const MusicGenerator = () => {
         music: response.music,
         musicxml: response.musicxml,
         warnings: response.warnings,
+        provider: response.provider,
+        model: response.model,
       });
     } catch (error) {
       failGeneration(error.message);
@@ -187,6 +190,7 @@ const MusicGenerator = () => {
 
   return (
     <Container>
+      <ProjectComposerBar />
       <h2>LLM JSON Composer</h2>
         {!availableLlmModels.length && (
           <StatusMessage className="info">

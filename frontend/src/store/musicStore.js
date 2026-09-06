@@ -1,5 +1,13 @@
 import { create } from 'zustand';
 import { renderMusicXmlPreview } from '../api/musicApi.js';
+import {
+  createProject as createProjectRequest,
+  deleteProject as deleteProjectRequest,
+  duplicateProject as duplicateProjectRequest,
+  getProject as getProjectRequest,
+  listProjects as listProjectsRequest,
+  patchProject as patchProjectRequest,
+} from '../api/projectApi.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { compositionRevisionKey } from '../utils/playbackPosition.js';
 import {
@@ -12,6 +20,11 @@ import {
   sanitizeNoteSummary,
   updateTrackNote,
 } from '../utils/pianoRollEvents.js';
+
+export const AUTOSAVE_DEBOUNCE_MS = 900;
+
+let autosaveTimer = null;
+let autosaveRequestSeq = 0;
 
 const initialPrompt = {
   genre: 'ambient',
@@ -59,6 +72,16 @@ export const useMusicStore = create((set, get) => ({
   noteEditUndoStack: [],
   noteEditRedoStack: [],
 
+  activeView: 'home',
+  currentProjectId: null,
+  currentProjectName: '',
+  projectList: [],
+  projectListStatus: 'idle',
+  saveStatus: 'saved',
+  saveError: '',
+  lastSavedRevision: 'empty',
+  generationMeta: null,
+
   setApiStatus: (apiStatus) => {
     console.debug('[musicStore] API status changed', { apiStatus });
     set({ apiStatus });
@@ -98,10 +121,16 @@ export const useMusicStore = create((set, get) => ({
     set({ generationStatus: 'loading', uiError: '', warnings: [] });
   },
 
-  completeGeneration: ({ music, musicxml, warnings = [] }) => {
+  completeGeneration: ({ music, musicxml, warnings = [], provider = null, model = null }) => {
     const { composition } = ensureCompositionNoteIds(music);
     const validation = validateMusicJson(composition);
     const revision = compositionRevisionKey(composition);
+    const promptSnapshot = buildPromptSnapshot(get().prompt);
+    const generationMeta = {
+      provider: provider || get().selectedProvider || null,
+      model: model || get().selectedModel || null,
+      prompt: promptSnapshot,
+    };
     console.debug('[musicStore] LLM generation completed', {
       hasMusic: Boolean(composition),
       schemaVersion: composition?.schema_version || 'legacy',
@@ -110,6 +139,9 @@ export const useMusicStore = create((set, get) => ({
       warningCount: warnings.length,
       valid: validation.valid,
       compositionRevision: revision.slice(0, 48),
+      provider: generationMeta.provider,
+      model: generationMeta.model,
+      projectId: get().currentProjectId,
     });
     if (!validation.valid) {
       console.error('[musicStore] Generated music JSON failed validation', { message: validation.message });
@@ -133,7 +165,9 @@ export const useMusicStore = create((set, get) => ({
       pianoRollNotationError: '',
       noteEditUndoStack: [],
       noteEditRedoStack: [],
+      generationMeta,
     });
+    markProjectDirty(set, get, revision);
   },
 
   failGeneration: (message) => {
@@ -181,15 +215,17 @@ export const useMusicStore = create((set, get) => ({
       noteEditUndoStack: [],
       noteEditRedoStack: [],
     });
+    markProjectDirty(set, get, revision);
   },
 
   resetEditedMusicJson: () => {
     console.debug('[musicStore] Edited music JSON reset');
     set((state) => {
       const music = state.generatedMusicJson;
+      const revision = compositionRevisionKey(music);
       return {
         editedMusicJson: music,
-        compositionRevision: compositionRevisionKey(music),
+        compositionRevision: revision,
         trackControls: buildDefaultTrackControls(music),
         pianoRollTrackId: pickDefaultTrackId(music),
         pianoRollNoteId: null,
@@ -198,6 +234,7 @@ export const useMusicStore = create((set, get) => ({
         noteEditRedoStack: [],
       };
     });
+    markProjectDirty(set, get, get().compositionRevision);
   },
 
   selectPianoRollTrack: (trackId) => {
@@ -392,6 +429,7 @@ export const useMusicStore = create((set, get) => ({
       noteEditRedoStack: nextRedo,
       pianoRollEditStatus: 'idle',
     });
+    markProjectDirty(set, get, revision);
     return true;
   },
 
@@ -422,6 +460,7 @@ export const useMusicStore = create((set, get) => ({
       noteEditRedoStack: nextRedo,
       pianoRollEditStatus: 'idle',
     });
+    markProjectDirty(set, get, revision);
     return true;
   },
 
@@ -550,6 +589,264 @@ export const useMusicStore = create((set, get) => ({
     }
     set({ uiError });
   },
+
+  goHome: async () => {
+    console.info('[musicStore] View transition', { activeView: 'home', projectId: get().currentProjectId });
+    cancelAutosaveTimer();
+    set({ activeView: 'home' });
+    await get().loadProjectList();
+  },
+
+  loadProjectList: async () => {
+    console.debug('[musicStore] Loading project list');
+    set({ projectListStatus: 'loading' });
+    try {
+      const response = await listProjectsRequest();
+      const projects = response?.projects || [];
+      console.info('[musicStore] Project list loaded', { count: projects.length });
+      set({ projectList: projects, projectListStatus: 'success' });
+      return projects;
+    } catch (error) {
+      console.error('[musicStore] Project list failed', { message: error.message });
+      set({ projectListStatus: 'error', uiError: error.message });
+      throw error;
+    }
+  },
+
+  createNewProject: async (name = 'Untitled Project') => {
+    console.info('[musicStore] Creating project', { nameLength: name.length });
+    try {
+      const project = await createProjectRequest({ name });
+      hydrateProject(set, get, project, { openComposer: true, markSaved: true });
+      console.info('[musicStore] Project created and opened', { projectId: project.id });
+      return project;
+    } catch (error) {
+      console.error('[musicStore] Project create failed', { message: error.message });
+      set({ uiError: error.message });
+      throw error;
+    }
+  },
+
+  openProject: async (projectId) => {
+    console.info('[musicStore] Opening project', { projectId });
+    try {
+      const project = await getProjectRequest(projectId);
+      hydrateProject(set, get, project, { openComposer: true, markSaved: true });
+      console.info('[musicStore] Project opened', {
+        projectId: project.id,
+        hasComposition: Boolean(project.composition),
+        compositionMigrated: Boolean(project.composition_migrated),
+      });
+      return project;
+    } catch (error) {
+      console.error('[musicStore] Project open failed', { projectId, message: error.message });
+      set({ uiError: error.message });
+      throw error;
+    }
+  },
+
+  renameCurrentProject: async (name) => {
+    const projectId = get().currentProjectId;
+    if (!projectId) {
+      console.warn('[musicStore] rename ignored; no open project');
+      return null;
+    }
+    const trimmed = String(name || '').trim();
+    if (!trimmed) {
+      console.warn('[musicStore] rename rejected empty name', { projectId });
+      return null;
+    }
+    console.info('[musicStore] Renaming project', { projectId, nameLength: trimmed.length });
+    set({ currentProjectName: trimmed, saveStatus: 'saving', saveError: '' });
+    try {
+      const project = await patchProjectRequest(projectId, { name: trimmed });
+      set({
+        currentProjectName: project.name,
+        saveStatus: get().compositionRevision === get().lastSavedRevision ? 'saved' : get().saveStatus,
+      });
+      // If composition still dirty keep unsaved; rename alone is persisted.
+      if (get().compositionRevision === get().lastSavedRevision) {
+        set({ saveStatus: 'saved', saveError: '' });
+      } else {
+        set({ saveStatus: 'unsaved', saveError: '' });
+        scheduleAutosave(set, get);
+      }
+      console.info('[musicStore] Project renamed', { projectId });
+      return project;
+    } catch (error) {
+      console.error('[musicStore] Project rename failed', { projectId, message: error.message });
+      set({ saveStatus: 'error', saveError: error.message });
+      throw error;
+    }
+  },
+
+  renameProjectById: async (projectId, name) => {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) {
+      console.warn('[musicStore] renameProjectById rejected empty name', { projectId });
+      return null;
+    }
+    console.info('[musicStore] Renaming project from browser', { projectId, nameLength: trimmed.length });
+    try {
+      const project = await patchProjectRequest(projectId, { name: trimmed });
+      if (get().currentProjectId === projectId) {
+        set({ currentProjectName: project.name });
+      }
+      await get().loadProjectList();
+      return project;
+    } catch (error) {
+      console.error('[musicStore] Browser rename failed', { projectId, message: error.message });
+      set({ uiError: error.message });
+      throw error;
+    }
+  },
+
+  duplicateProjectById: async (projectId) => {
+    console.info('[musicStore] Duplicating project', { projectId });
+    try {
+      const project = await duplicateProjectRequest(projectId);
+      await get().loadProjectList();
+      console.info('[musicStore] Project duplicated', { sourceProjectId: projectId, projectId: project.id });
+      return project;
+    } catch (error) {
+      console.error('[musicStore] Project duplicate failed', { projectId, message: error.message });
+      set({ uiError: error.message });
+      throw error;
+    }
+  },
+
+  deleteProjectById: async (projectId) => {
+    console.info('[musicStore] Deleting project', { projectId });
+    try {
+      await deleteProjectRequest(projectId);
+      if (get().currentProjectId === projectId) {
+        cancelAutosaveTimer();
+        console.info('[musicStore] Cleared active project after delete', { projectId });
+        set({
+          currentProjectId: null,
+          currentProjectName: '',
+          activeView: 'home',
+          generatedMusicJson: null,
+          editedMusicJson: null,
+          musicXml: '',
+          compositionRevision: 'empty',
+          lastSavedRevision: 'empty',
+          saveStatus: 'saved',
+          saveError: '',
+          generationMeta: null,
+          noteEditUndoStack: [],
+          noteEditRedoStack: [],
+        });
+      }
+      await get().loadProjectList();
+      console.info('[musicStore] Project deleted', { projectId });
+    } catch (error) {
+      console.error('[musicStore] Project delete failed', { projectId, message: error.message });
+      set({ uiError: error.message });
+      throw error;
+    }
+  },
+
+  saveCurrentProject: async ({ reason = 'manual' } = {}) => {
+    const state = get();
+    const projectId = state.currentProjectId;
+    if (!projectId) {
+      console.debug('[musicStore] Save skipped; no open project', { reason });
+      return null;
+    }
+    if (state.compositionRevision === state.lastSavedRevision && reason !== 'manual-force') {
+      console.debug('[musicStore] Save skipped; already saved', {
+        reason,
+        projectId,
+        revision: state.compositionRevision.slice(0, 48),
+      });
+      set({ saveStatus: 'saved', saveError: '' });
+      return null;
+    }
+
+    const requestId = ++autosaveRequestSeq;
+    const revisionAtStart = state.compositionRevision;
+    const composition = state.editedMusicJson;
+    const payload = {
+      composition: composition || undefined,
+      clear_composition: !composition,
+    };
+    if (state.generationMeta) {
+      payload.generation = {
+        provider: state.generationMeta.provider || null,
+        model: state.generationMeta.model || null,
+        prompt: state.generationMeta.prompt || null,
+      };
+    }
+
+    console.info('[musicStore] Saving project', {
+      reason,
+      projectId,
+      requestId,
+      eventCount: countEvents(composition),
+      revision: revisionAtStart.slice(0, 48),
+    });
+    console.debug('[musicStore] Save status transition', { from: state.saveStatus, to: 'saving', reason });
+    set({ saveStatus: 'saving', saveError: '' });
+
+    try {
+      const project = await patchProjectRequest(projectId, payload);
+      if (requestId !== autosaveRequestSeq) {
+        console.warn('[musicStore] Ignoring stale save response', { requestId, latest: autosaveRequestSeq });
+        return project;
+      }
+      const stillCurrent = get().currentProjectId === projectId;
+      if (!stillCurrent) {
+        console.warn('[musicStore] Save completed after project closed', { projectId, requestId });
+        return project;
+      }
+      const currentRevision = get().compositionRevision;
+      if (currentRevision !== revisionAtStart) {
+        console.debug('[musicStore] Save completed but newer edits exist', {
+          projectId,
+          savedRevision: revisionAtStart.slice(0, 48),
+          currentRevision: currentRevision.slice(0, 48),
+        });
+        set({
+          lastSavedRevision: revisionAtStart,
+          saveStatus: 'unsaved',
+          saveError: '',
+        });
+        scheduleAutosave(set, get);
+        return project;
+      }
+      console.info('[musicStore] Project saved', {
+        reason,
+        projectId,
+        eventCount: countEvents(composition),
+      });
+      console.debug('[musicStore] Save status transition', { from: 'saving', to: 'saved', reason });
+      set({
+        lastSavedRevision: revisionAtStart,
+        saveStatus: 'saved',
+        saveError: '',
+        currentProjectName: project.name || get().currentProjectName,
+      });
+      return project;
+    } catch (error) {
+      if (requestId !== autosaveRequestSeq) {
+        return null;
+      }
+      console.error('[musicStore] Project save failed', {
+        reason,
+        projectId,
+        message: error.message,
+        status: error.status,
+      });
+      console.debug('[musicStore] Save status transition', { from: 'saving', to: 'error', reason });
+      set({ saveStatus: 'error', saveError: error.message });
+      throw error;
+    }
+  },
+
+  scheduleAutosave: () => {
+    scheduleAutosave(set, get);
+  },
 }));
 
 function selectModel(models, defaults, state) {
@@ -665,6 +962,7 @@ function applyNoteEdit(set, get, {
     noteEditUndoStack,
     noteEditRedoStack,
   });
+  markProjectDirty(set, get, revision);
 }
 
 function findNote(composition, trackId, noteId) {
@@ -680,4 +978,130 @@ function noteStillExists(composition, trackId, noteId) {
     return false;
   }
   return Boolean(findNote(composition, trackId, noteId));
+}
+
+function cancelAutosaveTimer() {
+  if (autosaveTimer) {
+    console.debug('[musicStore] Autosave debounce cancelled');
+    clearTimeout(autosaveTimer);
+    autosaveTimer = null;
+  }
+}
+
+function markProjectDirty(set, get, revision) {
+  const state = get();
+  if (!state.currentProjectId) {
+    return;
+  }
+  if (revision === state.lastSavedRevision) {
+    set({ saveStatus: 'saved', saveError: '' });
+    cancelAutosaveTimer();
+    return;
+  }
+  console.debug('[musicStore] Project marked unsaved', {
+    projectId: state.currentProjectId,
+    revision: String(revision).slice(0, 48),
+  });
+  set({ saveStatus: 'unsaved', saveError: '' });
+  scheduleAutosave(set, get);
+}
+
+function scheduleAutosave(set, get) {
+  const state = get();
+  if (!state.currentProjectId) {
+    console.debug('[musicStore] Autosave skipped; no open project');
+    return;
+  }
+  if (state.compositionRevision === state.lastSavedRevision) {
+    console.debug('[musicStore] Autosave skipped; clean revision');
+    return;
+  }
+  cancelAutosaveTimer();
+  console.debug('[musicStore] Autosave debounce scheduled', {
+    projectId: state.currentProjectId,
+    delayMs: AUTOSAVE_DEBOUNCE_MS,
+    revision: state.compositionRevision.slice(0, 48),
+  });
+  autosaveTimer = setTimeout(() => {
+    autosaveTimer = null;
+    console.debug('[musicStore] Autosave debounce fired', {
+      projectId: get().currentProjectId,
+    });
+    get().saveCurrentProject({ reason: 'autosave' }).catch(() => {
+      // error already recorded on saveStatus
+    });
+  }, AUTOSAVE_DEBOUNCE_MS);
+}
+
+function hydrateProject(set, get, project, { openComposer = true, markSaved = true } = {}) {
+  const composition = project.composition
+    ? ensureCompositionNoteIds(project.composition).composition
+    : null;
+  const revision = compositionRevisionKey(composition);
+  const generationMeta = project.generation_provider || project.generation_model || project.generation_prompt
+    ? {
+      provider: project.generation_provider || null,
+      model: project.generation_model || null,
+      prompt: project.generation_prompt || null,
+    }
+    : null;
+
+  console.debug('[musicStore] Hydrating project into composer state', {
+    projectId: project.id,
+    hasComposition: Boolean(composition),
+    openComposer,
+    markSaved,
+  });
+
+  cancelAutosaveTimer();
+  set({
+    currentProjectId: project.id,
+    currentProjectName: project.name,
+    activeView: openComposer ? 'composer' : get().activeView,
+    generatedMusicJson: composition,
+    editedMusicJson: composition,
+    musicXml: '',
+    compositionRevision: revision,
+    lastSavedRevision: markSaved ? revision : get().lastSavedRevision,
+    saveStatus: markSaved ? 'saved' : 'unsaved',
+    saveError: '',
+    generationMeta,
+    trackControls: buildDefaultTrackControls(composition),
+    playbackStatus: 'idle',
+    playbackSeconds: 0,
+    playbackBar: 1,
+    pianoRollTrackId: pickDefaultTrackId(composition),
+    pianoRollNoteId: null,
+    pianoRollEditStatus: 'idle',
+    pianoRollNotationStatus: 'idle',
+    pianoRollNotationError: '',
+    noteEditUndoStack: [],
+    noteEditRedoStack: [],
+    uiError: '',
+  });
+}
+
+function buildPromptSnapshot(prompt) {
+  return {
+    genre: prompt.genre,
+    mood: prompt.mood,
+    key: prompt.key || null,
+    time_signature: prompt.time_signature,
+    tempo_min: Number(prompt.tempo_min),
+    tempo_max: Number(prompt.tempo_max),
+    instruments: String(prompt.instruments || '')
+      .split(',')
+      .map((instrument) => instrument.trim())
+      .filter(Boolean),
+    sections: String(prompt.sections || '')
+      .split(',')
+      .map((section) => {
+        const [type, bars] = section.split(':').map((part) => part.trim());
+        return type && bars ? { type, bars: Number(bars) } : null;
+      })
+      .filter(Boolean),
+    complexity: prompt.complexity,
+    duration_bars: Number(prompt.duration_bars),
+    instructions: prompt.instructions || null,
+  };
 }

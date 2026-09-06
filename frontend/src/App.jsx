@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect } from 'react';
 import styled from 'styled-components';
 import MusicGenerator from './components/MusicGenerator.jsx';
+import ProjectBrowser from './components/ProjectBrowser.jsx';
 import Header from './components/Header.jsx';
 import { getHealth, getLlmModels } from './api/musicApi.js';
 import { useMusicStore } from './store/musicStore.js';
@@ -58,6 +59,7 @@ const StatusDot = styled.div`
 
 function App() {
   const apiStatus = useMusicStore((state) => state.apiStatus);
+  const activeView = useMusicStore((state) => state.activeView);
   const setApiStatus = useMusicStore((state) => state.setApiStatus);
   const setAvailableLlmModels = useMusicStore((state) => state.setAvailableLlmModels);
   const setUiError = useMusicStore((state) => state.setUiError);
@@ -85,6 +87,10 @@ function App() {
     checkApiStatus();
   }, [checkApiStatus]);
 
+  useEffect(() => {
+    console.debug('[App] Active view changed', { activeView });
+  }, [activeView]);
+
   return (
     <AppContainer>
       <Header />
@@ -104,7 +110,7 @@ function App() {
 
       <MainContent>
         <Card>
-          <MusicGenerator />
+          {activeView === 'home' ? <ProjectBrowser /> : <MusicGenerator />}
         </Card>
       </MainContent>
     </AppContainer>
