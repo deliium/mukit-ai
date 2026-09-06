@@ -21,29 +21,42 @@ A full-stack LLM music composer that generates canonical playable `composition.v
 - **LLM Orchestration**: LangChain/LangGraph with OpenAI-compatible chat providers
 - **Frontend State**: Zustand store for API status, LLM models, project browser/save status, generation output, piano-roll edit state, notation, playback transport state, and per-track mute/solo/volume
 
-## 📋 Prerequisites
+## Prerequisites
 
-- **Recommended (V1):** Docker + Docker Compose, plus one LLM provider API key
+- **Recommended (V1):** Docker + Docker Compose
+- For demos/tests without API spend: `LLM_FAKE_MODE=1` (no OpenAI/DeepSeek keys required)
+- For real LLM generation: one provider API key (`OPENAI_API_KEY` and/or `DEEPSEEK_API_KEY`)
 - Optional host-local: Python 3.14+, Node.js 20+, npm
 
 ## First run (Docker) — production-local V1
 
-On a clean machine with Docker Compose and one provider API key:
-
 1. Copy `.env.example` → `.env`
-2. Set at least one of `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` (optional models/timeouts documented in `.env.example`)
+2. Either:
+   - **Credit-free demo/tests:** set `LLM_FAKE_MODE=1` (and optionally `DEFAULT_LLM_PROVIDER=fake`), or
+   - **Real providers:** set at least one of `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` (models/timeouts in `.env.example`)
 3. `docker compose up --build`
 4. Open **http://localhost:3000** (nginx SPA; API proxied same-origin). Backend also on **http://localhost:8888** for debugging.
-5. Primary workflow: **Projects** → New/Open → **Generate** → playback → piano roll → notation tab → AI partial edit → save → export (MusicXML/MIDI/WAV)
 
-Secrets stay in `.env` / Compose and are passed **only to the backend**. Frontend never receives API keys.
+Secrets stay in `.env` / Compose and are passed **only to the backend**. Frontend never receives API keys. Fake mode never opens network sockets to OpenAI/DeepSeek.
+
+### V1 workflow
+
+1. **Projects** → New Project (or Open)
+2. Select a configured model (Fake deterministic, or a real provider)
+3. Generate 16–32 bar multi-track composition
+4. Play (Tone.js), view notation (OSMD), edit notes on the piano roll
+5. AI region edit (select bars → instruction → Regenerate Selection)
+6. Undo note edits if needed → Save
+7. Export MusicXML / MIDI / WAV
+8. `docker compose restart` → reopen the same project (named volume keeps SQLite)
 
 - Named volume `mukit_project_data` persists SQLite at `/data/projects.db`. Prefer `docker compose restart` or `down` without `-v`.
 - Both services use `restart: unless-stopped` and healthchecks (`GET /health` on backend; HTTP on frontend).
 - Hot-reload override (optional): `docker compose -f docker-compose.yml -f compose.dev.yml up --build`
-- Logging: set `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` (default `INFO`). Never expect keys/prompts/raw MusicXML in logs.
+- Logging: set `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` (default `INFO`). Never expect keys/prompts/raw MusicXML/MIDI/WAV in logs.
+- Acceptance commands: see `docs/testing.md` (pytest, Playwright, Docker persistence script).
 
-## 🛠️ Installation (host-local optional)
+## Installation (host-local optional)
 
 ### Backend Setup
 

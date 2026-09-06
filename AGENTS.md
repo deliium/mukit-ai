@@ -22,16 +22,19 @@ mukit-ai/
 │   │   ├── main.py          # Composition / LLM / export routes
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
 │   │   ├── routers/         # Projects HTTP API
-│   │   ├── services/        # Domain + orchestration services
+│   │   ├── services/        # Domain + orchestration services (+ fake_llm, fixture_compositions)
+│   │   ├── fixtures/        # Canonical composition.v1 JSON for fake LLM / tests
 │   │   ├── db/              # SQLite connection + migrations
 │   │   └── schemas.py       # composition.v1 + LLM models
 │   └── tests/
 ├── frontend/                # React + Vite SPA
+│   ├── e2e/                 # Playwright V1 acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
 │       ├── components/      # Workspace, generator, piano roll, playback, …
 │       ├── store/           # Zustand musicStore
 │       └── utils/           # validation, playback, piano-roll helpers
+├── scripts/                 # e.g. v1_docker_acceptance.sh
 ├── docs/                    # composition.v1, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
@@ -45,6 +48,7 @@ mukit-ai/
 | File | Purpose |
 |------|---------|
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
+| `backend/app/services/fake_llm.py` | Deterministic `LLM_FAKE_MODE` generate/edit (no API credits) |
 | `backend/app/ready.py` | Logging/CORS helpers and readiness report |
 | `backend/app/routers/projects.py` | Project CRUD + autosave APIs |
 | `backend/run.py` / `uvicorn app.main:app` | Backend process entry |

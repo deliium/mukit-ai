@@ -30,6 +30,8 @@ mukit-ai/
 │   │   ├── services/               # Application services (orchestration + domain helpers)
 │   │   │   ├── llm_music_generator.py
 │   │   │   ├── llm_composition_editor.py
+│   │   │   ├── fake_llm.py              # LLM_FAKE_MODE deterministic generate/edit
+│   │   │   ├── fixture_compositions.py  # Load packaged Composition V1 fixtures
 │   │   │   ├── composition_planner.py
 │   │   │   ├── composition_validator.py
 │   │   │   ├── composition_normalizer.py
@@ -40,6 +42,7 @@ mukit-ai/
 │   │   │   ├── composition_wav.py
 │   │   │   ├── project_store.py         # SQLite persistence
 │   │   │   └── project_composition.py   # Project ↔ composition mapping
+│   │   ├── fixtures/               # Shared composition.v1 JSON (fake LLM + tests)
 │   │   └── db/                     # Shared infrastructure: connection + SQL migrations
 │   │       ├── connection.py
 │   │       └── migrations/
@@ -47,6 +50,7 @@ mukit-ai/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
+│   ├── e2e/                        # Playwright V1 acceptance
 │   └── src/
 │       ├── api/                    # HTTP clients (outbound adapters)
 │       │   ├── musicApi.js

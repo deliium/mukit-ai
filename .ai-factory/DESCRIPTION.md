@@ -19,7 +19,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - **Framework:** FastAPI + Uvicorn; React 18 + Vite
 - **Database:** SQLite (`PROJECT_DB_PATH`) with numbered SQL migrations
 - **ORM:** None — raw SQL via `sqlite3` helpers in `backend/app/db/` and `project_store`
-- **LLM:** LangChain / LangGraph with OpenAI-compatible providers (OpenAI, DeepSeek)
+- **LLM:** LangChain / LangGraph with OpenAI-compatible providers (OpenAI, DeepSeek) plus optional `LLM_FAKE_MODE` deterministic fixture provider for demos/E2E
 - **Music processing:** music21 (MusicXML), mido (MIDI), FluidSynth + SoundFont (WAV)
 - **Frontend libraries:** Zustand, styled-components, Tone.js, OpenSheetMusicDisplay, axios
 - **Integrations:** Docker Compose production-local stack (`backend` + nginx `frontend`), optional LLM API keys via `.env` / Compose (backend-only)

@@ -9,9 +9,15 @@ Run backend unit tests from the `backend/` directory:
 ```
 
 The LLM tests mock provider behavior and do not call OpenAI or DeepSeek APIs.
+Set `LLM_FAKE_MODE=1` for a deterministic in-process fake provider (fixtures under
+`backend/app/fixtures/` / `backend/tests/fixtures/`) used by unit tests, Docker
+acceptance, and Playwright.
 
 Focused canonical coverage includes:
 
+- `backend/tests/test_llm_fake_provider.py` for fake generate/edit, `/llm/models`, malformed `502` without clobbering projects, and unsupported-instrument fixture export.
+- `backend/tests/test_secret_hygiene.py` for `/ready`, `/llm/models`, project CRUD, and committed config secret leakage checks.
+- `backend/tests/test_docker_persistence_acceptance.py` opt-in Compose restart persistence (`RUN_DOCKER_ACCEPTANCE=1`).
 - `backend/tests/test_composition_schema.py` for `composition.v1` validation, 4/4, 3/4, 6/8 timing, invalid pitches, velocities, durations, duplicate tracks, and section boundaries.
 - `backend/tests/test_composition_normalizer.py` for legacy migration, velocity defaults, canonical pass-through, and harmony-only rejection.
 - `backend/tests/test_composition_midi.py` for MIDI-ready timing, channel, program, velocity preservation, and Standard MIDI File rendering.
@@ -57,6 +63,18 @@ RUN_WAV_RENDERER_SMOKE=1 ../.venv/bin/python -m pytest tests/test_wav_renderer_s
 
 Useful logs: renderer path basename, SoundFont basename, byte length, measured duration, missing-bin/SoundFont errors, timeout, invalid WAV, and duration padding warnings. Raw composition/audio bytes are never logged.
 
+### Opt-in Docker Persistence Acceptance
+
+Proves healthchecks + named-volume reopen after Compose restart with **fake LLM only** (no API credits):
+
+```bash
+RUN_DOCKER_ACCEPTANCE=1 ./scripts/v1_docker_acceptance.sh
+# or
+RUN_DOCKER_ACCEPTANCE=1 ../.venv/bin/python -m pytest tests/test_docker_persistence_acceptance.py
+```
+
+Uses Compose project name `mukit-v1-accept` by default and removes the volume on exit unless `KEEP_VOLUME=1`.
+
 ## Frontend Tests
 
 Run from `frontend/`:
@@ -65,7 +83,30 @@ Run from `frontend/`:
 npm test
 ```
 
-The frontend uses Node's built-in test runner for browser-independent utilities and store actions. Tests cover:
+### Playwright V1 E2E (fake LLM)
+
+Requires a running stack with `LLM_FAKE_MODE=1` (Compose preferred):
+
+```bash
+# once
+npx playwright install chromium
+
+# against http://localhost:3000
+LLM_FAKE_MODE=1 docker compose up --build -d
+npm run test:e2e
+# UI mode
+npm run test:e2e:ui
+```
+
+Specs live in `frontend/e2e/`. Persistence reopen after Compose restart is opt-in:
+
+```bash
+RUN_PLAYWRIGHT_DOCKER_RESTART=1 npm run test:e2e -- e2e/v1-persistence.spec.js
+```
+
+Artifacts (trace/video on failure) are gitignored under `frontend/test-results/` and `frontend/playwright-report/`.
+
+## Frontend Smoke Checks
 
 - canonical JSON validation, invalid velocity rejection, and legacy harmony-only rejection
 - piano-roll pitch conversion, snap intervals (480 TPQ), 4/4 and 6/8 bar metrics, create/move/resize/delete immutability, clamping, and polyphony
