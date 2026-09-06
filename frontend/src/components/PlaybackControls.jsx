@@ -3,9 +3,15 @@ import * as Tone from 'tone';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
 import { buildCanonicalPlaybackEvents } from '../utils/playbackEvents.js';
+import { buildLegacyPlaybackEvents } from '../utils/legacyPlaybackEvents.js';
+import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
+import { compositionRevisionKey, secondsToPlaybackPosition } from '../utils/playbackPosition.js';
+import { createPlaybackEngine } from '../utils/tonePlaybackEngine.js';
+import TrackPlaybackControls from './TrackPlaybackControls.jsx';
 
 const Controls = styled.div`
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 20px;
 
@@ -16,7 +22,12 @@ const Controls = styled.div`
 
 const Button = styled.button`
   flex: 1;
-  background: ${(props) => (props.$variant === 'stop' ? '#ef4444' : '#10b981')};
+  min-width: 120px;
+  background: ${(props) => {
+    if (props.$variant === 'stop') return '#ef4444';
+    if (props.$variant === 'secondary') return '#374151';
+    return '#10b981';
+  }};
   color: white;
   border: none;
   padding: 12px 16px;
@@ -30,6 +41,12 @@ const Button = styled.button`
   }
 `;
 
+const StatusRow = styled.div`
+  margin-top: 12px;
+  color: #374151;
+  font-size: 0.9rem;
+`;
+
 const ErrorText = styled.div`
   margin-top: 10px;
   color: #991b1b;
@@ -39,57 +56,136 @@ const ErrorText = styled.div`
 const PlaybackControls = () => {
   const editedMusicJson = useMusicStore((state) => state.editedMusicJson);
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
+  const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
+  const playbackBar = useMusicStore((state) => state.playbackBar);
+  const trackControls = useMusicStore((state) => state.trackControls);
+  const compositionRevision = useMusicStore((state) => state.compositionRevision);
   const setPlaybackStatus = useMusicStore((state) => state.setPlaybackStatus);
+  const setPlaybackPosition = useMusicStore((state) => state.setPlaybackPosition);
   const setUiError = useMusicStore((state) => state.setUiError);
-  const synthRef = useRef(null);
+  const toggleTrackMute = useMusicStore((state) => state.toggleTrackMute);
+  const toggleTrackSolo = useMusicStore((state) => state.toggleTrackSolo);
+  const setTrackVolume = useMusicStore((state) => state.setTrackVolume);
+  const syncTrackControlsFromComposition = useMusicStore((state) => state.syncTrackControlsFromComposition);
 
-  useEffect(() => () => stopPlayback(synthRef, setPlaybackStatus), [setPlaybackStatus]);
+  const engineRef = useRef(null);
+  const legacySynthRef = useRef(null);
+  const scheduledRevisionRef = useRef('');
+  const positionTimerRef = useRef(null);
+
+  useEffect(() => {
+    syncTrackControlsFromComposition(editedMusicJson);
+  }, [editedMusicJson, syncTrackControlsFromComposition]);
+
+  useEffect(() => {
+    if (!engineRef.current) {
+      engineRef.current = createPlaybackEngine({ Tone, logger: console });
+    }
+    return () => {
+      clearPositionTimer(positionTimerRef);
+      if (engineRef.current) {
+        engineRef.current.dispose();
+        engineRef.current = null;
+      }
+      disposeLegacySynth(legacySynthRef);
+      setPlaybackStatus('idle');
+      setPlaybackPosition({ seconds: 0, bar: 1 });
+    };
+  }, [setPlaybackPosition, setPlaybackStatus]);
+
+  useEffect(() => {
+    if (!scheduledRevisionRef.current) {
+      return undefined;
+    }
+    if (scheduledRevisionRef.current === compositionRevision) {
+      return undefined;
+    }
+    if (playbackStatus === 'playing' || playbackStatus === 'paused' || playbackStatus === 'loading') {
+      console.info('[PlaybackControls] Active playback stopped because edited composition changed', {
+        previousRevision: scheduledRevisionRef.current.slice(0, 48),
+        currentRevision: compositionRevision.slice(0, 48),
+      });
+      stopEverything({
+        engineRef,
+        legacySynthRef,
+        positionTimerRef,
+        scheduledRevisionRef,
+        setPlaybackStatus,
+        setPlaybackPosition,
+      });
+    }
+    return undefined;
+  }, [compositionRevision, playbackStatus, setPlaybackPosition, setPlaybackStatus]);
+
+  useEffect(() => {
+    if (!engineRef.current || !isCanonicalComposition(editedMusicJson)) {
+      return undefined;
+    }
+    if (playbackStatus !== 'playing' && playbackStatus !== 'paused') {
+      return undefined;
+    }
+    console.debug('[PlaybackControls] Applying live track control overrides');
+    engineRef.current.applyTrackOverrides(trackControls);
+    return undefined;
+  }, [trackControls, editedMusicJson, playbackStatus]);
 
   const handlePlay = async () => {
     if (!editedMusicJson) {
       setUiError('Generate or edit music JSON before playback.');
+      console.warn('[PlaybackControls] Play ignored; no composition loaded');
+      return;
+    }
+
+    const validation = validateMusicJson(editedMusicJson);
+    if (!validation.valid && isCanonicalComposition(editedMusicJson)) {
+      console.warn('[PlaybackControls] Rejected unsupported/invalid canonical playback JSON', {
+        message: validation.message,
+      });
+      setUiError(validation.message || 'Canonical composition JSON is invalid for playback.');
+      setPlaybackStatus('error');
       return;
     }
 
     try {
       setPlaybackStatus('loading');
-      console.debug('[PlaybackControls] Audio initialization started');
+      console.info('[PlaybackControls] User play action', {
+        path: isCanonicalComposition(editedMusicJson) ? 'canonical' : 'legacy',
+      });
       await Tone.start();
-      stopPlayback(synthRef, setPlaybackStatus);
 
-      const synth = new Tone.PolySynth(Tone.Synth).toDestination();
-      synthRef.current = synth;
-      Tone.Transport.bpm.value = editedMusicJson.tempo || 100;
-      Tone.Transport.cancel();
-      Tone.Transport.position = 0;
-
-      const events = buildPlaybackEvents(editedMusicJson);
-      console.debug('[PlaybackControls] Playback schedule summary', {
-        eventCount: events.length,
-        tempo: editedMusicJson.tempo,
-        transportState: Tone.Transport.state,
+      stopEverything({
+        engineRef,
+        legacySynthRef,
+        positionTimerRef,
+        scheduledRevisionRef,
+        setPlaybackStatus,
+        setPlaybackPosition,
+        preserveStatus: true,
       });
 
-      if (!events.length) {
-        console.warn('[PlaybackControls] No playable note events found');
-        setUiError('No playable note events found in the current JSON.');
-        setPlaybackStatus('error');
+      if (isCanonicalComposition(editedMusicJson)) {
+        await startCanonicalPlayback({
+          editedMusicJson,
+          trackControls,
+          engineRef,
+          scheduledRevisionRef,
+          positionTimerRef,
+          setPlaybackStatus,
+          setPlaybackPosition,
+          setUiError,
+        });
         return;
       }
 
-      events.forEach((event) => {
-        Tone.Transport.schedule((time) => {
-          synth.triggerAttackRelease(event.notes, event.duration, time, event.velocity);
-        }, event.position);
+      await startLegacyPlayback({
+        editedMusicJson,
+        legacySynthRef,
+        scheduledRevisionRef,
+        positionTimerRef,
+        setPlaybackStatus,
+        setPlaybackPosition,
+        setUiError,
       });
-
-      Tone.Transport.scheduleOnce(() => {
-        stopPlayback(synthRef, setPlaybackStatus);
-      }, playbackEndPosition(events));
-
-      Tone.Transport.start();
-      setPlaybackStatus('playing');
-      setUiError('');
     } catch (error) {
       console.error('[PlaybackControls] Audio initialization/playback failed', { message: error.message });
       setUiError('Playback failed. Check browser audio permissions and generated JSON.');
@@ -97,116 +193,330 @@ const PlaybackControls = () => {
     }
   };
 
+  const handlePause = () => {
+    if (playbackStatus !== 'playing') {
+      console.warn('[PlaybackControls] Pause ignored because playback is not active', { playbackStatus });
+      return;
+    }
+    console.info('[PlaybackControls] User pause action');
+    if (isCanonicalComposition(editedMusicJson) && engineRef.current) {
+      engineRef.current.pause();
+    } else {
+      Tone.Transport.pause();
+    }
+    clearPositionTimer(positionTimerRef);
+    setPlaybackStatus('paused');
+  };
+
+  const handleResume = async () => {
+    if (playbackStatus !== 'paused') {
+      console.warn('[PlaybackControls] Resume ignored because playback is not paused', { playbackStatus });
+      return;
+    }
+    console.info('[PlaybackControls] User resume action');
+    await Tone.start();
+    if (isCanonicalComposition(editedMusicJson) && engineRef.current) {
+      engineRef.current.resume();
+    } else {
+      Tone.Transport.start();
+    }
+    startPositionTimer({
+      editedMusicJson,
+      engineRef,
+      positionTimerRef,
+      setPlaybackPosition,
+      isCanonical: isCanonicalComposition(editedMusicJson),
+    });
+    setPlaybackStatus('playing');
+  };
+
+  const handleStop = () => {
+    console.info('[PlaybackControls] User stop action');
+    stopEverything({
+      engineRef,
+      legacySynthRef,
+      positionTimerRef,
+      scheduledRevisionRef,
+      setPlaybackStatus,
+      setPlaybackPosition,
+    });
+  };
+
+  const handleSeekToStart = () => {
+    console.info('[PlaybackControls] User seek-to-start action');
+    if (isCanonicalComposition(editedMusicJson) && engineRef.current) {
+      engineRef.current.seekToStart();
+    } else {
+      Tone.Transport.position = 0;
+    }
+    setPlaybackPosition({ seconds: 0, bar: 1 });
+  };
+
+  const canonical = isCanonicalComposition(editedMusicJson);
+  const tracks = canonical && Array.isArray(editedMusicJson?.tracks) ? editedMusicJson.tracks : [];
+
   return (
     <div>
       <h4>Playback</h4>
       <Controls>
-        <Button type="button" onClick={handlePlay} disabled={!editedMusicJson || playbackStatus === 'loading'}>
-          {playbackStatus === 'loading' ? 'Preparing Audio...' : 'Play'}
+        {playbackStatus === 'paused' ? (
+          <Button type="button" onClick={handleResume}>Resume</Button>
+        ) : (
+          <Button
+            type="button"
+            onClick={handlePlay}
+            disabled={!editedMusicJson || playbackStatus === 'loading'}
+          >
+            {playbackStatus === 'loading' ? 'Preparing Audio...' : 'Play'}
+          </Button>
+        )}
+        <Button
+          type="button"
+          $variant="secondary"
+          onClick={handlePause}
+          disabled={playbackStatus !== 'playing'}
+        >
+          Pause
         </Button>
-        <Button type="button" $variant="stop" onClick={() => stopPlayback(synthRef, setPlaybackStatus)} disabled={playbackStatus !== 'playing'}>
+        <Button
+          type="button"
+          $variant="stop"
+          onClick={handleStop}
+          disabled={playbackStatus !== 'playing' && playbackStatus !== 'paused' && playbackStatus !== 'loading'}
+        >
           Stop
         </Button>
+        <Button
+          type="button"
+          $variant="secondary"
+          onClick={handleSeekToStart}
+          disabled={!editedMusicJson}
+        >
+          Seek Start
+        </Button>
       </Controls>
+      <StatusRow>
+        Status: {playbackStatus} · {playbackSeconds.toFixed(2)}s · bar {playbackBar}
+        {canonical ? ' · composition.v1' : editedMusicJson ? ' · legacy' : ''}
+      </StatusRow>
+      {canonical ? (
+        <TrackPlaybackControls
+          tracks={tracks}
+          trackControls={trackControls}
+          disabled={!editedMusicJson}
+          onMuteToggle={(trackId) => {
+            console.info('[PlaybackControls] User mute toggle', { trackId });
+            toggleTrackMute(trackId);
+          }}
+          onSoloToggle={(trackId) => {
+            console.info('[PlaybackControls] User solo toggle', { trackId });
+            toggleTrackSolo(trackId);
+          }}
+          onVolumeChange={(trackId, volumeMidi) => {
+            console.info('[PlaybackControls] User volume change', { trackId, volumeMidi });
+            setTrackVolume(trackId, volumeMidi);
+          }}
+        />
+      ) : (
+        <StatusRow>Track mute/solo/volume controls require composition.v1.</StatusRow>
+      )}
       {playbackStatus === 'error' && <ErrorText>Playback is unavailable for the current JSON.</ErrorText>}
     </div>
   );
 };
 
-function stopPlayback(synthRef, setPlaybackStatus) {
-  Tone.Transport.stop();
+async function startCanonicalPlayback({
+  editedMusicJson,
+  trackControls,
+  engineRef,
+  scheduledRevisionRef,
+  positionTimerRef,
+  setPlaybackStatus,
+  setPlaybackPosition,
+  setUiError,
+}) {
+  console.info('[PlaybackControls] Using canonical composition.v1 playback path');
+  const events = buildCanonicalPlaybackEvents(editedMusicJson);
+  console.debug('[PlaybackControls] Canonical schedule summary', {
+    trackCount: editedMusicJson.tracks?.length || 0,
+    eventCount: events.length,
+    tempo: editedMusicJson.tempo,
+    ticksPerQuarter: editedMusicJson.ticks_per_quarter,
+  });
+
+  if (!events.length) {
+    console.warn('[PlaybackControls] Canonical composition has no playable track events');
+    setUiError('No playable note events found in the current composition.');
+    setPlaybackStatus('error');
+    return;
+  }
+
+  // Never inspect harmony for audible content on the canonical path.
+  engineRef.current.prepare({
+    tracks: editedMusicJson.tracks,
+    events,
+    tempo: editedMusicJson.tempo,
+    trackOverrides: trackControls,
+    onComplete: () => {
+      stopEverything({
+        engineRef,
+        legacySynthRef: { current: null },
+        positionTimerRef,
+        scheduledRevisionRef,
+        setPlaybackStatus,
+        setPlaybackPosition,
+      });
+    },
+  });
+
+  scheduledRevisionRef.current = compositionRevisionKey(editedMusicJson);
+  await engineRef.current.start();
+  startPositionTimer({
+    editedMusicJson,
+    engineRef,
+    positionTimerRef,
+    setPlaybackPosition,
+    isCanonical: true,
+  });
+  setUiError('');
+  setPlaybackStatus('playing');
+}
+
+async function startLegacyPlayback({
+  editedMusicJson,
+  legacySynthRef,
+  scheduledRevisionRef,
+  positionTimerRef,
+  setPlaybackStatus,
+  setPlaybackPosition,
+  setUiError,
+}) {
+  console.info('[PlaybackControls] Using legacy playback path');
+  const synth = new Tone.PolySynth(Tone.Synth).toDestination();
+  legacySynthRef.current = synth;
+  Tone.Transport.bpm.value = editedMusicJson.tempo || 100;
   Tone.Transport.cancel();
-  if (synthRef.current) {
-    synthRef.current.dispose();
-    synthRef.current = null;
+  Tone.Transport.position = 0;
+
+  const events = buildLegacyPlaybackEvents(editedMusicJson, {
+    frequencyToNote: (midi, unit) => Tone.Frequency(midi, unit).toNote(),
+  });
+  console.debug('[PlaybackControls] Legacy schedule summary', {
+    eventCount: events.length,
+    tempo: editedMusicJson.tempo,
+  });
+
+  if (!events.length) {
+    console.warn('[PlaybackControls] Rejected harmony-only or unsupported legacy playback JSON');
+    setUiError('No playable note events found in the current JSON.');
+    setPlaybackStatus('error');
+    disposeLegacySynth(legacySynthRef);
+    return;
+  }
+
+  events.forEach((event) => {
+    Tone.Transport.schedule((time) => {
+      synth.triggerAttackRelease(event.notes, event.duration, time, event.velocity);
+    }, event.position);
+  });
+
+  const endPosition = playbackEndPosition(events);
+  Tone.Transport.scheduleOnce(() => {
+    stopEverything({
+      engineRef: { current: null },
+      legacySynthRef,
+      positionTimerRef,
+      scheduledRevisionRef,
+      setPlaybackStatus,
+      setPlaybackPosition,
+    });
+  }, endPosition);
+
+  scheduledRevisionRef.current = compositionRevisionKey(editedMusicJson);
+  Tone.Transport.start();
+  startPositionTimer({
+    editedMusicJson,
+    engineRef: { current: null },
+    positionTimerRef,
+    setPlaybackPosition,
+    isCanonical: false,
+  });
+  setUiError('');
+  setPlaybackStatus('playing');
+}
+
+function stopEverything({
+  engineRef,
+  legacySynthRef,
+  positionTimerRef,
+  scheduledRevisionRef,
+  setPlaybackStatus,
+  setPlaybackPosition,
+  preserveStatus = false,
+}) {
+  clearPositionTimer(positionTimerRef);
+  if (engineRef?.current) {
+    engineRef.current.stop({ seekToStart: true });
+  } else {
+    Tone.Transport.stop();
+    Tone.Transport.cancel();
+    Tone.Transport.position = 0;
+  }
+  disposeLegacySynth(legacySynthRef);
+  scheduledRevisionRef.current = '';
+  setPlaybackPosition({ seconds: 0, bar: 1 });
+  if (!preserveStatus) {
+    setPlaybackStatus('idle');
   }
   console.debug('[PlaybackControls] Transport stopped', { transportState: Tone.Transport.state });
-  setPlaybackStatus('idle');
 }
 
-function buildPlaybackEvents(musicJson) {
-  if (musicJson?.schema_version === 'composition.v1') {
-    return buildCanonicalPlaybackEvents(musicJson);
-  }
-
-  if (Array.isArray(musicJson.notes) && musicJson.notes.length) {
-    const beatsPerMeasure = measureQuarterLength(musicJson.time_signature);
-    const quarterSeconds = 60 / Number(musicJson.tempo || 100);
-    const events = musicJson.notes
-      .map((item) => {
-        const bar = Number(item.bar);
-        const beat = Number(item.beat || 1);
-        const duration = Number(item.duration);
-        const pitch = normalizePitch(item.pitch);
-        if (!Number.isFinite(bar) || bar < 1 || !Number.isFinite(beat) || beat < 1 || !Number.isFinite(duration) || duration <= 0 || !pitch) {
-          console.warn('[PlaybackControls] Invalid note event skipped', { note: item });
-          return null;
-        }
-        return {
-          bar,
-          beat,
-          notes: [pitch],
-          duration: duration * quarterSeconds,
-          velocity: 0.8,
-          position: positionForNote(bar, beat, beatsPerMeasure, quarterSeconds),
-          stopPosition: positionForNote(bar, beat + duration, beatsPerMeasure, quarterSeconds),
-        };
-      })
-      .filter(Boolean)
-      .sort((left, right) => left.bar - right.bar || left.beat - right.beat);
-
-    if (events.length) {
-      return events;
+function disposeLegacySynth(legacySynthRef) {
+  if (legacySynthRef?.current) {
+    try {
+      legacySynthRef.current.dispose();
+    } catch (error) {
+      console.error('[PlaybackControls] Legacy synth dispose failed', { message: error.message });
     }
+    legacySynthRef.current = null;
   }
-
-  if (!Array.isArray(musicJson.harmony)) {
-    console.warn('[PlaybackControls] Harmony data skipped because it is not an array');
-    return [];
-  }
-
-  return musicJson.harmony
-    .map((item) => {
-      const notes = chordToNotes(item.chord);
-      if (!notes.length) {
-        console.warn('[PlaybackControls] Unsupported chord data skipped', { chord: item.chord });
-        return null;
-      }
-      const bar = Number(item.bar);
-      return {
-        bar,
-        beat: 1,
-        notes,
-        duration: '1m',
-        velocity: 0.7,
-        position: `${bar - 1}:0:0`,
-        stopPosition: `${bar}:0:0`,
-      };
-    })
-    .filter((event) => event && Number.isFinite(event.bar) && event.bar > 0);
 }
 
-function normalizePitch(pitch) {
-  if (!pitch || typeof pitch !== 'string') {
-    return '';
+function clearPositionTimer(positionTimerRef) {
+  if (positionTimerRef?.current) {
+    clearInterval(positionTimerRef.current);
+    positionTimerRef.current = null;
   }
-  return pitch.trim();
 }
 
-function measureQuarterLength(timeSignature) {
-  if (!timeSignature || typeof timeSignature !== 'string') {
-    return 4;
-  }
-  const [numerator, denominator] = timeSignature.split('/').map(Number);
-  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
-    return 4;
-  }
-  return numerator * (4 / denominator);
-}
-
-function positionForNote(bar, beat, beatsPerMeasure, quarterSeconds) {
-  const absoluteQuarterOffset = (bar - 1) * beatsPerMeasure + (beat - 1);
-  return absoluteQuarterOffset * quarterSeconds;
+function startPositionTimer({
+  editedMusicJson,
+  engineRef,
+  positionTimerRef,
+  setPlaybackPosition,
+  isCanonical,
+}) {
+  clearPositionTimer(positionTimerRef);
+  let lastLoggedSecond = -1;
+  positionTimerRef.current = setInterval(() => {
+    const seconds = isCanonical && engineRef.current
+      ? engineRef.current.getPositionSeconds()
+      : Number(Tone.Transport.seconds) || 0;
+    const position = secondsToPlaybackPosition(seconds, {
+      tempo: editedMusicJson?.tempo,
+      ticksPerQuarter: editedMusicJson?.ticks_per_quarter,
+      timeSignature: editedMusicJson?.time_signature,
+    });
+    setPlaybackPosition({ seconds: position.seconds, bar: position.bar });
+    const wholeSecond = Math.floor(position.seconds);
+    if (wholeSecond !== lastLoggedSecond) {
+      lastLoggedSecond = wholeSecond;
+      console.debug('[PlaybackControls] Playback position update', {
+        seconds: Number(position.seconds.toFixed(3)),
+        bar: position.bar,
+      });
+    }
+  }, 100);
 }
 
 function playbackEndPosition(events) {
@@ -215,47 +525,5 @@ function playbackEndPosition(events) {
   }
   return events[events.length - 1].stopPosition;
 }
-
-function chordToNotes(chordName) {
-  if (!chordName || typeof chordName !== 'string') {
-    return [];
-  }
-
-  const match = chordName.trim().match(/^([A-G])([#b]?)(.*)$/);
-  if (!match) {
-    return [];
-  }
-
-  const [, rootName, accidental, suffix] = match;
-  const root = `${rootName}${accidental}`;
-  const rootMidi = NOTE_TO_MIDI[root];
-  if (rootMidi === undefined) {
-    return [];
-  }
-
-  const isMinor = suffix.toLowerCase().startsWith('m') && !suffix.toLowerCase().startsWith('maj');
-  const intervals = isMinor ? [0, 3, 7] : [0, 4, 7];
-  return intervals.map((interval) => Tone.Frequency(rootMidi + interval, 'midi').toNote());
-}
-
-const NOTE_TO_MIDI = {
-  C: 60,
-  'C#': 61,
-  Db: 61,
-  D: 62,
-  'D#': 63,
-  Eb: 63,
-  E: 64,
-  F: 65,
-  'F#': 66,
-  Gb: 66,
-  G: 67,
-  'G#': 68,
-  Ab: 68,
-  A: 69,
-  'A#': 70,
-  Bb: 70,
-  B: 71,
-};
 
 export default PlaybackControls;

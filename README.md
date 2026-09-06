@@ -7,7 +7,7 @@ A full-stack LLM music composer that generates canonical playable `composition.v
 - **LLM JSON Composition**: Generate structured music JSON with OpenAI or DeepSeek-compatible providers
 - **Prompt Controls**: Configure genre, mood, key, meter, tempo range, instruments, sections, complexity, duration, and freeform instructions
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
-- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play canonical track-local note events with Tone.js
+- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start)
 - **Deterministic Export**: Download MusicXML and MIDI from the same canonical `tracks[].events[]` used by notation and playback
 
 ## 🏗️ Architecture
@@ -16,7 +16,7 @@ A full-stack LLM music composer that generates canonical playable `composition.v
 - **Frontend**: React with styled-components
 - **Music Processing**: music21 library for MusicXML rendering
 - **LLM Orchestration**: LangChain/LangGraph with OpenAI-compatible chat providers
-- **Frontend State**: Zustand store for API status, LLM models, generation output, notation, and playback state
+- **Frontend State**: Zustand store for API status, LLM models, generation output, notation, playback transport state, and per-track mute/solo/volume
 
 ## 📋 Prerequisites
 
@@ -189,15 +189,18 @@ mukit-ai/
 │   │   │   ├── MusicGenerator.jsx
 │   │   │   ├── NotationViewer.jsx
 │   │   │   ├── PlaybackControls.jsx
+│   │   │   ├── TrackPlaybackControls.jsx
+│   │   │   ├── ExportControls.jsx
 │   │   │   └── PromptJsonEditor.jsx
 │   │   ├── api/musicApi.js
 │   │   ├── store/musicStore.js
-│   │   ├── utils/               # Frontend validation and playback event helpers
+│   │   ├── utils/               # Validation, playback events/tracks/engine helpers
 │   │   ├── App.jsx
 │   │   ├── index.jsx
 │   │   └── index.css
 │   └── package.json
 ├── docs/
+│   ├── composition-v1.md
 │   └── testing.md
 └── README.md
 ```
@@ -223,7 +226,7 @@ Additional manual smoke checks are documented in `docs/testing.md`.
 
 ## Logging And Secret Handling
 
-Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Python `logging` and intentionally log provider names, model names, schema version, normalization path, validation retry counts, event counts, timing summaries, and sanitized error details. API key values are never logged. Frontend API/store/validator/playback code uses `console.debug`, `console.warn`, and `console.error` for request intent, state transitions, JSON validation, canonical shape summaries, notation rendering, and playback scheduling without logging secrets.
+Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Python `logging` and intentionally log provider names, model names, schema version, normalization path, validation retry counts, event counts, timing summaries, and sanitized error details. API key values are never logged. Frontend API/store/validator/playback code uses `console.debug`, `console.info`, `console.warn`, and `console.error` for request intent, state transitions, JSON validation, instrument strategy/fallback, mute/solo gains, transport lifecycle, notation rendering, and playback scheduling without logging secrets or full raw composition payloads.
 
 ## 🧠 Generation Architecture
 
@@ -235,7 +238,7 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 - **Testing**: normal backend tests mock providers. Opt-in real-provider smoke: `RUN_LLM_SMOKE=1 LLM_SMOKE_PROVIDER=openai ../.venv/bin/python -m pytest tests/test_llm_real_provider_smoke.py` from `backend/`.
 - **MusicXML rendering**: canonical note events are converted to deterministic MusicXML with music21 for notation preview and `/export/musicxml`; harmony remains chord-symbol metadata.
 - **MIDI export**: `/export/midi` writes a Standard MIDI File via `mido` from the same track-local events, preserving velocity, program, channel, volume, and pan.
-- **Frontend preview**: the browser edits canonical JSON, renders MusicXML with OSMD, schedules canonical note events from ticks with Tone.js, and downloads MusicXML/MIDI exports.
+- **Frontend preview**: the browser edits canonical JSON, renders MusicXML with OSMD, schedules exact multi-track note events from ticks with Tone.js (no harmony-derived substitutes), exposes mute/solo/volume routing controls, and downloads MusicXML/MIDI exports that share the same `tracks[].events[]`.
 
 ## 🔍 Troubleshooting
 
@@ -245,7 +248,7 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 2. **Generation returns 503**: No provider key is configured in the backend environment
 3. **Invalid LLM JSON**: The staged composer validates and repairs using diagnostic codes; check backend logs for `stage`, diagnostic codes, retry counts, and sanitized provider errors (never API keys)
 4. **Notation does not render**: Confirm the response includes `musicxml` and the edited JSON still matches the expected shape
-5. **Playback fails**: Browser audio requires a user gesture; click Play directly and check that canonical `tracks[].events[]` contain valid pitches, ticks, durations, and velocities
+5. **Playback fails**: Browser audio requires a user gesture; click Play directly and check that canonical `tracks[].events[]` contain valid pitches, ticks, durations, and velocities. Use browser console for schedule summaries, instrument fallback warnings, and transport errors.
 
 ### Performance Tips
 

@@ -68,10 +68,22 @@ Legacy music JSON has harmony/tracks but no note events; regenerate or add notes
 - Backend MusicXML rendering consumes canonical track events and inserts rests for empty ranges.
 - `POST /export/musicxml` accepts canonical `composition.v1` JSON and returns a downloadable MusicXML attachment (`application/vnd.recordare.musicxml+xml`).
 - `POST /export/midi` accepts the same JSON and returns a Standard MIDI File attachment (`audio/midi`) built with `mido`.
-- Browser playback schedules canonical events by converting ticks to seconds from `tempo` and `ticks_per_quarter`.
+- Browser playback schedules exact `tracks[].events[]` note tuples through a multi-track Tone.js engine (`frontend/src/utils/tonePlaybackEngine.js`), converting ticks to seconds from `tempo` and `ticks_per_quarter`.
+- Playback preserves track identity, pitch, start tick/time, duration, velocity, and polyphonic simultaneity. It never invents substitute notes from `harmony`.
+- Per-track mute, solo, and volume controls change routing gain only; they do not mutate the canonical composition JSON.
+- Unsupported instruments use an explicit fallback synth strategy (logged with track ID, instrument, role, program) rather than silently rewriting musical content.
 - Frontend Export MusicXML / Export MIDI actions download from those endpoints using the current edited JSON and refresh the notation preview from the exported MusicXML.
-- MIDI/MusicXML/playback/notation all consume the same `tracks[].events[]`; harmony remains metadata only and never invents export notes.
+- MIDI/MusicXML/playback/notation all consume the same `tracks[].events[]`; harmony remains metadata only and never invents export or audible notes.
 
 ## Diagnostics
 
-Use backend `LOG_LEVEL=DEBUG` or browser devtools console when diagnosing schema or export issues. Logs include schema version, normalization path, track count, event count, duration ticks, export format, byte length, validation failures, render decisions, and playback schedule summaries without API keys, prompts, or raw MusicXML/MIDI payloads.
+Use backend `LOG_LEVEL=DEBUG` or browser devtools console when diagnosing schema, export, or playback issues. Useful sanitized frontend fields include:
+
+- playback path (`canonical` vs `legacy`)
+- tempo, `ticks_per_quarter`, track/event counts
+- scheduled event counts and transport transitions (`play` / `pause` / `resume` / `stop`)
+- instrument strategy / unsupported fallback warnings
+- mute/solo/volume effective gain per track
+- composition revision changes that stop active playback
+
+Logs include schema version, normalization path, track count, event count, duration ticks, export format, byte length, validation failures, render decisions, and playback schedule summaries without API keys, prompts, or raw MusicXML/MIDI payloads.

@@ -39,7 +39,15 @@ Run from `frontend/`:
 npm test
 ```
 
-The frontend uses Node's built-in test runner for browser-independent utilities. Tests cover canonical JSON validation, invalid velocity rejection, legacy harmony-only rejection, canonical tick-to-second playback scheduling, polyphony preservation, invalid playback event skipping, and download Blob URL create/revoke cleanup.
+The frontend uses Node's built-in test runner for browser-independent utilities. Tests cover:
+
+- canonical JSON validation, invalid velocity rejection, and legacy harmony-only rejection
+- canonical tick-to-second playback scheduling with multi-track ordering, polyphony, and velocity
+- export-fidelity-style fixture parity fields (track ID, pitch, ticks, velocity, metadata)
+- no harmony-derived events for canonical compositions
+- track volume/mute/solo effective audible state and unsupported-instrument fallback selection
+- Tone playback engine lifecycle with a fake Transport (schedule, cancel, stop, seek-to-start, dispose)
+- download Blob URL create/revoke cleanup
 
 ## Frontend Smoke Checks
 
@@ -54,9 +62,12 @@ Use these manual checks after `npm run build` and during local development.
 7. Edit the JSON to an invalid velocity, pitch, duration, section boundary, or track event shape and confirm a validation error appears.
 8. Reset the editor and confirm the generated JSON is restored.
 9. Confirm notation renders from backend MusicXML.
-10. Click Play and Stop to confirm playback starts only after the user gesture, preserves simultaneous notes, and stops cleanly.
-11. Click Export MusicXML and Export MIDI; confirm downloads use `.musicxml` / `.mid`, notation preview updates from the exported MusicXML, and playback/export positions match the edited canonical JSON.
-12. Resize to a mobile viewport and confirm controls remain usable without horizontal page overflow.
+10. Click Play and confirm AudioContext starts only after the user gesture; simultaneous multi-track notes are audible; Pause/Resume, Stop, and Seek Start work; current seconds/bar update while playing.
+11. Use per-track Mute, Solo, and Volume while playing; confirm routing changes without editing composition JSON.
+12. Edit a note event while idle, then Play again; confirm playback uses the edited events. Edit during playback and confirm active playback stops.
+13. Click Export MusicXML and Export MIDI; confirm downloads use `.musicxml` / `.mid`, notation preview updates from the exported MusicXML, and a known fixture's playback positions match export note tuples.
+14. Open browser devtools and confirm sanitized playback diagnostics (path, event counts, instrument strategy/fallback, mute/solo gains) without raw composition dumps.
+15. Resize to a mobile viewport and confirm playback/track controls remain usable without horizontal page overflow.
 
 ## Frontend Build
 
