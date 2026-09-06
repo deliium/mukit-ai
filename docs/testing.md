@@ -15,8 +15,10 @@ Focused canonical coverage includes:
 - `backend/tests/test_composition_schema.py` for `composition.v1` validation, 4/4, 3/4, 6/8 timing, invalid pitches, velocities, durations, duplicate tracks, and section boundaries.
 - `backend/tests/test_composition_normalizer.py` for legacy migration, velocity defaults, canonical pass-through, and harmony-only rejection.
 - `backend/tests/test_composition_midi.py` for MIDI-ready timing, channel, program, velocity preservation, and Standard MIDI File rendering.
-- `backend/tests/test_export_fidelity.py` for deterministic fixture comparisons across canonical JSON, MIDI bytes, and MusicXML note timing.
-- `backend/tests/test_export_routes.py` for `/export/musicxml`, `/export/musicxml/preview`, and `/export/midi` content types, attachments vs preview (no download header), and validation errors.
+- `backend/tests/test_composition_wav.py` for mocked FluidSynth argv construction (`shell=False`), config/env discovery, silence path, timeout/non-zero/invalid output errors, duration padding, and temp cleanup.
+- `backend/tests/test_export_fidelity.py` for deterministic fixture comparisons across canonical JSON, MIDI bytes, MusicXML note timing, and WAV duration/silence anchored to `render_midi`.
+- `backend/tests/test_export_routes.py` for `/export/musicxml`, `/export/musicxml/preview`, `/export/midi`, and `/export/wav` content types, attachments vs preview (no download header), `503`/`500` WAV mapping, and validation errors.
+- `backend/tests/test_wav_renderer_smoke.py` opt-in real FluidSynth smoke (`RUN_WAV_RENDERER_SMOKE=1`).
 - `backend/tests/test_music_json_renderer.py` for canonical MusicXML rendering from events without harmony fallback.
 - `backend/tests/test_composition_validator.py` for integrity diagnostics such as missing roles, empty/sparse tracks, pitch/range issues, and harmony-only rejection.
 - `backend/tests/test_llm_staged_composer.py` for mocked multi-stage sequencing, repair/retry, oversized request rejection, provider/model override, and actionable API errors.
@@ -36,6 +38,23 @@ RUN_LLM_SMOKE=1 LLM_SMOKE_PROVIDER=openai ../.venv/bin/python -m pytest tests/te
 ```
 
 Requires the matching provider API key. The smoke test logs provider/model, bars, tracks, events, and validation outcome, and is skipped clearly when `RUN_LLM_SMOKE` is unset.
+
+### Opt-in FluidSynth WAV Smoke Test
+
+Normal `pytest` does not require FluidSynth. Inside the standard Docker backend image (packages `fluidsynth` + `fluid-soundfont-gm`):
+
+```bash
+docker compose run --rm -e RUN_WAV_RENDERER_SMOKE=1 backend \
+  python -m pytest tests/test_wav_renderer_smoke.py
+```
+
+Or locally with FluidSynth and `COMPOSITION_WAV_SOUNDFONT` pointing at an installed `.sf2`:
+
+```bash
+RUN_WAV_RENDERER_SMOKE=1 ../.venv/bin/python -m pytest tests/test_wav_renderer_smoke.py
+```
+
+Useful logs: renderer path basename, SoundFont basename, byte length, measured duration, missing-bin/SoundFont errors, timeout, invalid WAV, and duration padding warnings. Raw composition/audio bytes are never logged.
 
 ## Frontend Tests
 
@@ -77,7 +96,7 @@ Use these manual checks after `npm run build` and during local development.
 12. Edit a note event while idle, then Play again; confirm playback uses the edited events. Edit during playback and confirm active playback stops.
 13. Open the piano-roll editor: select the melody track, set snap to `1/8` or `1/16`, drag a note to another pitch/time, resize duration, confirm the JSON editor shows the same `tracks[].events[]` change, confirm notation refreshes after the debounce, then Play and confirm the edited pitch/duration are heard with the red playback cursor moving.
 14. Use piano-roll Undo/Redo and Play again; confirm audible result follows the current edited state. Undo/redo applies only to note edits (not arbitrary JSON editor typing).
-15. Click Export MusicXML and Export MIDI; confirm downloads use `.musicxml` / `.mid`, notation preview updates from the exported MusicXML, and a known fixture's playback positions match export note tuples.
+15. Click Export MusicXML, Export MIDI, and Export WAV; confirm downloads use `.musicxml` / `.mid` / `.wav`, notation preview updates from the exported MusicXML, WAV does not start browser playback, and a known fixture's playback positions match MIDI export note tuples.
 16. Open browser devtools and confirm sanitized playback/piano-roll diagnostics (path, event counts, note edit summaries, MusicXML preview length, instrument strategy/fallback, mute/solo gains) without raw composition dumps.
 17. Resize to a mobile viewport and confirm piano-roll controls, playback, and track controls remain usable.
 

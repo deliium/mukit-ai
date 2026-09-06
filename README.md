@@ -10,7 +10,7 @@ A full-stack LLM music composer that generates canonical playable `composition.v
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
 - **Piano-Roll Editor**: Create, select, drag/transpose, resize, and delete notes on `tracks[].events[]` with snap/zoom, track focus, context tracks, and note-edit undo/redo; shares the same `editedMusicJson` as the JSON editor
 - **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start, piano-roll playback cursor)
-- **Deterministic Export**: Download MusicXML and MIDI from the same canonical `tracks[].events[]` used by notation and playback
+- **Deterministic Export**: Download MusicXML, MIDI, and server-rendered WAV from the same canonical `tracks[].events[]` used by notation and playback
 
 ## 🏗️ Architecture
 
@@ -129,6 +129,7 @@ Details: [docs/project-persistence.md](docs/project-persistence.md).
 - `POST /export/musicxml` - Render canonical `composition.v1` JSON as a downloadable MusicXML attachment
 - `POST /export/musicxml/preview` - Render MusicXML text for notation refresh without a download header
 - `POST /export/midi` - Render canonical `composition.v1` JSON as a downloadable Standard MIDI File attachment
+- `POST /export/wav` - Render canonical `composition.v1` JSON as a downloadable WAV via FluidSynth (reuses MIDI note content)
 
 Example LLM request:
 
@@ -258,7 +259,8 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 - **Testing**: normal backend tests mock providers. Opt-in real-provider smoke: `RUN_LLM_SMOKE=1 LLM_SMOKE_PROVIDER=openai ../.venv/bin/python -m pytest tests/test_llm_real_provider_smoke.py` from `backend/`.
 - **MusicXML rendering**: canonical note events are converted to deterministic MusicXML with music21 for notation preview and `/export/musicxml`; harmony remains chord-symbol metadata.
 - **MIDI export**: `/export/midi` writes a Standard MIDI File via `mido` from the same track-local events, preserving velocity, program, channel, volume, and pan.
-- **Frontend preview**: the browser edits canonical JSON via piano roll or JSON editor, renders MusicXML with OSMD (including debounced preview refresh), schedules exact multi-track note events from ticks with Tone.js (no harmony-derived substitutes), exposes mute/solo/volume routing controls, and downloads MusicXML/MIDI exports that share the same `tracks[].events[]`.
+- **WAV export**: `/export/wav` synthesizes PCM with the FluidSynth CLI from those MIDI bytes (Docker installs `fluidsynth` + `fluid-soundfont-gm` / FluidR3_GM). Browser Tone.js remains interactive preview only.
+- **Frontend preview**: the browser edits canonical JSON via piano roll or JSON editor, renders MusicXML with OSMD (including debounced preview refresh), schedules exact multi-track note events from ticks with Tone.js (no harmony-derived substitutes), exposes mute/solo/volume routing controls, and downloads MusicXML/MIDI/WAV exports that share the same `tracks[].events[]`.
 
 ## 🔍 Troubleshooting
 
@@ -269,6 +271,7 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 3. **Invalid LLM JSON**: The staged composer validates and repairs using diagnostic codes; check backend logs for `stage`, diagnostic codes, retry counts, and sanitized provider errors (never API keys)
 4. **Notation does not render**: Confirm the response includes `musicxml` and the edited JSON still matches the expected shape
 5. **Playback fails**: Browser audio requires a user gesture; click Play directly and check that canonical `tracks[].events[]` contain valid pitches, ticks, durations, and velocities. Use browser console for schedule summaries, instrument fallback warnings, and transport errors.
+6. **WAV export returns 503**: Install FluidSynth and a SoundFont locally, or use Docker (`fluidsynth` + `fluid-soundfont-gm`). Set `COMPOSITION_WAV_SOUNDFONT` to the `.sf2` path (default `/usr/share/sounds/sf2/FluidR3_GM.sf2`). Check logs for missing binary/SoundFont basename.
 
 ### Performance Tips
 

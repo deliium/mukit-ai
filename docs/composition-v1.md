@@ -102,6 +102,9 @@ Legacy music JSON has harmony/tracks but no note events; regenerate or add notes
 - `POST /export/musicxml` accepts canonical `composition.v1` JSON and returns a downloadable MusicXML attachment (`application/vnd.recordare.musicxml+xml`).
 - `POST /export/musicxml/preview` accepts the same JSON and returns MusicXML text for notation refresh **without** a `Content-Disposition` download header.
 - `POST /export/midi` accepts the same JSON and returns a Standard MIDI File attachment (`audio/midi`) built with `mido`.
+- `POST /export/wav` accepts the same JSON and returns a WAV attachment (`audio/wav`) synthesized by FluidSynth from `render_midi()` bytes. Notes, programs, channels, tempo, and duration come from MIDI; Tone.js remains browser preview only. Empty compositions yield silent WAV matching `duration_ticks`. Short FluidSynth output is padded. Missing FluidSynth/SoundFont → `503`; synthesis failures → `500`.
+- Env vars: `FLUIDSYNTH_BIN`, `COMPOSITION_WAV_SOUNDFONT` (Docker default `/usr/share/sounds/sf2/FluidR3_GM.sf2` from Debian `fluid-soundfont-gm` / FluidR3_GM), `COMPOSITION_WAV_SAMPLE_RATE`, `COMPOSITION_WAV_GAIN`, `COMPOSITION_WAV_TIMEOUT_SECONDS`.
+- SoundFont package: Debian/Ubuntu `fluid-soundfont-gm` (Fluid R3 GM). License/attribution: see `/usr/share/doc/fluid-soundfont-gm/copyright` in the image (MIT-style Fluid R3 license; do not bundle the `.sf2` in this repo).
 - Browser playback schedules exact `tracks[].events[]` note tuples through a multi-track Tone.js engine (`frontend/src/utils/tonePlaybackEngine.js`), converting ticks to seconds from `tempo` and `ticks_per_quarter`.
 - Playback preserves track identity, pitch, start tick/time, duration, velocity, and polyphonic simultaneity. It never invents substitute notes from `harmony`.
 - Per-track mute, solo, and volume controls change routing gain only; they do not mutate the canonical composition JSON.
@@ -109,8 +112,8 @@ Legacy music JSON has harmony/tracks but no note events; regenerate or add notes
 - The piano-roll editor (`frontend/src/components/PianoRollEditor.jsx`) edits the same Zustand `editedMusicJson` as the JSON editor: create/move/transpose/resize/delete notes on `tracks[].events[]` with snap (`1/4`, `1/8`, `1/16`), zoom, track focus, context tracks, and bounded undo/redo for note edits only.
 - AI region editing selects inclusive bars (Shift+drag or controls), defaults target tracks to the focused piano-roll track (or all tracks), and calls `POST /llm/edit-composition-region` via `AiRegionEditPanel`.
 - After valid piano-roll note edits or successful AI region edits, the frontend debounces/refreshes `POST /export/musicxml/preview` and updates `musicXml` so OSMD notation stays in sync without forcing a download.
-- Frontend Export MusicXML / Export MIDI actions download from the export endpoints using the current edited JSON and refresh the notation preview from the exported MusicXML.
-- Piano roll, JSON editor, MIDI/MusicXML export, playback, and notation all consume the same `tracks[].events[]`; harmony remains metadata only and never invents export or audible notes.
+- Frontend Export MusicXML / Export MIDI / Export WAV actions download from the export endpoints using the current edited JSON; MusicXML export also refreshes notation. WAV is export-only (not preview playback).
+- Piano roll, JSON editor, MIDI/MusicXML/WAV export, playback, and notation all consume the same `tracks[].events[]`; harmony remains metadata only and never invents export or audible notes.
 
 ## Diagnostics
 
