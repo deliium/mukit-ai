@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
+import { downloadBlob, filenameFromContentDisposition } from '../utils/downloadFile.js';
 
 export async function getHealth() {
   return request('get', '/health');
@@ -23,6 +24,91 @@ export async function generateLlmMusicJson(payload) {
     throw new Error(validation.message);
   }
   return response;
+}
+
+export async function exportMusicXml(composition) {
+  return exportComposition(composition, {
+    endpoint: '/export/musicxml',
+    format: 'musicxml',
+    fallbackFilename: 'composition.musicxml',
+    expectedType: 'application/vnd.recordare.musicxml+xml',
+  });
+}
+
+export async function exportMidi(composition) {
+  return exportComposition(composition, {
+    endpoint: '/export/midi',
+    format: 'midi',
+    fallbackFilename: 'composition.mid',
+    expectedType: 'audio/midi',
+  });
+}
+
+async function exportComposition(composition, { endpoint, format, fallbackFilename, expectedType }) {
+  const validation = validateMusicJson(composition);
+  const eventCount = Array.isArray(composition?.tracks)
+    ? composition.tracks.reduce((total, track) => total + (track.events?.length || 0), 0)
+    : 0;
+  console.debug('[musicApi] Export request started', {
+    format,
+    schemaVersion: composition?.schema_version || 'legacy',
+    trackCount: composition?.tracks?.length || 0,
+    eventCount,
+    valid: validation.valid,
+  });
+  if (!validation.valid || !isCanonicalComposition(composition)) {
+    console.error('[musicApi] Export rejected invalid composition', {
+      format,
+      message: validation.message || 'Export requires composition.v1 JSON',
+    });
+    throw new Error(validation.message || 'Export requires canonical composition.v1 JSON');
+  }
+
+  try {
+    const response = await axios.post(endpoint, composition, { responseType: 'blob' });
+    const blob = response.data;
+    const contentType = response.headers?.['content-type'] || blob.type || expectedType;
+    const filename = filenameFromContentDisposition(
+      response.headers?.['content-disposition'],
+      fallbackFilename,
+    );
+    console.debug('[musicApi] Export request completed', {
+      format,
+      schemaVersion: composition.schema_version,
+      trackCount: composition.tracks.length,
+      eventCount,
+      blobSize: blob.size,
+      contentType,
+      filename,
+    });
+    downloadBlob(blob, filename);
+    return { blob, filename, contentType };
+  } catch (error) {
+    const detail = await extractBlobErrorDetail(error);
+    console.error('[musicApi] Export request failed', {
+      format,
+      status: error.response?.status,
+      detail,
+    });
+    throw new Error(detail);
+  }
+}
+
+async function extractBlobErrorDetail(error) {
+  const data = error.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const text = await data.text();
+      const parsed = JSON.parse(text);
+      if (parsed?.detail) {
+        return typeof parsed.detail === 'string' ? parsed.detail : JSON.stringify(parsed.detail);
+      }
+      return text || error.message || 'Unknown export failure';
+    } catch {
+      return error.message || 'Unknown export failure';
+    }
+  }
+  return error.response?.data?.detail || error.message || 'Unknown export failure';
 }
 
 async function request(method, endpoint, data, config = {}) {

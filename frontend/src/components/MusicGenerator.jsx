@@ -4,6 +4,7 @@ import { generateLlmMusicJson } from '../api/musicApi.js';
 import NotationViewer from './NotationViewer.jsx';
 import PlaybackControls from './PlaybackControls.jsx';
 import PromptJsonEditor from './PromptJsonEditor.jsx';
+import ExportControls from './ExportControls.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const Container = styled.div`
@@ -282,6 +283,7 @@ const MusicGenerator = () => {
           <GeneratedMusic>
             <h4>Generated Music JSON</h4>
             <PromptJsonEditor />
+            <ExportControls />
             <NotationViewer />
             <PlaybackControls />
           </GeneratedMusic>

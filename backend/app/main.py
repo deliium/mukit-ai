@@ -2,15 +2,18 @@ import logging
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 import uvicorn
 
 from .llm_settings import load_llm_settings
 from .schemas import (
+    Composition,
     LLMMusicGenerationRequest,
     LLMMusicGenerationResponse,
     LLMModelsResponse,
     LLMProviderModel,
 )
+from .services.composition_midi import CompositionMidiError, render_midi
 from .services.composition_planner import OversizedLLMGenerationRequestError
 from .services.llm_music_generator import (
     InvalidLLMOutputError,
@@ -34,6 +37,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _composition_export_summary(composition: Composition) -> dict:
+    return {
+        "schema_version": composition.schema_version,
+        "track_count": len(composition.tracks),
+        "event_count": sum(len(track.events) for track in composition.tracks),
+        "duration_ticks": composition.duration_ticks,
+        "tempo": composition.tempo,
+        "time_signature": composition.time_signature,
+    }
+
+
+def _safe_export_filename(composition: Composition, extension: str) -> str:
+    raw = f"composition-{composition.key}-{composition.tempo}bpm".lower()
+    safe = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in raw)
+    while "--" in safe:
+        safe = safe.replace("--", "-")
+    return f"{safe.strip('-') or 'composition'}.{extension}"
+
 
 @app.get("/")
 async def root():
@@ -151,5 +174,70 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
             extra={"error_type": type(exc).__name__, "error_detail": str(exc)[:200]},
         )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/export/musicxml")
+async def export_musicxml(composition: Composition):
+    """Render canonical Composition V1 JSON to a downloadable MusicXML file."""
+    summary = _composition_export_summary(composition)
+    logger.info("MusicXML export request started", extra={"format": "musicxml", **summary})
+    try:
+        musicxml, warnings = render_musicxml(composition)
+        filename = _safe_export_filename(composition, "musicxml")
+        if warnings:
+            logger.warning(
+                "MusicXML export completed with notation warnings",
+                extra={"format": "musicxml", "warning_count": len(warnings), **summary},
+            )
+        logger.info(
+            "MusicXML export request completed",
+            extra={"format": "musicxml", "byte_length": len(musicxml.encode("utf-8")), **summary},
+        )
+        logger.debug(
+            "MusicXML export response metadata",
+            extra={"filename": filename, "musicxml_length": len(musicxml), "warning_count": len(warnings)},
+        )
+        return Response(
+            content=musicxml,
+            media_type="application/vnd.recordare.musicxml+xml",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except MusicJsonRenderError as exc:
+        logger.error(
+            "MusicXML export failed",
+            extra={"format": "musicxml", "error_type": type(exc).__name__, **summary},
+        )
+        raise HTTPException(status_code=500, detail="Composition could not be rendered as MusicXML") from exc
+
+
+@app.post("/export/midi")
+async def export_midi(composition: Composition):
+    """Render canonical Composition V1 JSON to a downloadable Standard MIDI File."""
+    summary = _composition_export_summary(composition)
+    logger.info("MIDI export request started", extra={"format": "midi", **summary})
+    try:
+        midi_bytes = render_midi(composition)
+        filename = _safe_export_filename(composition, "mid")
+        logger.info(
+            "MIDI export request completed",
+            extra={"format": "midi", "byte_length": len(midi_bytes), **summary},
+        )
+        logger.debug(
+            "MIDI export response metadata",
+            extra={"filename": filename, "byte_length": len(midi_bytes)},
+        )
+        return Response(
+            content=midi_bytes,
+            media_type="audio/midi",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except CompositionMidiError as exc:
+        logger.error(
+            "MIDI export failed",
+            extra={"format": "midi", "error_type": type(exc).__name__, **summary},
+        )
+        raise HTTPException(status_code=500, detail="Composition could not be rendered as MIDI") from exc
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8888)
