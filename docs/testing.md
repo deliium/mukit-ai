@@ -14,7 +14,9 @@ Focused canonical coverage includes:
 
 - `backend/tests/test_composition_schema.py` for `composition.v1` validation, 4/4, 3/4, 6/8 timing, invalid pitches, velocities, durations, duplicate tracks, and section boundaries.
 - `backend/tests/test_composition_normalizer.py` for legacy migration, velocity defaults, canonical pass-through, and harmony-only rejection.
-- `backend/tests/test_composition_midi.py` for MIDI-ready timing, channel, program, and velocity preservation.
+- `backend/tests/test_composition_midi.py` for MIDI-ready timing, channel, program, velocity preservation, and Standard MIDI File rendering.
+- `backend/tests/test_export_fidelity.py` for deterministic fixture comparisons across canonical JSON, MIDI bytes, and MusicXML note timing.
+- `backend/tests/test_export_routes.py` for `/export/musicxml` and `/export/midi` content types, attachments, and validation errors.
 - `backend/tests/test_music_json_renderer.py` for canonical MusicXML rendering from events without harmony fallback.
 - `backend/tests/test_composition_validator.py` for integrity diagnostics such as missing roles, empty/sparse tracks, pitch/range issues, and harmony-only rejection.
 - `backend/tests/test_llm_staged_composer.py` for mocked multi-stage sequencing, repair/retry, oversized request rejection, provider/model override, and actionable API errors.
@@ -37,7 +39,7 @@ Run from `frontend/`:
 npm test
 ```
 
-The frontend uses Node's built-in test runner for browser-independent utilities. Tests cover canonical JSON validation, invalid velocity rejection, legacy harmony-only rejection, canonical tick-to-second playback scheduling, polyphony preservation, and invalid playback event skipping.
+The frontend uses Node's built-in test runner for browser-independent utilities. Tests cover canonical JSON validation, invalid velocity rejection, legacy harmony-only rejection, canonical tick-to-second playback scheduling, polyphony preservation, invalid playback event skipping, and download Blob URL create/revoke cleanup.
 
 ## Frontend Smoke Checks
 
@@ -53,7 +55,8 @@ Use these manual checks after `npm run build` and during local development.
 8. Reset the editor and confirm the generated JSON is restored.
 9. Confirm notation renders from backend MusicXML.
 10. Click Play and Stop to confirm playback starts only after the user gesture, preserves simultaneous notes, and stops cleanly.
-11. Resize to a mobile viewport and confirm controls remain usable without horizontal page overflow.
+11. Click Export MusicXML and Export MIDI; confirm downloads use `.musicxml` / `.mid`, notation preview updates from the exported MusicXML, and playback/export positions match the edited canonical JSON.
+12. Resize to a mobile viewport and confirm controls remain usable without horizontal page overflow.
 
 ## Frontend Build
 
@@ -67,6 +70,6 @@ The OSMD/Tone.js bundle can trigger Vite's large chunk warning; that warning is 
 
 ## Logging Checks
 
-- Backend: set `LOG_LEVEL=DEBUG` before running the server or tests when diagnosing schema, migration, rendering, or MIDI-ready mapping decisions.
-- Frontend: use browser devtools console to inspect API response validation, store updates, editor validation, and playback schedule summaries.
-- Logs should include schema version, normalization path, event counts, timing summaries, and sanitized error messages. API keys and full raw prompts should not appear in logs.
+- Backend: set `LOG_LEVEL=DEBUG` before running the server or tests when diagnosing schema, migration, rendering, export, or MIDI mapping decisions.
+- Frontend: use browser devtools console to inspect API response validation, store updates, editor validation, export requests, and playback schedule summaries.
+- Logs should include schema version, export format, event counts, timing summaries, byte lengths, and sanitized error messages. API keys, full raw prompts, MusicXML payloads, and MIDI bytes should not appear in logs.

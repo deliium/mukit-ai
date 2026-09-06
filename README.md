@@ -8,6 +8,7 @@ A full-stack LLM music composer that generates canonical playable `composition.v
 - **Prompt Controls**: Configure genre, mood, key, meter, tempo range, instruments, sections, complexity, duration, and freeform instructions
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
 - **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play canonical track-local note events with Tone.js
+- **Deterministic Export**: Download MusicXML and MIDI from the same canonical `tracks[].events[]` used by notation and playback
 
 ## 🏗️ Architecture
 
@@ -94,6 +95,7 @@ The frontend will be available at `http://localhost:3000`
 6. Edit the returned JSON in the browser. Invalid edits show a client-side validation error.
 7. Review notation rendered from backend MusicXML.
 8. Use Play/Stop to preview canonical note events from the generated or edited JSON.
+9. Export MusicXML or MIDI from the edited canonical JSON; notation preview refreshes from the exported MusicXML.
 
 ## 🔧 API Endpoints
 
@@ -101,6 +103,8 @@ The frontend will be available at `http://localhost:3000`
 - `GET /health` - Health check
 - `GET /llm/models` - Return configured LLM provider/model options
 - `POST /llm/generate-music-json` - Generate validated music JSON and derived MusicXML
+- `POST /export/musicxml` - Render canonical `composition.v1` JSON as a downloadable MusicXML attachment
+- `POST /export/midi` - Render canonical `composition.v1` JSON as a downloadable Standard MIDI File attachment
 
 Example LLM request:
 
@@ -229,8 +233,9 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 - **Validation**: Pydantic schema checks plus deterministic integrity validation cover required roles, note density, pitch ranges, timing bounds, and harmony-only rejection. Failed stages repair using structured diagnostics until `max_retries` is exhausted; final failures return HTTP `502` with sanitized detail.
 - **Normalization**: legacy LLM output with explicit notes is still migrated to canonical track-local events when encountered; harmony-only legacy output is rejected with an actionable error.
 - **Testing**: normal backend tests mock providers. Opt-in real-provider smoke: `RUN_LLM_SMOKE=1 LLM_SMOKE_PROVIDER=openai ../.venv/bin/python -m pytest tests/test_llm_real_provider_smoke.py` from `backend/`.
-- **MusicXML rendering**: canonical note events are converted to deterministic MusicXML with music21 for notation preview; harmony remains chord-symbol metadata.
-- **Frontend preview**: the browser edits canonical JSON, renders MusicXML with OSMD, and schedules canonical note events from ticks with Tone.js.
+- **MusicXML rendering**: canonical note events are converted to deterministic MusicXML with music21 for notation preview and `/export/musicxml`; harmony remains chord-symbol metadata.
+- **MIDI export**: `/export/midi` writes a Standard MIDI File via `mido` from the same track-local events, preserving velocity, program, channel, volume, and pan.
+- **Frontend preview**: the browser edits canonical JSON, renders MusicXML with OSMD, schedules canonical note events from ticks with Tone.js, and downloads MusicXML/MIDI exports.
 
 ## 🔍 Troubleshooting
 
