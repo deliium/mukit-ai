@@ -32,6 +32,20 @@ def load_llm_settings(env: Mapping[str, str] | None = None) -> LLMSettings:
     source = env if env is not None else os.environ
     requested_default = _normalized_provider(source.get("DEFAULT_LLM_PROVIDER"))
 
+    logger.debug(
+        "LLM env key presence (booleans only)",
+        extra={
+            "OPENAI_API_KEY": bool(source.get("OPENAI_API_KEY")),
+            "DEEPSEEK_API_KEY": bool(source.get("DEEPSEEK_API_KEY")),
+            "DEFAULT_LLM_PROVIDER": bool(source.get("DEFAULT_LLM_PROVIDER")),
+            "OPENAI_MODEL": bool(source.get("OPENAI_MODEL")),
+            "DEEPSEEK_MODEL": bool(source.get("DEEPSEEK_MODEL")),
+            "DEEPSEEK_BASE_URL": bool(source.get("DEEPSEEK_BASE_URL")),
+            "LLM_REQUEST_TIMEOUT_SECONDS": bool(source.get("LLM_REQUEST_TIMEOUT_SECONDS")),
+            "LLM_TEMPERATURE": bool(source.get("LLM_TEMPERATURE")),
+        },
+    )
+
     providers = []
     openai_key = source.get("OPENAI_API_KEY")
     if openai_key:

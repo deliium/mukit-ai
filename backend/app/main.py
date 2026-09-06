@@ -8,6 +8,7 @@ import uvicorn
 
 from .db import ensure_database
 from .llm_settings import load_llm_settings
+from .ready import build_readiness_report, configure_logging, parse_cors_allow_origins
 from .routers.projects import router as projects_router
 from .schemas import (
     Composition,
@@ -34,23 +35,40 @@ from .services.music_json_renderer import MusicJsonRenderError, render_musicxml
 
 logger = logging.getLogger(__name__)
 
+# Apply LOG_LEVEL before other modules emit startup logs.
+_CONFIGURED_LOG_LEVEL = configure_logging()
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db_path = ensure_database()
+    llm_settings = load_llm_settings()
+    provider_names = [provider.provider for provider in llm_settings.providers]
     logger.info(
         "Application startup database ready",
-        extra={"project_db_path": str(db_path)},
+        extra={"project_db_path": str(db_path), "log_level": _CONFIGURED_LOG_LEVEL},
     )
+    logger.info(
+        "Application startup LLM providers configured",
+        extra={
+            "providers": provider_names,
+            "default_provider": llm_settings.default_provider,
+            "provider_count": len(provider_names),
+        },
+    )
+    if not provider_names:
+        logger.warning("No LLM providers configured; generate/edit routes will return 503")
     yield
+    logger.info("Application shutdown")
 
 
 app = FastAPI(title="LLM Music Composer API", version="1.0.0", lifespan=lifespan)
 
-# Configure CORS
+_cors_origins = parse_cors_allow_origins()
+logger.debug("Installing CORS middleware", extra={"origins": _cors_origins})
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React dev server
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -84,7 +102,17 @@ async def root():
 
 @app.get("/health")
 async def health_check():
+    """Liveness probe — process is up."""
     return {"status": "healthy"}
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness probe — DB openable; LLM/WAV reported as non-secret flags."""
+    report = build_readiness_report()
+    if not report.get("ready"):
+        raise HTTPException(status_code=503, detail=report)
+    return report
 
 @app.get("/llm/models", response_model=LLMModelsResponse)
 async def get_llm_models():
