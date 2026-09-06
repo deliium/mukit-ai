@@ -11,6 +11,7 @@ from .schemas import (
     LLMModelsResponse,
     LLMProviderModel,
 )
+from .services.composition_planner import OversizedLLMGenerationRequestError
 from .services.llm_music_generator import (
     InvalidLLMOutputError,
     LLMGenerationError,
@@ -123,6 +124,12 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
             musicxml=musicxml,
             warnings=all_warnings,
         )
+    except OversizedLLMGenerationRequestError as exc:
+        logger.warning(
+            "LLM generation request rejected as oversized",
+            extra={"code": "oversized_generation_request", "detail": str(exc)[:200]},
+        )
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except NoLLMProviderConfiguredError as exc:
         logger.warning("LLM provider unavailable", extra={"reason": "no_configured_providers"})
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -130,8 +137,11 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
         logger.warning("LLM provider unavailable", extra={"reason": "unsupported_provider"})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except InvalidLLMOutputError as exc:
-        logger.warning("Invalid or non-playable LLM output could not be corrected")
-        raise HTTPException(status_code=502, detail="LLM returned invalid or non-playable music JSON") from exc
+        logger.warning(
+            "Invalid or non-playable LLM output could not be corrected",
+            extra={"detail": str(exc)[:300]},
+        )
+        raise HTTPException(status_code=502, detail=str(exc)[:500]) from exc
     except MusicJsonRenderError as exc:
         logger.error("MusicXML rendering failed", extra={"error_type": type(exc).__name__})
         raise HTTPException(status_code=500, detail="Generated JSON could not be rendered as MusicXML") from exc
