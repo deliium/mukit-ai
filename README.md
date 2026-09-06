@@ -5,6 +5,7 @@ A full-stack LLM music composer that generates canonical playable `composition.v
 ## 🚀 Features
 
 - **LLM JSON Composition**: Generate structured music JSON with OpenAI or DeepSeek-compatible providers
+- **Local Project Persistence**: Create/open/rename/duplicate/delete projects backed by SQLite; debounced autosave keeps edited compositions across Docker restarts
 - **Prompt Controls**: Configure genre, mood, key, meter, tempo range, instruments, sections, complexity, duration, and freeform instructions
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
 - **Piano-Roll Editor**: Create, select, drag/transpose, resize, and delete notes on `tracks[].events[]` with snap/zoom, track focus, context tracks, and note-edit undo/redo; shares the same `editedMusicJson` as the JSON editor
@@ -15,9 +16,10 @@ A full-stack LLM music composer that generates canonical playable `composition.v
 
 - **Backend**: FastAPI with Python
 - **Frontend**: React with styled-components
+- **Persistence**: SQLite project store (`PROJECT_DB_PATH`) with numbered SQL migrations; Docker named volume `mukit_project_data`
 - **Music Processing**: music21 library for MusicXML rendering
 - **LLM Orchestration**: LangChain/LangGraph with OpenAI-compatible chat providers
-- **Frontend State**: Zustand store for API status, LLM models, generation output, piano-roll edit state, notation, playback transport state, and per-track mute/solo/volume
+- **Frontend State**: Zustand store for API status, LLM models, project browser/save status, generation output, piano-roll edit state, notation, playback transport state, and per-track mute/solo/volume
 
 ## 📋 Prerequisites
 
@@ -54,6 +56,8 @@ export DEEPSEEK_MODEL="deepseek-chat"
 export DEFAULT_LLM_PROVIDER="openai"
 export LLM_REQUEST_TIMEOUT_SECONDS="60"
 export LLM_TEMPERATURE="0.7"
+# Optional local SQLite path (default: backend/data/projects.db)
+export PROJECT_DB_PATH="/absolute/path/to/projects.db"
 ```
 
 If no provider key is configured, `/llm/models` returns an empty list and LLM generation returns `503` with a clear message.
@@ -86,14 +90,24 @@ The frontend will be available at `http://localhost:3000`
 
 ## 🎼 Usage
 
+### Local projects
+
+1. Start the backend and frontend (or `docker compose up`).
+2. On the Projects home screen, create a project or open an existing one.
+3. Generate music, edit notes, and confirm the save chip reaches **Saved**.
+4. Restart with `docker compose restart` and reopen the project — edits should match.
+5. Avoid `docker compose down -v` unless you intend to wipe the `mukit_project_data` volume.
+
+Details: [docs/project-persistence.md](docs/project-persistence.md).
+
 ### LLM JSON Composition
 
 1. Configure `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or both on the backend.
 2. Start the backend and frontend.
-3. Choose the provider/model in the LLM JSON Composer panel.
+3. Open or create a project, then choose the provider/model in the LLM JSON Composer panel.
 4. Set prompt parameters such as genre, mood, key, time signature, tempo range, instruments, sections, complexity, duration, and freeform instructions.
 5. Click "Generate LLM Music JSON".
-6. Edit notes on the piano roll (or in the JSON editor). Invalid edits show a client-side validation error. Piano-roll undo/redo covers note edits only.
+6. Edit notes on the piano roll (or in the JSON editor). Invalid edits show a client-side validation error. Piano-roll undo/redo covers note edits only. Changes autosave when a project is open.
 7. Review notation rendered from backend MusicXML; piano-roll edits refresh notation via `POST /export/musicxml/preview` after a short debounce.
 8. Use Play/Stop to preview canonical note events from the generated or edited JSON; the piano-roll cursor follows playback position.
 9. Export MusicXML or MIDI from the edited canonical JSON; notation preview refreshes from the exported MusicXML.
@@ -104,6 +118,12 @@ The frontend will be available at `http://localhost:3000`
 - `GET /health` - Health check
 - `GET /llm/models` - Return configured LLM provider/model options
 - `POST /llm/generate-music-json` - Generate validated music JSON and derived MusicXML
+- `GET /projects` - List local project summaries
+- `POST /projects` - Create a local project
+- `GET /projects/{id}` - Open a project (migrates legacy composition JSON to `composition.v1` when needed)
+- `PATCH /projects/{id}` - Rename and/or save composition + generation metadata
+- `POST /projects/{id}/duplicate` - Duplicate a project
+- `DELETE /projects/{id}` - Delete a project
 - `POST /export/musicxml` - Render canonical `composition.v1` JSON as a downloadable MusicXML attachment
 - `POST /export/musicxml/preview` - Render MusicXML text for notation refresh without a download header
 - `POST /export/midi` - Render canonical `composition.v1` JSON as a downloadable Standard MIDI File attachment
@@ -196,6 +216,7 @@ mukit-ai/
 │   └── package.json
 ├── docs/
 │   ├── composition-v1.md
+│   ├── project-persistence.md
 │   └── testing.md
 └── README.md
 ```

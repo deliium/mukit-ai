@@ -95,3 +95,7 @@ Use backend `LOG_LEVEL=DEBUG` or browser devtools console when diagnosing schema
 Backend preview-render logs include format `musicxml_preview`, track/event counts, duration ticks, and sanitized render failures without dumping full compositions.
 
 Logs include schema version, normalization path, track count, event count, duration ticks, export format, byte length, validation failures, render decisions, and playback schedule summaries without API keys, prompts, or raw MusicXML/MIDI payloads.
+
+## Project persistence
+
+Saved projects store canonical `composition.v1` JSON in SQLite. Opening a project re-runs normalization so older/legacy payloads upgrade before the client receives them. See [project-persistence.md](./project-persistence.md).
