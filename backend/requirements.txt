@@ -7,6 +7,7 @@ python-multipart==0.0.12
 
 # Music Processing
 music21==10.1.0
+mido>=1.3.0
 
 # LLM Music Generation
 langchain>=0.3.27
