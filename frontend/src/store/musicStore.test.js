@@ -64,6 +64,16 @@ function resetStore(composition = structuredClone(BASE)) {
     pianoRollNotationError: '',
     noteEditUndoStack: [],
     noteEditRedoStack: [],
+    aiEditStartBar: null,
+    aiEditEndBar: null,
+    aiEditTrackMode: 'current',
+    aiEditTrackIds: null,
+    aiEditInstruction: '',
+    aiEditStatus: 'idle',
+    aiEditError: '',
+    aiEditWarnings: [],
+    selectedProvider: 'openai',
+    selectedModel: 'test-model',
     playbackStatus: 'idle',
     playbackSeconds: 0,
     playbackBar: 1,
@@ -135,4 +145,47 @@ test('updateNote skipHistory does not grow undo stack on every call', () => {
     useMusicStore.getState().editedMusicJson.tracks[0].events.find((event) => event.id === 'n1').start_tick,
     720,
   );
+});
+
+test('AI edit failure leaves composition and history unchanged', () => {
+  resetStore();
+  const before = structuredClone(useMusicStore.getState().editedMusicJson);
+  const store = useMusicStore.getState();
+  store.setAiEditSelection({ startBar: 1, endBar: 2, trackMode: 'current' });
+  store.setAiEditInstruction('make this phrase more dramatic but keep the harmony');
+  assert.equal(store.startAiEdit(), true);
+  store.failAiEdit('provider failed');
+  const after = useMusicStore.getState();
+  assert.deepEqual(after.editedMusicJson, before);
+  assert.equal(after.noteEditUndoStack.length, 0);
+  assert.equal(after.noteEditRedoStack.length, 0);
+  assert.equal(after.aiEditStatus, 'error');
+  assert.match(after.aiEditError, /provider failed/);
+});
+
+test('AI edit success pushes one undo snapshot and supports undo/redo', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  const before = structuredClone(useMusicStore.getState().editedMusicJson);
+  store.setAiEditSelection({ startBar: 1, endBar: 1, trackMode: 'current' });
+  store.setAiEditInstruction('make this phrase more dramatic but keep the harmony');
+  store.startAiEdit();
+
+  const edited = structuredClone(before);
+  edited.tracks[0].events = [
+    { type: 'note', id: 'n1', pitch: 'G4', start_tick: 0, duration_ticks: 480, velocity: 100 },
+    { type: 'note', id: 'n2', pitch: 'E4', start_tick: 0, duration_ticks: 480, velocity: 88 },
+  ];
+  assert.equal(store.completeAiEdit({ composition: edited, musicxml: '<score/>', warnings: ['ok'] }), true);
+
+  const afterApply = useMusicStore.getState();
+  assert.equal(afterApply.noteEditUndoStack.length, 1);
+  assert.equal(afterApply.aiEditStatus, 'success');
+  assert.equal(afterApply.editedMusicJson.tracks[0].events[0].pitch, 'G4');
+  assert.equal(afterApply.playbackStatus, 'idle');
+
+  assert.equal(store.undoNoteEdit(), true);
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events[0].pitch, 'C4');
+  assert.equal(store.redoNoteEdit(), true);
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events[0].pitch, 'G4');
 });
