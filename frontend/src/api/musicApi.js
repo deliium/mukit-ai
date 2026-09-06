@@ -35,6 +35,47 @@ export async function exportMusicXml(composition) {
   });
 }
 
+export async function renderMusicXmlPreview(composition) {
+  const validation = validateMusicJson(composition);
+  const eventCount = Array.isArray(composition?.tracks)
+    ? composition.tracks.reduce((total, track) => total + (track.events?.length || 0), 0)
+    : 0;
+  console.debug('[musicApi] MusicXML preview request started', {
+    schemaVersion: composition?.schema_version || 'legacy',
+    trackCount: composition?.tracks?.length || 0,
+    eventCount,
+    valid: validation.valid,
+  });
+  if (!validation.valid || !isCanonicalComposition(composition)) {
+    console.warn('[musicApi] MusicXML preview rejected invalid composition', {
+      message: validation.message || 'Preview requires composition.v1 JSON',
+    });
+    throw new Error(validation.message || 'Preview requires canonical composition.v1 JSON');
+  }
+
+  try {
+    const response = await axios.post('/export/musicxml/preview', composition, {
+      responseType: 'text',
+      headers: { Accept: 'application/vnd.recordare.musicxml+xml, application/xml, text/xml, text/plain' },
+    });
+    const musicxml = typeof response.data === 'string' ? response.data : String(response.data || '');
+    console.debug('[musicApi] MusicXML preview request completed', {
+      schemaVersion: composition.schema_version,
+      eventCount,
+      musicXmlLength: musicxml.length,
+    });
+    return musicxml;
+  } catch (error) {
+    const detail = error.response?.data?.detail || error.message || 'Unknown MusicXML preview failure';
+    const message = typeof detail === 'string' ? detail : JSON.stringify(detail);
+    console.error('[musicApi] MusicXML preview request failed', {
+      status: error.response?.status,
+      detail: message,
+    });
+    throw new Error(message);
+  }
+}
+
 export async function exportMidi(composition) {
   return exportComposition(composition, {
     endpoint: '/export/midi',

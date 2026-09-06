@@ -210,6 +210,39 @@ async def export_musicxml(composition: Composition):
         raise HTTPException(status_code=500, detail="Composition could not be rendered as MusicXML") from exc
 
 
+@app.post("/export/musicxml/preview")
+async def export_musicxml_preview(composition: Composition):
+    """Render canonical Composition V1 JSON to MusicXML text without download headers."""
+    summary = _composition_export_summary(composition)
+    logger.info("MusicXML preview render started", extra={"format": "musicxml_preview", **summary})
+    try:
+        musicxml, warnings = render_musicxml(composition)
+        if warnings:
+            logger.warning(
+                "MusicXML preview completed with notation warnings",
+                extra={"format": "musicxml_preview", "warning_count": len(warnings), **summary},
+            )
+        logger.info(
+            "MusicXML preview render completed",
+            extra={
+                "format": "musicxml_preview",
+                "musicxml_length": len(musicxml),
+                "warning_count": len(warnings),
+                **summary,
+            },
+        )
+        return Response(
+            content=musicxml,
+            media_type="application/vnd.recordare.musicxml+xml",
+        )
+    except MusicJsonRenderError as exc:
+        logger.error(
+            "MusicXML preview render failed",
+            extra={"format": "musicxml_preview", "error_type": type(exc).__name__, **summary},
+        )
+        raise HTTPException(status_code=500, detail="Composition could not be rendered as MusicXML") from exc
+
+
 @app.post("/export/midi")
 async def export_midi(composition: Composition):
     """Render canonical Composition V1 JSON to a downloadable Standard MIDI File."""
