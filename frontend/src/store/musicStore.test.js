@@ -1,0 +1,138 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { useMusicStore } from '../store/musicStore.js';
+
+const BASE = {
+  schema_version: 'composition.v1',
+  tempo: 100,
+  key: 'C major',
+  time_signature: '4/4',
+  ticks_per_quarter: 480,
+  bar_count: 2,
+  duration_ticks: 3840,
+  sections: [
+    { type: 'intro', start_bar: 1, bar_count: 2, start_tick: 0, duration_ticks: 3840 },
+  ],
+  tracks: [
+    {
+      id: 'melody-1',
+      name: 'Melody',
+      instrument: 'piano',
+      role: 'melody',
+      midi_program: 0,
+      channel: 1,
+      is_drum: false,
+      volume: 100,
+      pan: 0,
+      events: [
+        { type: 'note', id: 'n1', pitch: 'C4', start_tick: 0, duration_ticks: 480, velocity: 90 },
+        { type: 'note', id: 'n2', pitch: 'E4', start_tick: 0, duration_ticks: 480, velocity: 88 },
+      ],
+    },
+    {
+      id: 'bass-1',
+      name: 'Bass',
+      instrument: 'bass',
+      role: 'bass',
+      midi_program: 32,
+      channel: 2,
+      is_drum: false,
+      volume: 100,
+      pan: 0,
+      events: [
+        { type: 'note', id: 'b1', pitch: 'C2', start_tick: 0, duration_ticks: 960, velocity: 90 },
+      ],
+    },
+  ],
+  harmony: [{ bar: 1, chord: 'C' }],
+};
+
+function resetStore(composition = structuredClone(BASE)) {
+  useMusicStore.setState({
+    generatedMusicJson: composition,
+    editedMusicJson: composition,
+    musicXml: '',
+    compositionRevision: 'test',
+    trackControls: {},
+    pianoRollTrackId: 'melody-1',
+    pianoRollNoteId: null,
+    pianoRollSnap: '1/8',
+    pianoRollZoom: 0.05,
+    pianoRollEditStatus: 'idle',
+    pianoRollNotationStatus: 'idle',
+    pianoRollNotationError: '',
+    noteEditUndoStack: [],
+    noteEditRedoStack: [],
+    playbackStatus: 'idle',
+    playbackSeconds: 0,
+    playbackBar: 1,
+    uiError: '',
+    warnings: [],
+  });
+}
+
+test('store create/update/delete and undo/redo keep editedMusicJson authoritative', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+
+  const created = store.createNote('melody-1', {
+    pitch: 'G4',
+    start_tick: 480,
+    duration_ticks: 240,
+  });
+  assert.ok(created?.id);
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events.length, 3);
+  assert.equal(useMusicStore.getState().pianoRollNoteId, created.id);
+
+  const updated = store.updateNote('melody-1', created.id, { pitch: 'A4', start_tick: 720 });
+  assert.equal(updated.pitch, 'A4');
+  assert.equal(updated.start_tick, 720);
+  // Polyphonic overlap with existing notes remains allowed
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events.length, 3);
+
+  const resized = store.updateNote('melody-1', created.id, { duration_ticks: 960 });
+  assert.equal(resized.duration_ticks, 960);
+
+  assert.equal(store.deleteNote('melody-1', created.id), true);
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events.length, 2);
+
+  assert.equal(store.undoNoteEdit(), true);
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events.length, 3);
+  assert.equal(store.redoNoteEdit(), true);
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events.length, 2);
+});
+
+test('store rejects invalid snap/zoom and recovers missing track selection', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  store.setPianoRollSnap('1/3');
+  assert.equal(useMusicStore.getState().pianoRollSnap, '1/8');
+  store.setPianoRollZoom(99);
+  assert.equal(useMusicStore.getState().pianoRollZoom, 0.05);
+
+  store.setEditedMusicJson({
+    ...BASE,
+    tracks: [BASE.tracks[1]],
+  });
+  assert.equal(useMusicStore.getState().pianoRollTrackId, 'bass-1');
+});
+
+test('updateNote skipHistory does not grow undo stack on every call', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  const snapshot = {
+    editedMusicJson: useMusicStore.getState().editedMusicJson,
+    pianoRollTrackId: 'melody-1',
+    pianoRollNoteId: 'n1',
+  };
+  store.updateNote('melody-1', 'n1', { start_tick: 240 }, { historySnapshot: snapshot });
+  assert.equal(useMusicStore.getState().noteEditUndoStack.length, 1);
+  store.updateNote('melody-1', 'n1', { start_tick: 480 }, { skipHistory: true });
+  store.updateNote('melody-1', 'n1', { start_tick: 720 }, { skipHistory: true });
+  assert.equal(useMusicStore.getState().noteEditUndoStack.length, 1);
+  assert.equal(
+    useMusicStore.getState().editedMusicJson.tracks[0].events.find((event) => event.id === 'n1').start_tick,
+    720,
+  );
+});
