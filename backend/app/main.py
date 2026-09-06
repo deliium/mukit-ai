@@ -1,10 +1,12 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import uvicorn
 
+from .db import ensure_database
 from .llm_settings import load_llm_settings
 from .schemas import (
     Composition,
@@ -27,7 +29,18 @@ from .services.music_json_renderer import MusicJsonRenderError, render_musicxml
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="LLM Music Composer API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    db_path = ensure_database()
+    logger.info(
+        "Application startup database ready",
+        extra={"project_db_path": str(db_path)},
+    )
+    yield
+
+
+app = FastAPI(title="LLM Music Composer API", version="1.0.0", lifespan=lifespan)
 
 # Configure CORS
 app.add_middleware(

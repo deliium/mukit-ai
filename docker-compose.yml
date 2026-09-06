@@ -9,8 +9,10 @@ services:
       - ./backend:/app
       - ./backend/models:/app/models
       - ./backend/training_data:/app/training_data
+      - mukit_project_data:/data
     environment:
       - PYTHONPATH=/app
+      - PROJECT_DB_PATH=/data/projects.db
     command: uvicorn app.main:app --host 0.0.0.0 --port 8888 --reload
 
   frontend:
@@ -24,3 +26,6 @@ services:
       - REACT_APP_API_URL=http://localhost:8888
     depends_on:
       - backend
+
+volumes:
+  mukit_project_data:

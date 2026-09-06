@@ -50,6 +50,9 @@ backend/models/*.pkl
 backend/training_data/*.mid
 backend/training_data/*.midi
 
+# Local SQLite project database
+backend/data/
+
 # Node.js
 frontend/node_modules/
 frontend/npm-debug.log*

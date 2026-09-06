@@ -18,8 +18,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p models training_data
+# Create necessary directories (models, training data, and durable project DB mount)
+RUN mkdir -p models training_data /data
 
 # Expose port
 EXPOSE 8888
