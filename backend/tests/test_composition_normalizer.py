@@ -46,3 +46,15 @@ def test_normalizer_returns_canonical_composition_unchanged():
     composition = normalize_composition_json(legacy_music_json())
 
     assert normalize_composition_json(composition) is composition
+
+
+def test_midi_program_mapping_covers_common_gm_instruments():
+    from app.services.composition_normalizer import _midi_program_for_instrument
+
+    assert _midi_program_for_instrument("Acoustic Grand Piano") == 0
+    assert _midi_program_for_instrument("Electric Bass") == 32
+    assert _midi_program_for_instrument("Clarinet Solo") == 71
+    assert _midi_program_for_instrument("Oboe") == 68
+    assert _midi_program_for_instrument("Church Organ") == 19
+    assert _midi_program_for_instrument("Orchestral Harp") == 46
+    assert _midi_program_for_instrument("Unknown Widget") == 0
