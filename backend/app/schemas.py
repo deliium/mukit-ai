@@ -575,6 +575,249 @@ class LLMMusicGenerationResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class CompositionEditSelection(BaseModel):
+    start_bar: int = Field(..., ge=1)
+    end_bar: int = Field(..., ge=1)
+    track_ids: list[str] | None = None
+    section_id: str | None = Field(default=None, min_length=1, max_length=80)
+    section_type: str | None = None
+
+    @field_validator("section_id")
+    @classmethod
+    def validate_section_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        normalized = value.strip()
+        if not normalized:
+            _log_validation_failure(cls.__name__, "section_id", value, "section_id cannot be empty")
+            raise ValueError("section_id must not be empty when provided")
+        return normalized
+
+    @field_validator("section_type")
+    @classmethod
+    def validate_optional_section_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized not in SUPPORTED_SECTION_TYPES:
+            _log_validation_failure(
+                cls.__name__,
+                "section_type",
+                value,
+                f"supported values: {sorted(SUPPORTED_SECTION_TYPES)}",
+            )
+            raise ValueError(f"Unsupported section type: {value}")
+        return normalized
+
+    @field_validator("track_ids")
+    @classmethod
+    def validate_track_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        normalized = [track_id.strip() for track_id in value if track_id and track_id.strip()]
+        if not normalized:
+            _log_validation_failure(cls.__name__, "track_ids", value, "track_ids cannot be empty when provided")
+            raise ValueError("track_ids must contain at least one non-empty track id when provided")
+        duplicates = sorted({track_id for track_id in normalized if normalized.count(track_id) > 1})
+        if duplicates:
+            _log_validation_failure(cls.__name__, "track_ids", duplicates, "duplicate track IDs are not allowed")
+            raise ValueError("track_ids must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_bar_range(self) -> "CompositionEditSelection":
+        if self.end_bar < self.start_bar:
+            _log_validation_failure(
+                self.__class__.__name__,
+                "bar_range",
+                {"start_bar": self.start_bar, "end_bar": self.end_bar},
+                "end_bar must be greater than or equal to start_bar",
+            )
+            raise ValueError("end_bar must be greater than or equal to start_bar")
+        return self
+
+
+class CompositionEditInstruction(BaseModel):
+    instruction: str = Field(..., min_length=1, max_length=2000)
+    selection: CompositionEditSelection
+    allow_harmony_changes: bool = False
+    allow_added_tracks: bool = False
+
+    @field_validator("instruction")
+    @classmethod
+    def validate_instruction(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            _log_validation_failure(cls.__name__, "instruction", value, "instruction cannot be empty")
+            raise ValueError("instruction must not be empty")
+        return normalized
+
+
+class CompositionRegionTrackReplacement(BaseModel):
+    track_id: str = Field(..., min_length=1, max_length=80)
+    events: list[NoteEvent] = Field(default_factory=list)
+
+    @field_validator("track_id")
+    @classmethod
+    def validate_track_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            _log_validation_failure(cls.__name__, "track_id", value, "track_id cannot be empty")
+            raise ValueError("track_id must not be empty")
+        return normalized
+
+
+class CompositionRegionReplacementPatch(BaseModel):
+    schema_version: Literal["composition.v1"] = COMPOSITION_SCHEMA_VERSION
+    operation: Literal["replace_region"] = "replace_region"
+    start_bar: int = Field(..., ge=1)
+    end_bar: int = Field(..., ge=1)
+    target_track_ids: list[str] | None = None
+    replace_tracks: list[CompositionRegionTrackReplacement] = Field(default_factory=list)
+    added_tracks: list[CompositionTrack] = Field(default_factory=list)
+    harmony_patch: list[LLMMusicHarmonyItem] | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+    @field_validator("target_track_ids")
+    @classmethod
+    def validate_target_track_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        normalized = [track_id.strip() for track_id in value if track_id and track_id.strip()]
+        if not normalized:
+            _log_validation_failure(
+                cls.__name__,
+                "target_track_ids",
+                value,
+                "target_track_ids cannot be empty when provided",
+            )
+            raise ValueError("target_track_ids must contain at least one non-empty track id when provided")
+        duplicates = sorted({track_id for track_id in normalized if normalized.count(track_id) > 1})
+        if duplicates:
+            _log_validation_failure(
+                cls.__name__,
+                "target_track_ids",
+                duplicates,
+                "duplicate target track IDs are not allowed",
+            )
+            raise ValueError("target_track_ids must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_patch_shape(self) -> "CompositionRegionReplacementPatch":
+        if self.end_bar < self.start_bar:
+            _log_validation_failure(
+                self.__class__.__name__,
+                "bar_range",
+                {"start_bar": self.start_bar, "end_bar": self.end_bar},
+                "end_bar must be greater than or equal to start_bar",
+            )
+            raise ValueError("end_bar must be greater than or equal to start_bar")
+
+        replace_ids = [track.track_id for track in self.replace_tracks]
+        duplicate_replace_ids = sorted({track_id for track_id in replace_ids if replace_ids.count(track_id) > 1})
+        if duplicate_replace_ids:
+            _log_validation_failure(
+                self.__class__.__name__,
+                "replace_tracks",
+                duplicate_replace_ids,
+                "duplicate replace_tracks track IDs are not allowed",
+            )
+            raise ValueError("replace_tracks track IDs must be unique")
+
+        if self.target_track_ids is not None:
+            unknown_replace_ids = sorted(set(replace_ids) - set(self.target_track_ids))
+            if unknown_replace_ids:
+                _log_validation_failure(
+                    self.__class__.__name__,
+                    "replace_tracks",
+                    unknown_replace_ids,
+                    "replace_tracks must only target declared target_track_ids",
+                )
+                raise ValueError("replace_tracks must only include target_track_ids")
+
+        added_ids = [track.id for track in self.added_tracks]
+        duplicate_added_ids = sorted({track_id for track_id in added_ids if added_ids.count(track_id) > 1})
+        if duplicate_added_ids:
+            _log_validation_failure(
+                self.__class__.__name__,
+                "added_tracks",
+                duplicate_added_ids,
+                "duplicate added_tracks IDs are not allowed",
+            )
+            raise ValueError("added_tracks IDs must be unique")
+
+        overlapping_ids = sorted(set(replace_ids) & set(added_ids))
+        if overlapping_ids:
+            _log_validation_failure(
+                self.__class__.__name__,
+                "added_tracks",
+                overlapping_ids,
+                "added_tracks cannot reuse replace_tracks IDs",
+            )
+            raise ValueError("added_tracks cannot reuse replace_tracks IDs")
+
+        return self
+
+
+class LLMCompositionEditRequest(BaseModel):
+    composition: Composition
+    edit: CompositionEditInstruction
+    selection: LLMModelSelection = Field(default_factory=LLMModelSelection)
+    options: LLMGenerationOptions = Field(default_factory=LLMGenerationOptions)
+
+    @model_validator(mode="after")
+    def validate_edit_against_composition(self) -> "LLMCompositionEditRequest":
+        edit_selection = self.edit.selection
+        if edit_selection.end_bar > self.composition.bar_count:
+            _log_validation_failure(
+                self.__class__.__name__,
+                "edit.selection.end_bar",
+                edit_selection.end_bar,
+                f"end_bar exceeds composition bar_count {self.composition.bar_count}",
+            )
+            raise ValueError("edit selection end_bar must be within composition bar_count")
+
+        if edit_selection.track_ids is not None:
+            known_track_ids = {track.id for track in self.composition.tracks}
+            unknown = sorted(set(edit_selection.track_ids) - known_track_ids)
+            if unknown:
+                _log_validation_failure(
+                    self.__class__.__name__,
+                    "edit.selection.track_ids",
+                    unknown,
+                    "track_ids must exist in composition",
+                )
+                raise ValueError("edit selection track_ids must exist in the composition")
+
+        if edit_selection.section_type is not None:
+            matching = [
+                section
+                for section in self.composition.sections
+                if section.type == edit_selection.section_type
+            ]
+            if not matching:
+                _log_validation_failure(
+                    self.__class__.__name__,
+                    "edit.selection.section_type",
+                    edit_selection.section_type,
+                    "section_type not present in composition",
+                )
+                raise ValueError("edit selection section_type must exist in the composition")
+
+        return self
+
+
+class LLMCompositionEditResponse(BaseModel):
+    composition: Composition
+    patch: CompositionRegionReplacementPatch
+    provider: Literal["openai", "deepseek"]
+    model: str
+    musicxml: str | None = None
+    musicxml_filename: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 def _measure_quarter_length(time_signature: str) -> float:
     numerator, denominator = (int(part) for part in time_signature.split("/"))
     return numerator * (4 / denominator)
