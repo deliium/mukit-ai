@@ -67,17 +67,20 @@ Legacy music JSON has harmony/tracks but no note events; regenerate or add notes
 - Backend generation returns `Composition` in the response `music` field.
 - Backend MusicXML rendering consumes canonical track events and inserts rests for empty ranges.
 - `POST /export/musicxml` accepts canonical `composition.v1` JSON and returns a downloadable MusicXML attachment (`application/vnd.recordare.musicxml+xml`).
+- `POST /export/musicxml/preview` accepts the same JSON and returns MusicXML text for notation refresh **without** a `Content-Disposition` download header.
 - `POST /export/midi` accepts the same JSON and returns a Standard MIDI File attachment (`audio/midi`) built with `mido`.
 - Browser playback schedules exact `tracks[].events[]` note tuples through a multi-track Tone.js engine (`frontend/src/utils/tonePlaybackEngine.js`), converting ticks to seconds from `tempo` and `ticks_per_quarter`.
 - Playback preserves track identity, pitch, start tick/time, duration, velocity, and polyphonic simultaneity. It never invents substitute notes from `harmony`.
 - Per-track mute, solo, and volume controls change routing gain only; they do not mutate the canonical composition JSON.
 - Unsupported instruments use an explicit fallback synth strategy (logged with track ID, instrument, role, program) rather than silently rewriting musical content.
-- Frontend Export MusicXML / Export MIDI actions download from those endpoints using the current edited JSON and refresh the notation preview from the exported MusicXML.
-- MIDI/MusicXML/playback/notation all consume the same `tracks[].events[]`; harmony remains metadata only and never invents export or audible notes.
+- The piano-roll editor (`frontend/src/components/PianoRollEditor.jsx`) edits the same Zustand `editedMusicJson` as the JSON editor: create/move/transpose/resize/delete notes on `tracks[].events[]` with snap (`1/4`, `1/8`, `1/16`), zoom, track focus, context tracks, and bounded undo/redo for note edits only.
+- After valid piano-roll note edits, the frontend debounces `POST /export/musicxml/preview` and updates `musicXml` so OSMD notation stays in sync without forcing a download.
+- Frontend Export MusicXML / Export MIDI actions download from the export endpoints using the current edited JSON and refresh the notation preview from the exported MusicXML.
+- Piano roll, JSON editor, MIDI/MusicXML export, playback, and notation all consume the same `tracks[].events[]`; harmony remains metadata only and never invents export or audible notes.
 
 ## Diagnostics
 
-Use backend `LOG_LEVEL=DEBUG` or browser devtools console when diagnosing schema, export, or playback issues. Useful sanitized frontend fields include:
+Use backend `LOG_LEVEL=DEBUG` or browser devtools console when diagnosing schema, export, playback, or piano-roll issues. Useful sanitized frontend fields include:
 
 - playback path (`canonical` vs `legacy`)
 - tempo, `ticks_per_quarter`, track/event counts
@@ -85,5 +88,10 @@ Use backend `LOG_LEVEL=DEBUG` or browser devtools console when diagnosing schema
 - instrument strategy / unsupported fallback warnings
 - mute/solo/volume effective gain per track
 - composition revision changes that stop active playback
+- piano-roll track/note selection, snap/zoom, create/update/delete/undo/redo summaries (pitch, start tick, duration)
+- playback cursor tick/px (throttled) and MusicXML preview debounce schedule/cancel/complete
+- MusicXML preview request schema version, event count, and MusicXML length
+
+Backend preview-render logs include format `musicxml_preview`, track/event counts, duration ticks, and sanitized render failures without dumping full compositions.
 
 Logs include schema version, normalization path, track count, event count, duration ticks, export format, byte length, validation failures, render decisions, and playback schedule summaries without API keys, prompts, or raw MusicXML/MIDI payloads.

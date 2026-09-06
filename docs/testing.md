@@ -16,7 +16,7 @@ Focused canonical coverage includes:
 - `backend/tests/test_composition_normalizer.py` for legacy migration, velocity defaults, canonical pass-through, and harmony-only rejection.
 - `backend/tests/test_composition_midi.py` for MIDI-ready timing, channel, program, velocity preservation, and Standard MIDI File rendering.
 - `backend/tests/test_export_fidelity.py` for deterministic fixture comparisons across canonical JSON, MIDI bytes, and MusicXML note timing.
-- `backend/tests/test_export_routes.py` for `/export/musicxml` and `/export/midi` content types, attachments, and validation errors.
+- `backend/tests/test_export_routes.py` for `/export/musicxml`, `/export/musicxml/preview`, and `/export/midi` content types, attachments vs preview (no download header), and validation errors.
 - `backend/tests/test_music_json_renderer.py` for canonical MusicXML rendering from events without harmony fallback.
 - `backend/tests/test_composition_validator.py` for integrity diagnostics such as missing roles, empty/sparse tracks, pitch/range issues, and harmony-only rejection.
 - `backend/tests/test_llm_staged_composer.py` for mocked multi-stage sequencing, repair/retry, oversized request rejection, provider/model override, and actionable API errors.
@@ -39,9 +39,11 @@ Run from `frontend/`:
 npm test
 ```
 
-The frontend uses Node's built-in test runner for browser-independent utilities. Tests cover:
+The frontend uses Node's built-in test runner for browser-independent utilities and store actions. Tests cover:
 
 - canonical JSON validation, invalid velocity rejection, and legacy harmony-only rejection
+- piano-roll pitch conversion, snap intervals (480 TPQ), 4/4 and 6/8 bar metrics, create/move/resize/delete immutability, clamping, and polyphony
+- Zustand note-edit actions including undo/redo boundaries and skip-history drag updates
 - canonical tick-to-second playback scheduling with multi-track ordering, polyphony, and velocity
 - export-fidelity-style fixture parity fields (track ID, pitch, ticks, velocity, metadata)
 - no harmony-derived events for canonical compositions
@@ -65,9 +67,11 @@ Use these manual checks after `npm run build` and during local development.
 10. Click Play and confirm AudioContext starts only after the user gesture; simultaneous multi-track notes are audible; Pause/Resume, Stop, and Seek Start work; current seconds/bar update while playing.
 11. Use per-track Mute, Solo, and Volume while playing; confirm routing changes without editing composition JSON.
 12. Edit a note event while idle, then Play again; confirm playback uses the edited events. Edit during playback and confirm active playback stops.
-13. Click Export MusicXML and Export MIDI; confirm downloads use `.musicxml` / `.mid`, notation preview updates from the exported MusicXML, and a known fixture's playback positions match export note tuples.
-14. Open browser devtools and confirm sanitized playback diagnostics (path, event counts, instrument strategy/fallback, mute/solo gains) without raw composition dumps.
-15. Resize to a mobile viewport and confirm playback/track controls remain usable without horizontal page overflow.
+13. Open the piano-roll editor: select the melody track, set snap to `1/8` or `1/16`, drag a note to another pitch/time, resize duration, confirm the JSON editor shows the same `tracks[].events[]` change, confirm notation refreshes after the debounce, then Play and confirm the edited pitch/duration are heard with the red playback cursor moving.
+14. Use piano-roll Undo/Redo and Play again; confirm audible result follows the current edited state. Undo/redo applies only to note edits (not arbitrary JSON editor typing).
+15. Click Export MusicXML and Export MIDI; confirm downloads use `.musicxml` / `.mid`, notation preview updates from the exported MusicXML, and a known fixture's playback positions match export note tuples.
+16. Open browser devtools and confirm sanitized playback/piano-roll diagnostics (path, event counts, note edit summaries, MusicXML preview length, instrument strategy/fallback, mute/solo gains) without raw composition dumps.
+17. Resize to a mobile viewport and confirm piano-roll controls, playback, and track controls remain usable.
 
 ## Frontend Build
 

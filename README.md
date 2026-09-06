@@ -1,13 +1,14 @@
 # 🎵 AI Music Composer
 
-A full-stack LLM music composer that generates canonical playable `composition.v1` JSON through a LangChain/LangGraph-backed FastAPI service. The React frontend lets users choose a configured provider/model, edit the returned JSON, render notation from backend MusicXML, and preview canonical note-event playback in the browser.
+A full-stack LLM music composer that generates canonical playable `composition.v1` JSON through a LangChain/LangGraph-backed FastAPI service. The React frontend lets users choose a configured provider/model, edit notes on a piano roll or in JSON, render notation from backend MusicXML, and preview canonical note-event playback in the browser.
 
 ## 🚀 Features
 
 - **LLM JSON Composition**: Generate structured music JSON with OpenAI or DeepSeek-compatible providers
 - **Prompt Controls**: Configure genre, mood, key, meter, tempo range, instruments, sections, complexity, duration, and freeform instructions
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
-- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start)
+- **Piano-Roll Editor**: Create, select, drag/transpose, resize, and delete notes on `tracks[].events[]` with snap/zoom, track focus, context tracks, and note-edit undo/redo; shares the same `editedMusicJson` as the JSON editor
+- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start, piano-roll playback cursor)
 - **Deterministic Export**: Download MusicXML and MIDI from the same canonical `tracks[].events[]` used by notation and playback
 
 ## 🏗️ Architecture
@@ -16,7 +17,7 @@ A full-stack LLM music composer that generates canonical playable `composition.v
 - **Frontend**: React with styled-components
 - **Music Processing**: music21 library for MusicXML rendering
 - **LLM Orchestration**: LangChain/LangGraph with OpenAI-compatible chat providers
-- **Frontend State**: Zustand store for API status, LLM models, generation output, notation, playback transport state, and per-track mute/solo/volume
+- **Frontend State**: Zustand store for API status, LLM models, generation output, piano-roll edit state, notation, playback transport state, and per-track mute/solo/volume
 
 ## 📋 Prerequisites
 
@@ -92,9 +93,9 @@ The frontend will be available at `http://localhost:3000`
 3. Choose the provider/model in the LLM JSON Composer panel.
 4. Set prompt parameters such as genre, mood, key, time signature, tempo range, instruments, sections, complexity, duration, and freeform instructions.
 5. Click "Generate LLM Music JSON".
-6. Edit the returned JSON in the browser. Invalid edits show a client-side validation error.
-7. Review notation rendered from backend MusicXML.
-8. Use Play/Stop to preview canonical note events from the generated or edited JSON.
+6. Edit notes on the piano roll (or in the JSON editor). Invalid edits show a client-side validation error. Piano-roll undo/redo covers note edits only.
+7. Review notation rendered from backend MusicXML; piano-roll edits refresh notation via `POST /export/musicxml/preview` after a short debounce.
+8. Use Play/Stop to preview canonical note events from the generated or edited JSON; the piano-roll cursor follows playback position.
 9. Export MusicXML or MIDI from the edited canonical JSON; notation preview refreshes from the exported MusicXML.
 
 ## 🔧 API Endpoints
@@ -104,6 +105,7 @@ The frontend will be available at `http://localhost:3000`
 - `GET /llm/models` - Return configured LLM provider/model options
 - `POST /llm/generate-music-json` - Generate validated music JSON and derived MusicXML
 - `POST /export/musicxml` - Render canonical `composition.v1` JSON as a downloadable MusicXML attachment
+- `POST /export/musicxml/preview` - Render MusicXML text for notation refresh without a download header
 - `POST /export/midi` - Render canonical `composition.v1` JSON as a downloadable Standard MIDI File attachment
 
 Example LLM request:
@@ -184,17 +186,10 @@ mukit-ai/
 ├── frontend/
 │   ├── public/
 │   ├── src/
-│   │   ├── components/
-│   │   │   ├── Header.jsx
-│   │   │   ├── MusicGenerator.jsx
-│   │   │   ├── NotationViewer.jsx
-│   │   │   ├── PlaybackControls.jsx
-│   │   │   ├── TrackPlaybackControls.jsx
-│   │   │   ├── ExportControls.jsx
-│   │   │   └── PromptJsonEditor.jsx
+│   │   ├── components/          # Generator, piano roll, notation, playback, export controls
 │   │   ├── api/musicApi.js
-│   │   ├── store/musicStore.js
-│   │   ├── utils/               # Validation, playback events/tracks/engine helpers
+│   │   ├── store/               # Zustand music store (edits, undo, playback, notation)
+│   │   ├── utils/               # Validation, piano-roll geometry, playback events/tracks/engine helpers
 │   │   ├── App.jsx
 │   │   ├── index.jsx
 │   │   └── index.css
@@ -238,7 +233,7 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 - **Testing**: normal backend tests mock providers. Opt-in real-provider smoke: `RUN_LLM_SMOKE=1 LLM_SMOKE_PROVIDER=openai ../.venv/bin/python -m pytest tests/test_llm_real_provider_smoke.py` from `backend/`.
 - **MusicXML rendering**: canonical note events are converted to deterministic MusicXML with music21 for notation preview and `/export/musicxml`; harmony remains chord-symbol metadata.
 - **MIDI export**: `/export/midi` writes a Standard MIDI File via `mido` from the same track-local events, preserving velocity, program, channel, volume, and pan.
-- **Frontend preview**: the browser edits canonical JSON, renders MusicXML with OSMD, schedules exact multi-track note events from ticks with Tone.js (no harmony-derived substitutes), exposes mute/solo/volume routing controls, and downloads MusicXML/MIDI exports that share the same `tracks[].events[]`.
+- **Frontend preview**: the browser edits canonical JSON via piano roll or JSON editor, renders MusicXML with OSMD (including debounced preview refresh), schedules exact multi-track note events from ticks with Tone.js (no harmony-derived substitutes), exposes mute/solo/volume routing controls, and downloads MusicXML/MIDI exports that share the same `tracks[].events[]`.
 
 ## 🔍 Troubleshooting
 
