@@ -23,11 +23,27 @@ A full-stack LLM music composer that generates canonical playable `composition.v
 
 ## 📋 Prerequisites
 
-- Python 3.14+
-- Node.js 16+
-- npm or yarn
+- **Recommended (V1):** Docker + Docker Compose, plus one LLM provider API key
+- Optional host-local: Python 3.14+, Node.js 20+, npm
 
-## 🛠️ Installation
+## First run (Docker) — production-local V1
+
+On a clean machine with Docker Compose and one provider API key:
+
+1. Copy `.env.example` → `.env`
+2. Set at least one of `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` (optional models/timeouts documented in `.env.example`)
+3. `docker compose up --build`
+4. Open **http://localhost:3000** (nginx SPA; API proxied same-origin). Backend also on **http://localhost:8888** for debugging.
+5. Primary workflow: **Projects** → New/Open → **Generate** → playback → piano roll → notation tab → AI partial edit → save → export (MusicXML/MIDI/WAV)
+
+Secrets stay in `.env` / Compose and are passed **only to the backend**. Frontend never receives API keys.
+
+- Named volume `mukit_project_data` persists SQLite at `/data/projects.db`. Prefer `docker compose restart` or `down` without `-v`.
+- Both services use `restart: unless-stopped` and healthchecks (`GET /health` on backend; HTTP on frontend).
+- Hot-reload override (optional): `docker compose -f docker-compose.yml -f compose.dev.yml up --build`
+- Logging: set `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` (default `INFO`). Never expect keys/prompts/raw MusicXML in logs.
+
+## 🛠️ Installation (host-local optional)
 
 ### Backend Setup
 
@@ -81,12 +97,12 @@ cd frontend
 npm install
 ```
 
-3. Start the React development server:
+3. Start the Vite development server:
 ```bash
-npm start
+npm run dev
 ```
 
-The frontend will be available at `http://localhost:3000`
+The frontend will be available at `http://localhost:3000` (proxies `/health`, `/ready`, `/llm`, `/export`, `/projects` to the backend).
 
 ## 🎼 Usage
 
@@ -116,7 +132,8 @@ Details: [docs/project-persistence.md](docs/project-persistence.md).
 ## 🔧 API Endpoints
 
 - `GET /` - API status
-- `GET /health` - Health check
+- `GET /health` - Liveness probe
+- `GET /ready` - Readiness (DB openable; LLM provider names/count; WAV deps booleans — no secrets)
 - `GET /llm/models` - Return configured LLM provider/model options
 - `POST /llm/generate-music-json` - Generate validated music JSON and derived MusicXML
 - `POST /llm/edit-composition-region` - Apply a validated `replace_region` AI edit to selected bars/tracks

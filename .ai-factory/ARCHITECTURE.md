@@ -21,6 +21,7 @@ mukit-ai/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py                 # Composition / LLM / export HTTP handlers (composition module surface)
+│   │   ├── ready.py                # LOG_LEVEL, CORS origins, readiness report helpers
 │   │   ├── schemas.py              # composition.v1 + LLM request/response models
 │   │   ├── project_schemas.py      # Project CRUD API models
 │   │   ├── llm_settings.py         # Provider config from environment
@@ -58,6 +59,8 @@ mukit-ai/
 │       └── main.jsx
 ├── docs/                           # composition.v1, persistence, testing
 ├── docker-compose.yml
+├── compose.dev.yml
+├── .env.example
 └── README.md
 ```
 

@@ -12,6 +12,8 @@ Projects store metadata and canonical `composition.v1` JSON in a backend **SQLit
 6. Restart containers with `docker compose restart` (do **not** use `docker compose down -v`).
 7. Reopen the same project — edited notes and generation metadata return unchanged.
 
+Compose loads backend secrets from `.env` (see root `.env.example`). Frontend nginx proxies `/projects` to the backend on the same origin in production-local Docker.
+
 Rename, duplicate, and delete (with confirmation) are available on the home screen. The composer bar shows the project name and save status, plus a **Projects** back button.
 
 ## Storage and configuration

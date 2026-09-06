@@ -69,7 +69,9 @@ docs/
 .agents/skills/              OpenCode/AI Factory skills, including cartographer
 .codex/skills/               Codex skill pack copy
 .cursor/skills/              Cursor skill pack copy
-docker-compose.yml           Dev compose topology for backend and frontend
+docker-compose.yml           Production-local compose (API + nginx SPA, named volume, healthchecks)
+compose.dev.yml              Optional Vite/uvicorn reload override
+.env.example                 Documented env template (LLM keys backend-only)
 start-servers.sh             Local helper script to start both servers
 README.md                    Primary project documentation
 ```
@@ -215,7 +217,8 @@ The `.agents/skills`, `.codex/skills`, and `.cursor/skills` trees dominate the r
 | `frontend/package.json` | Active scripts and dependencies | 340 |
 | `frontend/vite.config.js` | Vite React plugin and `/health`/`/llm` proxy to backend | 109 |
 | `frontend/eslint.config.js` | ESLint flat config | 256 |
-| `frontend/Dockerfile` | Node dev-server image | 79 |
+| `frontend/Dockerfile` | Multi-stage Node 20 build → nginx SPA + API proxy | |
+| `frontend/nginx.conf` | SPA fallback; proxy `/health` `/ready` `/llm` `/export` `/projects` | |
 
 **Gotchas**: `package-modern.json`, `package-cra-backup.json`, and `package-vite.json` are historical variants. The Dockerfile uses `node:16-alpine`, which may be too old for Vite 6 in some environments.
 
@@ -229,11 +232,11 @@ The `.agents/skills`, `.codex/skills`, and `.cursor/skills` trees dominate the r
 |------|---------|--------|
 | `README.md` | Main onboarding and architecture document | 2045 |
 | `docs/testing.md` | Backend test and frontend smoke-test guide | 322 |
-| `docker-compose.yml` | Dev compose stack | 162 |
+| `docker-compose.yml` | Production-local stack (`env_file`, volume, healthchecks) | |
 | `start-servers.sh` | Local backend/frontend startup helper | 858 |
 | `.ai-factory.json` | AI Factory installed skill manifest | 10474 |
 
-**Gotchas**: README says `npm start`, but active frontend scripts use `npm run dev`. README says MIT license, but `LICENSE` is CC0 1.0 Universal. Compose does not pass LLM API keys to the backend. `start-servers.sh` uses broad `pkill -f "uvicorn"` and `pkill -f "vite"` commands.
+**Gotchas**: Prefer `npm run dev` for host-local Vite (not CRA `npm start`). Compose passes LLM env vars from `.env` to the backend only. `start-servers.sh` uses broad `pkill -f "uvicorn"` and `pkill -f "vite"` commands.
 
 ## Data Flow
 
@@ -313,12 +316,12 @@ flowchart TD
 - Adding a new provider requires coordinated changes in `llm_settings.py`, `schemas.py`, `llm_music_generator.py`, route/model tests, and frontend provider UI assumptions.
 - JSON edits currently affect playback but do not regenerate MusicXML notation.
 - Frontend production builds cannot rely on Vite dev proxy.
-- Backend CORS currently allows only `http://localhost:3000`.
+- Backend CORS is configured via `CORS_ALLOW_ORIGINS` (defaults include `http://localhost:3000`).
 - `musicxml_filename` exists in the backend response schema but is not populated by the route.
 - `requirements.txt` and `requirements-modern.txt` are duplicates.
 - There are no active frontend tests; testing is currently backend pytest plus frontend build/lint/manual smoke checks.
 - `.gitignore` ignores `frontend/build/` but not Vite `frontend/dist/`, and ignores `venv/` but not `.venv/`.
-- README/setup docs have known mismatches: `npm start` vs `npm run dev`, MIT vs CC0 license.
+- README first-run path is Docker Compose + `.env.example`; host-local uses `npm run dev`.
 - The scanner skipped `backend/models/music_composer_model.keras` as too large; it appears unrelated to the current LLM JSON generation flow.
 
 ## Navigation Guide
@@ -343,7 +346,7 @@ flowchart TD
 
 **To change playback**: Edit `frontend/src/components/PlaybackControls.jsx`, especially `buildPlaybackEvents()`, `chordToNotes()`, and Tone transport cleanup.
 
-**To change Docker setup**: Edit `docker-compose.yml`, `backend/Dockerfile`, and `frontend/Dockerfile`; add LLM env var handling if generation should work in compose.
+**To change Docker setup**: Edit `docker-compose.yml`, optional `compose.dev.yml`, `backend/Dockerfile`, `frontend/Dockerfile` / `nginx.conf`, and `.env.example`.
 
 **To update documentation**: Edit `README.md`, `docs/testing.md`, and this map as needed.
 

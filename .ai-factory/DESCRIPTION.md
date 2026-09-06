@@ -22,7 +22,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - **LLM:** LangChain / LangGraph with OpenAI-compatible providers (OpenAI, DeepSeek)
 - **Music processing:** music21 (MusicXML), mido (MIDI), FluidSynth + SoundFont (WAV)
 - **Frontend libraries:** Zustand, styled-components, Tone.js, OpenSheetMusicDisplay, axios
-- **Integrations:** Docker Compose (`backend` + `frontend`), optional LLM API keys via env
+- **Integrations:** Docker Compose production-local stack (`backend` + nginx `frontend`), optional LLM API keys via `.env` / Compose (backend-only)
 
 ## Architecture Notes
 

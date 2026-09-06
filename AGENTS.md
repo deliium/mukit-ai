@@ -20,6 +20,7 @@ mukit-ai/
 ├── backend/                 # FastAPI app, tests, Dockerfile
 │   ├── app/
 │   │   ├── main.py          # Composition / LLM / export routes
+│   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
 │   │   ├── routers/         # Projects HTTP API
 │   │   ├── services/        # Domain + orchestration services
 │   │   ├── db/              # SQLite connection + migrations
@@ -28,12 +29,14 @@ mukit-ai/
 ├── frontend/                # React + Vite SPA
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # UI (generator, piano roll, playback, …)
+│       ├── components/      # Workspace, generator, piano roll, playback, …
 │       ├── store/           # Zustand musicStore
 │       └── utils/           # validation, playback, piano-roll helpers
 ├── docs/                    # composition.v1, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
+├── compose.dev.yml
+├── .env.example
 └── start-servers.sh
 ```
 
@@ -42,11 +45,14 @@ mukit-ai/
 | File | Purpose |
 |------|---------|
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
+| `backend/app/ready.py` | Logging/CORS helpers and readiness report |
 | `backend/app/routers/projects.py` | Project CRUD + autosave APIs |
 | `backend/run.py` / `uvicorn app.main:app` | Backend process entry |
 | `frontend/src/main.jsx` | Frontend bootstrap |
 | `frontend/src/store/musicStore.js` | Shared UI/application state |
-| `docker-compose.yml` | Local backend + frontend containers |
+| `docker-compose.yml` | Production-local backend + nginx frontend |
+| `compose.dev.yml` | Optional hot-reload override |
+| `.env.example` | Env template for LLM/settings |
 | `.ai-factory/config.yaml` | AI Factory language/paths/git settings |
 
 ## Documentation

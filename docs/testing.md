@@ -25,6 +25,7 @@ Focused canonical coverage includes:
 - `backend/tests/test_composition_region_patch.py` for deterministic bar-to-tick selection, melody/all-track replacement, added tracks, harmony/metadata preservation, and rejected out-of-scope patches.
 - `backend/tests/test_llm_composition_editing.py` for mocked region-edit graph success paths (dramatic melody bars 9–12 with unchanged outside notes/harmony), accompaniment/bass/counter-melody scenarios, malformed JSON, out-of-scope repair exhaustion, and provider failures.
 - `backend/tests/test_llm_routes.py` for `/llm/edit-composition-region` success, `503` without providers, and `502` invalid patch mapping.
+- `backend/tests/test_health_and_cors.py` for `/health`, `/ready` (non-secret readiness flags), CORS allow/deny origins, and empty-provider readiness.
 - `backend/tests/test_project_store.py` for SQLite migrations, project CRUD/duplicate/delete, and generation metadata without keys.
 - `backend/tests/test_project_routes.py` for `/projects` routes, 404/422 behavior, secret-field rejection, and legacy composition migration on open.
 - `backend/tests/test_project_persistence_acceptance.py` for create → edit → reopen composition equality (Docker-restart acceptance at the data layer).
@@ -70,6 +71,7 @@ The frontend uses Node's built-in test runner for browser-independent utilities 
 - piano-roll pitch conversion, snap intervals (480 TPQ), 4/4 and 6/8 bar metrics, create/move/resize/delete immutability, clamping, and polyphony
 - Zustand note-edit actions including undo/redo boundaries and skip-history drag updates
 - AI region selection helpers, API response validation for `editCompositionRegion`, and store non-destructive failure / single-undo success paths
+- generation duplicate guards (`startGeneration` / `startAiEdit` while loading) and empty LLM model load behavior
 - project API client HTTP paths plus Zustand project open/hydrate, dirty→saving→saved, autosave debounce cancel/fire, generation metadata without keys, and delete clearing the active project
 - canonical tick-to-second playback scheduling with multi-track ordering, polyphony, and velocity
 - export-fidelity-style fixture parity fields (track ID, pitch, ticks, velocity, metadata)
