@@ -74,7 +74,8 @@ const TrackPlaybackControls = ({
   }
 
   return (
-    <TrackList>
+    <TrackList aria-label="Track mixer">
+      <Hint style={{ marginTop: 0 }}>Tracks / mixer</Hint>
       {tracks.map((track) => {
         const trackId = String(track.id);
         const control = trackControls[trackId] || {

@@ -130,8 +130,19 @@ export const useMusicStore = create((set, get) => ({
   },
 
   startGeneration: () => {
-    console.debug('[musicStore] LLM generation started');
+    if (get().generationStatus === 'loading') {
+      console.warn('[musicStore] Duplicate generation blocked', {
+        provider: get().selectedProvider,
+        model: get().selectedModel,
+      });
+      return false;
+    }
+    console.info('[musicStore] LLM generation started', {
+      provider: get().selectedProvider,
+      model: get().selectedModel,
+    });
     set({ generationStatus: 'loading', uiError: '', warnings: [] });
+    return true;
   },
 
   completeGeneration: ({ music, musicxml, warnings = [], provider = null, model = null }) => {
@@ -561,6 +572,13 @@ export const useMusicStore = create((set, get) => ({
 
   startAiEdit: () => {
     const state = get();
+    if (state.aiEditStatus === 'loading') {
+      console.warn('[musicStore] Duplicate AI edit blocked', {
+        startBar: state.aiEditStartBar,
+        endBar: state.aiEditEndBar,
+      });
+      return false;
+    }
     const instruction = String(state.aiEditInstruction || '').trim();
     if (!state.editedMusicJson || !isCanonicalComposition(state.editedMusicJson)) {
       console.warn('[musicStore] AI edit start rejected; composition missing/invalid');

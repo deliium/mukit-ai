@@ -60,6 +60,10 @@ const ExportControls = () => {
   );
 
   const runExport = async (format) => {
+    if (exportStatus === 'loading') {
+      console.warn('[ExportControls] Duplicate export blocked', { format });
+      return;
+    }
     if (!canExport) {
       console.warn('[ExportControls] Export blocked', {
         format,
@@ -77,7 +81,7 @@ const ExportControls = () => {
       trackCount: editedMusicJson.tracks?.length || 0,
     });
     setExportStatus('loading');
-    setStatusMessage('');
+    setStatusMessage(`Exporting ${format}…`);
     setUiError('');
 
     try {

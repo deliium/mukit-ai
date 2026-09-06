@@ -1,42 +1,55 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { generateLlmMusicJson } from '../api/musicApi.js';
-import NotationViewer from './NotationViewer.jsx';
-import PlaybackControls from './PlaybackControls.jsx';
-import PromptJsonEditor from './PromptJsonEditor.jsx';
-import ExportControls from './ExportControls.jsx';
-import PianoRollEditor from './PianoRollEditor.jsx';
-import AiRegionEditPanel from './AiRegionEditPanel.jsx';
+import ComposerWorkspace from './ComposerWorkspace.jsx';
 import ProjectComposerBar from './ProjectComposerBar.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const Container = styled.div`
   h2 {
-    color: #333;
-    margin-bottom: 20px;
-    font-size: 1.5rem;
-    font-weight: 600;
+    color: #1e293b;
+    margin-bottom: 12px;
+    font-size: 1.35rem;
+    font-weight: 650;
   }
 `;
 
+const Layout = styled.div`
+  display: grid;
+  gap: 16px;
+
+  @media (min-width: 1200px) {
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    align-items: start;
+  }
+`;
+
+const GenerationPanel = styled.section`
+  padding: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+`;
+
 const FormGroup = styled.div`
-  margin-bottom: 20px;
+  margin-bottom: 14px;
 `;
 
 const Label = styled.label`
   display: block;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   font-weight: 500;
   color: #374151;
+  font-size: 0.9rem;
 `;
 
 const Input = styled.input`
   width: 100%;
-  padding: 12px;
+  padding: 10px;
   border: 2px solid #e5e7eb;
   border-radius: 8px;
-  font-size: 1rem;
-  transition: border-color 0.3s ease;
+  font-size: 0.95rem;
+  box-sizing: border-box;
 
   &:focus {
     outline: none;
@@ -46,12 +59,12 @@ const Input = styled.input`
 
 const Select = styled.select`
   width: 100%;
-  padding: 12px;
+  padding: 10px;
   border: 2px solid #e5e7eb;
   border-radius: 8px;
-  font-size: 1rem;
+  font-size: 0.95rem;
   background: white;
-  transition: border-color 0.3s ease;
+  box-sizing: border-box;
 
   &:focus {
     outline: none;
@@ -61,14 +74,14 @@ const Select = styled.select`
 
 const TextArea = styled.textarea`
   width: 100%;
-  min-height: 90px;
-  padding: 12px;
+  min-height: 72px;
+  padding: 10px;
   border: 2px solid #e5e7eb;
   border-radius: 8px;
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-family: inherit;
   resize: vertical;
-  transition: border-color 0.3s ease;
+  box-sizing: border-box;
 
   &:focus {
     outline: none;
@@ -80,69 +93,77 @@ const Button = styled.button`
   background: #667eea;
   color: white;
   border: none;
-  padding: 12px 24px;
+  padding: 12px 18px;
   border-radius: 8px;
-  font-size: 1rem;
-  font-weight: 500;
+  font-size: 0.95rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.3s ease;
   width: 100%;
-  margin-top: 10px;
+  margin-top: 6px;
 
-  &:hover {
+  &:hover:not(:disabled) {
     background: #5a67d8;
-    transform: translateY(-1px);
   }
 
   &:disabled {
     background: #d1d5db;
     cursor: not-allowed;
-    transform: none;
   }
 `;
 
 const StatusMessage = styled.div`
   padding: 12px;
   border-radius: 8px;
-  margin: 15px 0;
+  margin: 12px 0;
   font-size: 0.9rem;
-  text-align: center;
-  
+
   &.success {
     background: #d1fae5;
     color: #065f46;
     border: 1px solid #a7f3d0;
   }
-  
+
   &.error {
     background: #fee2e2;
     color: #991b1b;
     border: 1px solid #fca5a5;
   }
-  
+
   &.info {
     background: #dbeafe;
     color: #1e40af;
     border: 1px solid #93c5fd;
   }
-`;
 
-const GeneratedMusic = styled.div`
-  margin-top: 20px;
-  padding: 20px;
-  background: #f8f9ff;
-  border-radius: 12px;
-  border: 1px solid #e0e7ff;
+  &.setup {
+    background: #fff7ed;
+    color: #9a3412;
+    border: 1px solid #fdba74;
+  }
+
+  code {
+    font-size: 0.85em;
+  }
+
+  ol {
+    margin: 8px 0 0 18px;
+  }
 `;
 
 const ParameterGrid = styled.div`
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 15px;
-  
+  gap: 10px;
+
   @media (max-width: 480px) {
     grid-template-columns: 1fr;
   }
+`;
+
+const ProgressHint = styled.p`
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: #4338ca;
 `;
 
 const MusicGenerator = () => {
@@ -154,19 +175,41 @@ const MusicGenerator = () => {
   const generationStatus = useMusicStore((state) => state.generationStatus);
   const uiError = useMusicStore((state) => state.uiError);
   const warnings = useMusicStore((state) => state.warnings);
+  const apiStatus = useMusicStore((state) => state.apiStatus);
   const setSelectedLlmModel = useMusicStore((state) => state.setSelectedLlmModel);
   const updatePrompt = useMusicStore((state) => state.updatePrompt);
   const startGeneration = useMusicStore((state) => state.startGeneration);
   const completeGeneration = useMusicStore((state) => state.completeGeneration);
   const failGeneration = useMusicStore((state) => state.failGeneration);
 
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const startedAtRef = useRef(null);
+
+  useEffect(() => {
+    if (generationStatus !== 'loading') {
+      startedAtRef.current = null;
+      setElapsedSeconds(0);
+      return undefined;
+    }
+    startedAtRef.current = Date.now();
+    const timer = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [generationStatus]);
+
   const handleGenerateLlmJson = async () => {
     if (!availableLlmModels.length) {
-      failGeneration('No LLM providers configured. Set OPENAI_API_KEY or DEEPSEEK_API_KEY on the backend.');
+      failGeneration('No LLM providers configured. Copy .env.example → .env, set a key, and restart compose.');
       return;
     }
 
-    startGeneration();
+    const started = startGeneration();
+    if (!started) {
+      console.warn('[MusicGenerator] Duplicate generate blocked by store guard');
+      return;
+    }
+
     const requestData = buildLlmRequest(prompt, selectedProvider, selectedModel);
     console.debug('[MusicGenerator] LLM generation requested', {
       provider: selectedProvider,
@@ -189,113 +232,133 @@ const MusicGenerator = () => {
     }
   };
 
+  const llmReady = availableLlmModels.length > 0;
+  const generating = generationStatus === 'loading';
+
   return (
     <Container>
       <ProjectComposerBar />
-      <h2>LLM JSON Composer</h2>
-        {!availableLlmModels.length && (
-          <StatusMessage className="info">
-            Configure OPENAI_API_KEY or DEEPSEEK_API_KEY on the backend to enable LLM generation.
-          </StatusMessage>
-        )}
+      <h2>AI Composer</h2>
 
-        {availableLlmModels.length > 0 && (
-          <FormGroup>
-            <Label htmlFor="llmModel">Provider / Model</Label>
-            <Select
-              id="llmModel"
-              value={`${selectedProvider}:${selectedModel}`}
-              onChange={(event) => {
-                const [provider, model] = event.target.value.split(':');
-                setSelectedLlmModel(provider, model);
-              }}
-            >
-              {availableLlmModels.map((model) => (
-                <option key={`${model.provider}:${model.model}`} value={`${model.provider}:${model.model}`}>
-                  {model.display_name || `${model.provider} (${model.model})`}
-                </option>
-              ))}
-            </Select>
-          </FormGroup>
-        )}
+      <Layout>
+        <GenerationPanel>
+          <h3 style={{ margin: '0 0 10px', fontSize: '1rem', color: '#334155' }}>Generate</h3>
 
-        <ParameterGrid>
-          <FormGroup>
-            <Label htmlFor="genre">Genre</Label>
-            <Input id="genre" value={prompt.genre} onChange={(event) => updatePrompt('genre', event.target.value)} />
-          </FormGroup>
-          <FormGroup>
-            <Label htmlFor="mood">Mood</Label>
-            <Input id="mood" value={prompt.mood} onChange={(event) => updatePrompt('mood', event.target.value)} />
-          </FormGroup>
-          <FormGroup>
-            <Label htmlFor="key">Key</Label>
-            <Input id="key" value={prompt.key} onChange={(event) => updatePrompt('key', event.target.value)} placeholder="C minor" />
-          </FormGroup>
-          <FormGroup>
-            <Label htmlFor="timeSignature">Time Signature</Label>
-            <Input id="timeSignature" value={prompt.time_signature} onChange={(event) => updatePrompt('time_signature', event.target.value)} />
-          </FormGroup>
-          <FormGroup>
-            <Label htmlFor="tempoMin">Tempo Min</Label>
-            <Input id="tempoMin" type="number" min="40" max="240" value={prompt.tempo_min} onChange={(event) => updatePrompt('tempo_min', event.target.value)} />
-          </FormGroup>
-          <FormGroup>
-            <Label htmlFor="tempoMax">Tempo Max</Label>
-            <Input id="tempoMax" type="number" min="40" max="240" value={prompt.tempo_max} onChange={(event) => updatePrompt('tempo_max', event.target.value)} />
-          </FormGroup>
-        </ParameterGrid>
+          {apiStatus === 'healthy' && !llmReady && (
+            <StatusMessage className="setup">
+              <strong>API is healthy, but no LLM providers are configured.</strong>
+              <ol>
+                <li>Copy <code>.env.example</code> → <code>.env</code></li>
+                <li>Set at least one of <code>OPENAI_API_KEY</code> / <code>DEEPSEEK_API_KEY</code></li>
+                <li>Run <code>docker compose up --build</code></li>
+              </ol>
+              Secrets stay on the backend only.
+            </StatusMessage>
+          )}
 
-        <FormGroup>
-          <Label htmlFor="instruments">Instruments / Tracks</Label>
-          <Input id="instruments" value={prompt.instruments} onChange={(event) => updatePrompt('instruments', event.target.value)} placeholder="piano,bass,strings" />
-        </FormGroup>
+          {llmReady && (
+            <FormGroup>
+              <Label htmlFor="llmModel">Provider / Model</Label>
+              <Select
+                id="llmModel"
+                value={`${selectedProvider}:${selectedModel}`}
+                disabled={generating}
+                onChange={(event) => {
+                  const [provider, model] = event.target.value.split(':');
+                  setSelectedLlmModel(provider, model);
+                }}
+              >
+                {availableLlmModels.map((model) => (
+                  <option key={`${model.provider}:${model.model}`} value={`${model.provider}:${model.model}`}>
+                    {model.display_name || `${model.provider} (${model.model})`}
+                  </option>
+                ))}
+              </Select>
+            </FormGroup>
+          )}
 
-        <FormGroup>
-          <Label htmlFor="sections">Sections / Bars</Label>
-          <Input id="sections" value={prompt.sections} onChange={(event) => updatePrompt('sections', event.target.value)} placeholder="intro:4,verse:8,chorus:8" />
-        </FormGroup>
+          <ParameterGrid>
+            <FormGroup>
+              <Label htmlFor="genre">Genre</Label>
+              <Input id="genre" value={prompt.genre} disabled={generating || !llmReady} onChange={(event) => updatePrompt('genre', event.target.value)} />
+            </FormGroup>
+            <FormGroup>
+              <Label htmlFor="mood">Mood</Label>
+              <Input id="mood" value={prompt.mood} disabled={generating || !llmReady} onChange={(event) => updatePrompt('mood', event.target.value)} />
+            </FormGroup>
+            <FormGroup>
+              <Label htmlFor="key">Key</Label>
+              <Input id="key" value={prompt.key} disabled={generating || !llmReady} onChange={(event) => updatePrompt('key', event.target.value)} placeholder="C minor" />
+            </FormGroup>
+            <FormGroup>
+              <Label htmlFor="timeSignature">Time Signature</Label>
+              <Input id="timeSignature" value={prompt.time_signature} disabled={generating || !llmReady} onChange={(event) => updatePrompt('time_signature', event.target.value)} />
+            </FormGroup>
+            <FormGroup>
+              <Label htmlFor="tempoMin">Tempo Min</Label>
+              <Input id="tempoMin" type="number" min="40" max="240" value={prompt.tempo_min} disabled={generating || !llmReady} onChange={(event) => updatePrompt('tempo_min', event.target.value)} />
+            </FormGroup>
+            <FormGroup>
+              <Label htmlFor="tempoMax">Tempo Max</Label>
+              <Input id="tempoMax" type="number" min="40" max="240" value={prompt.tempo_max} disabled={generating || !llmReady} onChange={(event) => updatePrompt('tempo_max', event.target.value)} />
+            </FormGroup>
+          </ParameterGrid>
 
-        <ParameterGrid>
           <FormGroup>
-            <Label htmlFor="complexity">Complexity</Label>
-            <Select id="complexity" value={prompt.complexity} onChange={(event) => updatePrompt('complexity', event.target.value)}>
-              <option value="simple">Simple</option>
-              <option value="moderate">Moderate</option>
-              <option value="complex">Complex</option>
-            </Select>
+            <Label htmlFor="instruments">Instruments / Tracks</Label>
+            <Input id="instruments" value={prompt.instruments} disabled={generating || !llmReady} onChange={(event) => updatePrompt('instruments', event.target.value)} placeholder="piano,bass,strings" />
           </FormGroup>
+
           <FormGroup>
-            <Label htmlFor="durationBars">Duration Bars</Label>
-            <Input id="durationBars" type="number" min="1" max="512" value={prompt.duration_bars} onChange={(event) => updatePrompt('duration_bars', event.target.value)} />
+            <Label htmlFor="sections">Sections / Bars</Label>
+            <Input id="sections" value={prompt.sections} disabled={generating || !llmReady} onChange={(event) => updatePrompt('sections', event.target.value)} placeholder="intro:4,verse:8,chorus:8" />
           </FormGroup>
-        </ParameterGrid>
 
-        <FormGroup>
-          <Label htmlFor="instructions">Freeform Instructions</Label>
-          <TextArea id="instructions" value={prompt.instructions} onChange={(event) => updatePrompt('instructions', event.target.value)} placeholder="Add arrangement, texture, or reference notes" />
-        </FormGroup>
+          <ParameterGrid>
+            <FormGroup>
+              <Label htmlFor="complexity">Complexity</Label>
+              <Select id="complexity" value={prompt.complexity} disabled={generating || !llmReady} onChange={(event) => updatePrompt('complexity', event.target.value)}>
+                <option value="simple">Simple</option>
+                <option value="moderate">Moderate</option>
+                <option value="complex">Complex</option>
+              </Select>
+            </FormGroup>
+            <FormGroup>
+              <Label htmlFor="durationBars">Duration Bars</Label>
+              <Input id="durationBars" type="number" min="1" max="512" value={prompt.duration_bars} disabled={generating || !llmReady} onChange={(event) => updatePrompt('duration_bars', event.target.value)} />
+            </FormGroup>
+          </ParameterGrid>
 
-        {uiError && <StatusMessage className="error">{uiError}</StatusMessage>}
-        {warnings.map((warning) => (
-          <StatusMessage key={warning} className="info">{warning}</StatusMessage>
-        ))}
+          <FormGroup>
+            <Label htmlFor="instructions">Freeform Instructions</Label>
+            <TextArea id="instructions" value={prompt.instructions} disabled={generating || !llmReady} onChange={(event) => updatePrompt('instructions', event.target.value)} placeholder="Add arrangement, texture, or reference notes" />
+          </FormGroup>
 
-        <Button onClick={handleGenerateLlmJson} disabled={generationStatus === 'loading' || !availableLlmModels.length}>
-          {generationStatus === 'loading' ? 'Generating JSON...' : 'Generate LLM Music JSON'}
-        </Button>
+          {uiError && <StatusMessage className="error">{uiError}</StatusMessage>}
+          {warnings.map((warning) => (
+            <StatusMessage key={warning} className="info">{warning}</StatusMessage>
+          ))}
 
-        {generatedMusicJson && (
-          <GeneratedMusic>
-            <h4>Generated Music JSON</h4>
-            <PromptJsonEditor />
-            <PianoRollEditor />
-            <AiRegionEditPanel />
-            <ExportControls />
-            <NotationViewer />
-            <PlaybackControls />
-          </GeneratedMusic>
-        )}
+          <Button onClick={handleGenerateLlmJson} disabled={generating || !llmReady}>
+            {generating ? 'Generating composition…' : 'Generate LLM Music JSON'}
+          </Button>
+          {generating && (
+            <ProgressHint>
+              Multi-stage LLM compose in progress ({elapsedSeconds}s). This can take a minute…
+            </ProgressHint>
+          )}
+        </GenerationPanel>
+
+        <div>
+          {generatedMusicJson ? (
+            <ComposerWorkspace />
+          ) : (
+            <StatusMessage className="info">
+              Generate a composition to open the piano roll, notation, AI region edit, and export tools.
+            </StatusMessage>
+          )}
+        </div>
+      </Layout>
     </Container>
   );
 };
