@@ -126,22 +126,23 @@ def test_generation_success_with_mocked_graph(monkeypatch):
 
     class FakeGraph:
         async def ainvoke(self, state):
-                return {
-                    **state,
-                    "music": normalize_composition_json(
-                        LLMMusicJson.model_validate(
-                            {
-                                "tempo": 100,
-                                "key": "C major",
-                                "time_signature": "4/4",
-                                "sections": [{"type": "intro", "bars": 1}],
-                                "tracks": [{"instrument": "piano", "role": "harmony"}],
-                                "harmony": [{"bar": 1, "chord": "C"}],
-                                "notes": [{"track": 1, "bar": 1, "beat": 1, "pitch": "C4", "duration": 1}],
-                            }
-                        )
-                    ),
-                }
+            return {
+                **state,
+                "validation_ok": True,
+                "music": normalize_composition_json(
+                    LLMMusicJson.model_validate(
+                        {
+                            "tempo": 100,
+                            "key": "C major",
+                            "time_signature": "4/4",
+                            "sections": [{"type": "intro", "bars": 1}],
+                            "tracks": [{"instrument": "piano", "role": "harmony"}],
+                            "harmony": [{"bar": 1, "chord": "C"}],
+                            "notes": [{"track": 1, "bar": 1, "beat": 1, "pitch": "C4", "duration": 1}],
+                        }
+                    )
+                ),
+            }
 
     monkeypatch.setattr(llm_music_generator, "_build_generation_graph", lambda: FakeGraph())
 
@@ -151,6 +152,25 @@ def test_generation_success_with_mocked_graph(monkeypatch):
     assert music.schema_version == "composition.v1"
     assert warnings == []
     assert provider.provider == "openai"
+
+
+def test_generation_rejects_oversized_request():
+    from app.services.composition_planner import OversizedLLMGenerationRequestError
+
+    request = LLMMusicGenerationRequest.model_validate(
+        {
+            "prompt": {
+                "genre": "ambient",
+                "mood": "calm",
+                "duration_bars": 64,
+                "instruments": ["piano", "bass", "strings", "flute", "guitar", "synth", "violin"],
+            }
+        }
+    )
+    settings = load_llm_settings({"OPENAI_API_KEY": "secret"})
+
+    with pytest.raises(OversizedLLMGenerationRequestError, match="32 bars"):
+        asyncio.run(generate_music_json(request, settings))
 
 
 def test_invalid_llm_output_parser():
