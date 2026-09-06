@@ -6,6 +6,7 @@ import PlaybackControls from './PlaybackControls.jsx';
 import PromptJsonEditor from './PromptJsonEditor.jsx';
 import ExportControls from './ExportControls.jsx';
 import PianoRollEditor from './PianoRollEditor.jsx';
+import AiRegionEditPanel from './AiRegionEditPanel.jsx';
 import ProjectComposerBar from './ProjectComposerBar.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
@@ -289,6 +290,7 @@ const MusicGenerator = () => {
             <h4>Generated Music JSON</h4>
             <PromptJsonEditor />
             <PianoRollEditor />
+            <AiRegionEditPanel />
             <ExportControls />
             <NotationViewer />
             <PlaybackControls />

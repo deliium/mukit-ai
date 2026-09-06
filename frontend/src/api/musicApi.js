@@ -26,6 +26,63 @@ export async function generateLlmMusicJson(payload) {
   return response;
 }
 
+export async function editCompositionRegion(payload) {
+  const selection = payload?.edit?.selection || {};
+  const trackScopeCount = Array.isArray(selection.track_ids) ? selection.track_ids.length : 0;
+  console.debug('[musicApi] Composition region edit request started', {
+    provider: payload?.selection?.provider || null,
+    model: payload?.selection?.model || null,
+    startBar: selection.start_bar,
+    endBar: selection.end_bar,
+    trackScopeCount,
+    schemaVersion: payload?.composition?.schema_version || 'legacy',
+  });
+
+  const inboundValidation = validateMusicJson(payload?.composition);
+  if (!inboundValidation.valid || !isCanonicalComposition(payload?.composition)) {
+    console.error('[musicApi] Composition region edit rejected invalid inbound composition', {
+      message: inboundValidation.message || 'Edit requires composition.v1 JSON',
+    });
+    throw new Error(inboundValidation.message || 'Edit requires canonical composition.v1 JSON');
+  }
+
+  try {
+    const response = await request('post', '/llm/edit-composition-region', payload);
+    const validation = validateMusicJson(response.composition);
+    const hasPatch = Boolean(response.patch && response.patch.operation === 'replace_region');
+    console.debug('[musicApi] Composition region edit response validation completed', {
+      provider: response.provider || null,
+      model: response.model || null,
+      startBar: selection.start_bar,
+      endBar: selection.end_bar,
+      trackScopeCount,
+      valid: validation.valid,
+      schemaVersion: response.composition?.schema_version || 'legacy',
+      warningCount: response.warnings?.length || 0,
+      hasPatch,
+    });
+    if (!validation.valid) {
+      console.error('[musicApi] Composition region edit response failed validation', {
+        message: validation.message,
+      });
+      throw new Error(validation.message);
+    }
+    if (!hasPatch) {
+      console.error('[musicApi] Composition region edit response missing replace_region patch', {
+        status: 'invalid_patch',
+      });
+      throw new Error('Edit response is missing a replace_region patch');
+    }
+    return response;
+  } catch (error) {
+    console.error('[musicApi] Composition region edit request failed', {
+      status: error.response?.status || null,
+      message: error.message,
+    });
+    throw error;
+  }
+}
+
 export async function exportMusicXml(composition) {
   return exportComposition(composition, {
     endpoint: '/export/musicxml',

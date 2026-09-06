@@ -20,6 +20,10 @@ import {
   sanitizeNoteSummary,
   updateTrackNote,
 } from '../utils/pianoRollEvents.js';
+import {
+  defaultTargetTrackIds,
+  normalizeBarRange,
+} from '../utils/pianoRollSelection.js';
 
 export const AUTOSAVE_DEBOUNCE_MS = 900;
 
@@ -71,6 +75,15 @@ export const useMusicStore = create((set, get) => ({
   pianoRollNotationError: '',
   noteEditUndoStack: [],
   noteEditRedoStack: [],
+
+  aiEditStartBar: null,
+  aiEditEndBar: null,
+  aiEditTrackMode: 'current',
+  aiEditTrackIds: null,
+  aiEditInstruction: '',
+  aiEditStatus: 'idle',
+  aiEditError: '',
+  aiEditWarnings: [],
 
   activeView: 'home',
   currentProjectId: null,
@@ -242,10 +255,17 @@ export const useMusicStore = create((set, get) => ({
     const previous = state.pianoRollTrackId;
     const next = pickDefaultTrackId(state.editedMusicJson, trackId);
     console.info('[musicStore] Piano-roll track selected', { previousTrackId: previous, nextTrackId: next });
-    set({
+    const patch = {
       pianoRollTrackId: next,
       pianoRollNoteId: null,
-    });
+    };
+    if (state.aiEditTrackMode === 'current') {
+      patch.aiEditTrackIds = defaultTargetTrackIds(state.editedMusicJson, {
+        mode: 'current',
+        currentTrackId: next,
+      });
+    }
+    set(patch);
   },
 
   selectPianoRollNote: (noteId) => {
@@ -459,6 +479,178 @@ export const useMusicStore = create((set, get) => ({
       noteEditUndoStack: nextUndo,
       noteEditRedoStack: nextRedo,
       pianoRollEditStatus: 'idle',
+    });
+    markProjectDirty(set, get, revision);
+    return true;
+  },
+
+  setAiEditSelection: ({ startBar, endBar, trackMode, trackIds } = {}) => {
+    const composition = get().editedMusicJson;
+    const barCount = Number(composition?.bar_count) || 0;
+    const normalized = normalizeBarRange(startBar, endBar, barCount || Number.MAX_SAFE_INTEGER);
+    if (normalized.startBar === null) {
+      console.warn('[musicStore] Invalid AI edit selection ignored', {
+        startBar,
+        endBar,
+        warning: normalized.warning,
+      });
+      return false;
+    }
+    if (barCount > 0 && (normalized.startBar > barCount || normalized.endBar > barCount)) {
+      console.warn('[musicStore] AI edit selection out of composition bounds', {
+        startBar: normalized.startBar,
+        endBar: normalized.endBar,
+        barCount,
+      });
+      return false;
+    }
+    const nextMode = trackMode === 'all' ? 'all' : 'current';
+    const nextTrackIds = Array.isArray(trackIds)
+      ? trackIds.map(String)
+      : defaultTargetTrackIds(composition, {
+        mode: nextMode,
+        currentTrackId: get().pianoRollTrackId,
+      });
+    console.info('[musicStore] AI edit selection changed', {
+      startBar: normalized.startBar,
+      endBar: normalized.endBar,
+      trackMode: nextMode,
+      trackScopeCount: nextTrackIds.length,
+    });
+    set({
+      aiEditStartBar: normalized.startBar,
+      aiEditEndBar: normalized.endBar,
+      aiEditTrackMode: nextMode,
+      aiEditTrackIds: nextTrackIds,
+    });
+    return true;
+  },
+
+  clearAiEditSelection: () => {
+    console.info('[musicStore] AI edit selection cleared');
+    set({
+      aiEditStartBar: null,
+      aiEditEndBar: null,
+      aiEditTrackIds: null,
+      aiEditTrackMode: 'current',
+    });
+  },
+
+  setAiEditInstruction: (instruction) => {
+    const value = typeof instruction === 'string' ? instruction : '';
+    console.debug('[musicStore] AI edit instruction updated', { length: value.trim().length });
+    set({ aiEditInstruction: value });
+  },
+
+  setAiEditTrackMode: (trackMode) => {
+    const nextMode = trackMode === 'all' ? 'all' : 'current';
+    const composition = get().editedMusicJson;
+    const trackIds = defaultTargetTrackIds(composition, {
+      mode: nextMode,
+      currentTrackId: get().pianoRollTrackId,
+    });
+    console.info('[musicStore] AI edit track mode changed', {
+      trackMode: nextMode,
+      trackScopeCount: trackIds.length,
+    });
+    set({
+      aiEditTrackMode: nextMode,
+      aiEditTrackIds: trackIds,
+    });
+  },
+
+  startAiEdit: () => {
+    const state = get();
+    const instruction = String(state.aiEditInstruction || '').trim();
+    if (!state.editedMusicJson || !isCanonicalComposition(state.editedMusicJson)) {
+      console.warn('[musicStore] AI edit start rejected; composition missing/invalid');
+      return false;
+    }
+    if (!state.aiEditStartBar || !state.aiEditEndBar) {
+      console.warn('[musicStore] AI edit start rejected; no bar selection');
+      return false;
+    }
+    if (!instruction) {
+      console.warn('[musicStore] AI edit start rejected; empty instruction');
+      return false;
+    }
+    console.info('[musicStore] AI edit started', {
+      startBar: state.aiEditStartBar,
+      endBar: state.aiEditEndBar,
+      trackMode: state.aiEditTrackMode,
+      trackScopeCount: (state.aiEditTrackIds || []).length,
+      provider: state.selectedProvider,
+      model: state.selectedModel,
+    });
+    set({
+      aiEditStatus: 'loading',
+      aiEditError: '',
+      aiEditWarnings: [],
+    });
+    return true;
+  },
+
+  failAiEdit: (message) => {
+    const safeMessage = message || 'AI region edit failed';
+    console.error('[musicStore] AI edit failed', { message: safeMessage });
+    set({
+      aiEditStatus: 'error',
+      aiEditError: safeMessage,
+    });
+  },
+
+  completeAiEdit: ({ composition, musicxml = '', warnings = [] } = {}) => {
+    const state = get();
+    const { composition: normalized } = ensureCompositionNoteIds(composition);
+    const validation = validateMusicJson(normalized);
+    if (!validation.valid || !isCanonicalComposition(normalized)) {
+      console.error('[musicStore] AI edit completion rejected invalid composition', {
+        message: validation.message,
+      });
+      set({
+        aiEditStatus: 'error',
+        aiEditError: validation.message || 'Edited composition failed validation',
+      });
+      return false;
+    }
+
+    const historySnapshot = snapshotNoteEditState(state);
+    const revision = compositionRevisionKey(normalized);
+    console.info('[musicStore] AI edit applied', {
+      startBar: state.aiEditStartBar,
+      endBar: state.aiEditEndBar,
+      trackScopeCount: (state.aiEditTrackIds || []).length,
+      warningCount: warnings.length,
+      eventCount: countEvents(normalized),
+      compositionRevision: revision.slice(0, 48),
+    });
+    console.debug('[musicStore] AI edit revision/event counts', {
+      previousEventCount: countEvents(state.editedMusicJson),
+      nextEventCount: countEvents(normalized),
+      undoDepth: Math.min(state.noteEditUndoStack.length + 1, MAX_UNDO_HISTORY),
+    });
+
+    set({
+      editedMusicJson: normalized,
+      generatedMusicJson: normalized,
+      musicXml: musicxml || state.musicXml || '',
+      compositionRevision: revision,
+      trackControls: mergeTrackControls(state.trackControls, normalized),
+      pianoRollTrackId: pickDefaultTrackId(normalized, state.pianoRollTrackId),
+      pianoRollNoteId: null,
+      noteEditUndoStack: [...state.noteEditUndoStack, historySnapshot].slice(-MAX_UNDO_HISTORY),
+      noteEditRedoStack: [],
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+      aiEditStatus: 'success',
+      aiEditError: '',
+      aiEditWarnings: Array.isArray(warnings) ? warnings : [],
+      pianoRollEditStatus: 'idle',
+    });
+    console.info('[musicStore] Project autosave-dirty transition after AI edit', {
+      projectId: state.currentProjectId,
+      revision: revision.slice(0, 48),
     });
     markProjectDirty(set, get, revision);
     return true;

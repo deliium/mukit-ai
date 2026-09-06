@@ -14,6 +14,11 @@ import {
   sanitizeNoteSummary,
   snapTick,
 } from '../utils/pianoRollEvents.js';
+import {
+  normalizeBarRange,
+  pointerXToBar,
+  selectionOverlayRect,
+} from '../utils/pianoRollSelection.js';
 
 const CONTEXT_COLORS = ['#94a3b8', '#a78bfa', '#67e8f9', '#fbbf24', '#f472b6', '#86efac'];
 const NOTE_NOTATION_DEBOUNCE_MS = 450;
@@ -200,7 +205,30 @@ const PlaybackCursor = styled.div`
   z-index: 5;
 `;
 
+const SelectionOverlay = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: ${(props) => props.$left}px;
+  width: ${(props) => props.$width}px;
+  background: rgba(79, 70, 229, 0.12);
+  border-left: 2px solid rgba(79, 70, 229, 0.55);
+  border-right: 2px solid rgba(79, 70, 229, 0.55);
+  pointer-events: none;
+  z-index: 2;
+`;
+
+const NumberInput = styled.input`
+  width: 64px;
+  padding: 6px 8px;
+  border: 1px solid #c7d2fe;
+  border-radius: 6px;
+  background: white;
+  font-size: 0.9rem;
+`;
+
 const CONTEXT_TRACK_OPACITY = 0.35;
+const BAR_SELECTION_LOG_THROTTLE_MS = 250;
 
 const PianoRollEditor = () => {
   const editedMusicJson = useMusicStore((state) => state.editedMusicJson);
@@ -227,12 +255,20 @@ const PianoRollEditor = () => {
   const refreshMusicXmlFromEditedComposition = useMusicStore(
     (state) => state.refreshMusicXmlFromEditedComposition,
   );
+  const aiEditStartBar = useMusicStore((state) => state.aiEditStartBar);
+  const aiEditEndBar = useMusicStore((state) => state.aiEditEndBar);
+  const aiEditTrackMode = useMusicStore((state) => state.aiEditTrackMode);
+  const setAiEditSelection = useMusicStore((state) => state.setAiEditSelection);
+  const clearAiEditSelection = useMusicStore((state) => state.clearAiEditSelection);
+  const setAiEditTrackMode = useMusicStore((state) => state.setAiEditTrackMode);
 
   const editorRef = useRef(null);
   const scrollRef = useRef(null);
   const dragRef = useRef(null);
+  const barSelectRef = useRef(null);
   const debounceRef = useRef(null);
   const lastCursorLogRef = useRef(0);
+  const lastBarSelectLogRef = useRef(0);
   const [viewportWidth, setViewportWidth] = useState(0);
 
   const validation = useMemo(
@@ -601,6 +637,87 @@ const PianoRollEditor = () => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - bounds.left;
     const y = event.clientY - bounds.top;
+
+    if (event.shiftKey) {
+      event.preventDefault();
+      const mapped = pointerXToBar(x, {
+        pixelsPerTick: metrics.pixelsPerTick,
+        barTicks: metrics.barTicks,
+        barCount: metrics.barCount,
+        scrollLeft: 0,
+      });
+      if (mapped.bar === null) {
+        return;
+      }
+      const originBar = mapped.bar;
+      setAiEditSelection({
+        startBar: originBar,
+        endBar: originBar,
+        trackMode: aiEditTrackMode,
+      });
+      console.info('[PianoRollEditor] AI bar selection started', {
+        startBar: originBar,
+        endBar: originBar,
+        trackMode: aiEditTrackMode,
+      });
+
+      const onMove = (moveEvent) => {
+        if (!barSelectRef.current || moveEvent.pointerId !== event.pointerId) {
+          return;
+        }
+        const moveBounds = event.currentTarget.getBoundingClientRect();
+        const moveX = moveEvent.clientX - moveBounds.left;
+        const nextBar = pointerXToBar(moveX, {
+          pixelsPerTick: metrics.pixelsPerTick,
+          barTicks: metrics.barTicks,
+          barCount: metrics.barCount,
+        });
+        if (nextBar.bar === null) {
+          return;
+        }
+        const now = Date.now();
+        if (now - lastBarSelectLogRef.current >= BAR_SELECTION_LOG_THROTTLE_MS) {
+          lastBarSelectLogRef.current = now;
+          console.debug('[PianoRollEditor] AI bar selection pointer update', {
+            startBar: originBar,
+            endBar: nextBar.bar,
+          });
+        }
+        setAiEditSelection({
+          startBar: originBar,
+          endBar: nextBar.bar,
+          trackMode: aiEditTrackMode,
+        });
+      };
+
+      const onUp = (upEvent) => {
+        if (!barSelectRef.current || upEvent.pointerId !== event.pointerId) {
+          return;
+        }
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        const final = normalizeBarRange(
+          barSelectRef.current.originBar,
+          useMusicStore.getState().aiEditEndBar,
+          metrics.barCount,
+        );
+        barSelectRef.current = null;
+        console.info('[PianoRollEditor] AI bar selection committed', {
+          startBar: final.startBar,
+          endBar: final.endBar,
+          trackMode: aiEditTrackMode,
+          trackScope: aiEditTrackMode === 'all' ? 'all-tracks' : 'current-track',
+        });
+      };
+
+      barSelectRef.current = { originBar, onMove, onUp };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+      return;
+    }
+
     const rawTick = pixelToTick(x, metrics.pixelsPerTick).tick;
     const { durationTicks } = defaultDurationForSnap(pianoRollSnap, metrics.ticksPerQuarter);
     const snappedStart = snapTick(rawTick, metrics.snapTicks, {
@@ -683,6 +800,13 @@ const PianoRollEditor = () => {
 
   const beatWidth = metrics.ticksPerQuarter * metrics.pixelsPerTick;
   const barWidth = metrics.barTicks * metrics.pixelsPerTick;
+  const selectionRect = (aiEditStartBar && aiEditEndBar)
+    ? selectionOverlayRect(aiEditStartBar, aiEditEndBar, {
+      pixelsPerTick: metrics.pixelsPerTick,
+      barTicks: metrics.barTicks,
+      totalHeight: metrics.totalHeight,
+    })
+    : null;
   const notationMessage = pianoRollNotationStatus === 'loading'
     ? 'Refreshing notation preview…'
     : pianoRollNotationStatus === 'error'
@@ -711,6 +835,58 @@ const PianoRollEditor = () => {
               ))}
             </Select>
           </ControlGroup>
+          <ControlGroup htmlFor="ai-edit-start-bar">
+            AI start bar
+            <NumberInput
+              id="ai-edit-start-bar"
+              type="number"
+              min="1"
+              max={metrics.barCount || 1}
+              value={aiEditStartBar || ''}
+              aria-label="AI edit start bar"
+              onChange={(event) => {
+                const startBar = Number(event.target.value);
+                const endBar = aiEditEndBar || startBar;
+                setAiEditSelection({ startBar, endBar, trackMode: aiEditTrackMode });
+              }}
+            />
+          </ControlGroup>
+          <ControlGroup htmlFor="ai-edit-end-bar">
+            AI end bar
+            <NumberInput
+              id="ai-edit-end-bar"
+              type="number"
+              min="1"
+              max={metrics.barCount || 1}
+              value={aiEditEndBar || ''}
+              aria-label="AI edit end bar"
+              onChange={(event) => {
+                const endBar = Number(event.target.value);
+                const startBar = aiEditStartBar || endBar;
+                setAiEditSelection({ startBar, endBar, trackMode: aiEditTrackMode });
+              }}
+            />
+          </ControlGroup>
+          <ControlGroup htmlFor="ai-edit-track-mode">
+            AI track scope
+            <Select
+              id="ai-edit-track-mode"
+              value={aiEditTrackMode}
+              aria-label="AI edit track scope"
+              onChange={(event) => setAiEditTrackMode(event.target.value)}
+            >
+              <option value="current">Current track</option>
+              <option value="all">All tracks</option>
+            </Select>
+          </ControlGroup>
+          <Button
+            type="button"
+            onClick={() => clearAiEditSelection()}
+            disabled={!aiEditStartBar}
+            aria-label="Clear AI bar selection"
+          >
+            Clear AI selection
+          </Button>
           <ControlGroup htmlFor="piano-roll-snap">
             Snap
             <Select
@@ -768,7 +944,8 @@ const PianoRollEditor = () => {
       )}
       <Status>
         Scroll horizontally for longer pieces. Drag notes to move/transpose, use the right handle to resize,
-        click empty space to create. Viewport ~{viewportWidth}px wide.
+        click empty space to create, Shift+drag to select bars for AI edit. Viewport ~{viewportWidth}px wide.
+        {selectionRect ? ` AI selection: bars ${selectionRect.startBar}-${selectionRect.endBar}.` : ''}
       </Status>
 
       <EditorShell
@@ -799,6 +976,13 @@ const PianoRollEditor = () => {
             onPointerDown={handleGridPointerDown}
             aria-label="Piano roll timeline grid"
           >
+            {selectionRect && (
+              <SelectionOverlay
+                $left={selectionRect.left}
+                $width={selectionRect.width}
+                aria-hidden="true"
+              />
+            )}
             {barLabels.map((label) => (
               <BarLabel key={label.bar} $left={label.left}>
                 Bar {label.bar}
