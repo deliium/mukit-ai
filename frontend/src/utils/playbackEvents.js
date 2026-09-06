@@ -103,7 +103,12 @@ export function buildCanonicalPlaybackEvents(musicJson) {
       return trackCompare;
     }
     return left.originalIndex - right.originalIndex;
-  }).map(({ originalIndex, ...event }) => event);
+  }).map((item) => {
+    const event = { ...item };
+    delete event.originalIndex;
+    return event;
+  });
+
 
   console.debug('[playbackEvents] Canonical playback events built', {
     schemaVersion: musicJson.schema_version,
