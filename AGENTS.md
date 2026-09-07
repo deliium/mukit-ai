@@ -22,7 +22,7 @@ mukit-ai/
 │   │   ├── main.py          # Composition / LLM / export routes
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
 │   │   ├── routers/         # Projects HTTP API
-│   │   ├── services/        # Domain + orchestration services (+ fake_llm, fixture_compositions)
+│   │   ├── services/        # Domain + orchestration (+ fake_llm, generation_constraints, composition_tonality)
 │   │   ├── fixtures/        # Canonical composition.v1 JSON for fake LLM / tests
 │   │   ├── db/              # SQLite connection + migrations
 │   │   └── schemas.py       # composition.v1 + LLM models

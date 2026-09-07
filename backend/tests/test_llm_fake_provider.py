@@ -96,7 +96,7 @@ def test_fake_generate_returns_canonical_notes(fake_env):
                 "genre": "pop",
                 "mood": "bright",
                 "duration_bars": 16,
-                "instruments": ["piano", "bass", "strings"],
+                "instruments": ["piano", "bass"],
             },
             "selection": {"provider": "fake"},
         }
@@ -110,6 +110,24 @@ def test_fake_generate_returns_canonical_notes(fake_env):
     assert response.musicxml
     fixture = load_composition_fixture(FIXTURE_16BAR_MULTITRACK)
     assert response.music.bar_count == fixture.bar_count
+
+
+def test_fake_generate_rejects_contradictory_duration(fake_env):
+    request = LLMMusicGenerationRequest.model_validate(
+        {
+            "prompt": {
+                "genre": "pop",
+                "mood": "bright",
+                "duration_bars": 12,
+                "instruments": ["piano", "bass"],
+            },
+            "selection": {"provider": "fake"},
+        }
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(generate_llm_music_json(request))
+    assert exc_info.value.status_code == 502
+    assert "duration_bars" in str(exc_info.value.detail).lower() or "fixture" in str(exc_info.value.detail).lower()
 
 
 def test_fake_region_edit_patches_only_selected_bars(fake_env):
@@ -165,7 +183,12 @@ def test_malformed_fake_generate_returns_502_and_leaves_project_unchanged(client
                 generate_llm_music_json(
                     LLMMusicGenerationRequest.model_validate(
                         {
-                            "prompt": {"genre": "jazz", "mood": "cool", "duration_bars": 16},
+                            "prompt": {
+                                "genre": "jazz",
+                                "mood": "cool",
+                                "duration_bars": 16,
+                                "instruments": ["piano", "bass"],
+                            },
                             "selection": {"provider": "fake"},
                         }
                     )

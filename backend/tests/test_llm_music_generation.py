@@ -146,7 +146,7 @@ def test_generation_success_with_mocked_graph(monkeypatch):
 
     monkeypatch.setattr(llm_music_generator, "_build_generation_graph", lambda: FakeGraph())
 
-    music, warnings, provider = asyncio.run(generate_music_json(request, settings))
+    music, warnings, provider, _validation = asyncio.run(generate_music_json(request, settings))
 
     assert music.tempo == 100
     assert music.schema_version == "composition.v1"

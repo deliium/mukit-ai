@@ -1,5 +1,7 @@
 import logging
 
+import pytest
+
 from app.schemas import Composition
 from app.services.composition_validator import validate_composition_integrity
 
@@ -209,6 +211,45 @@ def test_validator_warns_drum_channel_semantics():
     result = validate_composition_integrity(payload, complexity="simple")
     assert result.ok
     assert any(item.code == "track_range_semantics" for item in result.warnings)
+
+
+def test_validate_generation_constraints_flags_tempo_meter_and_instruments():
+    from app.schemas import LLMMusicGenerationRequest, LLMPromptParameters
+    from app.services.generation_constraints import (
+        build_generation_constraints,
+        validate_generation_constraints,
+    )
+
+    request = LLMMusicGenerationRequest(
+        prompt=LLMPromptParameters(
+            key="A minor",
+            duration_bars=4,
+            time_signature="4/4",
+            tempo_min=80,
+            tempo_max=90,
+            instruments=["piano", "bass", "strings"],
+        )
+    )
+    constraints = build_generation_constraints(request)
+    payload = _base_composition(tempo=100, key="A minor")
+    # Missing strings family.
+    report = validate_generation_constraints(Composition.model_validate(payload), constraints)
+    assert not report.ok
+    codes = {item.code for item in report.errors}
+    assert "constraint_tempo_out_of_range" in codes
+    assert "constraint_missing_instrument_family" in codes
+
+
+def test_prompt_sections_must_sum_to_duration_bars():
+    from pydantic import ValidationError
+
+    from app.schemas import LLMPromptParameters
+
+    with pytest.raises(ValidationError):
+        LLMPromptParameters(
+            duration_bars=16,
+            sections=[{"type": "verse", "bars": 8}, {"type": "chorus", "bars": 4}],
+        )
 
 
 def test_validator_detects_bar_overflow_density():

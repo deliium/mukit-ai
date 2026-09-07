@@ -11,15 +11,34 @@ The backend generates compositions through a multi-stage LangGraph composer rath
 3. `compose_melody` — primary melody track events plus motif/context handoff
 4. `compose_bass` — bass events guided by harmony and form
 5. `compose_accompaniment` — harmony/accompaniment events and practical optional instruments (for example strings/pad)
-6. `assemble_composition` — merge stage drafts into canonical `composition.v1`
-7. `validate_composition` — Pydantic schema checks plus deterministic musical integrity checks
-8. `repair_composition` — retry the failed stage using structured diagnostics until `options.max_retries` is exhausted
+6. `assemble_composition` — merge stage drafts into canonical `composition.v1` using locked hard constraints
+7. `normalize_composition` — canonical normalization that must not rewrite locked hard fields
+8. `validate_composition` — generic integrity checks **plus** request-conformance / tonal-center checks
+9. `repair_composition` — retry the failed stage using structured diagnostics until `options.max_retries` is exhausted
+
+## Generation Hard Constraints
+
+Explicit musical parameters on `LLMMusicGenerationRequest.prompt` are treated as an immutable constraint snapshot for the whole graph:
+
+| Kind | Fields |
+|------|--------|
+| **Hard** | `key` (when provided), `time_signature`, `duration_bars`, inclusive `tempo_min`/`tempo_max`, explicit `sections` sequence/bar counts, requested instrument families |
+| **Soft** | `genre`, `mood`, `complexity`, freeform `instructions` |
+
+Rules:
+
+- When `key` is omitted, the form stage may choose one; that choice is then frozen for harmony and note-content checks.
+- When `sections` is omitted, the form stage may design a contiguous structure totaling `duration_bars`; that structure is then frozen.
+- Explicitly supplied `sections` **must** sum to `duration_bars` (request validation fails before any provider call).
+- Requested instruments are required **families** (for example piano/bass/strings), not a strict one-track-per-token count. Multiple tracks may share a family. Unrequested families are rejected by default.
+- Tonal validation assesses **aggregate tonal center** (metadata + harmony + non-drum note events), not strict diatonic membership. Chromatic passing tones, harmonic/melodic-minor alterations, secondary dominants, and borrowed chords remain valid when the center stays on the locked key. Obvious competing centers (for example persistent `Am/F/C/Dm/E7` against an `F# minor` request) fail hard.
+- Successful responses include optional structured `validation` (`status`, `constraints_checked`, `errors`, `warnings`, `repair_attempts`, `tonality`). Repair exhaustion returns HTTP `502` with sanitized diagnostic codes/expected/actual (never full prompts or compositions).
 
 Practical initial LLM generation bounds reject oversized prompts before provider calls: up to **32 bars** and **6 non-drum instruments**. Schema-level `duration_bars` may still allow larger values for non-LLM/manual workflows. Oversized generation requests return HTTP `422` with an actionable reduce-duration/instrumentation message.
 
 Required playable roles are melody, bass, and harmony/accompaniment note events. Harmony metadata alone is never accepted as a substitute for `tracks[].events[]`. Repair exhaustion and other invalid staged output return HTTP `502` with sanitized diagnostic detail.
 
-Useful log fields include `stage`, `provider`, `model`, `attempt`, section/track/event counts, diagnostic codes, and sanitized provider errors. API keys and full freeform prompts are never logged.
+Useful log fields include `stage`, `provider`, `model`, `attempt`, section/track/event counts, diagnostic codes, constraint summaries, and sanitized provider errors. API keys, full freeform prompts, and raw composition/export payloads are never logged.
 
 ## Partial Region Editing
 

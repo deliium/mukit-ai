@@ -77,7 +77,7 @@ def test_real_provider_staged_smoke():
             "bars": request.prompt.duration_bars,
         },
     )
-    music, warnings, selected = asyncio.run(generate_music_json(request, settings))
+    music, warnings, selected, _validation = asyncio.run(generate_music_json(request, settings))
     result = validate_composition_integrity(
         music,
         requested_instruments=request.prompt.instruments,

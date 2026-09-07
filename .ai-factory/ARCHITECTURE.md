@@ -33,6 +33,8 @@ mukit-ai/
 │   │   │   ├── fake_llm.py              # LLM_FAKE_MODE deterministic generate/edit
 │   │   │   ├── fixture_compositions.py  # Load packaged Composition V1 fixtures
 │   │   │   ├── composition_planner.py
+│   │   │   ├── generation_constraints.py # Immutable request hard/soft constraints + conformance
+│   │   │   ├── composition_tonality.py   # Deterministic tonal-center analysis
 │   │   │   ├── composition_validator.py
 │   │   │   ├── composition_normalizer.py
 │   │   │   ├── composition_timing.py

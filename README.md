@@ -183,7 +183,7 @@ Example LLM request:
 }
 ```
 
-`POST /llm/generate-music-json` returns canonical `composition.v1` JSON in `music` plus derived `musicxml`. Legacy LLM output with explicit notes is normalized before returning; harmony-only legacy output is rejected as non-playable.
+`POST /llm/generate-music-json` returns canonical `composition.v1` JSON in `music`, derived `musicxml`, human-readable `warnings`, and optional structured `validation` (constraint status, errors/warnings, repair attempts, tonality summary). Hard prompt fields (`key`, meter, `duration_bars`, tempo bounds, explicit sections, instrument families) are enforced through every composer stage; soft fields (`genre`, `mood`, `complexity`, instructions) guide style only. Explicit `sections` must sum to `duration_bars`. Legacy LLM output with explicit notes is normalized before returning; harmony-only legacy output is rejected as non-playable. Constraint/repair exhaustion returns HTTP `502` with sanitized diagnostic codes (never full prompts).
 
 `POST /llm/edit-composition-region` accepts an existing composition, bar/track selection, and instruction, then returns a validated `replace_region` `patch`, the applied `composition`, and preview `musicxml`. Outside-region notes and metadata stay unchanged unless the request explicitly expands scope. Invalid provider patches return `502` without mutating the input composition.
 
@@ -283,7 +283,7 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 
 - **Model discovery**: `GET /llm/models` exposes only providers with configured API keys.
 - **Prompt orchestration**: the backend runs a multi-stage LangGraph composer (form → harmony → melody → bass → accompaniment → assemble → validate → repair) that emits canonical note events rather than one full-score blob.
-- **Generation bounds**: initial LLM Composition V1 generation rejects requests above 32 bars or 6 non-drum instruments with HTTP `422` and an actionable message.
+- **Generation bounds**: initial LLM Composition V1 generation rejects requests above 32 bars or 6 non-drum instruments with HTTP `422` and an actionable message. Hard musical parameters are constraint-checked through staged generation; contradictory tonal centers fail with structured `502` diagnostics.
 - **Validation**: Pydantic schema checks plus deterministic integrity validation cover required roles, note density, pitch ranges, timing bounds, and harmony-only rejection. Failed stages repair using structured diagnostics until `max_retries` is exhausted; final failures return HTTP `502` with sanitized detail.
 - **Normalization**: legacy LLM output with explicit notes is still migrated to canonical track-local events when encountered; harmony-only legacy output is rejected with an actionable error.
 - **Testing**: normal backend tests mock providers. Opt-in real-provider smoke: `RUN_LLM_SMOKE=1 LLM_SMOKE_PROVIDER=openai ../.venv/bin/python -m pytest tests/test_llm_real_provider_smoke.py` from `backend/`.

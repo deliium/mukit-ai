@@ -11,6 +11,7 @@ from app.schemas import LLMMusicGenerationRequest
 from app.services import llm_music_generator
 from app.services.composition_planner import ComposerDraftNote, OversizedLLMGenerationRequestError
 from app.services.llm_music_generator import (
+    GenerationConstraintViolationError,
     InvalidLLMOutputError,
     UnsupportedLLMProviderError,
     generate_music_json,
@@ -271,7 +272,7 @@ def test_staged_generation_acceptance_shape(monkeypatch, caplog):
     payloads = _stage_payloads()
     calls = _install_stage_mock(monkeypatch, payloads)
 
-    music, warnings, provider = asyncio.run(generate_music_json(_request(), _settings()))
+    music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
 
     assert provider.provider == "openai"
     assert music.schema_version == "composition.v1"
@@ -304,7 +305,7 @@ def test_staged_generation_preserves_model_override(monkeypatch):
         }
     )
     settings = _settings(model="base-model")
-    music, warnings, provider = asyncio.run(generate_music_json(request, settings))
+    music, warnings, provider, _validation = asyncio.run(generate_music_json(request, settings))
     assert music.schema_version == "composition.v1"
     assert provider.model == "gpt-override"
 
@@ -318,7 +319,7 @@ def test_staged_generation_deepseek_provider(monkeypatch):
             "selection": {"provider": "deepseek", "model": "deepseek-chat"},
         }
     )
-    music, warnings, provider = asyncio.run(generate_music_json(request, _settings("deepseek", "deepseek-chat")))
+    music, warnings, provider, _validation = asyncio.run(generate_music_json(request, _settings("deepseek", "deepseek-chat")))
     assert provider.provider == "deepseek"
     assert music.bar_count == 16
 
@@ -335,7 +336,7 @@ def test_staged_generation_unsupported_provider():
 
 
 def test_staged_generation_oversized_request_rejected():
-    request = _request(duration_bars=48, instruments=["piano", "bass", "strings", "flute", "guitar", "synth", "violin"])
+    request = _request(duration_bars=48, instruments=["piano", "bass", "strings", "flute", "guitar", "synth", "violin"], sections=[])
     with pytest.raises(OversizedLLMGenerationRequestError, match="32 bars"):
         asyncio.run(generate_music_json(request, _settings()))
 
@@ -344,7 +345,7 @@ def test_staged_generation_repairs_sparse_melody(monkeypatch, caplog):
     caplog.set_level(logging.WARNING)
     payloads = _stage_payloads()
     _install_stage_mock(monkeypatch, payloads, fail_melody_once=True)
-    music, warnings, provider = asyncio.run(generate_music_json(_request(), _settings()))
+    music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
     assert music.schema_version == "composition.v1"
     assert any("retrying" in warning.lower() or "failed validation" in warning.lower() for warning in warnings)
     assert "Composer repair attempt started" in caplog.text
@@ -363,7 +364,7 @@ def test_stage_parse_retry_preserves_integrity_repair_budget(monkeypatch, caplog
     request = LLMMusicGenerationRequest.model_validate(
         {**_request().model_dump(), "options": {"max_retries": 1}}
     )
-    music, warnings, provider = asyncio.run(generate_music_json(request, _settings()))
+    music, warnings, provider, _validation = asyncio.run(generate_music_json(request, _settings()))
     assert music.schema_version == "composition.v1"
     assert "[FIX] Preserved integrity repair budget after stage parse retry" in caplog.text
     assert "Composer repair attempt started" in caplog.text
@@ -427,8 +428,18 @@ def test_api_invalid_output_returns_actionable_502(monkeypatch):
     )
     assert response.status_code == 502
     detail = response.json()["detail"]
-    assert isinstance(detail, str) and detail
-    assert "empty_required_track" in detail or "non-playable" in detail or "missing" in detail.lower()
+    if isinstance(detail, dict):
+        codes = detail.get("codes") or []
+        joined = " ".join(codes) + " " + str(detail.get("message", ""))
+    else:
+        joined = str(detail)
+    assert joined
+    assert (
+        "empty_required_track" in joined
+        or "non-playable" in joined
+        or "missing" in joined.lower()
+        or "constraint_" in joined
+    )
 
 
 @pytest.mark.parametrize("pitch", ["C4", "F#3", "Bb2"])
@@ -457,7 +468,7 @@ def test_invalid_draft_pitch_is_not_provider_failure(monkeypatch, caplog):
     with pytest.raises(InvalidLLMOutputError) as exc_info:
         asyncio.run(generate_music_json(request, _settings()))
     message = str(exc_info.value)
-    assert type(exc_info.value) is InvalidLLMOutputError
+    assert isinstance(exc_info.value, InvalidLLMOutputError)
     assert "LLM provider request failed" not in message
     assert "invalid JSON" in message.lower() or "scientific" in message.lower() or "pitch" in message.lower()
     assert "LLM provider/API failure" not in caplog.text
@@ -467,7 +478,7 @@ def test_assemble_clamps_slightly_overflowing_events(monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     payloads = _stage_payloads(slight_overflow_melody=True)
     _install_stage_mock(monkeypatch, payloads)
-    music, warnings, provider = asyncio.run(generate_music_json(_request(), _settings()))
+    music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
     melody = next(track for track in music.tracks if track.role == "melody")
     assert melody.events
     assert all(event.start_tick + event.duration_ticks <= music.duration_ticks for event in melody.events)
@@ -488,7 +499,7 @@ def test_past_end_only_melody_is_not_provider_failure(monkeypatch, caplog):
     with pytest.raises(InvalidLLMOutputError) as exc_info:
         asyncio.run(generate_music_json(request, _settings()))
     message = str(exc_info.value)
-    assert type(exc_info.value) is InvalidLLMOutputError
+    assert isinstance(exc_info.value, InvalidLLMOutputError)
     assert "LLM provider request failed" not in message
     assert "LLM provider/API failure" not in caplog.text
     # Past-end-only note is dropped at assemble; integrity then rejects empty melody.
@@ -499,7 +510,7 @@ def test_assemble_remaps_duplicate_track_ids(monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     payloads = _stage_payloads(duplicate_track_ids=True)
     _install_stage_mock(monkeypatch, payloads)
-    music, warnings, provider = asyncio.run(generate_music_json(_request(), _settings()))
+    music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
     track_ids = [track.id for track in music.tracks]
     assert len(track_ids) == len(set(track_ids))
     assert "melody-1" in track_ids
@@ -508,3 +519,173 @@ def test_assemble_remaps_duplicate_track_ids(monkeypatch, caplog):
     assert "[FIX] Remapped duplicate assemble track id" in caplog.text
     assert "Track IDs must be unique" not in caplog.text
     assert provider.provider == "openai"
+
+
+def _fs_minor_payloads(*, a_minor_content: bool = True, bars: int = 20) -> dict[str, str]:
+    key = "A minor" if a_minor_content else "F# minor"
+    form = {
+        "tempo": 100,
+        "key": key,
+        "time_signature": "4/4",
+        "bar_count": bars,
+        "sections": [
+            {"type": "intro", "start_bar": 1, "bar_count": 4},
+            {"type": "verse", "start_bar": 5, "bar_count": 8},
+            {"type": "chorus", "start_bar": 13, "bar_count": 8},
+        ],
+        "instrumentation": ["piano", "bass", "strings"],
+    }
+    if a_minor_content:
+        harmony_chords = ["Am", "F", "C", "Dm", "E7", "Am", "F", "C", "Dm", "E7"] * 2
+        melody_pitch = "A4"
+        bass_pitch = "A2"
+    else:
+        harmony_chords = ["F#m", "C#7", "Bm", "F#m", "D", "C#7", "F#m", "C#7", "Bm", "C#7"] * 2
+        melody_pitch = "F#4"
+        bass_pitch = "F#2"
+    harmony = {
+        "events": [
+            {
+                "bar": index,
+                "chord": harmony_chords[index - 1],
+                "section_type": "verse",
+                "function": "tonic",
+            }
+            for index in range(1, bars + 1)
+        ]
+    }
+    melody = {
+        "track": {
+            "id": "melody-1",
+            "name": "Melody",
+            "instrument": "piano",
+            "role": "melody",
+            "events": _events_every_bar(melody_pitch, bars=bars),
+        },
+        "motif_context": {"motif_ids": ["m1"]},
+    }
+    bass = {
+        "track": {
+            "id": "bass-1",
+            "name": "Bass",
+            "instrument": "bass",
+            "role": "bass",
+            "events": _events_every_bar(bass_pitch, bars=bars, velocity=84),
+        }
+    }
+    accompaniment = {
+        "tracks": [
+            {
+                "id": "strings-1",
+                "name": "Strings",
+                "instrument": "strings",
+                "role": "pad",
+                "events": _events_every_bar("C#4" if not a_minor_content else "C5", bars=bars, velocity=60),
+            }
+        ],
+        "skipped": [],
+    }
+    return {
+        "plan_form": json.dumps(form),
+        "plan_harmony": json.dumps(harmony),
+        "compose_melody": json.dumps(melody),
+        "compose_bass": json.dumps(bass),
+        "compose_accompaniment": json.dumps(accompaniment),
+    }
+
+
+def test_f_sharp_minor_request_rejects_persistent_a_minor_outputs(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    payloads = _fs_minor_payloads(a_minor_content=True, bars=20)
+    _install_stage_mock(monkeypatch, payloads)
+    request = LLMMusicGenerationRequest.model_validate(
+        {
+            "prompt": {
+                "genre": "cinematic",
+                "mood": "dark",
+                "key": "F# minor",
+                "time_signature": "4/4",
+                "tempo_min": 90,
+                "tempo_max": 110,
+                "duration_bars": 20,
+                "instruments": ["piano", "bass", "strings"],
+                "sections": [
+                    {"type": "intro", "bars": 4},
+                    {"type": "verse", "bars": 8},
+                    {"type": "chorus", "bars": 8},
+                ],
+                "complexity": "moderate",
+            },
+            "options": {"max_retries": 0},
+        }
+    )
+    with pytest.raises(GenerationConstraintViolationError) as exc_info:
+        asyncio.run(generate_music_json(request, _settings()))
+    assert exc_info.value.report is not None
+    assert exc_info.value.report.status == "failed"
+    assert any(item.code.startswith("constraint_") for item in exc_info.value.diagnostics)
+    assert exc_info.value.report.tonality is None or exc_info.value.report.tonality.get("requested_key") == "F# minor"
+
+
+def test_f_sharp_minor_recovers_after_targeted_repair(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    bad = _fs_minor_payloads(a_minor_content=True, bars=20)
+    good = _fs_minor_payloads(a_minor_content=False, bars=20)
+    stage_hits = {"plan_harmony": 0, "compose_melody": 0, "compose_bass": 0, "compose_accompaniment": 0}
+
+    async def fake_invoke(state, prompt: str) -> str:
+        if "planning musical form" in prompt:
+            # Always return requested key after coercion path; first form can still drift.
+            stage_hits.setdefault("plan_form", 0)
+            stage_hits["plan_form"] += 1
+            if stage_hits["plan_form"] == 1:
+                return bad["plan_form"]
+            return good["plan_form"]
+        if "harmonic progression metadata" in prompt:
+            stage_hits["plan_harmony"] += 1
+            return bad["plan_harmony"] if stage_hits["plan_harmony"] == 1 else good["plan_harmony"]
+        if "primary melody track" in prompt:
+            stage_hits["compose_melody"] += 1
+            return bad["compose_melody"] if stage_hits["compose_melody"] == 1 else good["compose_melody"]
+        if "composing the bass track" in prompt:
+            stage_hits["compose_bass"] += 1
+            return bad["compose_bass"] if stage_hits["compose_bass"] == 1 else good["compose_bass"]
+        if "accompaniment / harmonic support" in prompt:
+            stage_hits["compose_accompaniment"] += 1
+            return (
+                bad["compose_accompaniment"]
+                if stage_hits["compose_accompaniment"] == 1
+                else good["compose_accompaniment"]
+            )
+        raise AssertionError("unexpected stage prompt")
+
+    monkeypatch.setattr(llm_music_generator, "_invoke_chat", fake_invoke)
+    request = LLMMusicGenerationRequest.model_validate(
+        {
+            "prompt": {
+                "genre": "cinematic",
+                "mood": "dark",
+                "key": "F# minor",
+                "time_signature": "4/4",
+                "tempo_min": 90,
+                "tempo_max": 110,
+                "duration_bars": 20,
+                "instruments": ["piano", "bass", "strings"],
+                "sections": [
+                    {"type": "intro", "bars": 4},
+                    {"type": "verse", "bars": 8},
+                    {"type": "chorus", "bars": 8},
+                ],
+                "complexity": "moderate",
+            },
+            "options": {"max_retries": 2},
+        }
+    )
+    music, warnings, provider, validation = asyncio.run(generate_music_json(request, _settings()))
+    assert music.key == "F# minor"
+    assert music.bar_count == 20
+    assert music.tempo >= 90 and music.tempo <= 110
+    assert validation is not None
+    assert validation.status in {"passed", "repaired"}
+    assert provider.provider == "openai"
+    assert any("retrying" in warning.lower() or "failed validation" in warning.lower() for warning in warnings) or stage_hits["plan_harmony"] > 1
