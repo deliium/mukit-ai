@@ -534,6 +534,24 @@ class LLMPromptParameters(BaseModel):
             raise ValueError("tempo_min must be less than or equal to tempo_max")
         return self
 
+    @model_validator(mode="after")
+    def validate_sections_match_duration(self) -> "LLMPromptParameters":
+        if not self.sections:
+            return self
+        total_bars = sum(section.bars for section in self.sections)
+        if total_bars != self.duration_bars:
+            _log_validation_failure(
+                self.__class__.__name__,
+                "sections",
+                {"section_bars": total_bars, "duration_bars": self.duration_bars},
+                "explicit sections must sum to duration_bars",
+            )
+            raise ValueError(
+                "Explicitly supplied sections must sum to duration_bars "
+                f"(got {total_bars}, expected {self.duration_bars})"
+            )
+        return self
+
 
 class LLMModelSelection(BaseModel):
     provider: Literal["openai", "deepseek", "fake"] | None = None
@@ -573,6 +591,36 @@ class LLMMusicGenerationResponse(BaseModel):
     musicxml: str | None = None
     musicxml_filename: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    validation: "GenerationValidationReport | None" = None
+
+
+class GenerationValidationIssue(BaseModel):
+    """Response-safe structured diagnostic for generation constraint checks."""
+
+    code: str = Field(..., min_length=1, max_length=80)
+    message: str = Field(..., min_length=1, max_length=500)
+    severity: Literal["error", "warning"] = "error"
+    expected: Any | None = None
+    actual: Any | None = None
+    stage: str | None = Field(default=None, max_length=80)
+    track_id: str | None = Field(default=None, max_length=80)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class GenerationValidationReport(BaseModel):
+    """Structured generation constraint validation outcome."""
+
+    status: Literal["passed", "failed", "repaired"] = "passed"
+    constraints_checked: list[str] = Field(default_factory=list)
+    errors: list[GenerationValidationIssue] = Field(default_factory=list)
+    warnings: list[GenerationValidationIssue] = Field(default_factory=list)
+    repair_attempts: int = Field(default=0, ge=0)
+    tonality: dict[str, Any] | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.status in {"passed", "repaired"} and not self.errors
+
 
 
 class CompositionEditSelection(BaseModel):

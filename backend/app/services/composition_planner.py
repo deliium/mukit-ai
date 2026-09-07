@@ -26,6 +26,16 @@ LLM_GENERATION_MAX_EVENT_BUDGET = LLM_GENERATION_MAX_BARS * LLM_GENERATION_MAX_N
 _DRUM_INSTRUMENT_TOKENS = ("drum", "drums", "percussion", "perc")
 
 
+def is_drum_instrument_label(instrument: str) -> bool:
+    """Return True when an instrument label is percussion/drums.
+
+    Prefer `generation_constraints.normalize_instrument_family` for family matching;
+    this helper stays local for cheap bound checks without circular imports.
+    """
+    lowered = instrument.strip().lower()
+    return any(token in lowered for token in _DRUM_INSTRUMENT_TOKENS)
+
+
 class OversizedLLMGenerationRequestError(ValueError):
     """Raised when an LLM generation request exceeds practical staged-composer bounds."""
 
@@ -155,8 +165,7 @@ class ValidationDiagnostic(BaseModel):
 def count_non_drum_instruments(instruments: list[str]) -> int:
     count = 0
     for instrument in instruments:
-        lowered = instrument.strip().lower()
-        if any(token in lowered for token in _DRUM_INSTRUMENT_TOKENS):
+        if is_drum_instrument_label(instrument):
             continue
         count += 1
     return count
