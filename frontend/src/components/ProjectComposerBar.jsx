@@ -123,7 +123,7 @@ const ProjectComposerBar = () => {
           disabled={saveStatus === 'saving'}
           onClick={() => {
             console.debug('[ProjectComposerBar] Manual save', { projectId: currentProjectId });
-            saveCurrentProject({ reason: 'manual' }).catch(() => {});
+            saveCurrentProject({ reason: 'manual-force' }).catch(() => {});
           }}
         >
           Save

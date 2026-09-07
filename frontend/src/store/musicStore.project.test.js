@@ -39,6 +39,14 @@ function installAxiosStub(handler) {
   };
 }
 
+function patchPayload(config) {
+  const raw = config.data;
+  if (typeof raw === 'string') {
+    return JSON.parse(raw);
+  }
+  return raw || {};
+}
+
 function resetProjectState(overrides = {}) {
   useMusicStore.setState({
     activeView: 'home',
@@ -48,7 +56,7 @@ function resetProjectState(overrides = {}) {
     projectListStatus: 'idle',
     saveStatus: 'saved',
     saveError: '',
-    lastSavedRevision: 'empty',
+    lastSavedPersistRevision: 'empty',
     compositionRevision: 'empty',
     generationMeta: null,
     generatedMusicJson: null,
@@ -106,6 +114,8 @@ test('open project hydrates composition and generation metadata without keys', a
   assert.equal(state.generationMeta.provider, 'openai');
   assert.equal(state.generationMeta.model, 'gpt-4o-mini');
   assert.equal(state.generationMeta.prompt.genre, 'ambient');
+  assert.equal(state.prompt.genre, 'ambient');
+  assert.equal(state.prompt.mood, '');
   assert.equal(state.saveStatus, 'saved');
   assert.ok(!JSON.stringify(state.generationMeta).includes('api_key'));
 });
@@ -198,7 +208,7 @@ test('completeGeneration captures provider/model/prompt and marks dirty for open
     editedMusicJson: structuredClone(COMPOSITION),
     generatedMusicJson: structuredClone(COMPOSITION),
     compositionRevision: 'rev-a',
-    lastSavedRevision: 'rev-a',
+    lastSavedPersistRevision: 'rev-a',
     saveStatus: 'saved',
   });
 
@@ -267,4 +277,356 @@ test('saveCurrentProject no-ops without open project', async () => {
   resetProjectState();
   const result = await useMusicStore.getState().saveCurrentProject({ reason: 'manual' });
   assert.equal(result, null);
+  assert.equal(useMusicStore.getState().saveStatus, 'error');
+  assert.match(useMusicStore.getState().saveError, /No project open/i);
+});
+
+test('metadata-only JSON edit marks dirty and Save patches', async (t) => {
+  const patchCalls = [];
+  const restore = installAxiosStub(async (config) => {
+    if (config.method === 'patch' || config.method === 'PATCH') {
+      patchCalls.push(config);
+      return {
+        data: { id: 'p1', name: 'Opened', composition: config.data?.composition || null },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return {
+      data: {
+        id: 'p1',
+        name: 'Opened',
+        composition: structuredClone(COMPOSITION),
+        generation_provider: null,
+        generation_model: null,
+        generation_prompt: null,
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = () => ({ cleared: false });
+  globalThis.clearTimeout = () => {};
+
+  try {
+    resetProjectState();
+    await useMusicStore.getState().openProject('p1');
+    assert.equal(useMusicStore.getState().saveStatus, 'saved');
+
+    const edited = structuredClone(COMPOSITION);
+    edited.harmony = [{ bar: 1, chord: 'Am' }];
+    edited.key = 'A minor';
+    useMusicStore.getState().setEditedMusicJson(edited);
+
+    assert.equal(useMusicStore.getState().saveStatus, 'unsaved');
+    await useMusicStore.getState().saveCurrentProject({ reason: 'manual' });
+    assert.equal(useMusicStore.getState().saveStatus, 'saved');
+    assert.equal(patchCalls.length, 1);
+    const payload = patchPayload(patchCalls[0]);
+    assert.equal(payload.composition.harmony[0].chord, 'Am');
+    assert.equal(payload.composition.key, 'A minor');
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('identical events with new generationMeta marks dirty and Save patches', async (t) => {
+  const patchCalls = [];
+  const restore = installAxiosStub(async (config) => {
+    if (config.method === 'patch' || config.method === 'PATCH') {
+      patchCalls.push(config);
+      return {
+        data: { id: 'p1', name: 'Opened', composition: config.data?.composition || null },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return {
+      data: {
+        id: 'p1',
+        name: 'Opened',
+        composition: structuredClone(COMPOSITION),
+        generation_provider: 'openai',
+        generation_model: 'gpt-4o-mini',
+        generation_prompt: { genre: 'ambient' },
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = () => ({ cleared: false });
+  globalThis.clearTimeout = () => {};
+
+  try {
+    resetProjectState();
+    await useMusicStore.getState().openProject('p1');
+    assert.equal(useMusicStore.getState().saveStatus, 'saved');
+
+    useMusicStore.getState().completeGeneration({
+      music: structuredClone(COMPOSITION),
+      musicxml: '<xml/>',
+      warnings: [],
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+    });
+
+    assert.equal(useMusicStore.getState().saveStatus, 'unsaved');
+    await useMusicStore.getState().saveCurrentProject({ reason: 'manual' });
+    assert.equal(useMusicStore.getState().saveStatus, 'saved');
+    assert.equal(patchCalls.length, 1);
+    const payload = patchPayload(patchCalls[0]);
+    assert.equal(payload.generation.provider, 'deepseek');
+    assert.equal(payload.generation.model, 'deepseek-chat');
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('manual Save with open project always invokes patch even when clean', async (t) => {
+  const patchCalls = [];
+  const restore = installAxiosStub(async (config) => {
+    if (config.method === 'patch' || config.method === 'PATCH') {
+      patchCalls.push(config);
+      return {
+        data: { id: 'p1', name: 'Opened', composition: config.data?.composition || null },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return {
+      data: {
+        id: 'p1',
+        name: 'Opened',
+        composition: structuredClone(COMPOSITION),
+        generation_provider: null,
+        generation_model: null,
+        generation_prompt: null,
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  resetProjectState();
+  await useMusicStore.getState().openProject('p1');
+  assert.equal(useMusicStore.getState().saveStatus, 'saved');
+
+  await useMusicStore.getState().saveCurrentProject({ reason: 'manual-force' });
+  assert.equal(patchCalls.length, 1);
+  assert.equal(useMusicStore.getState().saveStatus, 'saved');
+});
+
+test('autosave still skips when persist fingerprint matches', async (t) => {
+  const patchCalls = [];
+  const restore = installAxiosStub(async (config) => {
+    if (config.method === 'patch' || config.method === 'PATCH') {
+      patchCalls.push(config);
+      return {
+        data: { id: 'p1', name: 'Opened', composition: config.data?.composition || null },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return {
+      data: {
+        id: 'p1',
+        name: 'Opened',
+        composition: structuredClone(COMPOSITION),
+        generation_provider: null,
+        generation_model: null,
+        generation_prompt: null,
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  resetProjectState();
+  await useMusicStore.getState().openProject('p1');
+  assert.equal(useMusicStore.getState().saveStatus, 'saved');
+
+  const timers = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = (fn, delay) => {
+    const handle = { fn, delay, cleared: false };
+    timers.push(handle);
+    return handle;
+  };
+  globalThis.clearTimeout = (handle) => {
+    if (handle) {
+      handle.cleared = true;
+    }
+  };
+
+  try {
+    useMusicStore.getState().scheduleAutosave();
+    assert.equal(timers.length, 0);
+    const result = await useMusicStore.getState().saveCurrentProject({ reason: 'autosave' });
+    assert.equal(result, null);
+    assert.equal(useMusicStore.getState().saveStatus, 'saved');
+    assert.equal(patchCalls.length, 0);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('prompt mood/genre edits dirty project and Save persists generation_prompt', async (t) => {
+  const patchCalls = [];
+  const restore = installAxiosStub(async (config) => {
+    if (config.method === 'patch' || config.method === 'PATCH') {
+      patchCalls.push(config);
+      return {
+        data: { id: 'p1', name: 'Opened', composition: null },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return {
+      data: {
+        id: 'p1',
+        name: 'Opened',
+        composition: structuredClone(COMPOSITION),
+        generation_provider: 'openai',
+        generation_model: 'gpt-4o-mini',
+        generation_prompt: {
+          genre: 'ambient',
+          mood: 'cinematic',
+          key: 'C major',
+          time_signature: '4/4',
+          tempo_min: 80,
+          tempo_max: 120,
+          instruments: ['piano'],
+          sections: [{ type: 'intro', bars: 4 }],
+          complexity: 'moderate',
+          duration_bars: 8,
+          instructions: null,
+        },
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = () => ({ cleared: false });
+  globalThis.clearTimeout = () => {};
+
+  try {
+    resetProjectState();
+    await useMusicStore.getState().openProject('p1');
+    assert.equal(useMusicStore.getState().prompt.genre, 'ambient');
+    assert.equal(useMusicStore.getState().prompt.mood, 'cinematic');
+    assert.equal(useMusicStore.getState().saveStatus, 'saved');
+
+    useMusicStore.getState().updatePrompt('genre', 'rock');
+    useMusicStore.getState().updatePrompt('mood', 'sad');
+    assert.equal(useMusicStore.getState().saveStatus, 'unsaved');
+    assert.equal(useMusicStore.getState().generationMeta.prompt.genre, 'rock');
+    assert.equal(useMusicStore.getState().generationMeta.prompt.mood, 'sad');
+
+    await useMusicStore.getState().saveCurrentProject({ reason: 'manual-force' });
+    assert.equal(useMusicStore.getState().saveStatus, 'saved');
+    assert.equal(patchCalls.length, 1);
+    const payload = patchPayload(patchCalls[0]);
+    assert.equal(payload.generation.prompt.genre, 'rock');
+    assert.equal(payload.generation.prompt.mood, 'sad');
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('openProject restores composer form fields from generation_prompt', async (t) => {
+  const restore = installAxiosStub(async (config) => ({
+    data: {
+      id: 'p1',
+      name: 'Opened',
+      composition: structuredClone(COMPOSITION),
+      generation_provider: 'openai',
+      generation_model: 'gpt-4o-mini',
+      generation_prompt: {
+        genre: 'rock',
+        mood: 'sad',
+        key: 'F# minor',
+        time_signature: '4/4',
+        tempo_min: 100,
+        tempo_max: 120,
+        instruments: ['piano', 'bass', 'violin'],
+        sections: [
+          { type: 'intro', bars: 4 },
+          { type: 'verse', bars: 8 },
+          { type: 'chorus', bars: 8 },
+        ],
+        complexity: 'complex',
+        duration_bars: 20,
+        instructions: null,
+      },
+    },
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config,
+  }));
+  t.after(restore);
+
+  resetProjectState({
+    prompt: {
+      genre: 'ambient',
+      mood: 'cinematic',
+      key: '',
+      time_signature: '4/4',
+      tempo_min: 80,
+      tempo_max: 120,
+      instruments: 'piano',
+      sections: 'intro:4',
+      complexity: 'moderate',
+      duration_bars: 8,
+      instructions: '',
+    },
+  });
+  await useMusicStore.getState().openProject('p1');
+  const state = useMusicStore.getState();
+  assert.equal(state.prompt.genre, 'rock');
+  assert.equal(state.prompt.mood, 'sad');
+  assert.equal(state.prompt.key, 'F# minor');
+  assert.equal(state.prompt.instruments, 'piano,bass,violin');
+  assert.equal(state.prompt.sections, 'intro:4,verse:8,chorus:8');
+  assert.equal(state.prompt.complexity, 'complex');
+  assert.equal(state.prompt.duration_bars, 20);
 });

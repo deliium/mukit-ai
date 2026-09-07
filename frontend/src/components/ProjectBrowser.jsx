@@ -217,7 +217,7 @@ const ProjectBrowser = () => {
                         });
                       }}
                     >
-                      Save
+                      Rename
                     </Button>
                     <Button
                       type="button"
