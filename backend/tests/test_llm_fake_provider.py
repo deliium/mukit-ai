@@ -221,3 +221,47 @@ def test_unsupported_instrument_fixture_exports_and_keeps_notes():
     assert lead.midi_program == 0
     assert lead.events
     assert isinstance(warnings, list)
+
+
+def test_fake_generate_honors_aliases_and_reports_instrumentation(fake_env, caplog):
+    request = LLMMusicGenerationRequest.model_validate(
+        {
+            "prompt": {
+                "genre": "pop",
+                "mood": "bright",
+                "duration_bars": 16,
+                "instruments": ["Acoustic Piano", "bass guitar"],
+            },
+            "selection": {"provider": "fake"},
+        }
+    )
+    with caplog.at_level(logging.INFO):
+        response = asyncio.run(generate_llm_music_json(request))
+    assert response.validation is not None
+    assert response.validation.ok
+    assert response.validation.instrumentation is not None
+    keys = {item.key for item in response.validation.instrumentation.satisfied}
+    assert keys == {"piano", "bass"}
+    assert response.validation.instrumentation.missing == []
+    assert "Fake LLM instrumentation gate" in caplog.text
+
+
+def test_fake_generate_fails_genuinely_missing_requirement(fake_env, caplog):
+    request = LLMMusicGenerationRequest.model_validate(
+        {
+            "prompt": {
+                "genre": "pop",
+                "mood": "bright",
+                "duration_bars": 16,
+                "instruments": ["piano", "bass", "strings"],
+            },
+            "selection": {"provider": "fake"},
+        }
+    )
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(generate_llm_music_json(request))
+    assert exc_info.value.status_code == 502
+    detail = str(exc_info.value.detail).lower()
+    assert "constraint_missing_instrument_family" in detail or "fixture" in detail
+    assert "Fake LLM fixture conformance failure" in caplog.text

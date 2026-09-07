@@ -334,6 +334,35 @@ def test_metadata_is_preserved_for_note_scoped_edit():
     assert result.composition.ticks_per_quarter == composition.ticks_per_quarter
 
 
+def test_region_edit_preserves_arbitrary_existing_instruments():
+    composition = _sixteen_bar_composition()
+    tracks = list(composition.tracks)
+    unusual = tracks[0].model_copy(update={"instrument": "theremin", "name": "Theremin Lead"})
+    tracks[0] = unusual
+    composition = composition.model_copy(update={"tracks": tracks})
+    before = [(track.id, track.instrument, track.role) for track in composition.tracks]
+
+    selection = CompositionEditSelection(start_bar=1, end_bar=2, track_ids=["melody-1"])
+    patch = CompositionRegionReplacementPatch(
+        start_bar=1,
+        end_bar=2,
+        target_track_ids=["melody-1"],
+        replace_tracks=[
+            CompositionRegionTrackReplacement(
+                track_id="melody-1",
+                events=[
+                    NoteEvent(pitch="C5", start_tick=0, duration_ticks=480, velocity=90),
+                    NoteEvent(pitch="E5", start_tick=BAR_TICKS_4_4, duration_ticks=480, velocity=90),
+                ],
+            )
+        ],
+    )
+    result = apply_region_replacement_patch(composition, patch, selection=selection)
+    after = [(track.id, track.instrument, track.role) for track in result.composition.tracks]
+    assert after == before
+    assert result.composition.tracks[0].instrument == "theremin"
+
+
 def test_invalid_boundaries_are_rejected(caplog):
     composition = _sixteen_bar_composition()
     selection = CompositionEditSelection(start_bar=9, end_bar=12, track_ids=["melody-1"])

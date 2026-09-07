@@ -16,7 +16,8 @@ acceptance, and Playwright.
 Focused canonical coverage includes:
 
 - Set `LOG_LEVEL=DEBUG` to inspect stage/provider/model/attempt, constraint summaries, and diagnostic codes. Full prompts, API keys, and raw composition/export payloads must never appear in logs.
-- `backend/tests/test_llm_fake_provider.py` for fake generate/edit, fixture constraint gating (no contradictory warn-through), `/llm/models`, malformed `502` without clobbering projects, and unsupported-instrument fixture export.
+- `backend/tests/test_llm_fake_provider.py` for fake generate/edit, fixture constraint gating (aliases, missing requirements, instrumentation report), `/llm/models`, malformed `502` without clobbering projects, and unsupported-instrument fixture export.
+- `backend/tests/test_instrument_identity.py` for sound-source normalization, requirement satisfaction, and duplicate-content classification.
 - `backend/tests/test_secret_hygiene.py` for `/ready`, `/llm/models`, project CRUD, and committed config secret leakage checks.
 - `backend/tests/test_docker_persistence_acceptance.py` opt-in Compose restart persistence (`RUN_DOCKER_ACCEPTANCE=1`).
 - `backend/tests/test_composition_schema.py` for `composition.v1` validation, 4/4, 3/4, 6/8 timing, invalid pitches, velocities, durations, duplicate tracks, and section boundaries.
@@ -27,9 +28,9 @@ Focused canonical coverage includes:
 - `backend/tests/test_export_routes.py` for `/export/musicxml`, `/export/musicxml/preview`, `/export/midi`, and `/export/wav` content types, attachments vs preview (no download header), `503`/`500` WAV mapping, and validation errors.
 - `backend/tests/test_wav_renderer_smoke.py` opt-in real FluidSynth smoke (`RUN_WAV_RENDERER_SMOKE=1`).
 - `backend/tests/test_music_json_renderer.py` for canonical MusicXML rendering from events without harmony fallback.
-- `backend/tests/test_composition_validator.py` for integrity diagnostics such as missing roles, empty/sparse tracks, pitch/range issues, harmony-only rejection, and generation-constraint conformance helpers.
+- `backend/tests/test_composition_validator.py` for integrity diagnostics such as missing roles, empty/sparse tracks, pitch/range issues, harmony-only rejection, and generation-constraint instrumentation/duplicate diagnostics (requested-instrument ownership lives here, not in integrity matching).
 - `backend/tests/test_composition_tonality.py` for tonal-center scoring, F#-minor chromatic pass cases, and A-minor contradiction detection.
-- `backend/tests/test_llm_staged_composer.py` for mocked multi-stage sequencing, repair/retry, oversized request rejection, provider/model override, F#-minor constraint repair/exhaustion, and actionable API errors.
+- `backend/tests/test_llm_staged_composer.py` for mocked multi-stage sequencing, repair/retry (including duplicate bass/bass accompaniment regression), oversized request rejection, provider/model override, F#-minor constraint repair/exhaustion, and actionable API errors.
 - `backend/tests/test_composition_region_patch.py` for deterministic bar-to-tick selection, melody/all-track replacement, added tracks, harmony/metadata preservation, and rejected out-of-scope patches.
 - `backend/tests/test_llm_composition_editing.py` for mocked region-edit graph success paths (dramatic melody bars 9–12 with unchanged outside notes/harmony), accompaniment/bass/counter-melody scenarios, malformed JSON, out-of-scope repair exhaustion, and provider failures.
 - `backend/tests/test_llm_routes.py` for `/llm/edit-composition-region` success, `503` without providers, and `502` invalid patch mapping.

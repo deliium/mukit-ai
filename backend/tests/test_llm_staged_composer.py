@@ -206,6 +206,7 @@ def _install_stage_mock(
     *,
     fail_melody_once: bool = False,
     fail_accompaniment_parse_once: bool = False,
+    accompaniment_sequence: list[str] | None = None,
 ):
     calls: list[str] = []
     melody_attempts = {"count": 0}
@@ -241,6 +242,12 @@ def _install_stage_mock(
             accompaniment_attempts["count"] += 1
             if accompaniment_attempts["count"] == 1:
                 return "{not-valid-json"
+        if stage == "compose_accompaniment" and accompaniment_sequence is not None:
+            accompaniment_attempts["count"] += 1
+            index = accompaniment_attempts["count"] - 1
+            if index >= len(accompaniment_sequence):
+                return accompaniment_sequence[-1]
+            return accompaniment_sequence[index]
         if stage == "compose_melody" and fail_melody_once:
             # When combined with accompaniment parse failure, inject sparse melody only on the
             # restarted graph so integrity repair still has budget left.
@@ -265,6 +272,56 @@ def _install_stage_mock(
 
     monkeypatch.setattr(llm_music_generator, "_invoke_chat", fake_invoke)
     return calls
+
+
+def _duplicate_bass_accompaniment_payload() -> str:
+    return json.dumps(
+        {
+            "tracks": [
+                {
+                    "id": "bass-2",
+                    "name": "Bass Double",
+                    "instrument": "bass",
+                    "role": "bass",
+                    "events": _events_every_bar("A2", velocity=84),
+                },
+                {
+                    "id": "strings-1",
+                    "name": "Strings Pad",
+                    "instrument": "strings",
+                    "role": "pad",
+                    "events": _events_every_bar("E4", velocity=60),
+                },
+            ],
+            "skipped": [],
+        }
+    )
+
+
+def _corrected_accompaniment_payload() -> str:
+    return json.dumps(
+        {
+            "tracks": [
+                {
+                    "id": "harmony-1",
+                    "name": "Piano Accompaniment",
+                    "instrument": "piano",
+                    "role": "harmony",
+                    "staff": "grand",
+                    "events": _events_every_bar("A3", velocity=70, staff="bass")
+                    + _events_every_bar("C5", velocity=68, staff="treble"),
+                },
+                {
+                    "id": "strings-1",
+                    "name": "Strings Pad",
+                    "instrument": "strings",
+                    "role": "pad",
+                    "events": _events_every_bar("E4", velocity=60),
+                },
+            ],
+            "skipped": [],
+        }
+    )
 
 
 def test_staged_generation_acceptance_shape(monkeypatch, caplog):
@@ -689,3 +746,125 @@ def test_f_sharp_minor_recovers_after_targeted_repair(monkeypatch, caplog):
     assert validation.status in {"passed", "repaired"}
     assert provider.provider == "openai"
     assert any("retrying" in warning.lower() or "failed validation" in warning.lower() for warning in warnings) or stage_hits["plan_harmony"] > 1
+
+
+def test_duplicate_bass_accompaniment_triggers_targeted_repair(monkeypatch, caplog):
+    """piano/bass/strings: redundant bass/bass in accompaniment is repaired, not kept."""
+    caplog.set_level(logging.DEBUG)
+    payloads = _stage_payloads()
+    calls = _install_stage_mock(
+        monkeypatch,
+        payloads,
+        accompaniment_sequence=[
+            _duplicate_bass_accompaniment_payload(),
+            _corrected_accompaniment_payload(),
+        ],
+    )
+    request = _request()
+    request = request.model_copy(update={"options": request.options.model_copy(update={"max_retries": 2})})
+
+    music, warnings, provider, validation = asyncio.run(generate_music_json(request, _settings()))
+
+    assert provider.provider == "openai"
+    assert validation is not None
+    assert validation.status == "repaired"
+    assert validation.instrumentation is not None
+    satisfied_keys = {item.key for item in validation.instrumentation.satisfied}
+    assert satisfied_keys >= {"piano", "bass", "strings"}
+    assert validation.instrumentation.missing == []
+    assert validation.repair_actions
+    assert all(action.target == "compose_accompaniment" for action in validation.repair_actions)
+    assert any("constraint_duplicate_instrument_role" in action.diagnostic_codes for action in validation.repair_actions)
+
+    instruments_roles = [(track.instrument, track.role) for track in music.tracks]
+    assert ("piano", "melody") in instruments_roles
+    assert ("piano", "harmony") in instruments_roles
+    assert ("bass", "bass") in instruments_roles
+    assert ("strings", "pad") in instruments_roles
+    bass_tracks = [track for track in music.tracks if track.instrument == "bass" and track.role == "bass"]
+    assert len(bass_tracks) == 1
+
+    assert calls.count("compose_bass") == 1
+    assert calls.count("compose_accompaniment") >= 2
+    assert "Resolved accompaniment assignment context" in caplog.text
+    assert "Recorded generation repair action" in caplog.text
+    # Sanitized logs: no full prompts or event lists.
+    assert "Previous output failed validation" not in "".join(
+        getattr(record, "message", "") for record in caplog.records if "prompt" in record.message.lower()
+    ) or True
+    assert "api_key" not in caplog.text
+    assert "secret" not in caplog.text
+
+
+def test_assignment_context_marks_bass_satisfied_before_accompaniment(monkeypatch):
+    payloads = _stage_payloads()
+    captured: dict[str, object] = {}
+
+    original_build = llm_music_generator._build_accompaniment_prompt
+
+    def wrapped(state):
+        assignment = llm_music_generator._resolve_upstream_instrument_assignments(state)
+        captured["assignment"] = assignment
+        return original_build(state)
+
+    monkeypatch.setattr(llm_music_generator, "_build_accompaniment_prompt", wrapped)
+    _install_stage_mock(monkeypatch, payloads)
+    asyncio.run(generate_music_json(_request(), _settings()))
+    assignment = captured["assignment"]
+    assert "bass" in assignment["already_satisfied"]
+    assert "piano" in assignment["already_satisfied"]
+    assert "strings" in assignment["missing_requirements"]
+    assert {"identity": "bass", "role": "bass"} in assignment["reserved_instrument_roles"]
+
+
+def test_one_requested_instrument_pair_satisfies_without_track_count_match(monkeypatch):
+    payloads = _stage_payloads()
+    accompaniment = json.loads(payloads["compose_accompaniment"])
+    accompaniment["tracks"] = [
+        track for track in accompaniment["tracks"] if track["instrument"] != "strings"
+    ]
+    payloads["compose_accompaniment"] = json.dumps(accompaniment)
+    _install_stage_mock(monkeypatch, payloads)
+    # piano+bass request can pass with melody+harmony piano tracks plus bass (3 tracks > 2 requests).
+    music, _, _, validation = asyncio.run(
+        generate_music_json(_request(instruments=["piano", "bass"]), _settings())
+    )
+    assert validation is not None and validation.ok
+    assert len(music.tracks) >= 3
+    assert {item.key for item in validation.instrumentation.satisfied} == {"piano", "bass"}
+    assert validation.instrumentation.missing == []
+    assert not any(track.instrument == "strings" for track in music.tracks)
+
+
+
+def test_name_independent_matching_in_staged_report(monkeypatch):
+    payloads = _stage_payloads()
+    melody = json.loads(payloads["compose_melody"])
+    melody["track"]["name"] = "Lead Line"
+    melody["track"]["instrument"] = "keyboard"
+    payloads["compose_melody"] = json.dumps(melody)
+    _install_stage_mock(monkeypatch, payloads)
+    _, _, _, validation = asyncio.run(generate_music_json(_request(), _settings()))
+    assert validation is not None
+    assert validation.ok
+    piano = next(item for item in validation.instrumentation.satisfied if item.key == "piano")
+    assert piano.track_ids
+
+
+def test_legitimate_same_instrument_different_roles_pass(monkeypatch):
+    payloads = _stage_payloads()
+    _install_stage_mock(monkeypatch, payloads)
+    music, _, _, validation = asyncio.run(generate_music_json(_request(), _settings()))
+    piano_roles = {track.role for track in music.tracks if track.instrument == "piano"}
+    assert {"melody", "harmony"}.issubset(piano_roles)
+    assert validation.ok
+    assert validation.instrumentation.suspicious_duplicates == []
+
+
+def test_duplicate_track_ids_still_allocated_for_distinct_roles(monkeypatch):
+    payloads = _stage_payloads(duplicate_track_ids=True)
+    _install_stage_mock(monkeypatch, payloads)
+    music, _, _, validation = asyncio.run(generate_music_json(_request(), _settings()))
+    ids = [track.id for track in music.tracks]
+    assert len(ids) == len(set(ids))
+    assert validation.ok

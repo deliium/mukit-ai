@@ -22,7 +22,7 @@ Explicit musical parameters on `LLMMusicGenerationRequest.prompt` are treated as
 
 | Kind | Fields |
 |------|--------|
-| **Hard** | `key` (when provided), `time_signature`, `duration_bars`, inclusive `tempo_min`/`tempo_max`, explicit `sections` sequence/bar counts, requested instrument families |
+| **Hard** | `key` (when provided), `time_signature`, `duration_bars`, inclusive `tempo_min`/`tempo_max`, explicit `sections` sequence/bar counts, requested instrument sound sources |
 | **Soft** | `genre`, `mood`, `complexity`, freeform `instructions` |
 
 Rules:
@@ -30,9 +30,11 @@ Rules:
 - When `key` is omitted, the form stage may choose one; that choice is then frozen for harmony and note-content checks.
 - When `sections` is omitted, the form stage may design a contiguous structure totaling `duration_bars`; that structure is then frozen.
 - Explicitly supplied `sections` **must** sum to `duration_bars` (request validation fails before any provider call).
-- Requested instruments are required **families** (for example piano/bass/strings), not a strict one-track-per-token count. Multiple tracks may share a family. Unrequested families are rejected by default.
+- Requested instruments are required **sound sources**, not an exact track list. Satisfaction uses normalized `track.instrument` only (never display `name`). Aliases such as acoustic/grand piano → `piano`, bass guitar/electric bass → `bass`, keyboard → `piano`, and string ensemble → `strings` are applied conservatively; string-family matching remains bidirectional (`strings` ↔ violin/viola/cello). One instrument may cover several distinct roles (piano melody + piano accompaniment). Repeated aliases collapse to one requirement.
+- Same normalized instrument + role with exact or high-overlap playable content is an actionable duplicate (`constraint_duplicate_instrument_role`) repaired by regenerating accompaniment, not by silently deleting tracks. Distinct-content same-role pairs are reported as suspicious but not auto-merged. Unrequested identities are rejected by default.
+- Display names are UI metadata; prompts may request instrument-qualified names, but validators and persistence never rewrite or depend on them. Region edits, project save/open, normalization, and exports do **not** reapply historical generation requests.
 - Tonal validation assesses **aggregate tonal center** (metadata + harmony + non-drum note events), not strict diatonic membership. Chromatic passing tones, harmonic/melodic-minor alterations, secondary dominants, and borrowed chords remain valid when the center stays on the locked key. Obvious competing centers (for example persistent `Am/F/C/Dm/E7` against an `F# minor` request) fail hard.
-- Successful responses include optional structured `validation` (`status`, `constraints_checked`, `errors`, `warnings`, `repair_attempts`, `tonality`). Repair exhaustion returns HTTP `502` with sanitized diagnostic codes/expected/actual (never full prompts or compositions).
+- Successful responses include optional structured `validation` (`status`, `constraints_checked`, `errors`, `warnings`, `repair_attempts`, `tonality`, `instrumentation`, `repair_actions`). Repair exhaustion returns HTTP `502` with sanitized diagnostic codes/expected/actual (never full prompts or compositions).
 
 Practical initial LLM generation bounds reject oversized prompts before provider calls: up to **32 bars** and **6 non-drum instruments**. Schema-level `duration_bars` may still allow larger values for non-LLM/manual workflows. Oversized generation requests return HTTP `422` with an actionable reduce-duration/instrumentation message.
 

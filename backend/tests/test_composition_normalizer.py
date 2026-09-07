@@ -58,3 +58,48 @@ def test_midi_program_mapping_covers_common_gm_instruments():
     assert _midi_program_for_instrument("Church Organ") == 19
     assert _midi_program_for_instrument("Orchestral Harp") == 46
     assert _midi_program_for_instrument("Unknown Widget") == 0
+
+
+def test_canonical_normalization_preserves_same_instrument_multi_role_tracks():
+    payload = {
+        "schema_version": "composition.v1",
+        "tempo": 100,
+        "key": "C major",
+        "time_signature": "4/4",
+        "ticks_per_quarter": 480,
+        "bar_count": 2,
+        "duration_ticks": 3840,
+        "sections": [
+            {"type": "intro", "start_bar": 1, "bar_count": 2, "start_tick": 0, "duration_ticks": 3840},
+        ],
+        "tracks": [
+            {
+                "id": "melody-1",
+                "name": "Melody",
+                "instrument": "piano",
+                "role": "melody",
+                "midi_program": 0,
+                "channel": 1,
+                "events": [
+                    {"type": "note", "pitch": "C5", "start_tick": 0, "duration_ticks": 480, "velocity": 80},
+                ],
+            },
+            {
+                "id": "harmony-1",
+                "name": "Piano Accompaniment",
+                "instrument": "piano",
+                "role": "harmony",
+                "midi_program": 0,
+                "channel": 2,
+                "events": [
+                    {"type": "note", "pitch": "C3", "start_tick": 0, "duration_ticks": 960, "velocity": 70},
+                ],
+            },
+        ],
+        "harmony": [{"bar": 1, "chord": "C"}],
+    }
+    composition = normalize_composition_json(payload)
+    assert len(composition.tracks) == 2
+    assert [track.instrument for track in composition.tracks] == ["piano", "piano"]
+    assert [track.role for track in composition.tracks] == ["melody", "harmony"]
+    assert [track.id for track in composition.tracks] == ["melody-1", "harmony-1"]
