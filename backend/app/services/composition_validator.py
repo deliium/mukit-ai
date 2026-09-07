@@ -62,15 +62,31 @@ def validate_composition_integrity(
     requested_instruments: Iterable[str] | None = None,
     complexity: str = "moderate",
 ) -> CompositionValidationResult:
-    """Run schema plus musical integrity checks; return structured diagnostics."""
+    """Run schema plus musical integrity checks; return structured diagnostics.
+
+    Requested-instrument conformance is owned by generation constraint validation.
+    ``requested_instruments`` is accepted for call-site compatibility but does not
+    emit ``missing_requested_instrument`` here, avoiding duplicate diagnostics with
+    ``constraint_missing_instrument_family`` during staged generation.
+    """
+    requested = list(requested_instruments or [])
     logger.debug(
         "Starting composition integrity validation",
         extra={
-            "requested_instruments": list(requested_instruments or []),
+            "requested_instruments": requested,
+            "requested_instrument_check": "delegated_to_generation_constraints",
             "complexity": complexity,
             "input_type": type(music).__name__,
         },
     )
+    if requested:
+        logger.debug(
+            "Skipping integrity requested-instrument matching; delegated to generation validator",
+            extra={
+                "requested_count": len(requested),
+                "ownership": "generation_constraints",
+            },
+        )
 
     errors: list[ValidationDiagnostic] = []
     warnings: list[ValidationDiagnostic] = []
@@ -96,7 +112,6 @@ def validate_composition_integrity(
     _check_pitch_ranges(composition, errors, warnings)
     _check_bar_overflow(composition, errors, warnings)
     _check_timing_grid(composition, errors, warnings)
-    _check_requested_instruments(composition, list(requested_instruments or []), errors, warnings)
     _check_harmony_usefulness(composition, errors, warnings)
 
     result = CompositionValidationResult(ok=not errors, errors=errors, warnings=warnings)
@@ -367,49 +382,6 @@ def _check_timing_grid(
                 )
 
 
-def _check_requested_instruments(
-    composition: Composition,
-    requested_instruments: list[str],
-    errors: list[ValidationDiagnostic],
-    warnings: list[ValidationDiagnostic],
-) -> None:
-    if not requested_instruments:
-        return
-
-    present = " ".join(track.instrument.lower() for track in composition.tracks)
-    missing_substantial: list[str] = []
-    for instrument in requested_instruments:
-        token = instrument.strip().lower()
-        if not token:
-            continue
-        if any(part in token for part in ("drum", "perc")):
-            continue
-        if token not in present and not any(token in track.instrument.lower() for track in composition.tracks):
-            # Treat strings/pad/guitar as substantial optional requests.
-            if any(key in token for key in ("string", "pad", "guitar", "violin", "cello", "flute", "sax")):
-                missing_substantial.append(instrument)
-            elif token not in present:
-                missing_substantial.append(instrument)
-
-    for instrument in missing_substantial:
-        # Missing optional color instruments warn; missing core piano/bass already covered by roles.
-        if any(key in instrument.lower() for key in ("string", "pad", "guitar", "violin", "cello")):
-            warnings.append(
-                ValidationDiagnostic(
-                    code="missing_requested_instrument",
-                    message=f"Requested instrument '{instrument}' was not generated",
-                    severity="warning",
-                    context={"instrument": instrument},
-                )
-            )
-        else:
-            errors.append(
-                ValidationDiagnostic(
-                    code="missing_requested_instrument",
-                    message=f"Substantial requested instrument '{instrument}' is missing",
-                    context={"instrument": instrument},
-                )
-            )
 
 
 def _check_harmony_usefulness(

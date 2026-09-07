@@ -135,8 +135,34 @@ async def generate_fake_music_json(
         )
 
     report = validate_generation_constraints(music, active_constraints)
+    instrumentation = report.instrumentation
+    satisfied_count = len(instrumentation.satisfied) if instrumentation else 0
+    missing_count = len(instrumentation.missing) if instrumentation else 0
+    duplicate_count = len(instrumentation.suspicious_duplicates) if instrumentation else 0
+    actionable_duplicate_count = (
+        sum(1 for item in instrumentation.suspicious_duplicates if item.actionable)
+        if instrumentation
+        else 0
+    )
+    logger.info(
+        "Fake LLM instrumentation gate",
+        extra={
+            "status": report.status,
+            "satisfied_count": satisfied_count,
+            "missing_count": missing_count,
+            "suspicious_duplicate_count": duplicate_count,
+            "actionable_duplicate_count": actionable_duplicate_count,
+            "present_identities": (
+                list(instrumentation.present_identities) if instrumentation else []
+            ),
+        },
+    )
     if not report.ok:
         codes = [item.code for item in report.errors]
+        logger.warning(
+            "Fake LLM fixture conformance failure",
+            extra={"error_codes": codes, "status": report.status, "missing_count": missing_count},
+        )
         logger.error(
             "Fake LLM fixture failed generation constraint gate",
             extra={"error_codes": codes, "status": report.status},

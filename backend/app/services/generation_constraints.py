@@ -8,15 +8,28 @@ from typing import Any, Iterable, Sequence
 
 from ..schemas import (
     Composition,
+    GenerationRepairAction,
     GenerationValidationIssue,
     GenerationValidationReport,
+    InstrumentSatisfactionEntry,
+    InstrumentationReport,
     LLMMusicGenerationRequest,
     LLMMusicSection,
     LLMPromptParameters,
+    SuspiciousDuplicateGroupReport,
 )
 from .composition_planner import ComposerFormPlan, ComposerFormSection, ValidationDiagnostic
 from .composition_timing import bar_duration_ticks
 from .composition_tonality import analyze_composition_tonality
+from .instrument_identity import (
+    analyze_instrumentation,
+    collect_instrument_families as _collect_instrument_requirement_keys,
+    instrument_satisfies_family as _instrument_satisfies_requirement,
+    is_drum_family as _is_drum_family,
+    missing_required_identities,
+    normalize_instrument_family as _normalize_instrument_family,
+    unexpected_instrument_identities,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -30,53 +43,12 @@ CONSTRAINT_CATEGORIES = (
     "sections",
     "instrument_families",
     "extra_instruments",
+    "duplicate_instruments",
     "tonality_harmony",
     "tonality_notes",
 )
 
-# Longer / more specific tokens first so "bassoon" does not become "bass".
-_INSTRUMENT_FAMILY_ALIASES: tuple[tuple[str, str], ...] = (
-    ("bassoon", "woodwind"),
-    ("contrabass", "bass"),
-    ("double bass", "bass"),
-    ("electric bass", "bass"),
-    ("bass guitar", "bass"),
-    ("acoustic bass", "bass"),
-    ("upright bass", "bass"),
-    ("percussion", "drums"),
-    ("drums", "drums"),
-    ("drum kit", "drums"),
-    ("drum", "drums"),
-    ("synth pad", "pad"),
-    ("string ensemble", "strings"),
-    ("strings", "strings"),
-    ("string", "strings"),
-    ("violin", "violin"),
-    ("viola", "viola"),
-    ("cello", "cello"),
-    ("guitar", "guitar"),
-    ("keyboard", "piano"),
-    ("piano", "piano"),
-    ("organ", "organ"),
-    ("harp", "harp"),
-    ("choir", "choir"),
-    ("voice", "choir"),
-    ("vocal", "choir"),
-    ("trumpet", "brass"),
-    ("trombone", "brass"),
-    ("horn", "brass"),
-    ("brass", "brass"),
-    ("sax", "woodwind"),
-    ("oboe", "woodwind"),
-    ("clarinet", "woodwind"),
-    ("flute", "woodwind"),
-    ("woodwind", "woodwind"),
-    ("synth", "synth"),
-    ("pad", "pad"),
-    ("bass", "bass"),
-)
-
-_DRUM_FAMILIES = frozenset({"drums"})
+DUPLICATE_INSTRUMENT_ROLE_CODE = "constraint_duplicate_instrument_role"
 
 
 @dataclass(frozen=True)
@@ -144,47 +116,22 @@ class GenerationConstraints:
 
 
 def normalize_instrument_family(instrument: str) -> str | None:
-    """Map an instrument label to a canonical family token, or None if unknown."""
-    text = " ".join(instrument.strip().lower().split())
-    if not text:
-        return None
-    for token, family in _INSTRUMENT_FAMILY_ALIASES:
-        if token in text:
-            return family
-    # Fall back to a slug of the first word so unknown labels remain matchable.
-    slug = "".join(ch if ch.isalnum() else "_" for ch in text.split()[0])
-    return slug or None
+    """Map an instrument label to a compatibility/family token, or None if empty."""
+    return _normalize_instrument_family(instrument)
 
 
 def is_drum_family(family: str | None) -> bool:
-    return family in _DRUM_FAMILIES if family else False
+    return _is_drum_family(family)
 
 
 def instrument_satisfies_family(instrument: str, family: str) -> bool:
-    """Return True when a track instrument label covers a required family."""
-    normalized = normalize_instrument_family(instrument)
-    if normalized is None:
-        return False
-    if normalized == family:
-        return True
-    # Ensemble "strings" satisfies violin/viola/cello family requests and vice versa.
-    string_set = {"strings", "violin", "viola", "cello"}
-    if family in string_set and normalized in string_set:
-        return True
-    return False
+    """Return True when a track instrument label covers a required family/identity."""
+    return _instrument_satisfies_requirement(instrument, family)
 
 
 def collect_instrument_families(instruments: Iterable[str]) -> tuple[str, ...]:
-    """Deduplicate instrument families preserving request order."""
-    families: list[str] = []
-    seen: set[str] = set()
-    for instrument in instruments:
-        family = normalize_instrument_family(instrument)
-        if family is None or family in seen:
-            continue
-        seen.add(family)
-        families.append(family)
-    return tuple(families)
+    """Deduplicate required sound-source keys preserving request order."""
+    return _collect_instrument_requirement_keys(instruments)
 
 
 def sections_from_prompt(sections: Sequence[LLMMusicSection]) -> tuple[LockedSectionConstraint, ...]:
@@ -412,39 +359,52 @@ def missing_required_families(
     present_instruments: Iterable[str],
     constraints: GenerationConstraints,
 ) -> list[str]:
-    present = list(present_instruments)
-    missing: list[str] = []
-    for family in constraints.required_instrument_families:
-        if is_drum_family(family):
-            continue
-        if not any(instrument_satisfies_family(instrument, family) for instrument in present):
-            missing.append(family)
-    return missing
+    return missing_required_identities(
+        present_instruments,
+        constraints.required_instrument_families,
+    )
 
 
 def unexpected_instrument_families(
     present_instruments: Iterable[str],
     constraints: GenerationConstraints,
 ) -> list[str]:
-    if constraints.allow_extra_instrument_families:
-        return []
-    allowed = set(constraints.required_instrument_families)
-    unexpected: list[str] = []
-    seen: set[str] = set()
-    for instrument in present_instruments:
-        family = normalize_instrument_family(instrument)
-        if family is None or is_drum_family(family):
-            continue
-        if family in allowed or family in seen:
-            continue
-        # strings family covers violin/viola/cello when those were requested
-        if family in {"violin", "viola", "cello"} and "strings" in allowed:
-            continue
-        if family == "strings" and allowed & {"violin", "viola", "cello"}:
-            continue
-        seen.add(family)
-        unexpected.append(family)
-    return unexpected
+    return unexpected_instrument_identities(
+        present_instruments,
+        constraints.required_instrument_families,
+        allow_extra=constraints.allow_extra_instrument_families,
+    )
+
+
+def log_instrumentation_analysis(
+    analysis,
+    *,
+    stage: str | None = None,
+) -> None:
+    """DEBUG-log sanitized instrumentation analysis summaries at call sites."""
+    logger.debug(
+        "Instrumentation analysis summary",
+        extra={
+            "stage": stage,
+            "normalized_requirements": [item.key for item in analysis.requirements],
+            "satisfied": [
+                {"key": item.key, "track_ids": list(item.track_ids)} for item in analysis.satisfied
+            ],
+            "missing_keys": list(analysis.missing_keys),
+            "present_identities": list(analysis.present_identities),
+            "unexpected_identities": list(analysis.unexpected_identities),
+            "duplicate_groups": [
+                {
+                    "identity": group.identity,
+                    "role": group.role,
+                    "track_ids": list(group.track_ids),
+                    "content_relationship": group.content_relationship,
+                    "actionable": group.actionable,
+                }
+                for group in analysis.duplicate_groups
+            ],
+        },
+    )
 
 
 def _sections_match(
@@ -607,25 +567,59 @@ def validate_generation_constraints(
                 )
             )
 
-    # Required instrument families
+    # Required instrument families / sound sources
     checked.append("instrument_families")
-    present_instruments = [track.instrument for track in composition.tracks]
-    missing = missing_required_families(present_instruments, constraints)
+    analysis = analyze_instrumentation(
+        list(constraints.requested_instruments),
+        composition.tracks,
+        allow_extra=constraints.allow_extra_instrument_families,
+    )
+    log_instrumentation_analysis(analysis, stage="validate_generation_constraints")
+    instrumentation = _instrumentation_report_from_analysis(analysis)
+    logger.debug(
+        "Instrumentation report categories",
+        extra={
+            "satisfied_count": len(instrumentation.satisfied),
+            "missing_count": len(instrumentation.missing),
+            "unexpected_count": len(instrumentation.unexpected_identities),
+            "suspicious_duplicate_count": len(instrumentation.suspicious_duplicates),
+            "actionable_duplicate_count": sum(
+                1 for item in instrumentation.suspicious_duplicates if item.actionable
+            ),
+            "duplicate_evidence": [
+                {
+                    "identity": item.identity,
+                    "role": item.role,
+                    "track_ids": item.track_ids,
+                    "content_relationship": item.content_relationship,
+                    "actionable": item.actionable,
+                }
+                for item in instrumentation.suspicious_duplicates
+            ],
+        },
+    )
+
+    missing = list(analysis.missing_keys)
     if missing:
+        # One authoritative missing diagnostic per validation pass.
         errors.append(
             _issue(
                 code="constraint_missing_instrument_family",
                 message="One or more requested instrument families are missing",
                 expected=list(constraints.required_instrument_families),
-                actual=present_instruments,
+                actual=[track.instrument for track in composition.tracks],
                 stage="compose_accompaniment",
                 context={"missing_families": missing},
             )
         )
+        logger.warning(
+            "Missing requested instrument requirements",
+            extra={"code": "constraint_missing_instrument_family", "missing_keys": missing},
+        )
 
     # Extra instrument policy
     checked.append("extra_instruments")
-    unexpected = unexpected_instrument_families(present_instruments, constraints)
+    unexpected = list(analysis.unexpected_identities)
     if unexpected:
         errors.append(
             _issue(
@@ -636,6 +630,54 @@ def validate_generation_constraints(
                 stage="compose_accompaniment",
                 context={"allow_extra_instrument_families": constraints.allow_extra_instrument_families},
             )
+        )
+        logger.warning(
+            "Unexpected instrument identities present",
+            extra={
+                "code": "constraint_unexpected_instrument_family",
+                "unexpected_identities": unexpected,
+            },
+        )
+
+    # Actionable same-instrument/same-role duplicates
+    checked.append("duplicate_instruments")
+    for group in analysis.duplicate_groups:
+        if not group.actionable:
+            continue
+        errors.append(
+            _issue(
+                code=DUPLICATE_INSTRUMENT_ROLE_CODE,
+                message=(
+                    "Generated tracks reuse the same normalized instrument and role "
+                    "with overlapping playable content"
+                ),
+                expected={"identity": group.identity, "role": group.role},
+                actual={
+                    "track_ids": list(group.track_ids),
+                    "event_counts": list(group.event_counts),
+                    "content_relationship": group.content_relationship,
+                },
+                stage="compose_accompaniment",
+                track_id=group.track_ids[-1] if group.track_ids else None,
+                context={
+                    "identity": group.identity,
+                    "role": group.role,
+                    "track_ids": list(group.track_ids),
+                    "event_counts": list(group.event_counts),
+                    "content_relationship": group.content_relationship,
+                    "actionable": True,
+                },
+            )
+        )
+        logger.warning(
+            "Actionable duplicate instrument/role group",
+            extra={
+                "code": DUPLICATE_INSTRUMENT_ROLE_CODE,
+                "identity": group.identity,
+                "role": group.role,
+                "track_ids": list(group.track_ids),
+                "content_relationship": group.content_relationship,
+            },
         )
 
     # Tonality: harmony + note events
@@ -693,6 +735,22 @@ def validate_generation_constraints(
         warnings=warnings,
         repair_attempts=repair_attempts,
         tonality=tonality_summary,
+        instrumentation=instrumentation,
+        repair_actions=[],
+    )
+
+    logger.info(
+        "Generation constraint instrumentation counts",
+        extra={
+            "status": status,
+            "satisfied_count": len(instrumentation.satisfied),
+            "missing_count": len(instrumentation.missing),
+            "suspicious_duplicate_count": len(instrumentation.suspicious_duplicates),
+            "actionable_duplicate_count": sum(
+                1 for item in instrumentation.suspicious_duplicates if item.actionable
+            ),
+            "repair_action_count": len(report.repair_actions),
+        },
     )
 
     if errors:
@@ -740,24 +798,76 @@ def validate_generation_constraints(
 def diagnostics_from_validation_report(
     report: GenerationValidationReport,
 ) -> list[ValidationDiagnostic]:
-    """Convert response-safe issues into internal ValidationDiagnostic objects."""
+    """Convert response-safe issues into internal ValidationDiagnostic objects.
+
+    Actionable duplicate instrument/role issues keep stage=compose_accompaniment so
+    existing repair routing can target accompaniment regeneration.
+    """
     items: list[ValidationDiagnostic] = []
     for issue in [*report.errors, *report.warnings]:
+        context = {
+            **issue.context,
+            **({"expected": issue.expected} if issue.expected is not None else {}),
+            **({"actual": issue.actual} if issue.actual is not None else {}),
+            **({"stage": issue.stage} if issue.stage else {}),
+            **({"track_id": issue.track_id} if issue.track_id else {}),
+        }
+        if issue.code == DUPLICATE_INSTRUMENT_ROLE_CODE:
+            context.setdefault("stage", "compose_accompaniment")
+            context.setdefault("repairable", True)
         items.append(
             ValidationDiagnostic(
                 code=issue.code,
                 message=issue.message,
                 severity=issue.severity,
-                context={
-                    **issue.context,
-                    **({"expected": issue.expected} if issue.expected is not None else {}),
-                    **({"actual": issue.actual} if issue.actual is not None else {}),
-                    **({"stage": issue.stage} if issue.stage else {}),
-                    **({"track_id": issue.track_id} if issue.track_id else {}),
-                },
+                context=context,
             )
         )
     return items
+
+
+def _instrumentation_report_from_analysis(analysis) -> InstrumentationReport:
+    raw_by_key = {req.key: list(req.raw_labels) for req in analysis.requirements}
+    satisfied = [
+        InstrumentSatisfactionEntry(
+            key=item.key,
+            identity=item.identity,
+            family=item.family,
+            status="satisfied",
+            track_ids=list(item.track_ids),
+            raw_labels=raw_by_key.get(item.key, []),
+        )
+        for item in analysis.satisfied
+    ]
+    missing = [
+        InstrumentSatisfactionEntry(
+            key=item.key,
+            identity=item.identity,
+            family=item.family,
+            status="missing",
+            track_ids=[],
+            raw_labels=list(item.raw_labels),
+        )
+        for item in analysis.missing
+    ]
+    duplicates = [
+        SuspiciousDuplicateGroupReport(
+            identity=group.identity,
+            role=group.role,
+            track_ids=list(group.track_ids),
+            event_counts=list(group.event_counts),
+            content_relationship=group.content_relationship,
+            actionable=group.actionable,
+        )
+        for group in analysis.duplicate_groups
+    ]
+    return InstrumentationReport(
+        satisfied=satisfied,
+        missing=missing,
+        present_identities=list(analysis.present_identities),
+        unexpected_identities=list(analysis.unexpected_identities),
+        suspicious_duplicates=duplicates,
+    )
 
 
 def _issue(

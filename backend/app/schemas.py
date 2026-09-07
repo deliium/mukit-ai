@@ -607,6 +607,49 @@ class GenerationValidationIssue(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class InstrumentSatisfactionEntry(BaseModel):
+    """One requested sound-source requirement and its satisfaction state."""
+
+    key: str = Field(..., min_length=1, max_length=80)
+    identity: str = Field(..., min_length=1, max_length=80)
+    family: str = Field(..., min_length=1, max_length=80)
+    status: Literal["satisfied", "missing"] = "satisfied"
+    track_ids: list[str] = Field(default_factory=list)
+    raw_labels: list[str] = Field(default_factory=list)
+
+
+class SuspiciousDuplicateGroupReport(BaseModel):
+    """Suspicious same-identity/same-role track group with event evidence."""
+
+    identity: str = Field(..., min_length=1, max_length=80)
+    role: str = Field(..., min_length=1, max_length=80)
+    track_ids: list[str] = Field(..., min_length=2)
+    event_counts: list[int] = Field(default_factory=list)
+    content_relationship: Literal["exact", "high_overlap", "distinct"]
+    actionable: bool = False
+
+
+class GenerationRepairAction(BaseModel):
+    """Ordered repair action taken or requested during staged generation."""
+
+    target: str = Field(..., min_length=1, max_length=80)
+    attempt: int = Field(..., ge=0)
+    diagnostic_codes: list[str] = Field(default_factory=list)
+    affected_requirements: list[str] = Field(default_factory=list)
+    affected_track_ids: list[str] = Field(default_factory=list)
+    detail: str | None = Field(default=None, max_length=500)
+
+
+class InstrumentationReport(BaseModel):
+    """Deterministic instrumentation section of a generation validation report."""
+
+    satisfied: list[InstrumentSatisfactionEntry] = Field(default_factory=list)
+    missing: list[InstrumentSatisfactionEntry] = Field(default_factory=list)
+    present_identities: list[str] = Field(default_factory=list)
+    unexpected_identities: list[str] = Field(default_factory=list)
+    suspicious_duplicates: list[SuspiciousDuplicateGroupReport] = Field(default_factory=list)
+
+
 class GenerationValidationReport(BaseModel):
     """Structured generation constraint validation outcome."""
 
@@ -616,6 +659,8 @@ class GenerationValidationReport(BaseModel):
     warnings: list[GenerationValidationIssue] = Field(default_factory=list)
     repair_attempts: int = Field(default=0, ge=0)
     tonality: dict[str, Any] | None = None
+    instrumentation: InstrumentationReport | None = None
+    repair_actions: list[GenerationRepairAction] = Field(default_factory=list)
 
     @property
     def ok(self) -> bool:

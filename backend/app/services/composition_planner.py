@@ -56,6 +56,52 @@ class ComposerFormSection(BaseModel):
         return normalized
 
 
+def coerce_instrumentation_labels(value: Any) -> list[str]:
+    """Normalize form-plan instrumentation to instrument-family strings.
+
+    LLMs sometimes return objects like ``{"family": "piano", "role": "melody"}``
+    instead of the required string list. Extract family/instrument labels and
+    preserve first-seen order; roles belong to later compose stages.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        label = " ".join(value.strip().split())
+        return [label] if label else []
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("instrumentation must be a list of instrument family strings")
+
+    labels: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        label: str | None = None
+        if isinstance(item, str):
+            label = " ".join(item.strip().split())
+        elif isinstance(item, dict):
+            for key in ("family", "instrument", "name"):
+                raw = item.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    label = " ".join(raw.strip().split())
+                    break
+            if label is None:
+                raise ValueError(
+                    "instrumentation entries must be strings or objects with "
+                    f"family/instrument; got object at index {index}"
+                )
+        else:
+            raise ValueError(
+                f"instrumentation entries must be strings; got {type(item).__name__} at index {index}"
+            )
+        if not label:
+            continue
+        key = label.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(label)
+    return labels
+
+
 class ComposerFormPlan(BaseModel):
     tempo: int = Field(..., ge=40, le=240)
     key: str
@@ -63,6 +109,11 @@ class ComposerFormPlan(BaseModel):
     bar_count: int = Field(..., ge=1, le=LLM_GENERATION_MAX_BARS)
     sections: list[ComposerFormSection] = Field(..., min_length=1)
     instrumentation: list[str] = Field(default_factory=list)
+
+    @field_validator("instrumentation", mode="before")
+    @classmethod
+    def validate_instrumentation(cls, value: Any) -> list[str]:
+        return coerce_instrumentation_labels(value)
 
     @field_validator("key")
     @classmethod

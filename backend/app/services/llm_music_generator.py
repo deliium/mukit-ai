@@ -11,6 +11,7 @@ from ..schemas import (
     Composition,
     CompositionSection,
     CompositionTrack,
+    GenerationRepairAction,
     GenerationValidationReport,
     LLMMusicHarmonyItem,
     LLMMusicGenerationRequest,
@@ -29,6 +30,7 @@ from .composition_planner import (
     ComposerTrackDraft,
     OversizedLLMGenerationRequestError,
     ValidationDiagnostic,
+    coerce_instrumentation_labels,
     enforce_llm_generation_bounds,
     summarize_diagnostics,
     summarize_form_plan,
@@ -37,14 +39,19 @@ from .composition_planner import (
 from .composition_timing import bar_duration_ticks, derive_section_boundaries
 from .composition_validator import validate_composition_integrity
 from .generation_constraints import (
+    DUPLICATE_INSTRUMENT_ROLE_CODE,
     GenerationConstraints,
     build_generation_constraints,
     diagnostics_from_validation_report,
     freeze_form_resolved_fields,
-    missing_required_families,
+    log_instrumentation_analysis,
     prompt_parameters_hard_block,
-    unexpected_instrument_families,
     validate_generation_constraints,
+)
+from .instrument_identity import (
+    analyze_instrumentation,
+    normalize_instrument_identity,
+    normalize_role,
 )
 from .composition_tonality import analyze_harmony_tonality
 
@@ -132,6 +139,7 @@ class _GenerationState(TypedDict, total=False):
     stage_retry_count: int
     stage_raw_outputs: dict[str, str]
     pre_normalize_hard_summary: dict[str, Any]
+    repair_actions: list[GenerationRepairAction]
 
 
 async def generate_music_json(
@@ -830,8 +838,14 @@ def _validate_composition(state: _GenerationState) -> _GenerationState:
 
     integrity = validate_composition_integrity(
         music,
-        requested_instruments=request.prompt.instruments,
         complexity=request.prompt.complexity,
+    )
+    logger.debug(
+        "Integrity validation skipped requested-instrument checks; generation constraints own them",
+        extra={
+            "requested_instrument_count": len(request.prompt.instruments),
+            "ownership": "generation_constraints",
+        },
     )
     constraint_report: GenerationValidationReport | None = None
     constraint_diagnostics: list[ValidationDiagnostic] = []
@@ -862,6 +876,17 @@ def _validate_composition(state: _GenerationState) -> _GenerationState:
 
     if constraint_report is not None and ok and int(state.get("retry_count", 0)) > 0:
         constraint_report = constraint_report.model_copy(update={"status": "repaired"})
+
+    repair_actions = list(state.get("repair_actions") or [])
+    if constraint_report is not None and repair_actions:
+        constraint_report = constraint_report.model_copy(update={"repair_actions": repair_actions})
+        logger.debug(
+            "Attached repair actions to validation report",
+            extra={
+                "repair_action_count": len(repair_actions),
+                "targets": [action.target for action in repair_actions],
+            },
+        )
 
     logger.info(
         "Composer stage completed",
@@ -955,6 +980,43 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
         },
     )
 
+    affected_requirements: list[str] = []
+    affected_track_ids: list[str] = []
+    for item in diagnostics:
+        context = item.context or {}
+        missing = context.get("missing_families") or context.get("missing_requirements")
+        if isinstance(missing, list):
+            affected_requirements.extend(str(value) for value in missing)
+        track_ids = context.get("track_ids")
+        if isinstance(track_ids, list):
+            affected_track_ids.extend(str(value) for value in track_ids)
+        track_id = context.get("track_id")
+        if isinstance(track_id, str) and track_id:
+            affected_track_ids.append(track_id)
+    # Stable unique order
+    affected_requirements = list(dict.fromkeys(affected_requirements))
+    affected_track_ids = list(dict.fromkeys(affected_track_ids))
+    repair_action = GenerationRepairAction(
+        target=repair_target,
+        attempt=retry_count,
+        diagnostic_codes=codes,
+        affected_requirements=affected_requirements,
+        affected_track_ids=affected_track_ids,
+        detail=f"Retry {repair_target} after {', '.join(codes) or 'unspecified'}",
+    )
+    repair_actions = list(state.get("repair_actions") or [])
+    repair_actions.append(repair_action)
+    logger.info(
+        "Recorded generation repair action",
+        extra={
+            "target": repair_action.target,
+            "attempt": repair_action.attempt,
+            "diagnostic_codes": repair_action.diagnostic_codes,
+            "affected_requirements": repair_action.affected_requirements,
+            "affected_track_ids": repair_action.affected_track_ids,
+        },
+    )
+
     warnings = list(state.get("warnings") or [])
     warnings.append(
         "Staged composition failed validation; retrying "
@@ -967,6 +1029,7 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
         "current_stage": stage,
         "warnings": warnings,
         "validation_ok": False,
+        "repair_actions": repair_actions,
     }
     logger.info(
         "Composer repair routed to stage",
@@ -1111,6 +1174,22 @@ async def _invoke_chat(state: _GenerationState, prompt: str) -> str:
 
 
 def _parse_form_plan(parsed: dict[str, Any], state: _GenerationState) -> ComposerFormPlan:
+    raw_instrumentation = parsed.get("instrumentation")
+    needs_coercion = isinstance(raw_instrumentation, list) and any(
+        not isinstance(item, str) for item in raw_instrumentation
+    )
+    if needs_coercion:
+        coerced = coerce_instrumentation_labels(raw_instrumentation)
+        logger.info(
+            "[FIX] Coerced plan_form instrumentation objects to family strings",
+            extra={
+                "raw_entry_count": len(raw_instrumentation),
+                "coerced_count": len(coerced),
+                "coerced_labels": coerced,
+                "raw_entry_types": [type(item).__name__ for item in raw_instrumentation],
+            },
+        )
+        parsed = {**parsed, "instrumentation": coerced}
     return ComposerFormPlan.model_validate(parsed)
 
 
@@ -1312,21 +1391,27 @@ def _after_accompaniment_stage(
     skipped = payload.get("skipped") or []
     diagnostics = list(state.get("validation_diagnostics") or [])
     constraints = state.get("constraints")
-    melody = state.get("melody_draft")
-    bass = state.get("bass_draft")
-    present = [
-        *( [melody.instrument] if melody else [] ),
-        *( [bass.instrument] if bass else [] ),
-        *[track.instrument for track in tracks],
+    assignment = _resolve_upstream_instrument_assignments(state)
+    upstream_tracks = [
+        track
+        for track in (state.get("melody_draft"), state.get("bass_draft"))
+        if track is not None
     ]
+    all_tracks = [*upstream_tracks, *tracks]
     if not any(track.role in {"harmony", "pad", "rhythm", "countermelody"} for track in tracks):
         logger.warning(
             "Accompaniment stage missing required harmonic role",
             extra={"roles": [track.role for track in tracks]},
         )
     if constraints is not None:
-        missing = missing_required_families(present, constraints)
-        unexpected = unexpected_instrument_families(present, constraints)
+        analysis = analyze_instrumentation(
+            list(constraints.requested_instruments),
+            all_tracks,
+            allow_extra=constraints.allow_extra_instrument_families,
+        )
+        log_instrumentation_analysis(analysis, stage="compose_accompaniment")
+        missing = list(analysis.missing_keys)
+        unexpected = list(analysis.unexpected_identities)
         if missing:
             diagnostics.append(
                 ValidationDiagnostic(
@@ -1336,7 +1421,7 @@ def _after_accompaniment_stage(
                     context={
                         "missing_families": missing,
                         "stage": "compose_accompaniment",
-                        "present_instruments": present,
+                        "present_instruments": [track.instrument for track in all_tracks],
                     },
                 )
             )
@@ -1352,13 +1437,46 @@ def _after_accompaniment_stage(
                     },
                 )
             )
+        for group in analysis.actionable_duplicate_groups:
+            # Prefer accompaniment-stage ownership when a draft repeats an upstream
+            # instrument/role or duplicates within accompaniment.
+            diagnostics.append(
+                ValidationDiagnostic(
+                    code=DUPLICATE_INSTRUMENT_ROLE_CODE,
+                    message=(
+                        "Accompaniment reuses a reserved or duplicate normalized "
+                        "instrument/role assignment"
+                    ),
+                    severity="error",
+                    context={
+                        "identity": group.identity,
+                        "role": group.role,
+                        "track_ids": list(group.track_ids),
+                        "event_counts": list(group.event_counts),
+                        "content_relationship": group.content_relationship,
+                        "stage": "compose_accompaniment",
+                        "repairable": True,
+                    },
+                )
+            )
+            logger.warning(
+                "Attempted redundant instrument/role assignment in accompaniment",
+                extra={
+                    "identity": group.identity,
+                    "role": group.role,
+                    "track_ids": list(group.track_ids),
+                    "content_relationship": group.content_relationship,
+                },
+            )
         logger.info(
             "Accompaniment stage constraint check",
             extra={
-                "pass": not missing and not unexpected,
+                "pass": not missing and not unexpected and not analysis.actionable_duplicate_groups,
                 "missing_families": missing,
                 "unexpected_families": unexpected,
-                "instrument_assignments": present,
+                "actionable_duplicate_count": len(analysis.actionable_duplicate_groups),
+                "already_satisfied": assignment["already_satisfied"],
+                "instrument_assignments": [track.instrument for track in all_tracks],
             },
         )
     logger.info(
@@ -1565,7 +1683,8 @@ Rules:
 - bar_count MUST equal {constraints.duration_bars}
 {sections_rule}
 - section types: intro, verse, pre_chorus, chorus, bridge, solo, breakdown, outro
-- instrumentation MUST cover required families {list(constraints.required_instrument_families)} using melody, bass, and accompaniment roles
+- instrumentation MUST be a JSON array of instrument family strings only (e.g. ["piano", "bass", "violin"]); never objects, never role fields
+- instrumentation MUST cover required families {list(constraints.required_instrument_families)}; melody/bass/accompaniment roles are assigned in later stages
 - do NOT invent unrequested instrument families unless allow_extra_instrument_families is true
 - soft preferences: genre={prompt.genre}, mood={prompt.mood}, complexity={prompt.complexity}
 - freeform instructions present: {constraints.has_instructions}
@@ -1708,12 +1827,38 @@ def _build_accompaniment_prompt(state: _GenerationState) -> str:
     request = state["request"]
     constraints = state["constraints"]
     hard_block = prompt_parameters_hard_block(constraints)
+    assignment = _resolve_upstream_instrument_assignments(state)
     melody = state.get("melody_draft")
     bass = state.get("bass_draft")
     reserved_ids = [track.id for track in (melody, bass) if track is not None and track.id]
     ticks = DEFAULT_TICKS_PER_QUARTER
     bar_ticks = bar_duration_ticks(form.time_signature, ticks)
     locked_key = constraints.key or form.key
+    missing = assignment["missing_requirements"]
+    example_tracks = _assignment_aware_accompaniment_example(
+        missing_requirements=missing,
+        reserved_roles=assignment["reserved_instrument_roles"],
+        ticks=ticks,
+        bar_ticks=bar_ticks,
+    )
+    logger.info(
+        "Resolved accompaniment assignment context",
+        extra={
+            "already_satisfied": assignment["already_satisfied"],
+            "missing_requirements": missing,
+            "reserved_instrument_roles": assignment["reserved_instrument_roles"],
+            "upstream_assignments": assignment["upstream_assignments"],
+        },
+    )
+    logger.debug(
+        "Accompaniment assignment details",
+        extra={
+            "upstream_assignments": assignment["upstream_assignments"],
+            "satisfied_keys": assignment["already_satisfied"],
+            "missing_keys": missing,
+            "reserved_pairs": assignment["reserved_instrument_roles"],
+        },
+    )
     return f"""
 You are composing accompaniment / harmonic support tracks in canonical tick timing.
 IMMUTABLE HARD CONSTRAINTS:
@@ -1725,41 +1870,31 @@ Harmony:
 Motif context:
 {json.dumps(motif.model_dump(), ensure_ascii=True)}
 Requested instruments: {", ".join(request.prompt.instruments)}
-Required families: {list(constraints.required_instrument_families)}
+Required sound sources: {list(constraints.required_instrument_families)}
 Reserved track IDs already used by melody/bass (do not reuse): {", ".join(reserved_ids) if reserved_ids else "none"}
+
+ASSIGNMENT CONTEXT (machine-readable; recompute from current drafts):
+{json.dumps({
+    "already_satisfied": assignment["already_satisfied"],
+    "missing_requirements": missing,
+    "reserved_instrument_roles": assignment["reserved_instrument_roles"],
+    "upstream_assignments": assignment["upstream_assignments"],
+}, ensure_ascii=True)}
 
 Return JSON only:
 {{
-  "tracks": [
-    {{
-      "id": "harmony-1",
-      "name": "Piano Accompaniment",
-      "instrument": "piano",
-      "role": "harmony",
-      "staff": "grand",
-      "events": [
-        {{"pitch": "A3", "start_tick": 0, "duration_ticks": {ticks}, "velocity": 70, "staff": "bass"}},
-        {{"pitch": "C5", "start_tick": 0, "duration_ticks": {ticks}, "velocity": 68, "staff": "treble"}}
-      ]
-    }},
-    {{
-      "id": "strings-1",
-      "name": "Strings",
-      "instrument": "strings",
-      "role": "pad",
-      "events": [
-        {{"pitch": "E4", "start_tick": 0, "duration_ticks": {bar_ticks}, "velocity": 60}}
-      ]
-    }}
-  ],
+  "tracks": {json.dumps(example_tracks, ensure_ascii=True)},
   "skipped": []
 }}
 
 Rules:
 - always include at least one harmony/accompaniment role track with playable events
+- cover EVERY entry in missing_requirements using track.instrument (not display name)
+- you MAY reuse an already_satisfied instrument only for a DISTINCT role
+- do NOT emit another track with a reserved_instrument_roles pair (same normalized instrument + role)
+- use instrument-qualified display names (e.g. "Piano Accompaniment", "Strings Pad"); names are UI metadata only
 - for piano accompaniment prefer one piano track with staff "grand" and per-note staff treble/bass
-- EVERY required instrument family must appear on at least one melody/bass/accompaniment track
-- do NOT add unrequested instrument families unless allow_extra_instrument_families is true
+- do NOT add unrequested instrument identities unless allow_extra_instrument_families is true
 - if a non-required color instrument is skipped, list it under skipped with a short reason
 - track ids must be unique within this response and must not reuse reserved melody/bass ids
 - strings/pad pitches should stay within C2-C7 (cello lows OK; avoid sub-bass mud)
@@ -1767,6 +1902,160 @@ Rules:
 - ticks_per_quarter={ticks}; bar length={bar_ticks}; total bars={form.bar_count}
 - do not rely on harmony metadata as audible content
 """.strip()
+
+
+def _resolve_upstream_instrument_assignments(state: _GenerationState) -> dict[str, Any]:
+    """Derive satisfied/missing requirements and reserved instrument/role pairs."""
+    constraints = state.get("constraints")
+    request = state.get("request")
+    requested = list(
+        constraints.requested_instruments
+        if constraints is not None
+        else (request.prompt.instruments if request is not None else [])
+    )
+    upstream: list[ComposerTrackDraft] = [
+        track
+        for track in (state.get("melody_draft"), state.get("bass_draft"))
+        if track is not None
+    ]
+    analysis = analyze_instrumentation(
+        requested,
+        upstream,
+        allow_extra=bool(constraints.allow_extra_instrument_families) if constraints else False,
+    )
+    upstream_assignments = []
+    reserved_pairs: list[dict[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for track in upstream:
+        identity = normalize_instrument_identity(track.instrument) or track.instrument.strip().lower()
+        role = normalize_role(track.role)
+        upstream_assignments.append(
+            {
+                "track_id": track.id,
+                "instrument": track.instrument,
+                "identity": identity,
+                "role": role,
+            }
+        )
+        pair = (identity, role)
+        if pair not in seen_pairs:
+            seen_pairs.add(pair)
+            reserved_pairs.append({"identity": identity, "role": role})
+    return {
+        "already_satisfied": list(analysis.satisfied_keys),
+        "missing_requirements": list(analysis.missing_keys),
+        "reserved_instrument_roles": reserved_pairs,
+        "upstream_assignments": upstream_assignments,
+    }
+
+
+def _assignment_aware_accompaniment_example(
+    *,
+    missing_requirements: list[str],
+    reserved_roles: list[dict[str, str]],
+    ticks: int,
+    bar_ticks: int,
+) -> list[dict[str, Any]]:
+    """Build a neutral/assignment-aware example that avoids reserved pairs."""
+    reserved = {(item["identity"], item["role"]) for item in reserved_roles}
+    examples: list[dict[str, Any]] = []
+
+    def _can_use(identity: str, role: str) -> bool:
+        return (identity, role) not in reserved
+
+    # Prefer covering missing requirements with distinct roles.
+    for key in missing_requirements:
+        if key == "strings" and _can_use("strings", "pad"):
+            examples.append(
+                {
+                    "id": "strings-1",
+                    "name": "Strings Pad",
+                    "instrument": "strings",
+                    "role": "pad",
+                    "events": [
+                        {"pitch": "E4", "start_tick": 0, "duration_ticks": bar_ticks, "velocity": 60}
+                    ],
+                }
+            )
+        elif key == "piano" and _can_use("piano", "harmony"):
+            examples.append(
+                {
+                    "id": "harmony-1",
+                    "name": "Piano Accompaniment",
+                    "instrument": "piano",
+                    "role": "harmony",
+                    "staff": "grand",
+                    "events": [
+                        {
+                            "pitch": "A3",
+                            "start_tick": 0,
+                            "duration_ticks": ticks,
+                            "velocity": 70,
+                            "staff": "bass",
+                        },
+                        {
+                            "pitch": "C5",
+                            "start_tick": 0,
+                            "duration_ticks": ticks,
+                            "velocity": 68,
+                            "staff": "treble",
+                        },
+                    ],
+                }
+            )
+        elif key not in {"bass", "drums"} and _can_use(key, "harmony"):
+            examples.append(
+                {
+                    "id": f"{key}-harmony-1",
+                    "name": f"{key.title()} Accompaniment",
+                    "instrument": key,
+                    "role": "harmony",
+                    "events": [
+                        {"pitch": "C4", "start_tick": 0, "duration_ticks": ticks, "velocity": 70}
+                    ],
+                }
+            )
+
+    if not examples and _can_use("piano", "harmony"):
+        examples.append(
+            {
+                "id": "harmony-1",
+                "name": "Piano Accompaniment",
+                "instrument": "piano",
+                "role": "harmony",
+                "staff": "grand",
+                "events": [
+                    {
+                        "pitch": "A3",
+                        "start_tick": 0,
+                        "duration_ticks": ticks,
+                        "velocity": 70,
+                        "staff": "bass",
+                    },
+                    {
+                        "pitch": "C5",
+                        "start_tick": 0,
+                        "duration_ticks": ticks,
+                        "velocity": 68,
+                        "staff": "treble",
+                    },
+                ],
+            }
+        )
+    elif not examples:
+        # Fully neutral fallback that still demonstrates the schema.
+        examples.append(
+            {
+                "id": "harmony-1",
+                "name": "Accompaniment",
+                "instrument": "piano",
+                "role": "harmony",
+                "events": [
+                    {"pitch": "C4", "start_tick": 0, "duration_ticks": ticks, "velocity": 70}
+                ],
+            }
+        )
+    return examples
 
 
 def _append_repair_diagnostics(prompt: str, diagnostics: list[ValidationDiagnostic]) -> str:
@@ -1815,6 +2104,7 @@ def _infer_failed_stage(errors: list[ValidationDiagnostic]) -> str:
     if codes & {
         "constraint_missing_instrument_family",
         "constraint_unexpected_instrument_family",
+        "constraint_duplicate_instrument_role",
     }:
         return "compose_accompaniment"
     if "constraint_normalization_rewrite" in codes or "normalization_failed" in codes:
