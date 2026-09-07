@@ -18,6 +18,9 @@ export async function generateLlmMusicJson(payload) {
     schemaVersion: response.music?.schema_version || 'legacy',
     canonical: isCanonicalComposition(response.music),
     warningCount: response.warnings?.length || 0,
+    generationValidationStatus: response.validation?.status || null,
+    generationValidationErrorCount: response.validation?.errors?.length || 0,
+    generationValidationWarningCount: response.validation?.warnings?.length || 0,
   });
   if (!validation.valid) {
     console.error('[musicApi] LLM music response failed validation', { message: validation.message });

@@ -11,6 +11,7 @@ from ..schemas import (
     Composition,
     CompositionSection,
     CompositionTrack,
+    GenerationValidationReport,
     LLMMusicHarmonyItem,
     LLMMusicGenerationRequest,
     NoteEvent,
@@ -22,6 +23,7 @@ from .composition_normalizer import (
 )
 from .composition_planner import (
     ComposerFormPlan,
+    ComposerFormSection,
     ComposerHarmonyPlan,
     ComposerMotifContext,
     ComposerTrackDraft,
@@ -34,6 +36,17 @@ from .composition_planner import (
 )
 from .composition_timing import bar_duration_ticks, derive_section_boundaries
 from .composition_validator import validate_composition_integrity
+from .generation_constraints import (
+    GenerationConstraints,
+    build_generation_constraints,
+    diagnostics_from_validation_report,
+    freeze_form_resolved_fields,
+    missing_required_families,
+    prompt_parameters_hard_block,
+    unexpected_instrument_families,
+    validate_generation_constraints,
+)
+from .composition_tonality import analyze_harmony_tonality
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +58,7 @@ COMPOSER_STAGES = (
     "compose_bass",
     "compose_accompaniment",
     "assemble_composition",
+    "normalize_composition",
     "validate_composition",
     "repair_composition",
 )
@@ -68,7 +82,23 @@ class InvalidLLMOutputError(LLMGenerationError):
     pass
 
 
+class GenerationConstraintViolationError(InvalidLLMOutputError):
+    """Raised when hard generation constraints remain violated after repair."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostics: list[ValidationDiagnostic] | None = None,
+        report: GenerationValidationReport | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.diagnostics = list(diagnostics or [])
+        self.report = report
+
+
 __all__ = [
+    "GenerationConstraintViolationError",
     "InvalidLLMOutputError",
     "LLMGenerationError",
     "NoLLMProviderConfiguredError",
@@ -81,6 +111,7 @@ __all__ = [
 class _GenerationState(TypedDict, total=False):
     request: LLMMusicGenerationRequest
     provider: LLMProviderSettings
+    constraints: GenerationConstraints
     raw_output: str
     parsed_json: dict[str, Any]
     music: Composition
@@ -93,20 +124,23 @@ class _GenerationState(TypedDict, total=False):
     bass_draft: ComposerTrackDraft
     accompaniment_drafts: list[ComposerTrackDraft]
     validation_diagnostics: list[ValidationDiagnostic]
+    validation_report: GenerationValidationReport
     validation_ok: bool
     current_stage: str
     failed_stage: str
     repair_target: str
     stage_retry_count: int
     stage_raw_outputs: dict[str, str]
+    pre_normalize_hard_summary: dict[str, Any]
 
 
 async def generate_music_json(
     request: LLMMusicGenerationRequest,
     settings: LLMSettings | None = None,
-) -> tuple[Composition, list[str], LLMProviderSettings]:
+) -> tuple[Composition, list[str], LLMProviderSettings, GenerationValidationReport | None]:
     active_settings = settings or load_llm_settings()
     enforce_llm_generation_bounds(request)
+    constraints = build_generation_constraints(request)
     provider = _select_provider(request, active_settings)
 
     from .fake_llm import FakeLLMError, generate_fake_music_json, is_fake_provider
@@ -121,7 +155,7 @@ async def generate_music_json(
             },
         )
         try:
-            return await generate_fake_music_json(request, provider)
+            return await generate_fake_music_json(request, provider, constraints=constraints)
         except FakeLLMError as exc:
             raise InvalidLLMOutputError(str(exc)) from exc
 
@@ -133,6 +167,8 @@ async def generate_music_json(
             "composer_stages": list(COMPOSER_STAGES),
             "duration_bars": request.prompt.duration_bars,
             "instrument_count": len(request.prompt.instruments),
+            "constraint_key": constraints.key,
+            "key_user_specified": constraints.key_user_specified,
         },
     )
     logger.debug("LLM prompt parameters", extra={"prompt": _sanitized_prompt(request)})
@@ -141,6 +177,7 @@ async def generate_music_json(
     state: _GenerationState = {
         "request": request,
         "provider": provider,
+        "constraints": constraints,
         "retry_count": 0,
         "stage_retry_count": 0,
         "warnings": [],
@@ -222,14 +259,23 @@ async def generate_music_json(
             raise LLMGenerationError(f"LLM provider request failed: {type(exc).__name__}") from exc
 
         music = result.get("music")
+        validation_report = result.get("validation_report")
         if music is None or not result.get("validation_ok"):
             diagnostics = result.get("validation_diagnostics") or []
             codes = [item.code for item in diagnostics if getattr(item, "severity", "error") == "error"]
             messages = [item.message for item in diagnostics if getattr(item, "severity", "error") == "error"]
             detail = "; ".join(messages[:5]) if messages else (", ".join(codes) or "unknown validation failure")
-            raise InvalidLLMOutputError(
+            report = validation_report or GenerationValidationReport(
+                status="failed",
+                errors=[],
+                warnings=[],
+                repair_attempts=int(result.get("retry_count", 0)),
+            )
+            raise GenerationConstraintViolationError(
                 "LLM returned invalid or non-playable composition after staged generation/repair: "
-                f"{detail}"
+                f"{detail}",
+                diagnostics=diagnostics,
+                report=report,
             )
 
         warnings = list(result.get("warnings") or [])
@@ -246,9 +292,10 @@ async def generate_music_json(
                 "track_count": len(music.tracks),
                 "event_count": sum(len(track.events) for track in music.tracks),
                 "validation_retry_count": result.get("retry_count", 0),
+                "validation_status": validation_report.status if validation_report else None,
             },
         )
-        return music, warnings, provider
+        return music, warnings, provider, validation_report
 
 
 def _select_provider(request: LLMMusicGenerationRequest, settings: LLMSettings) -> LLMProviderSettings:
@@ -291,6 +338,7 @@ def _build_generation_graph():
     workflow.add_node("compose_bass", _compose_bass)
     workflow.add_node("compose_accompaniment", _compose_accompaniment)
     workflow.add_node("assemble_composition", _assemble_composition)
+    workflow.add_node("normalize_composition", _normalize_composition)
     workflow.add_node("validate_composition", _validate_composition)
     workflow.add_node("repair_composition", _repair_composition)
 
@@ -300,7 +348,8 @@ def _build_generation_graph():
     workflow.add_edge("compose_melody", "compose_bass")
     workflow.add_edge("compose_bass", "compose_accompaniment")
     workflow.add_edge("compose_accompaniment", "assemble_composition")
-    workflow.add_edge("assemble_composition", "validate_composition")
+    workflow.add_edge("assemble_composition", "normalize_composition")
+    workflow.add_edge("normalize_composition", "validate_composition")
     workflow.add_conditional_edges(
         "validate_composition",
         _route_after_validation,
@@ -320,6 +369,7 @@ def _build_generation_graph():
             "compose_bass": "compose_bass",
             "compose_accompaniment": "compose_accompaniment",
             "assemble_composition": "assemble_composition",
+            "normalize_composition": "normalize_composition",
             "validate_composition": "validate_composition",
             "fail": END,
         },
@@ -359,6 +409,7 @@ def _route_after_repair(state: _GenerationState) -> str:
         "compose_bass",
         "compose_accompaniment",
         "assemble_composition",
+        "normalize_composition",
         "validate_composition",
     }:
         return target
@@ -517,20 +568,37 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
     melody = state.get("melody_draft")
     bass = state.get("bass_draft")
     accompaniment = list(state.get("accompaniment_drafts") or [])
+    constraints = state.get("constraints")
     if form is None or harmony is None or melody is None or bass is None:
         raise InvalidLLMOutputError("Cannot assemble composition; required stage outputs are missing")
+    if constraints is None:
+        raise InvalidLLMOutputError("Cannot assemble composition; generation constraints are missing")
 
     drafts = [melody, bass, *accompaniment]
     duration_ticks: int | None = None
     try:
         ticks_per_quarter = DEFAULT_TICKS_PER_QUARTER
-        bar_ticks = bar_duration_ticks(form.time_signature, ticks_per_quarter)
-        section_payloads = [
-            {"type": section.type, "bar_count": section.bar_count} for section in form.sections
-        ]
-        derived_sections = derive_section_boundaries(section_payloads, form.time_signature, ticks_per_quarter)
+        locked_key = constraints.key or form.key
+        locked_meter = constraints.time_signature
+        locked_bars = constraints.duration_bars
+        locked_tempo = form.tempo
+        if locked_tempo < constraints.tempo_min:
+            locked_tempo = constraints.tempo_min
+        elif locked_tempo > constraints.tempo_max:
+            locked_tempo = constraints.tempo_max
+
+        bar_ticks = bar_duration_ticks(locked_meter, ticks_per_quarter)
+        if constraints.sections is not None:
+            section_payloads = [
+                {"type": section.type, "bar_count": section.bar_count} for section in constraints.sections
+            ]
+        else:
+            section_payloads = [
+                {"type": section.type, "bar_count": section.bar_count} for section in form.sections
+            ]
+        derived_sections = derive_section_boundaries(section_payloads, locked_meter, ticks_per_quarter)
         sections = [CompositionSection.model_validate(item) for item in derived_sections]
-        duration_ticks = form.bar_count * bar_ticks
+        duration_ticks = locked_bars * bar_ticks
 
         tracks: list[CompositionTrack] = []
         used_track_ids: set[str] = set()
@@ -564,12 +632,12 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
         ]
         composition = Composition(
             schema_version=COMPOSITION_SCHEMA_VERSION,
-            tempo=form.tempo,
-            key=form.key,
-            time_signature=form.time_signature,
+            tempo=locked_tempo,
+            key=locked_key,
+            time_signature=locked_meter,
             ticks_per_quarter=ticks_per_quarter,
             duration_ticks=duration_ticks,
-            bar_count=form.bar_count,
+            bar_count=locked_bars,
             sections=sections,
             tracks=tracks,
             harmony=harmony_items,
@@ -587,6 +655,15 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
             failed_stage=failed_stage,
         )
 
+    hard_summary = {
+        "key": composition.key,
+        "time_signature": composition.time_signature,
+        "bar_count": composition.bar_count,
+        "tempo": composition.tempo,
+        "duration_ticks": composition.duration_ticks,
+        "section_types": [section.type for section in composition.sections],
+        "section_bars": [section.bar_count for section in composition.sections],
+    }
     logger.info(
         "Composer stage completed",
         extra={
@@ -604,14 +681,114 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
             "track_ids": [track.id for track in composition.tracks],
             "roles": [track.role for track in composition.tracks],
             "events_by_track": {track.id: len(track.events) for track in composition.tracks},
+            "hard_fields": hard_summary,
         },
     )
     return {
         **state,
         "music": composition,
+        "pre_normalize_hard_summary": hard_summary,
         "current_stage": stage,
         "failed_stage": "",
         "parsed_json": composition.model_dump(),
+    }
+
+
+def _normalize_composition(state: _GenerationState) -> _GenerationState:
+    stage = "normalize_composition"
+    music = state.get("music")
+    constraints = state.get("constraints")
+    logger.info(
+        "Composer stage started",
+        extra=_stage_log_extra(state, stage, attempt=state.get("retry_count", 0)),
+    )
+    if music is None:
+        return {
+            **state,
+            "current_stage": stage,
+            "validation_ok": False,
+            "failed_stage": state.get("failed_stage") or "assemble_composition",
+        }
+    if constraints is None:
+        raise InvalidLLMOutputError("normalize_composition requires generation constraints")
+
+    pre = state.get("pre_normalize_hard_summary") or {
+        "key": music.key,
+        "time_signature": music.time_signature,
+        "bar_count": music.bar_count,
+        "tempo": music.tempo,
+        "duration_ticks": music.duration_ticks,
+        "section_types": [section.type for section in music.sections],
+        "section_bars": [section.bar_count for section in music.sections],
+    }
+    try:
+        normalized = normalize_composition_json(music.model_dump(mode="json"))
+    except (CompositionNormalizationError, ValidationError, ValueError) as exc:
+        diagnostic = ValidationDiagnostic(
+            code="normalization_failed",
+            message=f"Normalization failed: {str(exc)[:200]}",
+            severity="error",
+            context={"stage": stage},
+        )
+        logger.error(
+            "Normalization failed",
+            extra={"error_type": type(exc).__name__, "detail": str(exc)[:200]},
+        )
+        return {
+            **state,
+            "validation_ok": False,
+            "validation_diagnostics": [diagnostic],
+            "failed_stage": "assemble_composition",
+            "current_stage": stage,
+        }
+
+    post = {
+        "key": normalized.key,
+        "time_signature": normalized.time_signature,
+        "bar_count": normalized.bar_count,
+        "tempo": normalized.tempo,
+        "duration_ticks": normalized.duration_ticks,
+        "section_types": [section.type for section in normalized.sections],
+        "section_bars": [section.bar_count for section in normalized.sections],
+    }
+    rewritten_fields = [name for name in pre if pre.get(name) != post.get(name)]
+    if rewritten_fields:
+        diagnostic = ValidationDiagnostic(
+            code="constraint_normalization_rewrite",
+            message="Normalization attempted to rewrite locked hard fields",
+            severity="error",
+            context={"fields": rewritten_fields, "stage": stage},
+        )
+        logger.error(
+            "Normalization rewrote locked hard fields",
+            extra={"fields": rewritten_fields},
+        )
+        return {
+            **state,
+            "music": normalized,
+            "validation_ok": False,
+            "validation_diagnostics": [diagnostic],
+            "failed_stage": "normalize_composition",
+            "current_stage": stage,
+        }
+
+    logger.info(
+        "Composer stage completed",
+        extra={
+            **_stage_log_extra(state, stage, attempt=state.get("retry_count", 0)),
+            "normalization_path": "canonical",
+            "hard_field_count": len(post),
+        },
+    )
+    logger.debug(
+        "Normalization hard-field comparison",
+        extra={"pre": pre, "post": post},
+    )
+    return {
+        **state,
+        "music": normalized,
+        "current_stage": stage,
+        "parsed_json": normalized.model_dump(),
     }
 
 
@@ -619,6 +796,7 @@ def _validate_composition(state: _GenerationState) -> _GenerationState:
     stage = "validate_composition"
     music = state.get("music")
     request = state["request"]
+    constraints = state.get("constraints")
     logger.info(
         "Composer stage started",
         extra=_stage_log_extra(state, stage, attempt=state.get("retry_count", 0)),
@@ -650,25 +828,66 @@ def _validate_composition(state: _GenerationState) -> _GenerationState:
             "current_stage": stage,
         }
 
-    result = validate_composition_integrity(
+    integrity = validate_composition_integrity(
         music,
         requested_instruments=request.prompt.instruments,
         complexity=request.prompt.complexity,
     )
-    failed_stage = _infer_failed_stage(result.errors) if not result.ok else ""
+    constraint_report: GenerationValidationReport | None = None
+    constraint_diagnostics: list[ValidationDiagnostic] = []
+    if constraints is not None:
+        constraint_report = validate_generation_constraints(
+            music,
+            constraints,
+            repair_attempts=int(state.get("retry_count", 0)),
+        )
+        constraint_diagnostics = diagnostics_from_validation_report(constraint_report)
+
+    diagnostics = [*integrity.diagnostics, *constraint_diagnostics]
+    # Prefer existing stage diagnostics (e.g. normalization rewrite) when present.
+    prior = [
+        item
+        for item in (state.get("validation_diagnostics") or [])
+        if item.severity == "error"
+        and item.code in {"constraint_normalization_rewrite", "normalization_failed", "schema_invalid"}
+    ]
+    if prior:
+        diagnostics = [*prior, *diagnostics]
+
+    errors = [item for item in diagnostics if item.severity == "error"]
+    ok = integrity.ok and (constraint_report.ok if constraint_report is not None else True) and not prior
+    if constraint_report is not None and not constraint_report.ok:
+        ok = False
+    failed_stage = _infer_failed_stage(errors) if not ok else ""
+
+    if constraint_report is not None and ok and int(state.get("retry_count", 0)) > 0:
+        constraint_report = constraint_report.model_copy(update={"status": "repaired"})
+
     logger.info(
         "Composer stage completed",
         extra={
             **_stage_log_extra(state, stage, attempt=state.get("retry_count", 0)),
-            "validation_ok": result.ok,
-            "error_codes": result.error_codes(),
-            "warning_count": len(result.warnings),
+            "validation_ok": ok,
+            "integrity_ok": integrity.ok,
+            "constraint_status": constraint_report.status if constraint_report else None,
+            "error_codes": [item.code for item in errors],
+            "warning_count": len([item for item in diagnostics if item.severity == "warning"]),
+        },
+    )
+    logger.debug(
+        "Validation gate result counts",
+        extra={
+            "integrity_errors": len(integrity.errors),
+            "integrity_warnings": len(integrity.warnings),
+            "constraint_errors": len(constraint_report.errors) if constraint_report else 0,
+            "constraint_warnings": len(constraint_report.warnings) if constraint_report else 0,
         },
     )
     return {
         **state,
-        "validation_ok": result.ok,
-        "validation_diagnostics": result.diagnostics,
+        "validation_ok": ok,
+        "validation_diagnostics": diagnostics,
+        "validation_report": constraint_report,
         "failed_stage": failed_stage,
         "current_stage": stage,
     }
@@ -687,9 +906,43 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
         "compose_bass",
         "compose_accompaniment",
         "assemble_composition",
+        "normalize_composition",
         "validate_composition",
     }:
         repair_target = "assemble_composition"
+
+    # Preserve valid upstream drafts when repairing a later stage.
+    cleared: _GenerationState = {**state}
+    if repair_target == "plan_form":
+        cleared.pop("form_plan", None)
+        cleared.pop("harmony_plan", None)
+        cleared.pop("melody_draft", None)
+        cleared.pop("bass_draft", None)
+        cleared.pop("accompaniment_drafts", None)
+        cleared.pop("motif_context", None)
+        cleared.pop("music", None)
+    elif repair_target == "plan_harmony":
+        cleared.pop("harmony_plan", None)
+        cleared.pop("melody_draft", None)
+        cleared.pop("bass_draft", None)
+        cleared.pop("accompaniment_drafts", None)
+        cleared.pop("motif_context", None)
+        cleared.pop("music", None)
+    elif repair_target == "compose_melody":
+        cleared.pop("melody_draft", None)
+        cleared.pop("bass_draft", None)
+        cleared.pop("accompaniment_drafts", None)
+        cleared.pop("motif_context", None)
+        cleared.pop("music", None)
+    elif repair_target == "compose_bass":
+        cleared.pop("bass_draft", None)
+        cleared.pop("accompaniment_drafts", None)
+        cleared.pop("music", None)
+    elif repair_target == "compose_accompaniment":
+        cleared.pop("accompaniment_drafts", None)
+        cleared.pop("music", None)
+    elif repair_target in {"assemble_composition", "normalize_composition"}:
+        cleared.pop("music", None)
 
     logger.warning(
         "Composer repair attempt started",
@@ -697,17 +950,18 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
             **_stage_log_extra(state, stage, attempt=retry_count),
             "repair_target": repair_target,
             "diagnostic_codes": codes,
+            "preserved_form": cleared.get("form_plan") is not None,
+            "preserved_harmony": cleared.get("harmony_plan") is not None,
         },
     )
 
-    # Store structured diagnostics into warnings for frontend visibility, then route back.
     warnings = list(state.get("warnings") or [])
     warnings.append(
         "Staged composition failed validation; retrying "
         f"{repair_target} with diagnostics: {', '.join(codes) or 'unspecified'}."
     )
     updated: _GenerationState = {
-        **state,
+        **cleared,
         "retry_count": retry_count,
         "repair_target": repair_target,
         "current_stage": stage,
@@ -720,6 +974,7 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
             **_stage_log_extra(updated, stage, attempt=retry_count),
             "repair_target": repair_target,
             "diagnostic_codes": codes,
+            "diagnostic_count": len(diagnostics),
         },
     )
     return updated
@@ -747,8 +1002,14 @@ async def _run_json_stage(
         "Composer stage prompt parameters",
         extra={
             "stage": stage,
-            "prompt_preview": prompt[:240],
+            "prompt_length": len(prompt),
+            "has_repair_diagnostics": bool(
+                state.get("repair_target") == stage and state.get("validation_diagnostics")
+            ),
             "sanitized_request": _sanitized_prompt(request),
+            "constraint_summary": (
+                state["constraints"].hard_summary() if state.get("constraints") else None
+            ),
         },
     )
 
@@ -854,30 +1115,70 @@ def _parse_form_plan(parsed: dict[str, Any], state: _GenerationState) -> Compose
 
 
 def _after_form_plan(state: _GenerationState, form: ComposerFormPlan, parsed: dict[str, Any]) -> _GenerationState:
-    request = state["request"]
-    warnings = list(state.get("warnings") or [])
-    if request.prompt.key and form.key != request.prompt.key:
-        warnings.append(f"Form stage chose key {form.key} instead of requested {request.prompt.key}.")
-    if form.time_signature != request.prompt.time_signature:
-        warnings.append(
-            f"Form stage chose meter {form.time_signature} instead of requested {request.prompt.time_signature}."
-        )
-    if abs(form.bar_count - request.prompt.duration_bars) > 0:
+    constraints = state.get("constraints")
+    if constraints is None:
+        raise InvalidLLMOutputError("Form stage requires generation constraints")
+
+    frozen, drift_diagnostics = freeze_form_resolved_fields(constraints, form)
+    updates: dict[str, Any] = {}
+    if constraints.key_user_specified and form.key != constraints.key:
+        updates["key"] = constraints.key
+    if form.time_signature != constraints.time_signature:
+        updates["time_signature"] = constraints.time_signature
+    if form.bar_count != constraints.duration_bars:
+        updates["bar_count"] = constraints.duration_bars
+    if form.tempo < constraints.tempo_min:
+        updates["tempo"] = constraints.tempo_min
+    elif form.tempo > constraints.tempo_max:
+        updates["tempo"] = constraints.tempo_max
+    if constraints.sections_user_specified and constraints.sections is not None:
+        updates["sections"] = [
+            ComposerFormSection(
+                type=section.type,
+                start_bar=section.start_bar,
+                bar_count=section.bar_count,
+            )
+            for section in constraints.sections
+        ]
+
+    corrected = form.model_copy(update=updates) if updates else form
+    # Re-validate contiguous sections after coercion.
+    corrected = ComposerFormPlan.model_validate(corrected.model_dump())
+
+    for item in drift_diagnostics:
         logger.warning(
-            "Form stage bar count mismatch corrected downstream if needed",
-            extra={"requested_bars": request.prompt.duration_bars, "form_bars": form.bar_count},
+            "Form stage hard-constraint drift",
+            extra={"code": item.code, "expected": item.context.get("expected"), "actual": item.context.get("actual")},
         )
+
     logger.info(
         "Resolved form plan",
         extra={
-            "bar_count": form.bar_count,
-            "section_count": len(form.sections),
-            "tempo": form.tempo,
-            "key": form.key,
-            "time_signature": form.time_signature,
+            "bar_count": corrected.bar_count,
+            "section_count": len(corrected.sections),
+            "tempo": corrected.tempo,
+            "key": corrected.key,
+            "time_signature": corrected.time_signature,
+            "constraint_check": "fail" if drift_diagnostics else "pass",
+            "key_source": "user" if frozen.key_user_specified else "form",
+            "sections_source": "user" if frozen.sections_user_specified else "form",
         },
     )
-    return {**state, "form_plan": form, "parsed_json": parsed, "warnings": warnings}
+    logger.debug(
+        "Form constraint freeze summary",
+        extra={
+            "constraint_ids": list(frozen.hard_summary().keys()),
+            "drift_codes": [item.code for item in drift_diagnostics],
+            "coerced_fields": list(updates.keys()),
+        },
+    )
+    return {
+        **state,
+        "form_plan": corrected,
+        "constraints": frozen,
+        "parsed_json": parsed,
+        "validation_diagnostics": list(state.get("validation_diagnostics") or []) + drift_diagnostics,
+    }
 
 
 def _parse_harmony_plan(parsed: dict[str, Any], state: _GenerationState) -> ComposerHarmonyPlan:
@@ -890,7 +1191,36 @@ def _after_harmony_plan(
     state: _GenerationState, harmony: ComposerHarmonyPlan, parsed: dict[str, Any]
 ) -> _GenerationState:
     form = state.get("form_plan")
+    constraints = state.get("constraints")
     section_coverage = sorted({event.section_type for event in harmony.events if event.section_type})
+    diagnostics = list(state.get("validation_diagnostics") or [])
+    if constraints and constraints.key and harmony.events:
+        tonal = analyze_harmony_tonality(
+            [(event.bar, event.chord) for event in harmony.events],
+            constraints.key,
+            bar_count=form.bar_count if form else max((event.bar for event in harmony.events), default=1),
+            boundary_bars=[section.start_bar for section in form.sections] if form else None,
+        )
+        if tonal.contradicts:
+            diagnostics.append(
+                ValidationDiagnostic(
+                    code="constraint_tonality_center",
+                    message="Harmony plan tonal center contradicts the locked key",
+                    severity="error",
+                    context={
+                        "expected": constraints.key,
+                        "actual": tonal.winning_candidate,
+                        "stage": "plan_harmony",
+                        "reason": tonal.reason,
+                    },
+                )
+            )
+            logger.warning(
+                "Harmony stage constraint check failed",
+                extra={"code": "constraint_tonality_center", "winning_candidate": tonal.winning_candidate},
+            )
+        else:
+            logger.info("Harmony stage constraint check passed", extra={"requested_key": constraints.key})
     logger.info(
         "Resolved harmony plan",
         extra={
@@ -907,7 +1237,7 @@ def _after_harmony_plan(
             ]
         },
     )
-    return {**state, "harmony_plan": harmony, "parsed_json": parsed}
+    return {**state, "harmony_plan": harmony, "parsed_json": parsed, "validation_diagnostics": diagnostics}
 
 
 def _parse_melody_stage(parsed: dict[str, Any], state: _GenerationState) -> dict[str, Any]:
@@ -980,10 +1310,56 @@ def _after_accompaniment_stage(
 ) -> _GenerationState:
     tracks: list[ComposerTrackDraft] = payload["tracks"]
     skipped = payload.get("skipped") or []
+    diagnostics = list(state.get("validation_diagnostics") or [])
+    constraints = state.get("constraints")
+    melody = state.get("melody_draft")
+    bass = state.get("bass_draft")
+    present = [
+        *( [melody.instrument] if melody else [] ),
+        *( [bass.instrument] if bass else [] ),
+        *[track.instrument for track in tracks],
+    ]
     if not any(track.role in {"harmony", "pad", "rhythm", "countermelody"} for track in tracks):
         logger.warning(
             "Accompaniment stage missing required harmonic role",
             extra={"roles": [track.role for track in tracks]},
+        )
+    if constraints is not None:
+        missing = missing_required_families(present, constraints)
+        unexpected = unexpected_instrument_families(present, constraints)
+        if missing:
+            diagnostics.append(
+                ValidationDiagnostic(
+                    code="constraint_missing_instrument_family",
+                    message="Requested instrument families were not assigned across generated tracks",
+                    severity="error",
+                    context={
+                        "missing_families": missing,
+                        "stage": "compose_accompaniment",
+                        "present_instruments": present,
+                    },
+                )
+            )
+        if unexpected:
+            diagnostics.append(
+                ValidationDiagnostic(
+                    code="constraint_unexpected_instrument_family",
+                    message="Unrequested instrument families were generated",
+                    severity="error",
+                    context={
+                        "unexpected_families": unexpected,
+                        "stage": "compose_accompaniment",
+                    },
+                )
+            )
+        logger.info(
+            "Accompaniment stage constraint check",
+            extra={
+                "pass": not missing and not unexpected,
+                "missing_families": missing,
+                "unexpected_families": unexpected,
+                "instrument_assignments": present,
+            },
         )
     logger.info(
         "Resolved accompaniment drafts",
@@ -1005,6 +1381,7 @@ def _after_accompaniment_stage(
         "accompaniment_drafts": tracks,
         "parsed_json": parsed,
         "warnings": warnings,
+        "validation_diagnostics": diagnostics,
     }
 
 
@@ -1147,9 +1524,26 @@ def _draft_to_track(
 def _build_form_prompt(state: _GenerationState) -> str:
     request = state["request"]
     prompt = request.prompt
+    constraints = state["constraints"]
+    hard_block = prompt_parameters_hard_block(constraints)
     sections = [section.model_dump() for section in prompt.sections]
+    key_rule = (
+        f'- key MUST be exactly "{constraints.key}" (immutable hard constraint)'
+        if constraints.key_user_specified and constraints.key
+        else '- key format like "C minor" or "F# major"; once chosen it becomes the locked tonal center'
+    )
+    sections_rule = (
+        f"- sections MUST match this exact sequence and bar counts: {json.dumps(hard_block['hard']['sections'])}"
+        if constraints.sections_user_specified
+        else f"- sections must be contiguous from start_bar=1 and sum exactly to bar_count={constraints.duration_bars}"
+    )
     return f"""
 You are planning musical form for a composition.v1 generator.
+IMMUTABLE HARD CONSTRAINTS (must not violate):
+{json.dumps(hard_block["hard"], ensure_ascii=True)}
+SOFT creative preferences (may guide style only):
+{json.dumps(hard_block["soft"], ensure_ascii=True)}
+
 Return JSON only with this shape:
 {{
   "tempo": 80,
@@ -1165,16 +1559,17 @@ Return JSON only with this shape:
 }}
 
 Rules:
-- tempo between {prompt.tempo_min} and {prompt.tempo_max}
-- key format like "C minor" or "F# major"; prefer requested key when provided
-- time_signature must be {prompt.time_signature}
-- bar_count should equal requested duration_bars={prompt.duration_bars}
-- sections must be contiguous from start_bar=1 and sum to bar_count
+- tempo MUST be within inclusive bounds {constraints.tempo_min}..{constraints.tempo_max}
+{key_rule}
+- time_signature MUST be exactly {constraints.time_signature}
+- bar_count MUST equal {constraints.duration_bars}
+{sections_rule}
 - section types: intro, verse, pre_chorus, chorus, bridge, solo, breakdown, outro
-- instrumentation should reflect requested instruments and needed roles (melody, accompaniment/harmony, bass, optional strings/pad)
-- respect genre={prompt.genre}, mood={prompt.mood}, complexity={prompt.complexity}
-- instructions: {prompt.instructions or "none"}
-- requested sections hint: {json.dumps(sections) if sections else "choose coherent structure"}
+- instrumentation MUST cover required families {list(constraints.required_instrument_families)} using melody, bass, and accompaniment roles
+- do NOT invent unrequested instrument families unless allow_extra_instrument_families is true
+- soft preferences: genre={prompt.genre}, mood={prompt.mood}, complexity={prompt.complexity}
+- freeform instructions present: {constraints.has_instructions}
+- requested sections hint: {json.dumps(sections) if sections else "design coherent structure totaling duration_bars"}
 - requested instruments: {", ".join(prompt.instruments)}
 """.strip()
 
@@ -1182,8 +1577,13 @@ Rules:
 def _build_harmony_prompt(state: _GenerationState) -> str:
     form = state["form_plan"]
     request = state["request"]
+    constraints = state["constraints"]
+    hard_block = prompt_parameters_hard_block(constraints)
+    locked_key = constraints.key or form.key
     return f"""
 You are writing harmonic progression metadata for composition.v1.
+IMMUTABLE HARD CONSTRAINTS:
+{json.dumps(hard_block["hard"], ensure_ascii=True)}
 Form plan:
 {json.dumps(form.model_dump(), ensure_ascii=True)}
 
@@ -1199,8 +1599,9 @@ Rules:
 - harmony is metadata only; do not invent note events
 - cover each section start and important cadences
 - bars must be within 1..{form.bar_count}
-- prefer diatonic chords in key {form.key}
-- genre={request.prompt.genre}, mood={request.prompt.mood}, complexity={request.prompt.complexity}
+- tonal center MUST remain {locked_key}; do not drift to a competing key
+- secondary dominants, borrowed chords, and chromatic color are allowed when the aggregate tonic stays {locked_key}
+- soft preferences: genre={request.prompt.genre}, mood={request.prompt.mood}, complexity={request.prompt.complexity}
 """.strip()
 
 
@@ -1208,10 +1609,15 @@ def _build_melody_prompt(state: _GenerationState) -> str:
     form = state["form_plan"]
     harmony = state["harmony_plan"]
     request = state["request"]
+    constraints = state["constraints"]
+    hard_block = prompt_parameters_hard_block(constraints)
     ticks = DEFAULT_TICKS_PER_QUARTER
     bar_ticks = bar_duration_ticks(form.time_signature, ticks)
+    locked_key = constraints.key or form.key
     return f"""
 You are composing the primary melody track in canonical tick timing.
+IMMUTABLE HARD CONSTRAINTS:
+{json.dumps(hard_block["hard"], ensure_ascii=True)}
 Form:
 {json.dumps(form.model_dump(), ensure_ascii=True)}
 Harmony events:
@@ -1244,7 +1650,8 @@ Rules:
 - include enough melody notes for immediate playback across sections (at least ~1 event per bar on average)
 - carry and develop motifs across sections using motif_context
 - melody pitch range commonly C4-C6 unless instrument requires otherwise
-- choose instrument from requested instruments when practical: {", ".join(request.prompt.instruments)}
+- tonal center MUST remain {locked_key}; chromatic passing tones are allowed
+- instrument MUST use a requested family from {list(constraints.required_instrument_families)}: {", ".join(request.prompt.instruments)}
 - complexity={request.prompt.complexity}
 """.strip()
 
@@ -1253,11 +1660,16 @@ def _build_bass_prompt(state: _GenerationState) -> str:
     form = state["form_plan"]
     harmony = state["harmony_plan"]
     melody = state.get("melody_draft")
+    constraints = state["constraints"]
+    hard_block = prompt_parameters_hard_block(constraints)
     ticks = DEFAULT_TICKS_PER_QUARTER
     bar_ticks = bar_duration_ticks(form.time_signature, ticks)
     melody_summary = summarize_track_draft(melody)
+    locked_key = constraints.key or form.key
     return f"""
 You are composing the bass track in canonical tick timing.
+IMMUTABLE HARD CONSTRAINTS:
+{json.dumps(hard_block["hard"], ensure_ascii=True)}
 Form:
 {json.dumps(form.model_dump(), ensure_ascii=True)}
 Harmony:
@@ -1279,11 +1691,12 @@ Return JSON only:
 }}
 
 Rules:
-- follow harmonic roots and cadences
+- follow harmonic roots and cadences in locked key {locked_key}
 - stay in bass range C1-C4
 - ticks_per_quarter={ticks}; bar length={bar_ticks}
 - composition duration ticks={form.bar_count * bar_ticks}
 - include enough notes for the full form (roughly one event per bar minimum; avoid long empty stretches)
+- instrument MUST satisfy a requested bass-capable family from {list(constraints.required_instrument_families)}
 - reflect section intensity from the form plan
 """.strip()
 
@@ -1293,13 +1706,18 @@ def _build_accompaniment_prompt(state: _GenerationState) -> str:
     harmony = state["harmony_plan"]
     motif = state.get("motif_context") or ComposerMotifContext()
     request = state["request"]
+    constraints = state["constraints"]
+    hard_block = prompt_parameters_hard_block(constraints)
     melody = state.get("melody_draft")
     bass = state.get("bass_draft")
     reserved_ids = [track.id for track in (melody, bass) if track is not None and track.id]
     ticks = DEFAULT_TICKS_PER_QUARTER
     bar_ticks = bar_duration_ticks(form.time_signature, ticks)
+    locked_key = constraints.key or form.key
     return f"""
 You are composing accompaniment / harmonic support tracks in canonical tick timing.
+IMMUTABLE HARD CONSTRAINTS:
+{json.dumps(hard_block["hard"], ensure_ascii=True)}
 Form:
 {json.dumps(form.model_dump(), ensure_ascii=True)}
 Harmony:
@@ -1307,6 +1725,7 @@ Harmony:
 Motif context:
 {json.dumps(motif.model_dump(), ensure_ascii=True)}
 Requested instruments: {", ".join(request.prompt.instruments)}
+Required families: {list(constraints.required_instrument_families)}
 Reserved track IDs already used by melody/bass (do not reuse): {", ".join(reserved_ids) if reserved_ids else "none"}
 
 Return JSON only:
@@ -1339,10 +1758,12 @@ Return JSON only:
 Rules:
 - always include at least one harmony/accompaniment role track with playable events
 - for piano accompaniment prefer one piano track with staff "grand" and per-note staff treble/bass
-- add practical optional tracks such as strings/pad when requested
-- if an optional instrument is skipped, list it under skipped with a short reason
+- EVERY required instrument family must appear on at least one melody/bass/accompaniment track
+- do NOT add unrequested instrument families unless allow_extra_instrument_families is true
+- if a non-required color instrument is skipped, list it under skipped with a short reason
 - track ids must be unique within this response and must not reuse reserved melody/bass ids
 - strings/pad pitches should stay within C2-C7 (cello lows OK; avoid sub-bass mud)
+- tonal center MUST remain {locked_key}
 - ticks_per_quarter={ticks}; bar length={bar_ticks}; total bars={form.bar_count}
 - do not rely on harmony metadata as audible content
 """.strip()
@@ -1355,6 +1776,7 @@ def _append_repair_diagnostics(prompt: str, diagnostics: list[ValidationDiagnost
         + "\n\nPrevious output failed validation. Return corrected JSON only for this stage.\n"
         + "Diagnostics:\n"
         + json.dumps(payload, ensure_ascii=True)
+        + "\nHard constraints above remain immutable and MUST be satisfied.\n"
     )
 
 
@@ -1365,6 +1787,38 @@ def _infer_failed_stage(errors: list[ValidationDiagnostic]) -> str:
         str(item.context).lower() for item in errors if getattr(item, "context", None)
     )
     role_haystack = f"{messages} {contexts}"
+
+    def _stage_from_context() -> str | None:
+        for item in errors:
+            stage = (item.context or {}).get("stage") if item.context else None
+            if isinstance(stage, str) and stage:
+                return stage
+        return None
+
+    context_stage = _stage_from_context()
+
+    if codes & {
+        "constraint_key_mismatch",
+        "constraint_meter_mismatch",
+        "constraint_bar_count_mismatch",
+        "constraint_tempo_out_of_range",
+        "constraint_sections_mismatch",
+        "constraint_duration_mismatch",
+        "constraint_tonality_metadata",
+    }:
+        return "plan_form"
+    if "constraint_tonality_center" in codes:
+        # Prefer harmony restart; note-heavy failures still start at melody via context.
+        if context_stage == "compose_melody" or "note" in role_haystack:
+            return "compose_melody"
+        return "plan_harmony"
+    if codes & {
+        "constraint_missing_instrument_family",
+        "constraint_unexpected_instrument_family",
+    }:
+        return "compose_accompaniment"
+    if "constraint_normalization_rewrite" in codes or "normalization_failed" in codes:
+        return "assemble_composition"
     if "missing_required_track" in codes or "empty_required_track" in codes:
         if "melody" in role_haystack or "lead" in role_haystack:
             return "compose_melody"
@@ -1382,7 +1836,6 @@ def _infer_failed_stage(errors: list[ValidationDiagnostic]) -> str:
             return "compose_bass"
         if "harmony" in role_haystack or "accompaniment" in role_haystack or "pad" in role_haystack:
             return "compose_accompaniment"
-        # Bounds failures are compose-stage content issues, not assemble merges.
         return "compose_melody"
     if "schema_invalid" in codes:
         for item in errors:
@@ -1390,6 +1843,8 @@ def _infer_failed_stage(errors: list[ValidationDiagnostic]) -> str:
             if isinstance(failed, str) and failed:
                 return failed
         return "assemble_composition"
+    if context_stage:
+        return context_stage
     return "assemble_composition"
 
 

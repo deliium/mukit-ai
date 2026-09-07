@@ -24,6 +24,7 @@ from .services.composition_wav import CompositionWavError, load_wav_renderer_con
 from .services.composition_planner import OversizedLLMGenerationRequestError
 from .services.llm_composition_editor import edit_composition_region
 from .services.llm_music_generator import (
+    GenerationConstraintViolationError,
     InvalidLLMOutputError,
     LLMGenerationError,
     NoLLMProviderConfiguredError,
@@ -176,7 +177,7 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
 
     try:
         settings = load_llm_settings()
-        music, warnings, provider = await generate_music_json(request, settings)
+        music, warnings, provider, validation = await generate_music_json(request, settings)
         musicxml, render_warnings = render_musicxml(music)
         all_warnings = [*warnings, *render_warnings]
         logger.info(
@@ -186,6 +187,7 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
                 "model": provider.model,
                 "schema_version": music.schema_version,
                 "warning_count": len(all_warnings),
+                "validation_status": validation.status if validation else None,
             },
         )
         logger.debug(
@@ -199,6 +201,7 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
                 "events": sum(len(track.events) for track in music.tracks),
                 "duration_ticks": music.duration_ticks,
                 "musicxml_length": len(musicxml),
+                "validation_error_count": len(validation.errors) if validation else 0,
             },
         )
         return LLMMusicGenerationResponse(
@@ -207,6 +210,7 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
             model=provider.model,
             musicxml=musicxml,
             warnings=all_warnings,
+            validation=validation,
         )
     except OversizedLLMGenerationRequestError as exc:
         logger.warning(
@@ -220,6 +224,31 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
     except UnsupportedLLMProviderError as exc:
         logger.warning("LLM provider unavailable", extra={"reason": "unsupported_provider"})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GenerationConstraintViolationError as exc:
+        detail = {
+            "message": str(exc)[:500],
+            "codes": [item.code for item in exc.diagnostics if item.severity == "error"],
+            "errors": [
+                {
+                    "code": item.code,
+                    "message": item.message,
+                    "expected": item.context.get("expected"),
+                    "actual": item.context.get("actual"),
+                    "stage": item.context.get("stage"),
+                }
+                for item in exc.diagnostics
+                if item.severity == "error"
+            ][:20],
+            "validation": exc.report.model_dump() if exc.report else None,
+        }
+        logger.warning(
+            "Generation constraint violation returned as structured 502",
+            extra={
+                "codes": detail["codes"],
+                "error_count": len(detail["errors"]),
+            },
+        )
+        raise HTTPException(status_code=502, detail=detail) from exc
     except InvalidLLMOutputError as exc:
         logger.warning(
             "Invalid or non-playable LLM output could not be corrected",

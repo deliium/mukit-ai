@@ -16,6 +16,7 @@ from ..schemas import (
     CompositionEditSelection,
     CompositionRegionReplacementPatch,
     CompositionRegionTrackReplacement,
+    GenerationValidationReport,
     LLMCompositionEditRequest,
     LLMMusicGenerationRequest,
     NoteEvent,
@@ -31,6 +32,7 @@ from .fixture_compositions import (
     FixtureCompositionError,
     load_composition_fixture_cached,
 )
+from .generation_constraints import GenerationConstraints
 
 
 logger = logging.getLogger(__name__)
@@ -55,9 +57,17 @@ def is_fake_provider(provider: LLMProviderSettings | str | None) -> bool:
 async def generate_fake_music_json(
     request: LLMMusicGenerationRequest,
     provider: LLMProviderSettings,
-) -> tuple[Composition, list[str], LLMProviderSettings]:
+    *,
+    constraints: GenerationConstraints | None = None,
+) -> tuple[Composition, list[str], LLMProviderSettings, GenerationValidationReport | None]:
     """Return a fixture-backed multi-track Composition without calling a real LLM."""
+    from .generation_constraints import (
+        build_generation_constraints,
+        validate_generation_constraints,
+    )
+
     _maybe_inject_malformed("generate")
+    active_constraints = constraints or build_generation_constraints(request)
 
     logger.info(
         "Fake LLM music generation started",
@@ -67,6 +77,7 @@ async def generate_fake_music_json(
             "duration_bars": request.prompt.duration_bars,
             "instrument_count": len(request.prompt.instruments),
             "fixture": FIXTURE_16BAR_MULTITRACK,
+            "constraint_key": active_constraints.key,
         },
     )
 
@@ -84,17 +95,55 @@ async def generate_fake_music_json(
     warnings: list[str] = [
         "Fake LLM mode: returned deterministic fixture composition (no API credits used).",
     ]
-    if request.prompt.duration_bars != music.bar_count:
-        warnings.append(
-            f"Fake LLM ignored requested duration_bars={request.prompt.duration_bars}; "
-            f"fixture has bar_count={music.bar_count}."
+
+    # Transform soft-compatible hard fields; refuse contradictory hard mismatches.
+    updates: dict[str, object] = {}
+    if music.tempo < active_constraints.tempo_min:
+        updates["tempo"] = active_constraints.tempo_min
+    elif music.tempo > active_constraints.tempo_max:
+        updates["tempo"] = active_constraints.tempo_max
+
+    if active_constraints.duration_bars != music.bar_count:
+        raise FakeLLMError(
+            "Fake LLM fixture cannot satisfy requested duration_bars="
+            f"{active_constraints.duration_bars}; fixture has bar_count={music.bar_count}"
         )
-        logger.debug(
-            "Fake LLM duration_bars differs from fixture",
-            extra={
-                "requested_duration_bars": request.prompt.duration_bars,
-                "fixture_bar_count": music.bar_count,
-            },
+    if active_constraints.time_signature != music.time_signature:
+        raise FakeLLMError(
+            "Fake LLM fixture cannot satisfy requested time_signature="
+            f"{active_constraints.time_signature}; fixture has {music.time_signature}"
+        )
+    if active_constraints.key_user_specified and active_constraints.key != music.key:
+        raise FakeLLMError(
+            "Fake LLM fixture cannot satisfy requested key="
+            f"{active_constraints.key}; fixture has key={music.key}"
+        )
+    if active_constraints.sections_user_specified and active_constraints.sections is not None:
+        actual = [(section.type, section.start_bar, section.bar_count) for section in music.sections]
+        expected = [
+            (section.type, section.start_bar, section.bar_count) for section in active_constraints.sections
+        ]
+        if actual != expected:
+            raise FakeLLMError(
+                "Fake LLM fixture cannot satisfy requested section sequence/bar counts"
+            )
+
+    if updates:
+        music = music.model_copy(update=updates)
+        warnings.append(
+            "Fake LLM adjusted fixture tempo into the requested inclusive bounds."
+        )
+
+    report = validate_generation_constraints(music, active_constraints)
+    if not report.ok:
+        codes = [item.code for item in report.errors]
+        logger.error(
+            "Fake LLM fixture failed generation constraint gate",
+            extra={"error_codes": codes, "status": report.status},
+        )
+        raise FakeLLMError(
+            "Fake LLM fixture failed generation constraint validation: "
+            + ", ".join(codes)
         )
 
     event_count = sum(len(track.events) for track in music.tracks)
@@ -107,6 +156,7 @@ async def generate_fake_music_json(
             "track_count": len(music.tracks),
             "event_count": event_count,
             "warning_count": len(warnings),
+            "validation_status": report.status,
         },
     )
     logger.debug(
@@ -116,9 +166,10 @@ async def generate_fake_music_json(
             "tempo": music.tempo,
             "time_signature": music.time_signature,
             "track_ids": [track.id for track in music.tracks],
+            "constraint_error_count": len(report.errors),
         },
     )
-    return music, warnings, provider
+    return music, warnings, provider, report
 
 
 async def edit_fake_composition_region(
