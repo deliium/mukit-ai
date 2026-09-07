@@ -123,6 +123,7 @@ def _render_canonical_musicxml(composition: Composition) -> tuple[str, list[str]
                         composition.tempo,
                         include_markings=index == 1,
                     )
+                    measure.insert(0, _clef_for_composition_track(clef, track))
                 # Chord symbols are notation metadata only; attach once on the first part.
                 if index == 1:
                     _append_chord_symbol(harmony, measure, harmony_by_bar.get(bar_number), warnings)
@@ -237,6 +238,7 @@ def _render_legacy_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
                 measure = stream.Measure(number=bar_number)
                 if bar_number == 1:
                     _insert_staff_metadata(key, meter, tempo, measure, music, index == 1)
+                    measure.insert(0, _clef_for_legacy_track(clef, track))
                 chord_name = harmony_by_bar.get(bar_number)
                 _append_chord_symbol(harmony, measure, chord_name, warnings)
                 measure_notes = notes_by_track_staff_bar.get((index, "treble", bar_number), [])
@@ -567,6 +569,44 @@ def _default_staff_for_pitch(pitch: str) -> str:
 
 def _is_piano_composition_track(track: CompositionTrack) -> bool:
     return "piano" in track.instrument.lower() or track.staff == "grand"
+
+
+def _uses_bass_clef(*, role: str, instrument: str, staff: str | None = None) -> bool:
+    if staff == "bass":
+        return True
+    if role == "bass":
+        return True
+    return "bass" in instrument.lower()
+
+
+def _clef_for_composition_track(clef_module, track: CompositionTrack):
+    uses_bass = _uses_bass_clef(role=track.role, instrument=track.instrument, staff=track.staff)
+    clef_name = "bass" if uses_bass else "treble"
+    logger.info(
+        "[FIX] Applied clef for non-piano composition track",
+        extra={
+            "track_id": track.id,
+            "role": track.role,
+            "instrument": track.instrument,
+            "staff": track.staff,
+            "clef": clef_name,
+        },
+    )
+    return clef_module.BassClef() if uses_bass else clef_module.TrebleClef()
+
+
+def _clef_for_legacy_track(clef_module, track: LLMMusicTrack):
+    uses_bass = _uses_bass_clef(role=track.role, instrument=track.instrument)
+    clef_name = "bass" if uses_bass else "treble"
+    logger.info(
+        "[FIX] Applied clef for non-piano legacy track",
+        extra={
+            "role": track.role,
+            "instrument": track.instrument,
+            "clef": clef_name,
+        },
+    )
+    return clef_module.BassClef() if uses_bass else clef_module.TrebleClef()
 
 
 def _instrument_for_composition_track(instrument_module, track: CompositionTrack):
