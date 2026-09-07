@@ -7,7 +7,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from ..schemas import KEY_PATTERN, LLMMusicGenerationRequest, SUPPORTED_SECTION_TYPES, SUPPORTED_TRACK_ROLES
+from ..schemas import (
+    KEY_PATTERN,
+    LLMMusicGenerationRequest,
+    SUPPORTED_SECTION_TYPES,
+    SUPPORTED_TRACK_ROLES,
+    _midi_pitch_number,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -101,6 +107,20 @@ class ComposerDraftNote(BaseModel):
     velocity: int = Field(default=80, ge=1, le=127)
     staff: Literal["treble", "bass"] | None = None
     id: str | None = Field(default=None, max_length=120)
+
+    @field_validator("pitch")
+    @classmethod
+    def validate_draft_pitch(cls, value: str) -> str:
+        pitch = value.strip()
+        try:
+            _midi_pitch_number(pitch)
+        except ValueError as exc:
+            logger.debug(
+                "Composer draft pitch rejected",
+                extra={"pitch": value, "reason": str(exc)[:200]},
+            )
+            raise ValueError(str(exc)) from exc
+        return pitch
 
 
 class ComposerTrackDraft(BaseModel):

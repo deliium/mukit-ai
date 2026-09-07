@@ -157,31 +157,56 @@ async def generate_music_json(
             graph = _build_generation_graph()
             result = await graph.ainvoke(state)
         except InvalidLLMOutputError as exc:
-            # Stage parse failures outside the validation/repair loop still honor max_retries.
-            if state.get("retry_count", 0) >= retry_limit:
+            # Stage parse failures use a separate budget from integrity repair retries.
+            parse_retries = int(state.get("stage_retry_count", 0))
+            if parse_retries >= retry_limit:
                 logger.error(
                     "LLM staged generation failed after retries",
                     extra={
                         "error_type": type(exc).__name__,
                         "retry_count": state.get("retry_count", 0),
+                        "stage_retry_count": parse_retries,
                         "stage": state.get("current_stage"),
                         "detail": str(exc)[:300],
                     },
                 )
                 raise
-            state["retry_count"] = int(state.get("retry_count", 0)) + 1
+            state["stage_retry_count"] = parse_retries + 1
             state.setdefault("warnings", []).append(
                 f"Stage '{state.get('current_stage')}' returned invalid JSON; retrying staged generation."
             )
             logger.warning(
                 "Retrying staged generation after stage parse failure",
                 extra={
-                    "retry_count": state["retry_count"],
+                    "stage_retry_count": state["stage_retry_count"],
+                    "retry_count": state.get("retry_count", 0),
                     "stage": state.get("current_stage"),
                     "reason": str(exc)[:200],
                 },
             )
+            logger.info(
+                "[FIX] Preserved integrity repair budget after stage parse retry",
+                extra={
+                    "stage_retry_count": state["stage_retry_count"],
+                    "retry_count": state.get("retry_count", 0),
+                    "retry_limit": retry_limit,
+                },
+            )
             continue
+        except ValidationError as exc:
+            # Defense-in-depth: schema failures must not be labeled as provider/API errors.
+            logger.error(
+                "[FIX] Unexpected ValidationError remapped to InvalidLLMOutputError",
+                extra={
+                    "error_type": type(exc).__name__,
+                    "error_detail": str(exc)[:200],
+                    "stage": state.get("current_stage"),
+                    "retry_count": state.get("retry_count", 0),
+                },
+            )
+            raise InvalidLLMOutputError(
+                f"LLM returned invalid composition schema: {str(exc)[:200]}"
+            ) from exc
         except LLMGenerationError:
             raise
         except Exception as exc:
@@ -390,6 +415,97 @@ async def _compose_accompaniment(state: _GenerationState) -> _GenerationState:
     )
 
 
+def _compose_stage_for_role(role: str | None) -> str:
+    normalized = (role or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized in {"melody", "lead"}:
+        return "compose_melody"
+    if normalized == "bass":
+        return "compose_bass"
+    if normalized in {"harmony", "pad", "countermelody", "rhythm", "accompaniment"}:
+        return "compose_accompaniment"
+    return "assemble_composition"
+
+
+def _draft_overflows_duration(draft: ComposerTrackDraft, duration_ticks: int) -> bool:
+    return any(event.start_tick + event.duration_ticks > duration_ticks for event in draft.events)
+
+
+def _infer_assemble_failed_stage(
+    exc: Exception,
+    drafts: list[ComposerTrackDraft],
+    *,
+    draft: ComposerTrackDraft | None = None,
+    duration_ticks: int | None = None,
+) -> str:
+    if draft is not None:
+        return _compose_stage_for_role(draft.role)
+
+    if isinstance(exc, ValidationError):
+        for error in exc.errors():
+            loc = error.get("loc") or ()
+            if len(loc) >= 2 and loc[0] == "tracks" and isinstance(loc[1], int):
+                index = loc[1]
+                if 0 <= index < len(drafts):
+                    return _compose_stage_for_role(drafts[index].role)
+
+    detail = str(exc).lower()
+    if duration_ticks is not None and (
+        "fit within the composition duration" in detail or "composition duration" in detail
+    ):
+        for item in drafts:
+            if _draft_overflows_duration(item, duration_ticks):
+                return _compose_stage_for_role(item.role)
+    if "melody" in detail or "lead" in detail:
+        return "compose_melody"
+    if "bass" in detail:
+        return "compose_bass"
+    if "harmony" in detail or "accompaniment" in detail or "pad" in detail:
+        return "compose_accompaniment"
+    return "assemble_composition"
+
+
+def _assemble_schema_soft_fail(
+    state: _GenerationState,
+    *,
+    stage: str,
+    exc: Exception,
+    failed_stage: str,
+    draft: ComposerTrackDraft | None = None,
+) -> _GenerationState:
+    detail = str(exc)[:300]
+    logger.error(
+        "[FIX] Assemble composition schema validation failed",
+        extra={
+            "stage": stage,
+            "failed_stage": failed_stage,
+            "error_type": type(exc).__name__,
+            "error_detail": detail,
+            "track_role": draft.role if draft is not None else None,
+            "track_id": draft.id if draft is not None else None,
+        },
+    )
+    context: dict[str, Any] = {
+        "error_type": type(exc).__name__,
+        "failed_stage": failed_stage,
+    }
+    if draft is not None:
+        context["track_role"] = draft.role
+        context["track_id"] = draft.id
+    diagnostic = ValidationDiagnostic(
+        code="schema_invalid",
+        message=f"Assemble failed schema validation: {detail[:400]}",
+        context=context,
+    )
+    cleared = {key: value for key, value in state.items() if key != "music"}
+    return {
+        **cleared,
+        "validation_ok": False,
+        "validation_diagnostics": [diagnostic],
+        "failed_stage": failed_stage,
+        "current_stage": stage,
+    }
+
+
 def _assemble_composition(state: _GenerationState) -> _GenerationState:
     stage = "assemble_composition"
     logger.info(
@@ -404,34 +520,73 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
     if form is None or harmony is None or melody is None or bass is None:
         raise InvalidLLMOutputError("Cannot assemble composition; required stage outputs are missing")
 
-    ticks_per_quarter = DEFAULT_TICKS_PER_QUARTER
-    bar_ticks = bar_duration_ticks(form.time_signature, ticks_per_quarter)
-    section_payloads = [
-        {"type": section.type, "bar_count": section.bar_count} for section in form.sections
-    ]
-    derived_sections = derive_section_boundaries(section_payloads, form.time_signature, ticks_per_quarter)
-    sections = [CompositionSection.model_validate(item) for item in derived_sections]
-    duration_ticks = form.bar_count * bar_ticks
+    drafts = [melody, bass, *accompaniment]
+    duration_ticks: int | None = None
+    try:
+        ticks_per_quarter = DEFAULT_TICKS_PER_QUARTER
+        bar_ticks = bar_duration_ticks(form.time_signature, ticks_per_quarter)
+        section_payloads = [
+            {"type": section.type, "bar_count": section.bar_count} for section in form.sections
+        ]
+        derived_sections = derive_section_boundaries(section_payloads, form.time_signature, ticks_per_quarter)
+        sections = [CompositionSection.model_validate(item) for item in derived_sections]
+        duration_ticks = form.bar_count * bar_ticks
 
-    tracks: list[CompositionTrack] = []
-    for index, draft in enumerate([melody, bass, *accompaniment], start=1):
-        tracks.append(_draft_to_track(draft, index))
+        tracks: list[CompositionTrack] = []
+        used_track_ids: set[str] = set()
+        for index, draft in enumerate(drafts, start=1):
+            try:
+                tracks.append(
+                    _draft_to_track(
+                        draft,
+                        index,
+                        used_ids=used_track_ids,
+                        duration_ticks=duration_ticks,
+                    )
+                )
+            except (ValidationError, ValueError) as exc:
+                failed_stage = _infer_assemble_failed_stage(
+                    exc,
+                    drafts,
+                    draft=draft,
+                    duration_ticks=duration_ticks,
+                )
+                return _assemble_schema_soft_fail(
+                    state,
+                    stage=stage,
+                    exc=exc,
+                    failed_stage=failed_stage,
+                    draft=draft,
+                )
 
-    harmony_items = [
-        LLMMusicHarmonyItem(bar=event.bar, chord=event.chord) for event in harmony.events
-    ]
-    composition = Composition(
-        schema_version=COMPOSITION_SCHEMA_VERSION,
-        tempo=form.tempo,
-        key=form.key,
-        time_signature=form.time_signature,
-        ticks_per_quarter=ticks_per_quarter,
-        duration_ticks=duration_ticks,
-        bar_count=form.bar_count,
-        sections=sections,
-        tracks=tracks,
-        harmony=harmony_items,
-    )
+        harmony_items = [
+            LLMMusicHarmonyItem(bar=event.bar, chord=event.chord) for event in harmony.events
+        ]
+        composition = Composition(
+            schema_version=COMPOSITION_SCHEMA_VERSION,
+            tempo=form.tempo,
+            key=form.key,
+            time_signature=form.time_signature,
+            ticks_per_quarter=ticks_per_quarter,
+            duration_ticks=duration_ticks,
+            bar_count=form.bar_count,
+            sections=sections,
+            tracks=tracks,
+            harmony=harmony_items,
+        )
+    except (ValidationError, ValueError) as exc:
+        failed_stage = _infer_assemble_failed_stage(
+            exc,
+            drafts,
+            duration_ticks=duration_ticks,
+        )
+        return _assemble_schema_soft_fail(
+            state,
+            stage=stage,
+            exc=exc,
+            failed_stage=failed_stage,
+        )
+
     logger.info(
         "Composer stage completed",
         extra={
@@ -469,17 +624,29 @@ def _validate_composition(state: _GenerationState) -> _GenerationState:
         extra=_stage_log_extra(state, stage, attempt=state.get("retry_count", 0)),
     )
     if music is None:
-        diagnostics = [
-            ValidationDiagnostic(
-                code="schema_invalid",
-                message="No assembled composition available for validation",
+        existing = list(state.get("validation_diagnostics") or [])
+        failed_stage = state.get("failed_stage") or "assemble_composition"
+        if existing:
+            diagnostics = existing
+            logger.info(
+                "[FIX] Preserving assemble schema diagnostics through validate",
+                extra={
+                    "failed_stage": failed_stage,
+                    "diagnostic_codes": [item.code for item in diagnostics],
+                },
             )
-        ]
+        else:
+            diagnostics = [
+                ValidationDiagnostic(
+                    code="schema_invalid",
+                    message="No assembled composition available for validation",
+                )
+            ]
         return {
             **state,
             "validation_ok": False,
             "validation_diagnostics": diagnostics,
-            "failed_stage": "assemble_composition",
+            "failed_stage": failed_stage,
             "current_stage": stage,
         }
 
@@ -542,7 +709,6 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
     updated: _GenerationState = {
         **state,
         "retry_count": retry_count,
-        "stage_retry_count": retry_count,
         "repair_target": repair_target,
         "current_stage": stage,
         "warnings": warnings,
@@ -842,7 +1008,85 @@ def _after_accompaniment_stage(
     }
 
 
-def _draft_to_track(draft: ComposerTrackDraft, index: int) -> CompositionTrack:
+def _allocate_unique_track_id(
+    preferred: str | None,
+    instrument: str,
+    index: int,
+    used_ids: set[str],
+) -> str:
+    candidates: list[str] = []
+    if preferred:
+        candidates.append(preferred)
+    fallback = _track_id(instrument, index)
+    if fallback not in candidates:
+        candidates.append(fallback)
+    for candidate in candidates:
+        if candidate not in used_ids:
+            used_ids.add(candidate)
+            return candidate
+    base = preferred or fallback
+    suffix = 2
+    while True:
+        candidate = f"{base}-{suffix}"
+        if candidate not in used_ids:
+            used_ids.add(candidate)
+            return candidate
+        suffix += 1
+
+
+def _fit_events_to_duration(
+    draft_events: list,
+    duration_ticks: int,
+    *,
+    track_role: str,
+    preferred_track_id: str | None,
+) -> list[NoteEvent]:
+    fitted: list[NoteEvent] = []
+    truncated = 0
+    dropped = 0
+    for event in draft_events:
+        if event.start_tick >= duration_ticks:
+            dropped += 1
+            continue
+        duration = event.duration_ticks
+        if event.start_tick + duration > duration_ticks:
+            duration = duration_ticks - event.start_tick
+            if duration <= 0:
+                dropped += 1
+                continue
+            truncated += 1
+        fitted.append(
+            NoteEvent(
+                pitch=event.pitch,
+                start_tick=event.start_tick,
+                duration_ticks=duration,
+                velocity=event.velocity,
+                staff=event.staff,
+                id=event.id,
+            )
+        )
+    if truncated or dropped:
+        logger.info(
+            "[FIX] Clamped assemble events to composition duration",
+            extra={
+                "track_role": track_role,
+                "track_id": preferred_track_id,
+                "duration_ticks": duration_ticks,
+                "truncated_count": truncated,
+                "dropped_count": dropped,
+                "kept_count": len(fitted),
+            },
+        )
+    return fitted
+
+
+def _draft_to_track(
+    draft: ComposerTrackDraft,
+    index: int,
+    *,
+    used_ids: set[str] | None = None,
+    duration_ticks: int | None = None,
+) -> CompositionTrack:
     instrument = draft.instrument
     midi_program = draft.midi_program
     if midi_program is None:
@@ -850,19 +1094,43 @@ def _draft_to_track(draft: ComposerTrackDraft, index: int) -> CompositionTrack:
     channel = draft.channel
     if channel is None:
         channel = 10 if draft.is_drum else _melodic_channel(index)
-    events = [
-        NoteEvent(
-            pitch=event.pitch,
-            start_tick=event.start_tick,
-            duration_ticks=event.duration_ticks,
-            velocity=event.velocity,
-            staff=event.staff,
-            id=event.id,
+    preferred = draft.id or None
+    if duration_ticks is None:
+        events = [
+            NoteEvent(
+                pitch=event.pitch,
+                start_tick=event.start_tick,
+                duration_ticks=event.duration_ticks,
+                velocity=event.velocity,
+                staff=event.staff,
+                id=event.id,
+            )
+            for event in draft.events
+        ]
+    else:
+        events = _fit_events_to_duration(
+            draft.events,
+            duration_ticks,
+            track_role=draft.role,
+            preferred_track_id=preferred,
         )
-        for event in draft.events
-    ]
+    if used_ids is None:
+        track_id = preferred or _track_id(instrument, index)
+    else:
+        track_id = _allocate_unique_track_id(preferred, instrument, index, used_ids)
+        if preferred and track_id != preferred:
+            logger.info(
+                "[FIX] Remapped duplicate assemble track id",
+                extra={
+                    "preferred_track_id": preferred,
+                    "resolved_track_id": track_id,
+                    "track_role": draft.role,
+                    "instrument": instrument,
+                    "assemble_index": index,
+                },
+            )
     return CompositionTrack(
-        id=draft.id or _track_id(instrument, index),
+        id=track_id,
         name=draft.name or f"{instrument.title()} {draft.role}",
         instrument=instrument,
         role=draft.role,
@@ -1015,7 +1283,7 @@ Rules:
 - stay in bass range C1-C4
 - ticks_per_quarter={ticks}; bar length={bar_ticks}
 - composition duration ticks={form.bar_count * bar_ticks}
-- include enough notes for the full form (roughly one event per bar minimum)
+- include enough notes for the full form (roughly one event per bar minimum; avoid long empty stretches)
 - reflect section intensity from the form plan
 """.strip()
 
@@ -1025,6 +1293,9 @@ def _build_accompaniment_prompt(state: _GenerationState) -> str:
     harmony = state["harmony_plan"]
     motif = state.get("motif_context") or ComposerMotifContext()
     request = state["request"]
+    melody = state.get("melody_draft")
+    bass = state.get("bass_draft")
+    reserved_ids = [track.id for track in (melody, bass) if track is not None and track.id]
     ticks = DEFAULT_TICKS_PER_QUARTER
     bar_ticks = bar_duration_ticks(form.time_signature, ticks)
     return f"""
@@ -1036,6 +1307,7 @@ Harmony:
 Motif context:
 {json.dumps(motif.model_dump(), ensure_ascii=True)}
 Requested instruments: {", ".join(request.prompt.instruments)}
+Reserved track IDs already used by melody/bass (do not reuse): {", ".join(reserved_ids) if reserved_ids else "none"}
 
 Return JSON only:
 {{
@@ -1069,6 +1341,8 @@ Rules:
 - for piano accompaniment prefer one piano track with staff "grand" and per-note staff treble/bass
 - add practical optional tracks such as strings/pad when requested
 - if an optional instrument is skipped, list it under skipped with a short reason
+- track ids must be unique within this response and must not reuse reserved melody/bass ids
+- strings/pad pitches should stay within C2-C7 (cello lows OK; avoid sub-bass mud)
 - ticks_per_quarter={ticks}; bar length={bar_ticks}; total bars={form.bar_count}
 - do not rely on harmony metadata as audible content
 """.strip()
@@ -1086,20 +1360,35 @@ def _append_repair_diagnostics(prompt: str, diagnostics: list[ValidationDiagnost
 
 def _infer_failed_stage(errors: list[ValidationDiagnostic]) -> str:
     codes = {item.code for item in errors}
+    messages = " ".join(item.message.lower() for item in errors)
+    contexts = " ".join(
+        str(item.context).lower() for item in errors if getattr(item, "context", None)
+    )
+    role_haystack = f"{messages} {contexts}"
     if "missing_required_track" in codes or "empty_required_track" in codes:
-        messages = " ".join(item.message.lower() for item in errors)
-        if "melody" in messages:
+        if "melody" in role_haystack or "lead" in role_haystack:
             return "compose_melody"
-        if "bass" in messages:
+        if "bass" in role_haystack:
             return "compose_bass"
-        if "harmony" in messages or "accompaniment" in messages:
+        if "harmony" in role_haystack or "accompaniment" in role_haystack or "pad" in role_haystack:
             return "compose_accompaniment"
         return "compose_accompaniment"
     if "sparse_harmony" in codes:
         return "plan_harmony"
-    if "schema_invalid" in codes:
-        return "assemble_composition"
     if "bar_overflow" in codes or "event_out_of_range" in codes:
+        if "melody" in role_haystack or "lead" in role_haystack:
+            return "compose_melody"
+        if "bass" in role_haystack:
+            return "compose_bass"
+        if "harmony" in role_haystack or "accompaniment" in role_haystack or "pad" in role_haystack:
+            return "compose_accompaniment"
+        # Bounds failures are compose-stage content issues, not assemble merges.
+        return "compose_melody"
+    if "schema_invalid" in codes:
+        for item in errors:
+            failed = (item.context or {}).get("failed_stage") if item.context else None
+            if isinstance(failed, str) and failed:
+                return failed
         return "assemble_composition"
     return "assemble_composition"
 

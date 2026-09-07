@@ -122,6 +122,48 @@ def test_validator_rejects_pitch_out_of_range():
     assert "event_out_of_range" in result.error_codes()
 
 
+def test_validator_allows_strings_cello_register():
+    payload = _base_composition()
+    payload["tracks"].append(
+        {
+            "id": "strings-1",
+            "name": "Strings",
+            "instrument": "strings",
+            "role": "pad",
+            "midi_program": 48,
+            "channel": 3,
+            "events": [
+                {"pitch": "E2", "start_tick": 0, "duration_ticks": 1920, "velocity": 60},
+                {"pitch": "A2", "start_tick": 1920, "duration_ticks": 1920, "velocity": 60},
+                {"pitch": "F2", "start_tick": 3840, "duration_ticks": 1920, "velocity": 60},
+                {"pitch": "B2", "start_tick": 5760, "duration_ticks": 1920, "velocity": 60},
+            ],
+        }
+    )
+    result = validate_composition_integrity(payload, complexity="simple")
+    assert result.ok
+    assert "event_out_of_range" not in result.error_codes()
+
+
+def test_validator_bass_density_softer_than_melody_for_complex():
+    payload = _base_composition()
+    # 4 bars, complex melody/harmony need 6 events; bass only needs ~2 (0.5/bar).
+    payload["tracks"][0]["events"] = [
+        {"pitch": "A4", "start_tick": i * 480, "duration_ticks": 480, "velocity": 80} for i in range(6)
+    ]
+    payload["tracks"][1]["events"] = [
+        {"pitch": "A2", "start_tick": 0, "duration_ticks": 3840, "velocity": 84},
+        {"pitch": "E2", "start_tick": 3840, "duration_ticks": 3840, "velocity": 84},
+    ]
+    payload["tracks"][2]["events"] = [
+        {"pitch": "A3", "start_tick": i * 480, "duration_ticks": 480, "velocity": 70, "staff": "bass"}
+        for i in range(6)
+    ]
+    result = validate_composition_integrity(payload, complexity="complex")
+    assert result.ok
+    assert "empty_required_track" not in result.error_codes()
+
+
 def test_validator_rejects_event_outside_composition():
     payload = _base_composition()
     payload["tracks"][0]["events"][0]["start_tick"] = 7500

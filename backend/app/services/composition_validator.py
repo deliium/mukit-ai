@@ -23,13 +23,15 @@ ROLE_PITCH_RANGES: dict[str, tuple[int, int]] = {
     "countermelody": (_midi_pitch_number("C4"), _midi_pitch_number("C6")),
     "bass": (_midi_pitch_number("C1"), _midi_pitch_number("C4")),
     "harmony": (_midi_pitch_number("C2"), _midi_pitch_number("C7")),
-    "pad": (_midi_pitch_number("C3"), _midi_pitch_number("C7")),
+    # Pads often double cello/viola color; allow ensemble lows.
+    "pad": (_midi_pitch_number("C2"), _midi_pitch_number("C7")),
     "rhythm": (_midi_pitch_number("C2"), _midi_pitch_number("C6")),
 }
 
 INSTRUMENT_PITCH_RANGES: dict[str, tuple[int, int]] = {
     "bass": (_midi_pitch_number("C1"), _midi_pitch_number("C4")),
-    "strings": (_midi_pitch_number("C3"), _midi_pitch_number("C7")),
+    # Generic "strings" covers ensemble writing including cello register.
+    "strings": (_midi_pitch_number("C2"), _midi_pitch_number("C7")),
     "violin": (_midi_pitch_number("G3"), _midi_pitch_number("C7")),
     "cello": (_midi_pitch_number("C2"), _midi_pitch_number("C5")),
     "piano": (_midi_pitch_number("C2"), _midi_pitch_number("C7")),
@@ -201,6 +203,7 @@ def _check_tracks_and_density(
         if track.is_drum:
             continue
         if track.role in REQUIRED_MELODY_ROLES | REQUIRED_BASS_ROLES | ACCOMPANIMENT_ROLES:
+            track_min_events = _min_events_for_track(composition.bar_count, complexity, track.role)
             if not track.events:
                 errors.append(
                     ValidationDiagnostic(
@@ -209,7 +212,7 @@ def _check_tracks_and_density(
                         context={"track_id": track.id, "role": track.role},
                     )
                 )
-            elif len(track.events) < min_events:
+            elif len(track.events) < track_min_events:
                 errors.append(
                     ValidationDiagnostic(
                         code="empty_required_track",
@@ -221,7 +224,8 @@ def _check_tracks_and_density(
                             "track_id": track.id,
                             "role": track.role,
                             "event_count": len(track.events),
-                            "min_events": min_events,
+                            "min_events": track_min_events,
+                            "complexity_min_events": min_events,
                         },
                     )
                 )
@@ -452,3 +456,11 @@ def _pitch_range_for_track(role: str, instrument: str, staff: str | None) -> tup
 def _min_events_for_complexity(bar_count: int, complexity: str) -> int:
     per_bar = {"simple": 0.5, "moderate": 1.0, "complex": 1.5}.get(complexity, 1.0)
     return max(1, int(bar_count * per_bar))
+
+
+def _min_events_for_track(bar_count: int, complexity: str, role: str) -> int:
+    """Bass often sustains whole/half notes; do not require melody-like density."""
+    base = _min_events_for_complexity(bar_count, complexity)
+    if role in REQUIRED_BASS_ROLES:
+        return max(1, min(base, int(bar_count * 0.5)))
+    return base

@@ -9,7 +9,7 @@ from app.llm_settings import LLMProviderSettings, LLMSettings
 from app.main import app
 from app.schemas import LLMMusicGenerationRequest
 from app.services import llm_music_generator
-from app.services.composition_planner import OversizedLLMGenerationRequestError
+from app.services.composition_planner import ComposerDraftNote, OversizedLLMGenerationRequestError
 from app.services.llm_music_generator import (
     InvalidLLMOutputError,
     UnsupportedLLMProviderError,
@@ -75,7 +75,15 @@ def _events_every_bar(pitch: str, bars: int = 16, velocity: int = 80, staff: str
     return events
 
 
-def _stage_payloads(*, omit_melody: bool = False, bad_first_melody: bool = False) -> dict[str, str]:
+def _stage_payloads(
+    *,
+    omit_melody: bool = False,
+    bad_first_melody: bool = False,
+    invalid_pitch: str | None = None,
+    overflow_melody: bool = False,
+    slight_overflow_melody: bool = False,
+    duplicate_track_ids: bool = False,
+) -> dict[str, str]:
     form = {
         "tempo": 80,
         "key": "A minor",
@@ -99,6 +107,37 @@ def _stage_payloads(*, omit_melody: bool = False, bad_first_melody: bool = False
     melody_events = [] if omit_melody else _events_every_bar("A4", staff="treble")
     if bad_first_melody:
         melody_events = _events_every_bar("A4", bars=2, staff="treble")
+    if invalid_pitch:
+        melody_events = [
+            {
+                "pitch": invalid_pitch,
+                "start_tick": 0,
+                "duration_ticks": TICKS,
+                "velocity": 80,
+                "staff": "treble",
+            }
+        ]
+    if overflow_melody:
+        melody_events = [
+            {
+                "pitch": "A4",
+                "start_tick": 16 * BAR_TICKS,
+                "duration_ticks": TICKS,
+                "velocity": 80,
+                "staff": "treble",
+            }
+        ]
+    if slight_overflow_melody:
+        # Keep in-bounds notes and one note that ends past composition duration.
+        melody_events = _events_every_bar("A4", bars=15, staff="treble") + [
+            {
+                "pitch": "A4",
+                "start_tick": 15 * BAR_TICKS,
+                "duration_ticks": BAR_TICKS + TICKS,
+                "velocity": 80,
+                "staff": "treble",
+            }
+        ]
     melody = {
         "track": {
             "id": "melody-1",
@@ -125,25 +164,30 @@ def _stage_payloads(*, omit_melody: bool = False, bad_first_melody: bool = False
             "events": _events_every_bar("A2", velocity=84),
         }
     }
+    accompaniment_tracks = [
+        {
+            "id": "harmony-1",
+            "name": "Piano Accompaniment",
+            "instrument": "piano",
+            "role": "harmony",
+            "staff": "grand",
+            "events": _events_every_bar("A3", velocity=70, staff="bass")
+            + _events_every_bar("C5", velocity=68, staff="treble"),
+        },
+        {
+            "id": "strings-1",
+            "name": "Strings",
+            "instrument": "strings",
+            "role": "pad",
+            "events": _events_every_bar("E4", velocity=60),
+        },
+    ]
+    if duplicate_track_ids:
+        # Collide with melody and within accompaniment list.
+        accompaniment_tracks[0]["id"] = "melody-1"
+        accompaniment_tracks[1]["id"] = "melody-1"
     accompaniment = {
-        "tracks": [
-            {
-                "id": "harmony-1",
-                "name": "Piano Accompaniment",
-                "instrument": "piano",
-                "role": "harmony",
-                "staff": "grand",
-                "events": _events_every_bar("A3", velocity=70, staff="bass")
-                + _events_every_bar("C5", velocity=68, staff="treble"),
-            },
-            {
-                "id": "strings-1",
-                "name": "Strings",
-                "instrument": "strings",
-                "role": "pad",
-                "events": _events_every_bar("E4", velocity=60),
-            },
-        ],
+        "tracks": accompaniment_tracks,
         "skipped": [],
     }
     return {
@@ -155,9 +199,16 @@ def _stage_payloads(*, omit_melody: bool = False, bad_first_melody: bool = False
     }
 
 
-def _install_stage_mock(monkeypatch, payloads: dict[str, str], *, fail_melody_once: bool = False):
+def _install_stage_mock(
+    monkeypatch,
+    payloads: dict[str, str],
+    *,
+    fail_melody_once: bool = False,
+    fail_accompaniment_parse_once: bool = False,
+):
     calls: list[str] = []
     melody_attempts = {"count": 0}
+    accompaniment_attempts = {"count": 0}
 
     async def fake_invoke(state, prompt: str) -> str:
         stage = state.get("current_stage") or state.get("repair_target") or "plan_form"
@@ -185,7 +236,15 @@ def _install_stage_mock(monkeypatch, payloads: dict[str, str], *, fail_melody_on
             stage = "compose_accompaniment"
 
         calls.append(stage)
+        if stage == "compose_accompaniment" and fail_accompaniment_parse_once:
+            accompaniment_attempts["count"] += 1
+            if accompaniment_attempts["count"] == 1:
+                return "{not-valid-json"
         if stage == "compose_melody" and fail_melody_once:
+            # When combined with accompaniment parse failure, inject sparse melody only on the
+            # restarted graph so integrity repair still has budget left.
+            if fail_accompaniment_parse_once and accompaniment_attempts["count"] == 0:
+                return payloads[stage]
             melody_attempts["count"] += 1
             if melody_attempts["count"] == 1:
                 return json.dumps(
@@ -291,6 +350,27 @@ def test_staged_generation_repairs_sparse_melody(monkeypatch, caplog):
     assert "Composer repair attempt started" in caplog.text
 
 
+def test_stage_parse_retry_preserves_integrity_repair_budget(monkeypatch, caplog):
+    """Accompaniment parse failure must not burn the integrity repair retry_count."""
+    caplog.set_level(logging.INFO)
+    payloads = _stage_payloads()
+    _install_stage_mock(
+        monkeypatch,
+        payloads,
+        fail_accompaniment_parse_once=True,
+        fail_melody_once=True,
+    )
+    request = LLMMusicGenerationRequest.model_validate(
+        {**_request().model_dump(), "options": {"max_retries": 1}}
+    )
+    music, warnings, provider = asyncio.run(generate_music_json(request, _settings()))
+    assert music.schema_version == "composition.v1"
+    assert "[FIX] Preserved integrity repair budget after stage parse retry" in caplog.text
+    assert "Composer repair attempt started" in caplog.text
+    assert "Repair budget exhausted after validation failure" not in caplog.text
+    assert provider.provider == "openai"
+
+
 def test_staged_generation_repair_exhaustion(monkeypatch):
     payloads = _stage_payloads(omit_melody=True)
     _install_stage_mock(monkeypatch, payloads)
@@ -349,3 +429,82 @@ def test_api_invalid_output_returns_actionable_502(monkeypatch):
     detail = response.json()["detail"]
     assert isinstance(detail, str) and detail
     assert "empty_required_track" in detail or "non-playable" in detail or "missing" in detail.lower()
+
+
+@pytest.mark.parametrize("pitch", ["C4", "F#3", "Bb2"])
+def test_composer_draft_note_accepts_scientific_pitch(pitch):
+    note = ComposerDraftNote.model_validate(
+        {"pitch": pitch, "start_tick": 0, "duration_ticks": TICKS, "velocity": 80}
+    )
+    assert note.pitch == pitch
+
+
+@pytest.mark.parametrize("pitch", ["H4", "C", "X9"])
+def test_composer_draft_note_rejects_invalid_scientific_pitch(pitch):
+    with pytest.raises(Exception):
+        ComposerDraftNote.model_validate(
+            {"pitch": pitch, "start_tick": 0, "duration_ticks": TICKS, "velocity": 80}
+        )
+
+
+def test_invalid_draft_pitch_is_not_provider_failure(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR)
+    payloads = _stage_payloads(invalid_pitch="H4")
+    _install_stage_mock(monkeypatch, payloads)
+    request = LLMMusicGenerationRequest.model_validate(
+        {**_request().model_dump(), "options": {"max_retries": 0}}
+    )
+    with pytest.raises(InvalidLLMOutputError) as exc_info:
+        asyncio.run(generate_music_json(request, _settings()))
+    message = str(exc_info.value)
+    assert type(exc_info.value) is InvalidLLMOutputError
+    assert "LLM provider request failed" not in message
+    assert "invalid JSON" in message.lower() or "scientific" in message.lower() or "pitch" in message.lower()
+    assert "LLM provider/API failure" not in caplog.text
+
+
+def test_assemble_clamps_slightly_overflowing_events(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    payloads = _stage_payloads(slight_overflow_melody=True)
+    _install_stage_mock(monkeypatch, payloads)
+    music, warnings, provider = asyncio.run(generate_music_json(_request(), _settings()))
+    melody = next(track for track in music.tracks if track.role == "melody")
+    assert melody.events
+    assert all(event.start_tick + event.duration_ticks <= music.duration_ticks for event in melody.events)
+    last = max(melody.events, key=lambda event: event.start_tick + event.duration_ticks)
+    assert last.start_tick + last.duration_ticks == music.duration_ticks
+    assert "[FIX] Clamped assemble events to composition duration" in caplog.text
+    assert "Track events must fit within the composition duration" not in caplog.text
+    assert provider.provider == "openai"
+
+
+def test_past_end_only_melody_is_not_provider_failure(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR)
+    payloads = _stage_payloads(overflow_melody=True)
+    _install_stage_mock(monkeypatch, payloads)
+    request = LLMMusicGenerationRequest.model_validate(
+        {**_request().model_dump(), "options": {"max_retries": 0}}
+    )
+    with pytest.raises(InvalidLLMOutputError) as exc_info:
+        asyncio.run(generate_music_json(request, _settings()))
+    message = str(exc_info.value)
+    assert type(exc_info.value) is InvalidLLMOutputError
+    assert "LLM provider request failed" not in message
+    assert "LLM provider/API failure" not in caplog.text
+    # Past-end-only note is dropped at assemble; integrity then rejects empty melody.
+    assert "empty_required_track" in message or "sparse" in message.lower() or "non-playable" in message
+
+
+def test_assemble_remaps_duplicate_track_ids(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    payloads = _stage_payloads(duplicate_track_ids=True)
+    _install_stage_mock(monkeypatch, payloads)
+    music, warnings, provider = asyncio.run(generate_music_json(_request(), _settings()))
+    track_ids = [track.id for track in music.tracks]
+    assert len(track_ids) == len(set(track_ids))
+    assert "melody-1" in track_ids
+    assert any(track.role == "harmony" for track in music.tracks)
+    assert any(track.role == "pad" for track in music.tracks)
+    assert "[FIX] Remapped duplicate assemble track id" in caplog.text
+    assert "Track IDs must be unique" not in caplog.text
+    assert provider.provider == "openai"
