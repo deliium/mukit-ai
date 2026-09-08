@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import styled from 'styled-components';
+import ImportControls from './ImportControls.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const Container = styled.div`
@@ -179,12 +180,14 @@ const ProjectBrowser = () => {
         </Button>
       </Toolbar>
 
+      <ImportControls mode="create-project" title="Import as new project" />
+
       {uiError && <p style={{ color: '#991b1b' }}>{uiError}</p>}
       {projectListStatus === 'loading' && <p>Loading projects…</p>}
 
       {!projectList.length && projectListStatus !== 'loading' ? (
         <EmptyState>
-          No projects yet. Create one to generate music and keep edits after Docker restarts.
+          No projects yet. Create a blank project or import MIDI / MusicXML above to get started.
         </EmptyState>
       ) : (
         <List>

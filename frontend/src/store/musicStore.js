@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { renderMusicXmlPreview } from '../api/musicApi.js';
+import { importMidi, importMusicXml, renderMusicXmlPreview } from '../api/musicApi.js';
 import {
   createProject as createProjectRequest,
   deleteProject as deleteProjectRequest,
@@ -106,6 +106,11 @@ export const useMusicStore = create((set, get) => ({
   saveError: '',
   lastSavedPersistRevision: 'empty',
   generationMeta: null,
+
+  importStatus: 'idle',
+  importError: '',
+  importReport: null,
+  notationReport: null,
 
   setApiStatus: (apiStatus) => {
     console.debug('[musicStore] API status changed', { apiStatus });
@@ -214,6 +219,170 @@ export const useMusicStore = create((set, get) => ({
   failGeneration: (message) => {
     console.error('[musicStore] LLM generation failed', { message });
     set({ generationStatus: 'error', uiError: message });
+  },
+
+  startImport: ({ format = null } = {}) => {
+    if (get().importStatus === 'loading') {
+      console.warn('[musicStore] Duplicate import blocked', { format });
+      return false;
+    }
+    console.info('[musicStore] Composition import started', { format });
+    set({
+      importStatus: 'loading',
+      importError: '',
+      importReport: null,
+      notationReport: null,
+      uiError: '',
+    });
+    return true;
+  },
+
+  completeImport: ({
+    composition,
+    musicxml = '',
+    import_report: importReport = null,
+    notation_report: notationReport = null,
+  }) => {
+    const { composition: withIds } = ensureCompositionNoteIds(composition);
+    const nextComposition = prepareCompositionForStore(withIds);
+    const validation = validateMusicJson(nextComposition);
+    if (!validation.valid || !isCanonicalComposition(nextComposition)) {
+      const message = validation.message || 'Imported composition is invalid';
+      console.error('[musicStore] Import rejected after validation', { message });
+      set({
+        importStatus: 'error',
+        importError: message,
+      });
+      return false;
+    }
+
+    // Supersede in-flight saves / timers before replacing workspace music.
+    cancelAutosaveTimer();
+    autosaveRequestSeq += 1;
+
+    const revision = compositionRevisionKey(nextComposition);
+    const notationRev = notationRevisionKey(nextComposition);
+    const eventCount = countEvents(nextComposition);
+    const featureSummary = countV2FeatureSummary(nextComposition);
+    console.info('[musicStore] Composition import completed', {
+      schemaVersion: nextComposition.schema_version,
+      trackCount: nextComposition.tracks?.length || 0,
+      eventCount,
+      barCount: nextComposition.bar_count || 0,
+      importStatus: importReport?.status || null,
+      importIssueCount: importReport?.issues?.length || 0,
+      projectId: get().currentProjectId,
+      ...featureSummary,
+    });
+    console.debug('[musicStore] Import state installed', {
+      compositionRevision: revision.slice(0, 48),
+      musicXmlLength: musicxml?.length || 0,
+      hasNotationReport: Boolean(notationReport),
+    });
+
+    set({
+      generatedMusicJson: nextComposition,
+      editedMusicJson: nextComposition,
+      musicXml: musicxml || '',
+      warnings: [],
+      generationStatus: 'idle',
+      uiError: '',
+      compositionRevision: revision,
+      notationRevision: notationRev,
+      trackControls: buildDefaultTrackControls(nextComposition),
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+      pianoRollTrackId: pickDefaultTrackId(nextComposition),
+      pianoRollNoteId: null,
+      pianoRollNoteIds: [],
+      pianoRollEditStatus: 'idle',
+      pianoRollNotationStatus: 'idle',
+      pianoRollNotationError: '',
+      noteEditUndoStack: [],
+      noteEditRedoStack: [],
+      aiEditStartBar: null,
+      aiEditEndBar: null,
+      aiEditTrackMode: 'current',
+      aiEditTrackIds: null,
+      aiEditInstruction: '',
+      aiEditStatus: 'idle',
+      aiEditError: '',
+      aiEditWarnings: [],
+      generationMeta: null,
+      importStatus: 'success',
+      importError: '',
+      importReport: importReport || null,
+      notationReport: notationReport || null,
+    });
+    markProjectDirty(set, get);
+    return true;
+  },
+
+  failImport: (message, { code = null } = {}) => {
+    console.error('[musicStore] Composition import failed', {
+      message,
+      code,
+    });
+    set({
+      importStatus: 'error',
+      importError: message || 'Import failed',
+    });
+  },
+
+  createImportedProject: async (file, { format = 'midi' } = {}) => {
+    const started = get().startImport({ format });
+    if (!started) {
+      return null;
+    }
+    console.debug('[musicStore] Import-as-project parse started', {
+      format,
+      byteCount: typeof file?.size === 'number' ? file.size : null,
+    });
+    try {
+      const imported = format === 'musicxml'
+        ? await importMusicXml(file)
+        : await importMidi(file);
+      const name = defaultImportedProjectName(file);
+      const project = await createProjectRequest({
+        name,
+        composition: imported.composition,
+      });
+      cancelAutosaveTimer();
+      autosaveRequestSeq += 1;
+      hydrateProject(set, get, project, { openComposer: true, markSaved: true });
+      set({
+        musicXml: imported.musicxml || '',
+        generationMeta: null,
+        importStatus: 'success',
+        importError: '',
+        importReport: imported.import_report || null,
+        notationReport: imported.notation_report || null,
+        uiError: '',
+      });
+      console.info('[musicStore] Imported project created', {
+        projectId: project.id,
+        format,
+        trackCount: imported.composition?.tracks?.length || 0,
+        eventCount: countEvents(imported.composition),
+        importStatus: imported.import_report?.status || null,
+      });
+      return {
+        project,
+        import_report: imported.import_report || null,
+        notation_report: imported.notation_report || null,
+      };
+    } catch (error) {
+      const message = error.message || 'Import failed';
+      console.error('[musicStore] Import-as-project failed before/during create', {
+        format,
+        code: error.code || null,
+        status: error.status || null,
+        message,
+      });
+      get().failImport(message, { code: error.code || null });
+      throw error;
+    }
   },
 
   setEditedMusicJson: (editedMusicJson) => {
@@ -1167,6 +1336,10 @@ export const useMusicStore = create((set, get) => ({
           saveStatus: 'saved',
           saveError: '',
           generationMeta: null,
+          importStatus: 'idle',
+          importError: '',
+          importReport: null,
+          notationReport: null,
           noteEditUndoStack: [],
           noteEditRedoStack: [],
         });
@@ -1183,11 +1356,14 @@ export const useMusicStore = create((set, get) => ({
   saveCurrentProject: async ({ reason = 'manual' } = {}) => {
     const state = get();
     const projectId = state.currentProjectId;
-    const generationForSave = {
-      provider: state.generationMeta?.provider || state.selectedProvider || null,
-      model: state.generationMeta?.model || state.selectedModel || null,
-      prompt: buildPromptSnapshot(state.prompt),
-    };
+    const hasGenerationMeta = Boolean(state.generationMeta);
+    const generationForSave = hasGenerationMeta
+      ? {
+        provider: state.generationMeta.provider || state.selectedProvider || null,
+        model: state.generationMeta.model || state.selectedModel || null,
+        prompt: buildPromptSnapshot(state.prompt),
+      }
+      : null;
     const persistRevisionAtStart = projectPersistRevisionKey(state.editedMusicJson, generationForSave);
     const fingerprintDirty = persistRevisionAtStart !== state.lastSavedPersistRevision;
     const eventCount = countEvents(state.editedMusicJson);
@@ -1247,7 +1423,9 @@ export const useMusicStore = create((set, get) => ({
     const payload = {
       composition: composition || undefined,
       clear_composition: !composition,
-      generation: generationForSave,
+      ...(hasGenerationMeta
+        ? { generation: generationForSave }
+        : { clear_generation: true }),
     };
 
     console.info('[musicStore] Saving project', {
@@ -1256,18 +1434,19 @@ export const useMusicStore = create((set, get) => ({
       requestId,
       eventCount,
       persistRevision: persistRevisionAtStart.slice(0, 48),
-      generationProvider: generationForSave.provider,
-      generationModel: generationForSave.model,
-      promptGenre: generationForSave.prompt?.genre || null,
-      promptMood: generationForSave.prompt?.mood || null,
+      generationProvider: generationForSave?.provider || null,
+      generationModel: generationForSave?.model || null,
+      clearGeneration: !hasGenerationMeta,
+      promptGenre: generationForSave?.prompt?.genre || null,
+      promptMood: generationForSave?.prompt?.mood || null,
     });
     console.debug('[FIX] Save generation payload', {
       reason,
       projectId,
-      hasGenerationMeta: Boolean(state.generationMeta),
-      promptGenre: generationForSave.prompt?.genre || null,
-      promptMood: generationForSave.prompt?.mood || null,
-      promptKeyLength: String(generationForSave.prompt?.key || '').length,
+      hasGenerationMeta,
+      promptGenre: generationForSave?.prompt?.genre || null,
+      promptMood: generationForSave?.prompt?.mood || null,
+      promptKeyLength: String(generationForSave?.prompt?.key || '').length,
     });
     console.debug('[musicStore] Save status transition', { from: state.saveStatus, to: 'saving', reason });
     set({ saveStatus: 'saving', saveError: '' });
@@ -1311,8 +1490,8 @@ export const useMusicStore = create((set, get) => ({
         projectId,
         eventCount,
         persistRevision: persistRevisionAtStart.slice(0, 48),
-        promptGenre: generationForSave.prompt?.genre || null,
-        promptMood: generationForSave.prompt?.mood || null,
+        promptGenre: generationForSave?.prompt?.genre || null,
+        promptMood: generationForSave?.prompt?.mood || null,
       });
       console.debug('[musicStore] Save status transition', { from: 'saving', to: 'saved', reason });
       set({
@@ -1585,18 +1764,26 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
   const composition = rawComposition ? prepareCompositionForStore(rawComposition) : null;
   const revision = compositionRevisionKey(composition);
   const notationRev = notationRevisionKey(composition);
+  const hasStoredGeneration = Boolean(
+    project.generation_provider
+    || project.generation_model
+    || project.generation_prompt,
+  );
   const restoredPrompt = promptFromGenerationSnapshot(project.generation_prompt) || { ...initialPrompt };
-  // Always normalize generation meta through the form snapshot so Save dirty checks match.
-  const generationMeta = {
-    provider: project.generation_provider || null,
-    model: project.generation_model || null,
-    prompt: buildPromptSnapshot(restoredPrompt),
-  };
+  // Retain null provenance for imported / never-generated projects.
+  const generationMeta = hasStoredGeneration
+    ? {
+      provider: project.generation_provider || null,
+      model: project.generation_model || null,
+      prompt: buildPromptSnapshot(restoredPrompt),
+    }
+    : null;
   const persistRevision = projectPersistRevisionKey(composition, generationMeta);
 
   console.debug('[musicStore] Hydrating project into composer state', {
     projectId: project.id,
     hasComposition: Boolean(composition),
+    hasStoredGeneration,
     openComposer,
     markSaved,
     persistRevision: persistRevision.slice(0, 48),
@@ -1643,12 +1830,13 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
 
 function syncGenerationMetaFromPrompt(set, get, { reason = 'prompt-edit' } = {}) {
   const state = get();
-  if (!state.currentProjectId) {
+  if (!state.currentProjectId || !state.generationMeta) {
+    // Do not fabricate generation metadata for imported / never-generated projects.
     return;
   }
   const nextMeta = {
-    provider: state.generationMeta?.provider || state.selectedProvider || null,
-    model: state.generationMeta?.model || state.selectedModel || null,
+    provider: state.generationMeta.provider || state.selectedProvider || null,
+    model: state.generationMeta.model || state.selectedModel || null,
     prompt: buildPromptSnapshot(state.prompt),
   };
   const prev = state.generationMeta;
@@ -1669,6 +1857,13 @@ function syncGenerationMetaFromPrompt(set, get, { reason = 'prompt-edit' } = {})
   });
   set({ generationMeta: nextMeta });
   markProjectDirty(set, get);
+}
+
+function defaultImportedProjectName(file) {
+  const raw = String(file?.name || 'Imported Project').replace(/\\/g, '/').split('/').pop();
+  const withoutExt = raw.replace(/\.(mid|midi|musicxml|xml|mxl)$/i, '');
+  const trimmed = withoutExt.trim() || 'Imported Project';
+  return trimmed.slice(0, 200);
 }
 
 function buildPromptSnapshot(prompt) {

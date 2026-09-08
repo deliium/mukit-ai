@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import axios from 'axios';
 import { migrateV1ToV2 } from '../utils/compositionVersion.js';
-import { editCompositionRegion, generateLlmMusicJson, parseProjectionHeaders, projectionWarningsFromHeaders } from './musicApi.js';
+import { editCompositionRegion, generateLlmMusicJson, importMidi, importMusicXml, ImportApiError, parseProjectionHeaders, projectionWarningsFromHeaders } from './musicApi.js';
 
 function canonicalV1Composition() {
   return {
@@ -156,5 +156,99 @@ test('editCompositionRegion rejects missing replace_region patch', async (t) => 
       },
     }),
     /replace_region patch/,
+  );
+});
+
+test('importMidi posts FormData without forcing multipart boundary', async (t) => {
+  const previousAdapter = axios.defaults.adapter;
+  axios.defaults.adapter = async (config) => {
+    assert.equal(String(config.method || 'get').toLowerCase(), 'post');
+    assert.equal(config.url, '/imports/midi');
+    assert.ok(config.data instanceof FormData);
+    const contentType = String(
+      config.headers?.['Content-Type']
+      ?? config.headers?.['content-type']
+      ?? '',
+    );
+    assert.notEqual(contentType, 'application/x-www-form-urlencoded');
+    if (contentType) {
+      assert.ok(
+        contentType === 'false'
+        || contentType.includes('multipart/form-data')
+        || contentType === 'undefined',
+        `unexpected Content-Type for FormData upload: ${contentType}`,
+      );
+    }
+    return {
+      data: {
+        composition: migrateV1ToV2(canonicalV1Composition()),
+        musicxml: '<score-partwise/>',
+        import_report: {
+          status: 'exact',
+          issues: [],
+          summary: {
+            detected_format: 'midi',
+            display_filename: 'demo.mid',
+            input_bytes: 12,
+            target_ppq: 480,
+            source_track_count: 1,
+            result_track_count: 1,
+            source_note_count: 2,
+            result_note_count: 2,
+            bar_count: 2,
+            duration_ticks: 3840,
+          },
+        },
+        notation_report: { status: 'exact', issue_codes: [] },
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  };
+  t.after(() => {
+    axios.defaults.adapter = previousAdapter;
+  });
+
+  const file = { name: 'demo.mid', size: 4 };
+  const response = await importMidi(file);
+  assert.equal(response.composition.schema_version, 'composition.v2');
+  assert.equal(response.import_report.status, 'exact');
+  assert.equal(response.notation_report.status, 'exact');
+  assert.match(response.musicxml, /score-partwise/);
+});
+
+test('importMusicXml preserves structured error code and status', async (t) => {
+  const previousAdapter = axios.defaults.adapter;
+  axios.defaults.adapter = async () => {
+    const error = new Error('Request failed');
+    error.response = {
+      status: 415,
+      data: {
+        detail: {
+          code: 'import_unsupported_media_type',
+          message: 'Content signature does not match MusicXML import endpoint',
+          details: { detected: 'midi' },
+        },
+      },
+    };
+    throw error;
+  };
+  t.after(() => {
+    axios.defaults.adapter = previousAdapter;
+  });
+
+  const file = { name: 'bad.musicxml', size: 4 };
+  await assert.rejects(
+    () => importMusicXml(file),
+    (error) => {
+      assert.ok(error instanceof ImportApiError);
+      assert.equal(error.status, 415);
+      assert.equal(error.code, 'import_unsupported_media_type');
+      assert.match(error.message, /Content signature/);
+      assert.equal(error.details?.detected, 'midi');
+      return true;
+    },
   );
 });

@@ -235,6 +235,123 @@ export async function exportWav(composition) {
   });
 }
 
+export class ImportApiError extends Error {
+  constructor(message, { status = null, code = null, details = null } = {}) {
+    super(message);
+    this.name = 'ImportApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export async function importMidi(file) {
+  return importCompositionUpload('/imports/midi', file, { format: 'midi' });
+}
+
+export async function importMusicXml(file) {
+  return importCompositionUpload('/imports/musicxml', file, { format: 'musicxml' });
+}
+
+async function importCompositionUpload(endpoint, file, { format }) {
+  const byteCount = typeof file?.size === 'number' ? file.size : null;
+  console.debug('[musicApi] Composition import request started', {
+    format,
+    endpoint,
+    byteCount,
+  });
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    // Do not set multipart Content-Type manually; clear axios defaults so the
+    // runtime can supply the correct boundary (browser) or leave FormData intact.
+    const response = await axios.post(endpoint, formData, {
+      headers: { 'Content-Type': undefined },
+      transformRequest: [
+        (data, headers) => {
+          if (typeof FormData !== 'undefined' && data instanceof FormData) {
+            if (headers && typeof headers.set === 'function') {
+              headers.set('Content-Type', false);
+            } else if (headers) {
+              delete headers['Content-Type'];
+              delete headers['content-type'];
+            }
+          }
+          return data;
+        },
+      ],
+    });
+    const payload = response.data || {};
+    const composition = normalizeApiComposition(payload.composition, {
+      context: `${format}-import-response`,
+    });
+    const validation = validateMusicJson(composition);
+    console.debug('[musicApi] Composition import response validated', {
+      format,
+      status: response.status,
+      schemaVersion: composition.schema_version,
+      valid: validation.valid,
+      trackCount: composition.tracks?.length || 0,
+      importStatus: payload.import_report?.status || null,
+      importIssueCount: payload.import_report?.issues?.length || 0,
+      hasNotationReport: Boolean(payload.notation_report),
+    });
+    if (!validation.valid) {
+      console.error('[musicApi] Imported composition failed validation', {
+        format,
+        message: validation.message,
+      });
+      throw new ImportApiError(validation.message || 'Imported composition is invalid', {
+        status: response.status,
+        code: 'import_internal_error',
+      });
+    }
+    return {
+      composition,
+      musicxml: typeof payload.musicxml === 'string' ? payload.musicxml : '',
+      import_report: payload.import_report || null,
+      notation_report: payload.notation_report || {},
+    };
+  } catch (error) {
+    if (error instanceof ImportApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseImportErrorDetail(error.response?.data?.detail);
+    console.error('[musicApi] Composition import request failed', {
+      format,
+      endpoint,
+      status,
+      code: parsed.code,
+      message: parsed.message,
+    });
+    throw new ImportApiError(parsed.message, {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
+}
+
+function parseImportErrorDetail(detail) {
+  if (!detail) {
+    return { code: null, message: 'Unknown import failure', details: null };
+  }
+  if (typeof detail === 'string') {
+    return { code: null, message: detail, details: null };
+  }
+  if (typeof detail === 'object') {
+    const code = typeof detail.code === 'string' ? detail.code : null;
+    const message = typeof detail.message === 'string'
+      ? detail.message
+      : (typeof detail.detail === 'string' ? detail.detail : JSON.stringify(detail));
+    const details = detail.details && typeof detail.details === 'object' ? detail.details : null;
+    return { code, message, details };
+  }
+  return { code: null, message: String(detail), details: null };
+}
+
 async function exportComposition(composition, { endpoint, format, fallbackFilename, expectedType }) {
   const normalized = normalizeApiComposition(composition, { context: `${format}-export` });
   validateCanonicalForApi(normalized, { action: `${format} export` });

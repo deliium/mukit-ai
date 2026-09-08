@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { generateLlmMusicJson } from '../api/musicApi.js';
 import ComposerWorkspace from './ComposerWorkspace.jsx';
+import ImportControls from './ImportControls.jsx';
 import ProjectComposerBar from './ProjectComposerBar.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
@@ -172,6 +173,7 @@ const MusicGenerator = () => {
   const selectedModel = useMusicStore((state) => state.selectedModel);
   const prompt = useMusicStore((state) => state.prompt);
   const generatedMusicJson = useMusicStore((state) => state.generatedMusicJson);
+  const editedMusicJson = useMusicStore((state) => state.editedMusicJson);
   const generationStatus = useMusicStore((state) => state.generationStatus);
   const uiError = useMusicStore((state) => state.uiError);
   const warnings = useMusicStore((state) => state.warnings);
@@ -355,14 +357,16 @@ const MusicGenerator = () => {
               Multi-stage LLM compose in progress ({elapsedSeconds}s). This can take a minute…
             </ProgressHint>
           )}
+
+          <ImportControls mode="replace" title="Or import a score" />
         </GenerationPanel>
 
         <div>
-          {generatedMusicJson ? (
+          {editedMusicJson || generatedMusicJson ? (
             <ComposerWorkspace />
           ) : (
             <StatusMessage className="info">
-              Generate a composition to open the piano roll, notation, AI region edit, and export tools.
+              Generate or import a composition to open the piano roll, notation, AI region edit, and export tools.
             </StatusMessage>
           )}
         </div>

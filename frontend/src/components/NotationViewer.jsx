@@ -77,7 +77,11 @@ const NotationViewer = () => {
   return (
     <ViewerShell>
       <h4>Notation Preview</h4>
-      {!musicXml && <EmptyState>Generate LLM music JSON to render notation here.</EmptyState>}
+      {!musicXml && (
+        <EmptyState>
+          Import a score or generate music to render notation here.
+        </EmptyState>
+      )}
       {error && <ErrorState>{error}</ErrorState>}
       <ViewerFrame
         ref={containerRef}

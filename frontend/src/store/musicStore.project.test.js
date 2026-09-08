@@ -333,6 +333,8 @@ test('metadata-only JSON edit marks dirty and Save patches', async (t) => {
     const payload = patchPayload(patchCalls[0]);
     assert.equal(payload.composition.harmony[0].chord, 'Am');
     assert.equal(payload.composition.key, 'A minor');
+    assert.equal(payload.clear_generation, true);
+    assert.equal(payload.generation, undefined);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
@@ -629,4 +631,173 @@ test('openProject restores composer form fields from generation_prompt', async (
   assert.equal(state.prompt.sections, 'intro:4,verse:8,chorus:8');
   assert.equal(state.prompt.complexity, 'complex');
   assert.equal(state.prompt.duration_bars, 20);
+});
+
+test('open project without generation keeps generationMeta null', async (t) => {
+  const restore = installAxiosStub(async (config) => ({
+    data: {
+      id: 'p1',
+      name: 'Imported',
+      composition: structuredClone(COMPOSITION),
+      generation_provider: null,
+      generation_model: null,
+      generation_prompt: null,
+    },
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config,
+  }));
+  t.after(restore);
+
+  resetProjectState();
+  await useMusicStore.getState().openProject('p1');
+  const state = useMusicStore.getState();
+  assert.equal(state.generationMeta, null);
+  assert.equal(state.saveStatus, 'saved');
+
+  useMusicStore.getState().updatePrompt('genre', 'jazz');
+  assert.equal(useMusicStore.getState().generationMeta, null);
+  assert.equal(useMusicStore.getState().saveStatus, 'saved');
+});
+
+test('completeImport installs V2, clears generation, and marks open project dirty', async () => {
+  resetProjectState({
+    currentProjectId: 'p1',
+    currentProjectName: 'Open',
+    activeView: 'composer',
+    generationMeta: {
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      prompt: { genre: 'ambient' },
+    },
+    lastSavedPersistRevision: 'rev-saved',
+    saveStatus: 'saved',
+    aiEditStartBar: 1,
+    aiEditEndBar: 2,
+    noteEditUndoStack: [{ kind: 'edit' }],
+  });
+
+  const composition = structuredClone(COMPOSITION);
+  const ok = useMusicStore.getState().completeImport({
+    composition,
+    musicxml: '<score/>',
+    import_report: {
+      status: 'approximated',
+      issues: [{ code: 'tempo_defaulted', action: 'defaulted', severity: 'warning', message: 'tempo', count: 1 }],
+      summary: { detected_format: 'midi', display_filename: 'x.mid', input_bytes: 1, target_ppq: 480, source_track_count: 1, result_track_count: 1, source_note_count: 1, result_note_count: 1, bar_count: 1, duration_ticks: 1920 },
+    },
+    notation_report: { status: 'exact' },
+  });
+  assert.equal(ok, true);
+  const state = useMusicStore.getState();
+  assert.equal(state.importStatus, 'success');
+  assert.equal(state.editedMusicJson.schema_version, 'composition.v2');
+  assert.equal(state.generatedMusicJson.schema_version, 'composition.v2');
+  assert.equal(state.musicXml, '<score/>');
+  assert.equal(state.generationMeta, null);
+  assert.equal(state.aiEditStartBar, null);
+  assert.deepEqual(state.noteEditUndoStack, []);
+  assert.equal(state.importReport.status, 'approximated');
+  assert.equal(state.notationReport.status, 'exact');
+  assert.equal(state.saveStatus, 'unsaved');
+});
+
+test('createImportedProject parses before create and skips create on parse failure', async (t) => {
+  const createCalls = [];
+  const restore = installAxiosStub(async (config) => {
+    if (String(config.url || '').startsWith('/imports/')) {
+      const error = new Error('Request failed');
+      error.response = {
+        status: 422,
+        data: { detail: { code: 'import_malformed_source', message: 'MIDI upload is empty' } },
+      };
+      throw error;
+    }
+    if (config.method === 'post' || config.method === 'POST') {
+      createCalls.push(config);
+    }
+    return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
+  });
+  t.after(restore);
+
+  resetProjectState();
+  const file = { name: 'empty.mid', size: 0 };
+  await assert.rejects(
+    () => useMusicStore.getState().createImportedProject(file, { format: 'midi' }),
+    /MIDI upload is empty|empty|malformed/i,
+  );
+  assert.equal(createCalls.length, 0);
+  assert.equal(useMusicStore.getState().importStatus, 'error');
+  assert.equal(useMusicStore.getState().currentProjectId, null);
+});
+
+test('createImportedProject creates project after successful parse with null generation', async (t) => {
+  const createPayloads = [];
+  const restore = installAxiosStub(async (config) => {
+    if (config.url === '/imports/midi') {
+      return {
+        data: {
+          composition: structuredClone(COMPOSITION),
+          musicxml: '<score-partwise/>',
+          import_report: {
+            status: 'exact',
+            issues: [],
+            summary: {
+              detected_format: 'midi',
+              display_filename: 'song.mid',
+              input_bytes: 8,
+              target_ppq: 480,
+              source_track_count: 1,
+              result_track_count: 1,
+              source_note_count: 1,
+              result_note_count: 1,
+              bar_count: 1,
+              duration_ticks: 1920,
+            },
+          },
+          notation_report: { status: 'exact' },
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    if (config.url === '/projects' && (config.method === 'post' || config.method === 'POST')) {
+      const payload = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+      createPayloads.push(payload);
+      return {
+        data: {
+          id: 'imported-1',
+          name: payload.name,
+          composition: payload.composition,
+          generation_provider: null,
+          generation_model: null,
+          generation_prompt: null,
+        },
+        status: 201,
+        statusText: 'Created',
+        headers: {},
+        config,
+      };
+    }
+    return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
+  });
+  t.after(restore);
+
+  resetProjectState();
+  const file = { name: 'song.mid', size: 4 };
+  const result = await useMusicStore.getState().createImportedProject(file, { format: 'midi' });
+  assert.equal(createPayloads.length, 1);
+  assert.equal(createPayloads[0].name, 'song');
+  assert.equal(createPayloads[0].generation, undefined);
+  assert.equal(createPayloads[0].composition.schema_version, 'composition.v2');
+  assert.equal(result.project.id, 'imported-1');
+  const state = useMusicStore.getState();
+  assert.equal(state.currentProjectId, 'imported-1');
+  assert.equal(state.generationMeta, null);
+  assert.equal(state.importStatus, 'success');
+  assert.equal(state.saveStatus, 'saved');
+  assert.equal(state.musicXml, '<score-partwise/>');
 });
