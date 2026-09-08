@@ -11,10 +11,24 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Sequence, TYPE_CHECKING
 
+from app.analysis_schemas import (
+    ANALYSIS_ALGORITHM_VERSION,
+    ANALYSIS_MAX_CANDIDATES,
+    AnalysisEvidence,
+    InferenceMeta,
+    KeyCandidateScore,
+    KeySpanResult,
+    make_derived_id,
+    round_analysis_float,
+)
+from app.analysis_schemas import TonalityAnalysisResult as AnalysisTonalityResult
 from ..schemas import Composition, CompositionV2, _midi_pitch_number
 from .composition_timing import bar_duration_ticks, parse_time_signature
+
+if TYPE_CHECKING:
+    from .composition_analysis_context import CompositionAnalysisContext
 
 
 logger = logging.getLogger(__name__)
@@ -29,6 +43,20 @@ CONTRADICTION_SCORE_MARGIN = 0.35
 MIN_COMPETITOR_ABS_SCORE = 4.0
 # Below this absolute evidence mass, prefer warning over hard failure.
 MIN_TOTAL_EVIDENCE_MASS = 4.0
+
+# --- Analysis-path inference thresholds (duration mass in quarter-note units) ---
+MIN_INFERENCE_MASS_QUARTERS = MIN_NOTE_EVIDENCE_WEIGHT
+MIN_LOCAL_INFERENCE_MASS_QUARTERS = 2.0
+# (winner - runner_up) / winner below this with relative keys => ambiguous.
+RELATIVE_AMBIGUITY_MARGIN = 0.15
+# Fixed local-key window size and smoothing penalty ratio of top raw score.
+LOCAL_KEY_WINDOW_BARS = 2
+LOCAL_TRANSITION_PENALTY_RATIO = 0.15
+# Extra mass multipliers for optional bass / phrase-edge histograms.
+BASS_MASS_BOOST = 0.5
+EDGE_MASS_BOOST = 0.35
+# Ranking: mode major before minor when scores and pitch_class tie.
+_MODE_RANK = {"major": 0, "minor": 1}
 
 _NOTE_NAME_TO_PC = {
     "C": 0,
@@ -578,3 +606,740 @@ def _metric_weight(start_tick: int, bar_ticks: int, numerator: int) -> float:
     if beat_index == 2 and numerator >= 4:
         return 1.2
     return 1.0
+
+
+# ---------------------------------------------------------------------------
+# Analysis-path histogram scoring and neutral key inference
+# ---------------------------------------------------------------------------
+
+
+def score_keys_from_pitch_histogram(
+    pitch_class_mass: Sequence[float],
+    *,
+    bass_mass: Sequence[float] | None = None,
+    edge_mass: Sequence[float] | None = None,
+    harmony_evidence: Sequence[tuple[ParsedChord, float]] | None = None,
+) -> list[KeyCandidateScore]:
+    """Score all 24 major/minor keys from duration-weighted pitch-class mass.
+
+    Ranking is deterministic: score descending, then pitch_class ascending, then
+    mode major-before-minor. Floats are rounded via ``round_analysis_float``.
+    """
+    ranked = _score_key_candidates(
+        pitch_class_mass,
+        bass_mass=bass_mass,
+        edge_mass=edge_mass,
+        harmony_evidence=harmony_evidence,
+    )
+    return [_key_score_to_candidate(item) for item in ranked[:ANALYSIS_MAX_CANDIDATES]]
+
+
+def infer_tonality_from_context(
+    context: CompositionAnalysisContext,
+) -> AnalysisTonalityResult:
+    """Infer global/local tonality from a request-scoped analysis context.
+
+    Does not require a requested key. Declared ``composition.key`` / ``key_changes``
+    are compared for labeling and contradiction logging only.
+    """
+    composition = context.composition
+    scope = context.resolved_scope
+    declared_key = composition.key
+    tpq = float(composition.ticks_per_quarter)
+    start_bar = scope.start_bar
+    end_bar_exclusive = scope.end_bar_exclusive
+
+    pitched = context.notes_overlapping_scope(drums=False)
+    drum_only = context.notes_overlapping_scope(drums=True)
+    if not pitched and drum_only:
+        logger.warning(
+            "Tonality inference abstained",
+            extra={"code": "percussion_only_scope", "scope_kind": scope.kind},
+        )
+        empty = _abstain_result(
+            declared_key=declared_key,
+            status="not_applicable",
+            start_tick=scope.start_tick,
+            end_tick=scope.end_tick,
+            start_bar=start_bar,
+            end_bar_exclusive=end_bar_exclusive,
+            evidence_count=len(drum_only),
+            evidence_mass=0.0,
+        )
+        logger.info(
+            "Tonality inference complete",
+            extra={
+                "status": "not_applicable",
+                "accepted_global": 0,
+                "accepted_local_spans": 0,
+            },
+        )
+        return empty
+
+    pc_mass = _scoped_pitch_class_mass(context, start_bar, end_bar_exclusive)
+    total_mass = sum(pc_mass)
+    mass_quarters = total_mass / tpq if tpq > 0 else 0.0
+    edge_mass = _edge_mass_for_range(context, start_bar, end_bar_exclusive)
+    bass_mass = _bass_mass_for_range(context, start_bar, end_bar_exclusive)
+    harmony_evidence = _harmony_evidence_for_bars(composition, start_bar, end_bar_exclusive)
+
+    if mass_quarters < MIN_INFERENCE_MASS_QUARTERS and not harmony_evidence:
+        logger.warning(
+            "Tonality inference abstained",
+            extra={
+                "code": "insufficient_tonal_evidence",
+                "mass_quarters": round_analysis_float(mass_quarters),
+            },
+        )
+        result = _abstain_result(
+            declared_key=declared_key,
+            status="insufficient_evidence",
+            start_tick=scope.start_tick,
+            end_tick=scope.end_tick,
+            start_bar=start_bar,
+            end_bar_exclusive=end_bar_exclusive,
+            evidence_count=len(pitched),
+            evidence_mass=mass_quarters,
+        )
+        logger.info(
+            "Tonality inference complete",
+            extra={
+                "status": "insufficient_evidence",
+                "accepted_global": 0,
+                "accepted_local_spans": 0,
+            },
+        )
+        return result
+
+    ranked = _score_key_candidates(
+        pc_mass,
+        bass_mass=bass_mass,
+        edge_mass=edge_mass,
+        harmony_evidence=harmony_evidence or None,
+    )
+    candidates = [_key_score_to_candidate(item) for item in ranked[:ANALYSIS_MAX_CANDIDATES]]
+    logger.debug(
+        "Global key candidate summary",
+        extra={
+            "top_labels": [item.key for item in candidates[:5]],
+            "candidate_count": len(candidates),
+            "mass_quarters": round_analysis_float(mass_quarters),
+        },
+    )
+
+    global_status, global_key_label, confidence, margin = _decide_inference_status(ranked, mass_quarters)
+    coverage = _coverage_ratio(pc_mass, ranked[0].key) if ranked else 0.0
+    declared_parsed = parse_key(declared_key)
+    global_span = KeySpanResult(
+        id=make_derived_id("tonality", "global", scope.kind, start_bar, end_bar_exclusive),
+        start_tick=scope.start_tick,
+        end_tick=scope.end_tick,
+        start_bar=start_bar,
+        end_bar_exclusive=end_bar_exclusive,
+        key=global_key_label if global_status in {"ok", "ambiguous"} else None,
+        declared_key=declared_key,
+        candidates=candidates,
+        inference=InferenceMeta(
+            status=global_status,
+            confidence=confidence,
+            evidence=AnalysisEvidence(
+                count=len(pitched),
+                mass=round_analysis_float(mass_quarters),
+                coverage=round_analysis_float(coverage),
+            ),
+            method=ANALYSIS_ALGORITHM_VERSION,
+            method_version=ANALYSIS_ALGORITHM_VERSION,
+        ),
+    )
+
+    if (
+        global_status == "ok"
+        and global_key_label
+        and declared_parsed
+        and ranked
+        and not (
+            ranked[0].key.tonic_pc == declared_parsed.tonic_pc
+            and ranked[0].key.mode == declared_parsed.mode
+        )
+    ):
+        winning_abs = ranked[0].combined_score
+        declared_score = next(
+            (
+                item.combined_score
+                for item in ranked
+                if item.key.tonic_pc == declared_parsed.tonic_pc
+                and item.key.mode == declared_parsed.mode
+            ),
+            0.0,
+        )
+        relative_margin = (
+            (winning_abs - declared_score) / winning_abs if winning_abs > 0 else 0.0
+        )
+        if (
+            mass_quarters >= MIN_INFERENCE_MASS_QUARTERS
+            and winning_abs >= MIN_COMPETITOR_ABS_SCORE
+            and relative_margin >= CONTRADICTION_SCORE_MARGIN
+        ):
+            logger.warning(
+                "Declared key conflicts with inference",
+                extra={
+                    "code": "declared_key_conflicts_with_inference",
+                    "declared_key": declared_key,
+                    "inferred_key": global_key_label,
+                    "margin": round_analysis_float(relative_margin),
+                },
+            )
+
+    if global_status == "ambiguous":
+        logger.warning(
+            "Tonality inference ambiguous",
+            extra={
+                "code": "relative_key_ambiguity",
+                "top_labels": [item.key for item in candidates[:2]],
+                "margin": round_analysis_float(margin),
+            },
+        )
+
+    local_spans = _infer_local_key_spans(context, start_bar, end_bar_exclusive)
+    accepted_local = sum(1 for span in local_spans if span.inference.status == "ok" and span.key)
+    _log_key_change_contradictions(context, local_spans)
+
+    effective_key = global_key_label if global_status == "ok" and global_key_label else declared_key
+    top_status = global_status
+    result = AnalysisTonalityResult(
+        global_key=global_span,
+        local_spans=local_spans,
+        declared_key=declared_key,
+        effective_key=effective_key,
+        inference=InferenceMeta(
+            status=top_status,
+            confidence=confidence,
+            evidence=AnalysisEvidence(
+                count=len(pitched),
+                mass=round_analysis_float(mass_quarters),
+                coverage=round_analysis_float(coverage),
+            ),
+            method=ANALYSIS_ALGORITHM_VERSION,
+            method_version=ANALYSIS_ALGORITHM_VERSION,
+        ),
+    )
+    logger.info(
+        "Tonality inference complete",
+        extra={
+            "status": top_status,
+            "accepted_global": 1 if global_status == "ok" and global_key_label else 0,
+            "accepted_local_spans": accepted_local,
+            "local_span_count": len(local_spans),
+            "effective_key": effective_key,
+        },
+    )
+    return result
+
+
+def _score_key_candidates(
+    pitch_class_mass: Sequence[float],
+    *,
+    bass_mass: Sequence[float] | None = None,
+    edge_mass: Sequence[float] | None = None,
+    harmony_evidence: Sequence[tuple[ParsedChord, float]] | None = None,
+) -> list[KeyScore]:
+    masses = _normalize_pc_vector(pitch_class_mass)
+    bass = _normalize_pc_vector(bass_mass) if bass_mass is not None else None
+    edge = _normalize_pc_vector(edge_mass) if edge_mass is not None else None
+    candidates = _all_candidate_keys()
+    scores = {key.label: KeyScore(key=key) for key in candidates}
+
+    for key in candidates:
+        note_score = 0.0
+        note_weight = 0.0
+        for pc, mass in enumerate(masses):
+            if mass <= 0:
+                continue
+            weight = mass
+            if bass is not None and bass[pc] > 0:
+                weight += bass[pc] * BASS_MASS_BOOST
+            if edge is not None and edge[pc] > 0:
+                weight += edge[pc] * EDGE_MASS_BOOST
+            note_score += _note_weight_for_key(pc, key) * weight
+            note_weight += weight
+        scores[key.label].note_score = note_score
+        scores[key.label].note_weight = note_weight
+
+    if harmony_evidence:
+        for chord, weight in harmony_evidence:
+            if not chord.parseable:
+                continue
+            for key in candidates:
+                scores[key.label].harmony_score += _harmony_weight_for_key(chord, key) * weight
+                scores[key.label].harmony_count += 1
+
+    return _rank_key_scores(list(scores.values()))
+
+
+def _rank_key_scores(scores: Sequence[KeyScore]) -> list[KeyScore]:
+    return sorted(
+        scores,
+        key=lambda item: (
+            -round_analysis_float(item.combined_score if item.harmony_score else item.note_score),
+            item.key.tonic_pc,
+            _MODE_RANK.get(item.key.mode, 1),
+        ),
+    )
+
+
+def _key_score_to_candidate(score: KeyScore) -> KeyCandidateScore:
+    raw = score.combined_score if score.harmony_score else score.note_score
+    return KeyCandidateScore(
+        key=score.key.label,
+        score=round_analysis_float(raw),
+        pitch_class=score.key.tonic_pc,
+        mode=score.key.mode,  # type: ignore[arg-type]
+    )
+
+
+def _normalize_pc_vector(values: Sequence[float] | None) -> list[float]:
+    if values is None:
+        return [0.0] * 12
+    vector = [float(values[i]) if i < len(values) else 0.0 for i in range(12)]
+    if len(values) != 12:
+        logger.debug(
+            "Pitch-class mass length normalized to 12",
+            extra={"provided_length": len(values)},
+        )
+    return vector
+
+
+def _decide_inference_status(
+    ranked: Sequence[KeyScore],
+    mass_quarters: float,
+    *,
+    min_mass_quarters: float = MIN_INFERENCE_MASS_QUARTERS,
+) -> tuple[str, str | None, float | None, float]:
+    if not ranked:
+        return "insufficient_evidence", None, None, 0.0
+    if mass_quarters < min_mass_quarters and ranked[0].harmony_count == 0:
+        return "insufficient_evidence", None, None, 0.0
+
+    winner = ranked[0]
+    second = ranked[1] if len(ranked) > 1 else None
+    winner_score = winner.combined_score if winner.harmony_score else winner.note_score
+    second_score = (
+        (second.combined_score if second.harmony_score else second.note_score) if second else 0.0
+    )
+    top_mass = winner_score + second_score
+    confidence = round_analysis_float(winner_score / top_mass) if top_mass > 0 else 0.0
+    margin = (
+        round_analysis_float((winner_score - second_score) / winner_score)
+        if winner_score > 0
+        else 0.0
+    )
+
+    if (
+        second is not None
+        and _are_relative_keys(winner.key, second.key)
+        and margin < RELATIVE_AMBIGUITY_MARGIN
+    ):
+        return "ambiguous", winner.key.label, confidence, margin
+
+    if winner_score <= 0:
+        return "insufficient_evidence", None, confidence, margin
+
+    return "ok", winner.key.label, confidence, margin
+
+
+def _are_relative_keys(left: ParsedKey, right: ParsedKey) -> bool:
+    if left.mode == right.mode:
+        return False
+    if left.mode == "major":
+        return right.mode == "minor" and right.tonic_pc == left.relative_minor_pc
+    return right.mode == "major" and right.tonic_pc == left.relative_major_pc
+
+
+def _coverage_ratio(pc_mass: Sequence[float], key: ParsedKey) -> float:
+    total = sum(pc_mass)
+    if total <= 0:
+        return 0.0
+    diatonic = _diatonic_pitch_classes(key)
+    covered = sum(mass for pc, mass in enumerate(pc_mass) if pc in diatonic)
+    return covered / total
+
+
+def _scoped_pitch_class_mass(
+    context: CompositionAnalysisContext,
+    start_bar: int,
+    end_bar_exclusive: int,
+) -> list[float]:
+    scope = context.resolved_scope
+    if scope.kind == "track":
+        mass = [0.0] * 12
+        for track_idx, _note_idx, note in context.notes_overlapping_scope(drums=False):
+            if scope.track_index is not None and track_idx != scope.track_index:
+                continue
+            if scope.track_id is not None and context.tracks[track_idx].track_id != scope.track_id:
+                continue
+            for bar in range(start_bar, end_bar_exclusive):
+                clipped = context.clip_note_to_bar(note, bar)
+                if clipped > 0:
+                    mass[note.pitch_class] += float(clipped)
+        return mass
+    return context.pitch_class_mass_for_bars(start_bar, end_bar_exclusive)
+
+
+def _edge_mass_for_range(
+    context: CompositionAnalysisContext,
+    start_bar: int,
+    end_bar_exclusive: int,
+) -> list[float]:
+    if end_bar_exclusive <= start_bar:
+        return [0.0] * 12
+    edge_bars = {start_bar, end_bar_exclusive - 1}
+    mass = [0.0] * 12
+    for bar in sorted(edge_bars):
+        bar_mass = _scoped_pitch_class_mass(context, bar, bar + 1)
+        for pc in range(12):
+            mass[pc] += bar_mass[pc]
+    return mass
+
+
+def _bass_mass_for_range(
+    context: CompositionAnalysisContext,
+    start_bar: int,
+    end_bar_exclusive: int,
+) -> list[float]:
+    from .composition_logical_notes import clip_occupancy
+
+    mass = [0.0] * 12
+    if end_bar_exclusive <= start_bar:
+        return mass
+    start_tick = context.timeline.bar_start_tick(start_bar)
+    end_tick = context.timeline.bar_end_tick(end_bar_exclusive - 1)
+    for track in context.tracks:
+        if track.is_drum or track.role not in {"bass"}:
+            continue
+        if (
+            context.resolved_scope.kind == "track"
+            and track.track_id != context.resolved_scope.track_id
+        ):
+            continue
+        for note in track.logical_notes:
+            clipped = clip_occupancy(note, start_tick, end_tick)
+            if clipped > 0:
+                mass[note.pitch_class] += float(clipped)
+    return mass
+
+
+def _harmony_evidence_for_bars(
+    composition: CompositionV2,
+    start_bar: int,
+    end_bar_exclusive: int,
+) -> list[tuple[ParsedChord, float]]:
+    evidence: list[tuple[ParsedChord, float]] = []
+    boundary_bars = {section.start_bar for section in composition.sections}
+    for item in composition.harmony:
+        bar = item.bar
+        if bar < start_bar or bar >= end_bar_exclusive:
+            continue
+        chord = parse_chord_symbol(item.chord)
+        if not chord.parseable:
+            continue
+        weight = 1.5 if bar in boundary_bars else 1.0
+        if bar == 1 or bar == composition.bar_count:
+            weight *= 1.25
+        evidence.append((chord, weight))
+    return evidence
+
+
+def _infer_local_key_spans(
+    context: CompositionAnalysisContext,
+    start_bar: int,
+    end_bar_exclusive: int,
+) -> list[KeySpanResult]:
+    """Per-section and fixed 2-bar windows with transition smoothing and merge."""
+    window_results: list[KeySpanResult] = []
+
+    # Section windows overlapping the scope.
+    for section_index, section in enumerate(context.sections):
+        sec_start = section.start_bar
+        sec_end = section.start_bar + section.bar_count
+        overlap_start = max(start_bar, sec_start)
+        overlap_end = min(end_bar_exclusive, sec_end)
+        if overlap_end <= overlap_start:
+            continue
+        span = _analyze_bar_window(
+            context,
+            overlap_start,
+            overlap_end,
+            span_kind="section",
+            span_index=section_index,
+            previous_key=None,
+            min_mass_quarters=MIN_LOCAL_INFERENCE_MASS_QUARTERS,
+        )
+        if span is not None:
+            window_results.append(span)
+
+    # Fixed 2-bar windows across the scoped bar range.
+    previous_key: ParsedKey | None = None
+    fixed_windows: list[KeySpanResult] = []
+    bar = start_bar
+    window_index = 0
+    while bar < end_bar_exclusive:
+        win_end = min(bar + LOCAL_KEY_WINDOW_BARS, end_bar_exclusive)
+        span = _analyze_bar_window(
+            context,
+            bar,
+            win_end,
+            span_kind="window",
+            span_index=window_index,
+            previous_key=previous_key,
+            min_mass_quarters=MIN_LOCAL_INFERENCE_MASS_QUARTERS,
+        )
+        if span is not None:
+            fixed_windows.append(span)
+            if span.key and span.inference.status in {"ok", "ambiguous"}:
+                previous_key = parse_key(span.key)
+            logger.debug(
+                "Local key window scored",
+                extra={
+                    "start_bar": bar,
+                    "end_bar_exclusive": win_end,
+                    "key": span.key,
+                    "status": span.inference.status,
+                },
+            )
+        bar = win_end
+        window_index += 1
+
+    merged_fixed = _merge_adjacent_key_spans(fixed_windows)
+    # Stable order: sections first (canonical), then merged fixed windows by tick.
+    combined = list(window_results) + merged_fixed
+    combined.sort(key=lambda item: (item.start_tick, item.end_tick, item.id))
+    return combined[:512]
+
+
+def _analyze_bar_window(
+    context: CompositionAnalysisContext,
+    start_bar: int,
+    end_bar_exclusive: int,
+    *,
+    span_kind: str,
+    span_index: int,
+    previous_key: ParsedKey | None,
+    min_mass_quarters: float,
+) -> KeySpanResult | None:
+    if end_bar_exclusive <= start_bar:
+        return None
+    tpq = float(context.composition.ticks_per_quarter)
+    pc_mass = _scoped_pitch_class_mass(context, start_bar, end_bar_exclusive)
+    mass_quarters = sum(pc_mass) / tpq if tpq > 0 else 0.0
+    start_tick = context.timeline.bar_start_tick(start_bar)
+    end_tick = context.timeline.bar_end_tick(end_bar_exclusive - 1)
+    declared = context.timeline.active_key(start_tick)
+
+    if mass_quarters < min_mass_quarters:
+        return KeySpanResult(
+            id=make_derived_id("tonality", span_kind, span_index, start_bar, end_bar_exclusive),
+            start_tick=start_tick,
+            end_tick=end_tick,
+            start_bar=start_bar,
+            end_bar_exclusive=end_bar_exclusive,
+            key=None,
+            declared_key=declared,
+            candidates=[],
+            inference=InferenceMeta(
+                status="insufficient_evidence",
+                confidence=None,
+                evidence=AnalysisEvidence(
+                    count=0,
+                    mass=round_analysis_float(mass_quarters),
+                    coverage=0.0,
+                ),
+                method=ANALYSIS_ALGORITHM_VERSION,
+                method_version=ANALYSIS_ALGORITHM_VERSION,
+            ),
+        )
+
+    edge_mass = _edge_mass_for_range(context, start_bar, end_bar_exclusive)
+    bass_mass = _bass_mass_for_range(context, start_bar, end_bar_exclusive)
+    ranked = _score_key_candidates(pc_mass, bass_mass=bass_mass, edge_mass=edge_mass)
+    if previous_key is not None and ranked:
+        top_raw = ranked[0].note_score
+        penalty = top_raw * LOCAL_TRANSITION_PENALTY_RATIO
+        for item in ranked:
+            if (
+                item.key.tonic_pc != previous_key.tonic_pc
+                or item.key.mode != previous_key.mode
+            ):
+                item.note_score = max(0.0, item.note_score - penalty)
+        ranked = _rank_key_scores(ranked)
+
+    status, key_label, confidence, _margin = _decide_inference_status(
+        ranked,
+        mass_quarters,
+        min_mass_quarters=min_mass_quarters,
+    )
+    candidates = [_key_score_to_candidate(item) for item in ranked[:ANALYSIS_MAX_CANDIDATES]]
+    coverage = _coverage_ratio(pc_mass, ranked[0].key) if ranked else 0.0
+    note_count = 0
+    for _t, _n, note in context.notes_overlapping_scope(drums=False):
+        if note.start_tick < end_tick and note.end_tick > start_tick:
+            note_count += 1
+    return KeySpanResult(
+        id=make_derived_id("tonality", span_kind, span_index, start_bar, end_bar_exclusive),
+        start_tick=start_tick,
+        end_tick=end_tick,
+        start_bar=start_bar,
+        end_bar_exclusive=end_bar_exclusive,
+        key=key_label if status in {"ok", "ambiguous"} else None,
+        declared_key=declared,
+        candidates=candidates,
+        inference=InferenceMeta(
+            status=status,
+            confidence=confidence,
+            evidence=AnalysisEvidence(
+                count=note_count,
+                mass=round_analysis_float(mass_quarters),
+                coverage=round_analysis_float(coverage),
+            ),
+            method=ANALYSIS_ALGORITHM_VERSION,
+            method_version=ANALYSIS_ALGORITHM_VERSION,
+        ),
+    )
+
+
+def _merge_adjacent_key_spans(spans: Sequence[KeySpanResult]) -> list[KeySpanResult]:
+    """Merge adjacent accepted windows that share the same inferred key."""
+    if not spans:
+        return []
+    ordered = sorted(spans, key=lambda item: (item.start_tick, item.end_tick, item.id))
+    merged: list[KeySpanResult] = []
+    for span in ordered:
+        if (
+            merged
+            and span.key
+            and merged[-1].key
+            and span.key == merged[-1].key
+            and span.inference.status == "ok"
+            and merged[-1].inference.status == "ok"
+            and span.start_tick == merged[-1].end_tick
+        ):
+            prev = merged[-1]
+            prev_mass = prev.inference.evidence.mass or 0.0
+            span_mass = span.inference.evidence.mass or 0.0
+            merged[-1] = KeySpanResult(
+                id=make_derived_id(
+                    "tonality",
+                    "merged",
+                    prev.start_bar,
+                    span.end_bar_exclusive,
+                ),
+                start_tick=prev.start_tick,
+                end_tick=span.end_tick,
+                start_bar=prev.start_bar,
+                end_bar_exclusive=span.end_bar_exclusive,
+                key=prev.key,
+                declared_key=prev.declared_key,
+                candidates=prev.candidates,
+                inference=InferenceMeta(
+                    status="ok",
+                    confidence=prev.inference.confidence,
+                    evidence=AnalysisEvidence(
+                        count=(prev.inference.evidence.count or 0)
+                        + (span.inference.evidence.count or 0),
+                        mass=round_analysis_float(prev_mass + span_mass),
+                        coverage=prev.inference.evidence.coverage,
+                    ),
+                    method=ANALYSIS_ALGORITHM_VERSION,
+                    method_version=ANALYSIS_ALGORITHM_VERSION,
+                ),
+            )
+        else:
+            merged.append(span)
+    return merged
+
+
+def _log_key_change_contradictions(
+    context: CompositionAnalysisContext,
+    local_spans: Sequence[KeySpanResult],
+) -> None:
+    for span in local_spans:
+        if span.inference.status != "ok" or not span.key or not span.declared_key:
+            continue
+        inferred = parse_key(span.key)
+        declared = parse_key(span.declared_key)
+        if not inferred or not declared:
+            continue
+        if inferred.tonic_pc == declared.tonic_pc and inferred.mode == declared.mode:
+            continue
+        mass = span.inference.evidence.mass or 0.0
+        if mass < MIN_LOCAL_INFERENCE_MASS_QUARTERS:
+            continue
+        if not span.candidates:
+            continue
+        winner_score = span.candidates[0].score
+        declared_score = next(
+            (
+                item.score
+                for item in span.candidates
+                if item.pitch_class == declared.tonic_pc and item.mode == declared.mode
+            ),
+            0.0,
+        )
+        if winner_score <= 0:
+            continue
+        margin = (winner_score - declared_score) / winner_score
+        if (
+            winner_score >= MIN_COMPETITOR_ABS_SCORE
+            and margin >= CONTRADICTION_SCORE_MARGIN
+        ):
+            logger.warning(
+                "Declared key change conflicts with inference",
+                extra={
+                    "code": "declared_key_change_conflicts_with_inference",
+                    "declared_key": span.declared_key,
+                    "inferred_key": span.key,
+                    "start_bar": span.start_bar,
+                    "margin": round_analysis_float(margin),
+                },
+            )
+
+
+def _abstain_result(
+    *,
+    declared_key: str | None,
+    status: str,
+    start_tick: int,
+    end_tick: int,
+    start_bar: int,
+    end_bar_exclusive: int,
+    evidence_count: int,
+    evidence_mass: float,
+) -> AnalysisTonalityResult:
+    meta = InferenceMeta(
+        status=status,  # type: ignore[arg-type]
+        confidence=None,
+        evidence=AnalysisEvidence(
+            count=evidence_count,
+            mass=round_analysis_float(evidence_mass),
+            coverage=0.0,
+        ),
+        method=ANALYSIS_ALGORITHM_VERSION,
+        method_version=ANALYSIS_ALGORITHM_VERSION,
+    )
+    global_key = KeySpanResult(
+        id=make_derived_id("tonality", "global", start_bar, end_bar_exclusive),
+        start_tick=start_tick,
+        end_tick=end_tick,
+        start_bar=start_bar,
+        end_bar_exclusive=end_bar_exclusive,
+        key=None,
+        declared_key=declared_key,
+        candidates=[],
+        inference=meta,
+    )
+    return AnalysisTonalityResult(
+        global_key=global_key,
+        local_spans=[],
+        declared_key=declared_key,
+        effective_key=declared_key,
+        inference=meta,
+    )

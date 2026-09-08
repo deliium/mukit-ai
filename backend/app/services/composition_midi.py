@@ -304,41 +304,19 @@ class _CollapsedNote:
 
 
 def _collapse_tie_chains(track: CompositionV2Track) -> list[_CollapsedNote]:
-    tie_members: dict[str, list[CompositionV2NoteEvent]] = {}
-    standalone: list[CompositionV2NoteEvent] = []
-    for event in track.events:
-        if event.tie is None:
-            standalone.append(event)
-            continue
-        tie_members.setdefault(event.tie.group_id, []).append(event)
+    """Delegate to shared logical-note collapse; preserve MIDI projection fields only."""
+    from app.services.composition_logical_notes import collapse_track_tie_chains
 
-    collapsed: list[_CollapsedNote] = []
-    for event in standalone:
-        collapsed.append(
-            _CollapsedNote(
-                pitch=event.pitch,
-                start_tick=event.start_tick,
-                duration_ticks=event.duration_ticks,
-                velocity=event.velocity,
-                articulations=tuple(event.articulations),
-            )
+    return [
+        _CollapsedNote(
+            pitch=note.pitch,
+            start_tick=note.start_tick,
+            duration_ticks=note.duration_ticks,
+            velocity=note.velocity,
+            articulations=note.articulations,
         )
-
-    for members in tie_members.values():
-        ordered = sorted(members, key=lambda item: (item.start_tick, item.duration_ticks))
-        head = ordered[0]
-        total_duration = sum(item.duration_ticks for item in ordered)
-        collapsed.append(
-            _CollapsedNote(
-                pitch=head.pitch,
-                start_tick=head.start_tick,
-                duration_ticks=total_duration,
-                velocity=head.velocity,
-                articulations=tuple(head.articulations),
-            )
-        )
-
-    return sorted(collapsed, key=lambda item: (item.start_tick, item.pitch, item.duration_ticks))
+        for note in collapse_track_tie_chains(track)
+    ]
 
 
 def _build_track_cc_stream(
