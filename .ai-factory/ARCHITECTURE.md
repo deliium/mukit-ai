@@ -2,7 +2,7 @@
 
 ## Overview
 
-Mukit AI is a full-stack LLM music composer: a FastAPI backend produces and transforms canonical `composition.v2` JSON (generate, import, edit, validate, render, export, persist), and a React/Vite frontend edits that composition on a piano roll / JSON surface, shows notation, and plays note events in the browser. `composition.v1` remains accepted migration input.
+Mukit AI is a full-stack LLM music composer: a FastAPI backend produces and transforms canonical `composition.v2` JSON (generate, import, analyze, edit, validate, render, export, persist), and a React/Vite frontend edits that composition on a piano roll / JSON surface, shows notation and scoped analysis, and plays note events in the browser. `composition.v1` remains accepted migration input.
 
 This project uses **Structured Modules (Technical Layer)** as the guiding pattern — feature areas with clear service boundaries and downward dependencies — while **documenting the existing layout** rather than requiring an immediate module-folder refactor. New work should strengthen module boundaries inside the current trees (`backend/app/`, `frontend/src/`) instead of introducing hexagonal ceremony or microservices.
 
@@ -23,6 +23,7 @@ mukit-ai/
 │   │   ├── main.py                 # Composition / LLM / export HTTP handlers (composition module surface)
 │   │   ├── ready.py                # LOG_LEVEL, CORS origins, readiness report helpers
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 document contracts
+│   │   ├── analysis_schemas.py     # composition.analysis.v1 sidecar DTOs / warning codes
 │   │   ├── schemas.py              # LLM request/response models + re-exports
 │   │   ├── project_schemas.py      # Project CRUD API models
 │   │   ├── import_schemas.py       # Import response/report/issue DTOs
@@ -30,7 +31,8 @@ mukit-ai/
 │   │   ├── llm_settings.py         # Provider config from environment
 │   │   ├── routers/
 │   │   │   ├── projects.py         # Projects module HTTP routes
-│   │   │   └── imports.py          # MIDI / MusicXML multipart import
+│   │   │   ├── imports.py          # MIDI / MusicXML multipart import
+│   │   │   └── analysis.py         # POST /analysis/composition
 │   │   ├── services/               # Application services (orchestration + domain helpers)
 │   │   │   ├── llm_music_generator.py
 │   │   │   ├── llm_composition_editor.py
@@ -39,6 +41,16 @@ mukit-ai/
 │   │   │   ├── composition_planner.py
 │   │   │   ├── generation_constraints.py # Immutable request hard/soft constraints + conformance
 │   │   │   ├── composition_tonality.py   # Deterministic tonal-center analysis
+│   │   │   ├── composition_analysis.py  # Analysis orchestrator + bounded LLM projection
+│   │   │   ├── composition_fingerprint.py
+│   │   │   ├── composition_analysis_context.py
+│   │   │   ├── composition_harmony_analysis.py
+│   │   │   ├── composition_melody_analysis.py
+│   │   │   ├── composition_density_analysis.py
+│   │   │   ├── composition_role_analysis.py
+│   │   │   ├── composition_repetition_analysis.py
+│   │   │   ├── composition_tension_analysis.py
+│   │   │   ├── composition_analysis_warnings.py
 │   │   │   ├── composition_validator.py
 │   │   │   ├── composition_normalizer.py
 │   │   │   ├── composition_migration.py   # V1→V2 migration
@@ -62,18 +74,18 @@ mukit-ai/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
-│   ├── e2e/                        # Playwright V1/V2/import acceptance
+│   ├── e2e/                        # Playwright V1/V2/import/analysis acceptance
 │   └── src/
 │       ├── api/                    # HTTP clients (outbound adapters)
 │       │   ├── musicApi.js
 │       │   └── projectApi.js
 │       ├── store/
-│       │   └── musicStore.js       # Zustand — shared UI/application state
-│       ├── components/             # Feature UI (projects, import, generate, piano roll, playback, export)
-│       ├── utils/                  # Client-side composition/playback helpers
+│       │   └── musicStore.js       # Zustand — shared UI/application state (incl. analysis)
+│       ├── components/             # Feature UI (projects, import, analysis, generate, piano roll, playback, export)
+│       ├── utils/                  # Client-side composition/playback/analysis helpers
 │       ├── App.jsx
 │       └── main.jsx
-├── docs/                           # composition.v2/v1, import, persistence, testing
+├── docs/                           # composition.v2/v1, analysis, import, persistence, testing
 ├── docker-compose.yml
 ├── compose.dev.yml
 ├── .env.example
@@ -86,7 +98,8 @@ mukit-ai/
 |--------|--------------|---------------|
 | **Projects** | `routers/projects.py`, `project_schemas.py`, `services/project_*` | `ProjectBrowser`, `projectApi.js`, project slice of `musicStore` |
 | **Import** | `routers/imports.py`, `import_schemas.py`, `import_settings.py`, `composition_*_import.py`, `composition_import.py` | `ImportControls`, `importMidi` / `importMusicXml` in `musicApi.js`, import slice of `musicStore` |
-| **Composition / LLM** | `main.py` LLM routes, `schemas.py`, `llm_*`, `composition_*` (plan/validate/normalize/patch) | `MusicGenerator`, `PromptJsonEditor`, `AiRegionEditPanel`, `musicApi.js` |
+| **Analysis** | `routers/analysis.py`, `analysis_schemas.py`, `composition_analysis.py` + analyzer cluster / fingerprint / warnings | `CompositionAnalysisPanel`, `analyzeComposition` in `musicApi.js`, `compositionAnalysis.js`, analysis slice of `musicStore` |
+| **Composition / LLM** | `main.py` LLM routes, `schemas.py`, `llm_*`, `composition_*` (plan/validate/normalize/patch); bounded analysis advisory via `build_llm_analysis_context` | `MusicGenerator`, `PromptJsonEditor`, `AiRegionEditPanel`, `musicApi.js` |
 | **Rendering / Export** | `music_json_renderer`, `composition_midi`, `composition_wav` | `NotationViewer`, `ExportControls`, playback components + `utils/playback*` / `tonePlaybackEngine` |
 | **Shared infrastructure** | `db/`, `llm_settings.py`, CORS/lifespan in `main.py` | `api/*`, shared store fields, `utils/downloadFile.js` |
 
@@ -127,15 +140,15 @@ FastAPI backend
 ## Layer/Module Communication
 
 - **HTTP boundary:** FastAPI routers and `main.py` endpoints validate with Pydantic, map domain/service errors to HTTP status codes, and return DTOs — no composition business rules in handlers beyond thin orchestration.
-- **Canonical contract:** `composition.v2` (see `docs/composition-v2.md` and `composition_schemas.py`) is the operational shared language between generate, edit, persist, render, export, and the frontend editors/playback. `composition.v1` remains migration/parser input (`docs/composition-v1.md`).
+- **Canonical contract:** `composition.v2` (see `docs/composition-v2.md` and `composition_schemas.py`) is the operational shared language between generate, edit, persist, render, export, and the frontend editors/playback. `composition.v1` remains migration/parser input (`docs/composition-v1.md`). Derived `composition.analysis.v1` is advisory only (`docs/composition-analysis.md`) and must not become a second source of truth.
 - **Projects module:** `project_store` owns SQLite; `project_composition` normalizes stored JSON to the canonical model before API responses.
-- **Composition pipeline:** LLM generate/edit services produce or patch JSON; validator/normalizer/timing services enforce and shape the model; render/export services consume validated compositions only.
-- **Frontend state:** Zustand `musicStore` holds API status, models, project browser/save status, edited composition, piano-roll and playback transport state. Feature components subscribe to slices; they do not own parallel sources of truth for the same composition.
+- **Composition pipeline:** LLM generate/edit services produce or patch JSON; validator/normalizer/timing services enforce and shape the model; render/export services consume validated compositions only. Analysis may feed a bounded advisory projection into edit/repair prompts without mutating events.
+- **Frontend state:** Zustand `musicStore` holds API status, models, project browser/save status, edited composition, piano-roll and playback transport state, and a single derived analysis report. Feature components subscribe to slices; they do not own parallel sources of truth for the same composition.
 - **Client ↔ server:** `musicApi.js` / `projectApi.js` are the only HTTP clients; components and store actions go through them.
 
 ## Key Principles
 
-1. **Module boundaries by convention:** Treat Projects, Composition/LLM, and Rendering/Export as modules even while files live in shared `services/` / `components/` folders. Prefer new files named and clustered by module.
+1. **Module boundaries by convention:** Treat Projects, Import, Analysis, Composition/LLM, and Rendering/Export as modules even while files live in shared `services/` / `components/` folders. Prefer new files named and clustered by module.
 2. **Thin HTTP, fat services:** Keep `main.py` / routers focused on transport. Put generation, validation, patching, persistence, and export logic in `services/`.
 3. **Canonical composition first:** Any path that mutates or exports music should go through validated `composition.v2` (or explicit legacy/V1 migration), not ad-hoc JSON shapes.
 4. **Application services orchestrate:** Services coordinate LLM calls, validation, and I/O. Push invariants into schema validation and dedicated composition helpers rather than scattering rules across handlers and React components.

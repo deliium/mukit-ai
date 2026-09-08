@@ -206,13 +206,13 @@ Add a versioned, deterministic analysis layer over canonical `composition.v2` so
 ### Phase 6: Documentation Checkpoint
 
 #### Task 13: Document the analysis contract, heuristics, UX, and operating limits
-- [ ] Use `$aif-docs` for the mandatory documentation checkpoint. Add `docs/composition-analysis.md` describing sidecar/cache semantics, canonical authority, scopes, versioning/fingerprints, result groups, confidence/abstention, stable warning codes, algorithm definitions/thresholds, limits, and declared-versus-inferred provenance.
-- [ ] Update `README.md` with the Analysis panel and deterministic/optional-LLM behavior; update `docs/composition-v2.md` to state that analysis is not part of canonical V2; update `docs/import.md` to preserve the rule that raw import performs no analysis; and update `docs/testing.md` with focused, full, performance, and Playwright commands.
-- [ ] Update `docs/CODEBASE_MAP.md`, `AGENTS.md`, `.ai-factory/DESCRIPTION.md`, and `.ai-factory/ARCHITECTURE.md` for the analysis router/schema/service cluster, frontend panel/state flow, and bounded AI context integration.
-- [ ] Document known limitations: heuristic key/chord/phrase/role/tension outputs, no pedal-aware sounding-duration analysis in v1, optional section IDs, summary-level scale degrees, bounded motif search, and no persisted server cache.
-- [ ] Logging: document safe fields (`algorithm_version`, fingerprint prefix, scope/counts, elapsed time, warning codes, truncation) and prohibited fields (full compositions/reports/prompts/event arrays). Confirm runtime verbosity remains controlled by `LOG_LEVEL`.
-- [ ] Files: `docs/composition-analysis.md`, `README.md`, `docs/composition-v2.md`, `docs/import.md`, `docs/testing.md`, `docs/CODEBASE_MAP.md`, `AGENTS.md`, `.ai-factory/DESCRIPTION.md`, and `.ai-factory/ARCHITECTURE.md`.
-- [ ] Depends on Tasks 1-12.
+- [x] Use `$aif-docs` for the mandatory documentation checkpoint. Add `docs/composition-analysis.md` describing sidecar/cache semantics, canonical authority, scopes, versioning/fingerprints, result groups, confidence/abstention, stable warning codes, algorithm definitions/thresholds, limits, and declared-versus-inferred provenance.
+- [x] Update `README.md` with the Analysis panel and deterministic/optional-LLM behavior; update `docs/composition-v2.md` to state that analysis is not part of canonical V2; update `docs/import.md` to preserve the rule that raw import performs no analysis; and update `docs/testing.md` with focused, full, performance, and Playwright commands.
+- [x] Update `docs/CODEBASE_MAP.md`, `AGENTS.md`, `.ai-factory/DESCRIPTION.md`, and `.ai-factory/ARCHITECTURE.md` for the analysis router/schema/service cluster, frontend panel/state flow, and bounded AI context integration.
+- [x] Document known limitations: heuristic key/chord/phrase/role/tension outputs, no pedal-aware sounding-duration analysis in v1, optional section IDs, summary-level scale degrees, bounded motif search, and no persisted server cache.
+- [x] Logging: document safe fields (`algorithm_version`, fingerprint prefix, scope/counts, elapsed time, warning codes, truncation) and prohibited fields (full compositions/reports/prompts/event arrays). Confirm runtime verbosity remains controlled by `LOG_LEVEL`.
+- [x] Files: `docs/composition-analysis.md`, `README.md`, `docs/composition-v2.md`, `docs/import.md`, `docs/testing.md`, `docs/CODEBASE_MAP.md`, `AGENTS.md`, `.ai-factory/DESCRIPTION.md`, and `.ai-factory/ARCHITECTURE.md`.
+- [x] Depends on Tasks 1-12.
 
 ## Acceptance Gates
 

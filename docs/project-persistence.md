@@ -87,5 +87,6 @@ No persistence test requires provider API keys.
 ## See Also
 
 - [Composition V2](composition-v2.md) — V2 contract and migrate-on-open fidelity rules
+- [Composition Analysis](composition-analysis.md) — derived reports are not stored in `composition_json`
 - [Composition V1](composition-v1.md) — V1 parser compatibility
 - [Testing](testing.md) — full test matrix including V2 suites

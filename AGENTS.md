@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; React/Vite edits on piano roll/JSON, shows OSMD notation, and plays note events with Tone.js. Projects persist in SQLite. V1 remains migration/parser input.
+Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis tab, and plays note events with Tone.js. Projects persist in SQLite. V1 remains migration/parser input.
 
 ## Tech Stack
 
@@ -21,9 +21,10 @@ mukit-ai/
 │   ├── app/
 │   │   ├── main.py          # Composition / LLM / export routes
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
-│   │   ├── routers/         # Projects + imports HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. import, fake_llm, constraints)
+│   │   ├── routers/         # Projects + imports + analysis HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. import, analysis, fake_llm, constraints)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts
+│   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
 │   │   ├── import_schemas.py       # Import DTOs, issue/error codes
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── fixtures/        # Canonical composition JSON (V1 + V2 expressive for fake LLM / tests)
@@ -31,14 +32,14 @@ mukit-ai/
 │   │   └── schemas.py       # LLM models + composition re-exports
 │   └── tests/
 ├── frontend/                # React + Vite SPA
-│   ├── e2e/                 # Playwright V1/V2/import acceptance journeys
+│   ├── e2e/                 # Playwright V1/V2/import/analysis acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # Workspace, generator, import, piano roll, playback, …
+│       ├── components/      # Workspace, generator, import, analysis, piano roll, playback, …
 │       ├── store/           # Zustand musicStore
-│       └── utils/           # validation, playback, piano-roll helpers
+│       └── utils/           # validation, playback, piano-roll, analysis helpers
 ├── scripts/                 # e.g. v1/v2_docker_acceptance.sh
-├── docs/                    # composition.v2/v1, import, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, analysis, import, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -52,6 +53,9 @@ mukit-ai/
 |------|---------|
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
 | `backend/app/composition_schemas.py` | Strict V1/V2 document models and timeline helpers |
+| `backend/app/analysis_schemas.py` | `composition.analysis.v1` DTOs, scopes, warning codes |
+| `backend/app/routers/analysis.py` | `POST /analysis/composition` |
+| `backend/app/services/composition_analysis.py` | Analysis orchestrator + bounded LLM advisory projection |
 | `backend/app/routers/imports.py` | `POST /imports/midi` and `/imports/musicxml` |
 | `backend/app/services/composition_import.py` | Shared source → V2 canonicalization |
 | `backend/app/services/composition_midi_import.py` | Deterministic MIDI parse |
@@ -63,8 +67,9 @@ mukit-ai/
 | `backend/app/routers/projects.py` | Project CRUD + autosave APIs |
 | `backend/run.py` / `uvicorn app.main:app` | Backend process entry |
 | `frontend/src/main.jsx` | Frontend bootstrap |
-| `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import transitions) |
+| `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import + analysis transitions) |
 | `frontend/src/components/ImportControls.jsx` | Import / replace UX |
+| `frontend/src/components/CompositionAnalysisPanel.jsx` | Analysis tab UI |
 | `docker-compose.yml` | Production-local backend + nginx frontend |
 | `compose.dev.yml` | Optional hot-reload override |
 | `.env.example` | Env template for LLM/import settings |
@@ -76,6 +81,7 @@ mukit-ai/
 |----------|------|-------------|
 | README | `README.md` | Install, features, env vars, run instructions |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
+| Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |
 | MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |
 | Project persistence | `docs/project-persistence.md` | SQLite projects and migrations |
@@ -98,6 +104,6 @@ mukit-ai/
 - Decompose shell command chains; do not combine unrelated git operations with `&&` when a failure mid-chain is confusing
   - Incorrect: `git checkout main && git pull`
   - Correct: First `git checkout main`, then `git pull origin main`
-- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis.
+- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data.
 - Prefer extending `routers/` + `services/` over growing unrelated logic in `main.py`
-- Never log API keys, full prompts, raw MusicXML/MIDI/WAV payloads, or uploaded import source bytes
+- Never log API keys, full prompts, raw MusicXML/MIDI/WAV payloads, uploaded import source bytes, full analysis reports, or event arrays

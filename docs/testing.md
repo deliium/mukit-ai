@@ -67,6 +67,49 @@ cd backend
 
 Fidelity asserts identical re-import of the same bytes, V2/timeline validity, expected note/metadata vectors, persistence ID stability, fake-provider region edit fingerprints, and re-export semantics within documented approximations. Security covers forged MIME/extensions, DTD/entities, unsafe MXL, and every configurable complexity limit. Secret hygiene asserts responses and logs never echo raw payload material.
 
+### Composition analysis
+
+Deterministic sidecar coverage (`composition.analysis.v1`). Fixtures and golden vectors live under `backend/tests/fixtures/analysis/`.
+
+Focused suites:
+
+```bash
+cd backend
+../.venv/bin/python -m pytest \
+  tests/test_analysis_schemas.py \
+  tests/test_composition_fingerprint.py \
+  tests/test_composition_analysis_context.py \
+  tests/test_composition_tonality.py \
+  tests/test_composition_harmony_analysis.py \
+  tests/test_composition_melody_analysis.py \
+  tests/test_composition_analysis_warnings.py \
+  tests/test_composition_analysis.py \
+  tests/test_analysis_routes.py
+```
+
+Full backend gate (includes analysis + unrelated suites):
+
+```bash
+cd backend
+../.venv/bin/python -m pytest
+```
+
+Scale / performance (bounded 100k-note class coverage; generous ceiling):
+
+```bash
+cd backend
+../.venv/bin/python -m pytest tests/test_composition_analysis_scale.py tests/test_composition_analysis_golden.py
+```
+
+Secret hygiene for the analysis route:
+
+```bash
+cd backend
+../.venv/bin/python -m pytest tests/test_secret_hygiene.py -k analysis
+```
+
+Set `LOG_LEVEL=DEBUG` to inspect stage timings, scope, fingerprint prefix, and warning codes. Full compositions, reports, prompts, and event arrays must never appear in logs.
+
 ### Opt-in Real Provider Smoke Test
 
 Normal `pytest` skips real provider calls. To intentionally spend API credits on a small bounded staged composition:
@@ -145,6 +188,14 @@ npm run test:e2e -- e2e/import-user-journey.spec.js
 
 Covers multi-track MIDI import, play/edit/notation, save/reopen, fake AI region edit, export downloads, MusicXML/MXL success, no-LLM availability, replace confirmation, failed import non-mutation, and grouped warning summary.
 
+Analysis panel journey (requires running stack; fake LLM optional for core analysis):
+
+```bash
+npm run test:e2e -- e2e/analysis-panel.spec.js
+```
+
+Covers opening the Analysis tab, composition/section/track scopes, stale state after note edits, warning/error/retry, and a 390px responsive no-overflow path. Frontend unit coverage: `musicApi.test.js`, `compositionAnalysis.test.js`, `musicStore.analysis.test.js`.
+
 Artifacts (trace/video on failure) are gitignored under `frontend/test-results/` and `frontend/playwright-report/`.
 
 ## Frontend Smoke Checks
@@ -198,12 +249,13 @@ The OSMD/Tone.js bundle can trigger Vite's large chunk warning; that warning is 
 
 ## Logging Checks
 
-- Backend: set `LOG_LEVEL=DEBUG` before running the server or tests when diagnosing schema, migration, rendering, export, or MIDI mapping decisions.
-- Frontend: use browser devtools console to inspect API response validation, store updates, editor validation, export requests, and playback schedule summaries.
-- Logs should include schema version, export format, event counts, timing summaries, byte lengths, projection status/issue codes, import status/issue codes, and sanitized error messages. API keys, full raw prompts, MusicXML payloads, MIDI bytes, and uploaded source contents should not appear in logs.
+- Backend: set `LOG_LEVEL=DEBUG` before running the server or tests when diagnosing schema, migration, rendering, export, MIDI mapping, or analysis decisions.
+- Frontend: use browser devtools console to inspect API response validation, store updates, editor validation, export requests, playback schedule summaries, and analysis scope/status/counts.
+- Logs should include schema version, export format, event counts, timing summaries, byte lengths, projection status/issue codes, import status/issue codes, analysis `algorithm_version` / fingerprint prefix / warning codes, and sanitized error messages. API keys, full raw prompts, MusicXML payloads, MIDI bytes, uploaded source contents, full analysis reports, and event arrays should not appear in logs.
 
 ## See Also
 
+- [Composition Analysis](composition-analysis.md) — sidecar contract, warning codes, API
 - [MIDI and MusicXML import](import.md) — formats, limits, issue codes
 - [Composition V2](composition-v2.md) — V2 contract, fixtures, projection headers
 - [Composition V1](composition-v1.md) — V1 parser regressions

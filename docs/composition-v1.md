@@ -1,5 +1,6 @@
 [← MIDI/MusicXML Import](import.md) · [Back to README](../README.md) · [Project Persistence →](project-persistence.md)
 
+
 # Composition V1
 
 > **Status:** `composition.v1` is an accepted **migration and parser compatibility** input. The operational canonical document is [`composition.v2`](./composition-v2.md). Generation, project open/save, and API responses normalize to V2; V1 note events and root metadata migrate with a fidelity equality gate.
@@ -168,5 +169,6 @@ Saved projects store operational `composition.v2` JSON in SQLite. V1 and legacy 
 ## See Also
 
 - [Composition V2](composition-v2.md) — canonical contract, timeline, expression, export fidelity
+- [Composition Analysis](composition-analysis.md) — derived sidecar for region-edit advisory context
 - [Project persistence](project-persistence.md) — migrate-on-open and autosave
 - [Testing](testing.md) — V1 parser regressions and V2 migration tests

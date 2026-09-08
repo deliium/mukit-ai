@@ -1,10 +1,12 @@
-[Back to README](../README.md) · [MIDI/MusicXML Import →](import.md)
+[Back to README](../README.md) · [Composition Analysis →](composition-analysis.md)
 
 # Composition V2
 
 `composition.v2` is the **operational canonical** JSON contract for generation, editing, **MIDI/MusicXML import**, persistence, browser playback, and export. `composition.v1` remains an accepted **migration and parser compatibility** input only; API responses and stored projects normalize to V2. External music files convert **directly to V2** — they do not enter the legacy V1 parser path (see [import.md](import.md)).
 
 Playable pitches live **only** in `tracks[].events[]`. Timeline metadata, markers, harmony, and track expression direct deterministic **projections** — they never synthesize notes.
+
+**Derived musical analysis** (`composition.analysis.v1`) is a separate sidecar from `POST /analysis/composition`. It is not a V2 field, is not persisted in projects, and is not consumed by playback or export. See [composition-analysis.md](composition-analysis.md).
 
 ## Version dispatch
 
@@ -24,6 +26,7 @@ V2 persisted nested models use `extra="forbid"`. V1 keeps ignored-extra compatib
 | Musical content | note pitch/start/notated duration, ties, articulations, meter/key timelines | Authored notes and score structure |
 | Semantic / navigation | sections (type, boundaries, optional `id`/`label`), harmony, rehearsal/text `markers` | UI, notation, LLM context — never audible notes |
 | Playback / performance | note velocity, tempo timeline, track volume/pan/expression, dynamic marks, sustain spans, automation | Deterministic projections — never replaces note content |
+| Not in V2 | `composition.analysis.v1` reports | Derived sidecar only; never a canonical or persisted field |
 
 ## Root fields (V1 + timeline)
 
@@ -276,7 +279,8 @@ Before treating V2 responses as production-ready, verify:
 ## Consumers
 
 - **Import:** `POST /imports/midi` and `POST /imports/musicxml` return V2 in `composition` plus regenerated `musicxml` and `import_report`. See [import.md](import.md).
-- **Generation / edit:** `POST /llm/generate-music-json` and `POST /llm/edit-composition-region` return V2 in `music` (input may be V1 or V2, including imported scores). Canonical validation applies; generation ensemble density does not block imported material.
+- **Analysis:** `POST /analysis/composition` returns a derived `composition.analysis.v1` sidecar for a scope. Not persisted; not used by playback/export. See [composition-analysis.md](composition-analysis.md).
+- **Generation / edit:** `POST /llm/generate-music-json` and `POST /llm/edit-composition-region` return V2 in `music` (input may be V1 or V2, including imported scores). Canonical validation applies; generation ensemble density does not block imported material. Edit/repair prompts may include a bounded advisory analysis summary only.
 - **Projects:** SQLite stores V2 after open/save; V1 migrates on read. Imported projects persist with `generationMeta: null`. See [project-persistence.md](./project-persistence.md).
 - **Playback:** `tonePlaybackEngine.js` compiles V2 expression with piecewise tempo; mute/solo is UI-only. Regenerated notation after import comes from backend MusicXML of the installed V2 — never from the uploaded file.
 - **Exports:** `/export/musicxml`, `/export/midi`, and `/export/wav` accept V1 or V2 input, normalize to V2, and attach `X-Mukit-Projection-*` headers (CORS-exposed). MusicXML may report notation omissions such as `automation_omitted_from_notation`; MIDI/WAV inherit the shared MIDI projection report (tempo quantization, automation sampling, articulation transforms, and related codes). WAV uses FluidSynth on the same MIDI bytes; env vars: `FLUIDSYNTH_BIN`, `COMPOSITION_WAV_SOUNDFONT` (Docker default `/usr/share/sounds/sf2/FluidR3_GM.sf2`), `COMPOSITION_WAV_SAMPLE_RATE`, `COMPOSITION_WAV_GAIN`, `COMPOSITION_WAV_TIMEOUT_SECONDS`. Missing FluidSynth/SoundFont → `503`.
@@ -286,6 +290,7 @@ Staged generation, region editing, and V1 compatibility details: [composition-v1
 
 ## See Also
 
+- [Composition Analysis](composition-analysis.md) — deterministic sidecar report (not part of canonical V2)
 - [MIDI and MusicXML import](import.md) — ingestion mappings, limits, issue codes
 - [Composition V1](composition-v1.md) — staged generation, region editing, V1 parser compatibility
 - [Project persistence](project-persistence.md) — migrate-on-open, autosave, SQLite

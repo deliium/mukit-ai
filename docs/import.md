@@ -1,10 +1,10 @@
-[← Composition V2](composition-v2.md) · [Back to README](../README.md) · [Composition V1 →](composition-v1.md)
+[← Composition Analysis](composition-analysis.md) · [Back to README](../README.md) · [Composition V1 →](composition-v1.md)
 
 # MIDI and MusicXML Import
 
 Secure multipart ingestion converts uploaded MIDI or MusicXML into strict `composition.v2`, installs the same canonical state used by playback, piano roll, notation, persistence, export, and AI region editing, and returns a session-scoped import report.
 
-Source files are **ingress only**. After conversion, `tracks[].events[]` is the sole playable source. Raw import performs **no** harmony, form, key, or tonal analysis. Source bytes are not retained on the composition or in project storage.
+Source files are **ingress only**. After conversion, `tracks[].events[]` is the sole playable source. Raw import performs **no** harmony, form, key, or tonal analysis and does **not** call `POST /analysis/composition`. Resulting documents always set `harmony: []`. Optional Analysis-tab reports are derived later from the installed V2 only (see [composition-analysis.md](composition-analysis.md)). Source bytes are not retained on the composition or in project storage.
 
 ## Endpoints
 
@@ -162,5 +162,6 @@ Import → edit → export is fidelity within documented approximations. Re-expo
 ## See Also
 
 - [Composition V2](composition-v2.md) — canonical contract and export fidelity
+- [Composition Analysis](composition-analysis.md) — optional post-import sidecar (not run during import)
 - [Testing](testing.md) — import fixtures, fidelity/security tests, E2E
 - [Project persistence](project-persistence.md) — save/reopen after import

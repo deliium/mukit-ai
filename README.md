@@ -11,6 +11,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
 - **Piano-Roll Editor**: Create, select, drag/transpose, resize, and delete notes on `tracks[].events[]` with snap/zoom, track focus, context tracks, and note-edit undo/redo; shares the same `editedMusicJson` as the JSON editor
 - **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start, piano-roll playback cursor)
+- **Composition Analysis**: Deterministic `composition.analysis.v1` sidecar for tonal context, inferred harmony, phrases/density, and stable warnings over current V2 (Analysis tab; optional bounded advisory context for LLM edit/repair — not persisted, not required for import/playback)
 - **Deterministic Export**: Download MusicXML, MIDI, and server-rendered WAV from the same canonical `tracks[].events[]`; export responses include projection status headers when approximations apply
 
 ## 🏗️ Architecture
@@ -20,7 +21,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Persistence**: SQLite project store (`PROJECT_DB_PATH`) with numbered SQL migrations; Docker named volume `mukit_project_data`
 - **Music Processing**: music21 library for MusicXML rendering
 - **LLM Orchestration**: LangChain/LangGraph with OpenAI-compatible chat providers
-- **Frontend State**: Zustand store for API status, LLM models, project browser/save status, generation output, piano-roll edit state, notation, playback transport state, and per-track mute/solo/volume
+- **Frontend State**: Zustand store for API status, LLM models, project browser/save status, generation output, piano-roll edit state, notation, playback transport state, per-track mute/solo/volume, and derived analysis report cache
 
 ## Prerequisites
 
@@ -46,8 +47,9 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 2. Select a configured model (Fake deterministic, or a real provider) when generating or AI-editing
 3. Generate 16–32 bar multi-track composition (or work from the imported V2)
 4. Play (Tone.js), view notation (OSMD), edit notes on the piano roll
-5. AI region edit (select bars → instruction → Regenerate Selection)
-6. Undo note edits if needed → Save
+5. Open the **Analysis** tab for deterministic tonality/harmony/density/warnings on the current V2 (no LLM required)
+6. AI region edit (select bars → instruction → Regenerate Selection)
+7. Undo note edits if needed → Save
 7. Export MusicXML / MIDI / WAV
 8. `docker compose restart` → reopen the same project (named volume keeps SQLite)
 
@@ -117,7 +119,7 @@ npm install
 npm run dev
 ```
 
-The frontend will be available at `http://localhost:3000` (proxies `/health`, `/ready`, `/llm`, `/export`, `/projects`, `/imports` to the backend).
+The frontend will be available at `http://localhost:3000` (proxies `/health`, `/ready`, `/llm`, `/export`, `/projects`, `/imports`, `/analysis` to the backend).
 
 ## 🎼 Usage
 
@@ -139,6 +141,16 @@ Details: [docs/project-persistence.md](docs/project-persistence.md).
 4. Play, edit, save, export, and AI region edit use the same canonical path as generated scores. Import does not require an LLM key.
 
 Formats, limits, issue codes, and security: [docs/import.md](docs/import.md).
+
+### Composition analysis
+
+1. Open a generated or imported project with valid `composition.v2`.
+2. Select the composer **Analysis** tab.
+3. Choose whole-composition, a section, or the current piano-roll track; the UI posts the current edited V2 to `POST /analysis/composition`.
+4. Review declared vs inferred tonality/harmony, density, phrases, and stable warning codes. Edit notes while the tab is open to see stale → debounced refresh.
+5. Analysis is deterministic native Python (no LLM). Region edit / targeted generation repair may receive a bounded advisory summary only; hard constraints and canonical events remain authoritative.
+
+Contract, scopes, and warning codes: [docs/composition-analysis.md](docs/composition-analysis.md).
 
 ### LLM JSON Composition
 
@@ -173,6 +185,7 @@ Formats, limits, issue codes, and security: [docs/import.md](docs/import.md).
 - `POST /export/wav` - Render canonical composition JSON as a downloadable WAV via FluidSynth (reuses MIDI note content)
 - `POST /imports/midi` - Multipart MIDI → strict `composition.v2` + regenerated MusicXML + `import_report`
 - `POST /imports/musicxml` - Multipart MusicXML/MXL → same response shape (content-detected)
+- `POST /analysis/composition` - Deterministic `composition.analysis.v1` sidecar for a composition/section/track scope (complete current V2 body; not persisted)
 
 Example LLM request:
 
@@ -249,24 +262,26 @@ mukit-ai/
 │   │   ├── schemas.py           # Pydantic models
 │   │   ├── import_schemas.py    # Import DTOs / issue codes
 │   │   ├── import_settings.py   # IMPORT_* limits
+│   │   ├── analysis_schemas.py  # composition.analysis.v1 DTOs / warning codes
 │   │   ├── llm_settings.py      # LLM provider environment settings
-│   │   ├── routers/             # projects, imports
-│   │   └── services/            # LLM, import, normalization, MusicXML, MIDI/WAV
+│   │   ├── routers/             # projects, imports, analysis
+│   │   └── services/            # LLM, import, analysis, normalization, MusicXML, MIDI/WAV
 │   ├── requirements.txt
 │   └── tests/                   # Backend unit tests
 ├── frontend/
 │   ├── public/
 │   ├── src/
-│   │   ├── components/          # Generator, piano roll, notation, playback, export controls
+│   │   ├── components/          # Generator, analysis, piano roll, notation, playback, export controls
 │   │   ├── api/musicApi.js
-│   │   ├── store/               # Zustand music store (edits, undo, playback, notation)
-│   │   ├── utils/               # Validation, piano-roll geometry, playback events/tracks/engine helpers
+│   │   ├── store/               # Zustand music store (edits, undo, playback, notation, analysis)
+│   │   ├── utils/               # Validation, piano-roll geometry, playback, analysis helpers
 │   │   ├── App.jsx
 │   │   ├── index.jsx
 │   │   └── index.css
 │   └── package.json
 ├── docs/
 │   ├── composition-v2.md
+│   ├── composition-analysis.md
 │   ├── import.md
 │   ├── composition-v1.md
 │   ├── project-persistence.md
@@ -279,6 +294,7 @@ mukit-ai/
 | Guide | Description |
 |-------|-------------|
 | [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
+| [Composition Analysis](docs/composition-analysis.md) | Deterministic sidecar, scopes, warnings, Analysis tab |
 | [MIDI / MusicXML import](docs/import.md) | Ingestion mappings, limits, issue codes, security |
 | [Composition V1](docs/composition-v1.md) | V1 compatibility, staged generation, region editing |
 | [Project persistence](docs/project-persistence.md) | SQLite projects, migrate-on-open, autosave |
