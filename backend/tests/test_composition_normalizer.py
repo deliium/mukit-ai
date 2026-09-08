@@ -22,7 +22,7 @@ def test_normalizer_migrates_legacy_notes_and_defaults_velocity(caplog):
         composition = normalize_composition_json(legacy_music_json())
 
     event = composition.tracks[0].events[0]
-    assert composition.schema_version == "composition.v1"
+    assert composition.schema_version == "composition.v2"
     assert event.start_tick == 2160
     assert event.duration_ticks == 240
     assert event.velocity == 80

@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from .schemas import Composition, LLMPromptParameters
+from .schemas import CompositionV1, CompositionV2, LLMPromptParameters
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class ProjectGenerationMeta(BaseModel):
 
 class ProjectCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    composition: dict[str, Any] | Composition | None = None
+    composition: dict[str, Any] | CompositionV1 | CompositionV2 | None = None
     generation: ProjectGenerationMeta | None = None
 
     @model_validator(mode="before")
@@ -85,7 +85,7 @@ class ProjectCreateRequest(BaseModel):
 
 class ProjectPatchRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    composition: dict[str, Any] | Composition | None = None
+    composition: dict[str, Any] | CompositionV1 | CompositionV2 | None = None
     generation: ProjectGenerationMeta | None = None
     clear_composition: bool = False
     clear_generation: bool = False
@@ -139,7 +139,7 @@ class ProjectDetailResponse(BaseModel):
     name: str
     created_at: str
     updated_at: str
-    composition: Composition | None = None
+    composition: CompositionV2 | None = None
     generation_provider: str | None = None
     generation_model: str | None = None
     generation_prompt: dict[str, Any] | None = None

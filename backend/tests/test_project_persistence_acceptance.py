@@ -73,6 +73,7 @@ def test_create_save_reopen_preserves_edited_composition(project_db, caplog):
     assert reopened.name == "Acceptance Song"
     loaded = json.loads(reopened.composition_json)
     assert loaded == canonical
+    assert loaded["schema_version"] == "composition.v2"
     assert loaded["tracks"][0]["events"][0]["pitch"] == "D4"
     assert len(loaded["tracks"][0]["events"]) == 4
     assert reopened.generation_provider == "deepseek"

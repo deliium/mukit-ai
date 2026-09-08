@@ -49,7 +49,7 @@ def test_project_routes_crud_and_generation_meta(client, caplog):
     )
     assert patched.status_code == 200
     assert patched.json()["name"] == "Demo Renamed"
-    assert patched.json()["composition"]["schema_version"] == "composition.v1"
+    assert patched.json()["composition"]["schema_version"] == "composition.v2"
     assert patched.json()["updated_at"] >= create.json()["updated_at"]
 
     opened = client.get(f"/projects/{project_id}")
@@ -101,13 +101,59 @@ def test_open_migrates_legacy_composition(client, caplog):
 
     assert opened.status_code == 200
     body = opened.json()
-    assert body["composition"]["schema_version"] == "composition.v1"
+    assert body["composition"]["schema_version"] == "composition.v2"
     assert body["composition_migrated"] is True
     assert body["migration_path"] == "legacy"
-    assert "Composition migrated to composition.v1" in caplog.text
+    assert "Composition migrated to composition.v2" in caplog.text
 
     # Second open should be canonical after rewrite
     reopen = client.get(f"/projects/{created['id']}")
     assert reopen.status_code == 200
     assert reopen.json()["composition_migrated"] is False
     assert reopen.json()["migration_path"] == "canonical"
+
+
+def test_open_migrates_v1_composition_and_preserves_notes(client, caplog):
+    from app.services import project_store as store
+
+    created = client.post("/projects", json={"name": "V1 Home"}).json()
+    v1_payload = valid_composition()
+    v1_payload["tracks"][0]["events"][0]["id"] = "keep-me"
+    store.update_project(created["id"], composition=__import__("json").dumps(v1_payload))
+
+    with caplog.at_level("WARNING"):
+        opened = client.get(f"/projects/{created['id']}")
+
+    assert opened.status_code == 200
+    body = opened.json()
+    assert body["composition"]["schema_version"] == "composition.v2"
+    assert body["composition_migrated"] is True
+    assert body["migration_path"] == "v1_to_v2"
+    assert body["composition"]["tracks"][0]["events"][0]["id"] == "keep-me"
+    assert body["composition"]["tracks"][0]["events"][0]["pitch"] == "C4"
+    assert "Composition migrated to composition.v2" in caplog.text
+
+    stored = __import__("json").loads(store.get_project(created["id"]).composition_json)
+    assert stored["schema_version"] == "composition.v2"
+
+    reopen = client.get(f"/projects/{created['id']}")
+    assert reopen.json()["composition_migrated"] is False
+    assert reopen.json()["migration_path"] == "canonical"
+
+
+def test_failed_migration_does_not_rewrite_stored_json(client, monkeypatch):
+    from app.services import project_store as store
+    from app.services.composition_migration import CompositionMigrationError
+
+    created = client.post("/projects", json={"name": "Broken Migrate"}).json()
+    original = valid_composition()
+    store.update_project(created["id"], composition=__import__("json").dumps(original))
+
+    def boom(*_args, **_kwargs):
+        raise CompositionMigrationError()
+
+    monkeypatch.setattr("app.services.composition_normalizer.migrate_v1_to_v2", boom)
+    opened = client.get(f"/projects/{created['id']}")
+    assert opened.status_code == 422
+    stored = store.get_project(created["id"]).composition_json
+    assert __import__("json").loads(stored)["schema_version"] == "composition.v1"

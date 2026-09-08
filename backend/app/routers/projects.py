@@ -98,7 +98,7 @@ def _open_composition(record: ProjectRecord, *, rewrite: bool = True):
         project_id=record.id,
         persist_canonical=rewrite,
     )
-    migrated = normalized.migration_path == "legacy"
+    migrated = normalized.migration_path in {"legacy", "v1_to_v2"}
     updated_record = record
     if normalized.rewritten:
         canonical_json = composition_to_storage_json(normalized.composition)
@@ -112,6 +112,7 @@ def _open_composition(record: ProjectRecord, *, rewrite: bool = True):
                 "project_id": record.id,
                 "previous_schema_version": normalized.previous_schema_version,
                 "schema_version": normalized.composition.schema_version,
+                "migration_path": normalized.migration_path,
             },
         )
     return normalized.composition, migrated, normalized.migration_path, updated_record

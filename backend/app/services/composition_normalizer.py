@@ -4,7 +4,15 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.schemas import Composition, LLMMusicJson
+from app.composition_schemas import (
+    COMPOSITION_SCHEMA_VERSION_V1,
+    COMPOSITION_SCHEMA_VERSION_V2,
+    CompositionV1,
+    CompositionV2,
+    UnsupportedSchemaVersionError,
+)
+from app.schemas import LLMMusicJson
+from app.services.composition_migration import CompositionMigrationError, migrate_v1_to_v2
 from app.services.composition_timing import (
     derive_section_boundaries,
     legacy_bar_beat_to_start_tick,
@@ -14,7 +22,7 @@ from app.services.composition_timing import (
 
 logger = logging.getLogger(__name__)
 
-COMPOSITION_SCHEMA_VERSION = "composition.v1"
+COMPOSITION_SCHEMA_VERSION = COMPOSITION_SCHEMA_VERSION_V2
 DEFAULT_TICKS_PER_QUARTER = 480
 DEFAULT_LEGACY_VELOCITY = 80
 
@@ -48,47 +56,121 @@ class CompositionNormalizationError(ValueError):
     pass
 
 
-def normalize_composition_json(raw: Any) -> Composition:
+def normalize_composition_json(raw: Any) -> CompositionV2:
+    """Exact version dispatch that always returns operational CompositionV2."""
     logger.debug(
         "Starting composition normalization",
         extra={"raw_type": type(raw).__name__, "schema_version": _schema_version(raw)},
     )
-    if isinstance(raw, Composition):
+    if isinstance(raw, CompositionV2):
         logger.info(
             "Composition normalization completed",
-            extra={"normalization_path": "canonical", "schema_version": raw.schema_version},
+            extra={
+                "normalization_path": "canonical",
+                "source_schema_version": COMPOSITION_SCHEMA_VERSION_V2,
+                "schema_version": raw.schema_version,
+            },
         )
         return raw
+
+    if isinstance(raw, CompositionV1):
+        migrated = migrate_v1_to_v2(raw)
+        logger.info(
+            "Composition normalization completed",
+            extra={
+                "normalization_path": "v1_to_v2",
+                "source_schema_version": COMPOSITION_SCHEMA_VERSION_V1,
+                "schema_version": migrated.composition.schema_version,
+            },
+        )
+        return migrated.composition
 
     raw_data = raw.model_dump() if hasattr(raw, "model_dump") else raw
     if not isinstance(raw_data, dict):
         logger.error(
             "Composition normalization failed",
-            extra={"normalization_path": "legacy_rejected", "reason": "raw input is not an object"},
+            extra={"normalization_path": "rejected", "reason": "raw input is not an object"},
         )
         raise CompositionNormalizationError("Music JSON must be an object")
 
-    if raw_data.get("schema_version") == COMPOSITION_SCHEMA_VERSION:
+    schema_version = raw_data.get("schema_version")
+    if schema_version == COMPOSITION_SCHEMA_VERSION_V2:
         try:
-            composition = Composition.model_validate(raw_data)
+            composition = CompositionV2.model_validate(raw_data)
         except ValidationError as exc:
             logger.error(
-                "Canonical composition validation failed during normalization",
-                extra={"normalization_path": "legacy_rejected", "error_count": len(exc.errors())},
+                "Canonical composition.v2 validation failed during normalization",
+                extra={"normalization_path": "rejected", "error_count": len(exc.errors())},
             )
             raise
         logger.info(
             "Composition normalization completed",
-            extra={"normalization_path": "canonical", "schema_version": composition.schema_version},
+            extra={
+                "normalization_path": "canonical",
+                "source_schema_version": COMPOSITION_SCHEMA_VERSION_V2,
+                "schema_version": composition.schema_version,
+                "track_count": len(composition.tracks),
+                "event_count": sum(len(track.events) for track in composition.tracks),
+            },
         )
         return composition
 
-    return _migrate_legacy_music_json(raw_data)
+    if schema_version == COMPOSITION_SCHEMA_VERSION_V1:
+        try:
+            migrated = migrate_v1_to_v2(raw_data)
+        except (ValidationError, CompositionMigrationError) as exc:
+            logger.error(
+                "Composition.v1 migration failed during normalization",
+                extra={
+                    "normalization_path": "v1_to_v2",
+                    "error_type": type(exc).__name__,
+                    "code": getattr(exc, "code", None),
+                },
+            )
+            raise
+        logger.info(
+            "Composition normalization completed",
+            extra={
+                "normalization_path": "v1_to_v2",
+                "source_schema_version": COMPOSITION_SCHEMA_VERSION_V1,
+                "schema_version": migrated.composition.schema_version,
+                "ignored_field_count": len(migrated.ignored_field_paths),
+                "track_count": len(migrated.composition.tracks),
+                "event_count": sum(len(track.events) for track in migrated.composition.tracks),
+            },
+        )
+        return migrated.composition
+
+    if schema_version is not None:
+        logger.error(
+            "Unsupported composition schema_version",
+            extra={
+                "normalization_path": "rejected",
+                "schema_version": str(schema_version),
+                "code": UnsupportedSchemaVersionError.code,
+            },
+        )
+        raise UnsupportedSchemaVersionError(str(schema_version))
+
+    # Unversioned legacy → V1 → V2
+    v1 = _migrate_legacy_music_json(raw_data)
+    migrated = migrate_v1_to_v2(v1)
+    logger.info(
+        "Composition normalization completed",
+        extra={
+            "normalization_path": "legacy_to_v2",
+            "source_schema_version": None,
+            "schema_version": migrated.composition.schema_version,
+            "track_count": len(migrated.composition.tracks),
+            "event_count": sum(len(track.events) for track in migrated.composition.tracks),
+        },
+    )
+    return migrated.composition
 
 
-def _migrate_legacy_music_json(raw_data: dict[str, Any]) -> Composition:
+def _migrate_legacy_music_json(raw_data: dict[str, Any]) -> CompositionV1:
     logger.debug(
-        "Migrating legacy music JSON to canonical composition",
+        "Migrating legacy music JSON to composition.v1",
         extra={"raw_keys": sorted(raw_data.keys()), "note_count": len(raw_data.get("notes") or [])},
     )
     if not raw_data.get("notes"):
@@ -161,9 +243,9 @@ def _migrate_legacy_music_json(raw_data: dict[str, Any]) -> Composition:
             }
         )
 
-    composition = Composition.model_validate(
+    composition = CompositionV1.model_validate(
         {
-            "schema_version": COMPOSITION_SCHEMA_VERSION,
+            "schema_version": COMPOSITION_SCHEMA_VERSION_V1,
             "tempo": legacy.tempo,
             "key": legacy.key,
             "time_signature": legacy.time_signature,
@@ -176,7 +258,7 @@ def _migrate_legacy_music_json(raw_data: dict[str, Any]) -> Composition:
         }
     )
     logger.info(
-        "Composition normalization completed",
+        "Legacy music JSON migrated to composition.v1",
         extra={
             "normalization_path": "legacy_migrated",
             "schema_version": composition.schema_version,
@@ -186,20 +268,11 @@ def _migrate_legacy_music_json(raw_data: dict[str, Any]) -> Composition:
             "duration_ticks": composition.duration_ticks,
         },
     )
-    logger.debug(
-        "Legacy composition migration timing summary",
-        extra={
-            "normalization_path": "legacy_migrated",
-            "ticks_per_quarter": ticks_per_quarter,
-            "duration_ticks": duration_ticks,
-            "events_by_track": {track.id: len(track.events) for track in composition.tracks},
-        },
-    )
     return composition
 
 
 def _schema_version(raw: Any) -> str | None:
-    if isinstance(raw, Composition):
+    if isinstance(raw, (CompositionV1, CompositionV2)):
         return raw.schema_version
     if isinstance(raw, dict):
         value = raw.get("schema_version")

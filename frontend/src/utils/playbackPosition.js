@@ -1,28 +1,41 @@
 /**
- * Playback transport/position helpers for Composition V1.
+ * Playback transport/position helpers for Composition V1/V2.
  */
 
+import {
+  barAtTick,
+  barDurationTicks as timelineBarDurationTicks,
+  compileTimeline,
+  secondsToTick,
+  tickToSeconds,
+} from './compositionTimeline.js';
+
 export function barDurationTicks(timeSignature, ticksPerQuarter) {
-  if (!timeSignature || typeof timeSignature !== 'string') {
-    return null;
-  }
-  const [numerator, denominator] = timeSignature.split('/').map(Number);
-  if (!Number.isInteger(numerator) || !Number.isInteger(denominator) || numerator <= 0 || denominator <= 0) {
-    return null;
-  }
-  if (![1, 2, 4, 8, 16, 32].includes(denominator)) {
-    return null;
-  }
-  const ticks = numerator * ticksPerQuarter * (4 / denominator);
-  return Number.isInteger(ticks) ? ticks : null;
+  return timelineBarDurationTicks(timeSignature, ticksPerQuarter);
 }
 
 export function secondsToPlaybackPosition(seconds, {
   tempo = 100,
   ticksPerQuarter = 480,
   timeSignature = '4/4',
+  composition = null,
 } = {}) {
   const safeSeconds = Math.max(0, Number(seconds) || 0);
+  const timeline = composition ? compileTimeline(composition) : null;
+  if (timeline) {
+    const tick = secondsToTick(timeline, safeSeconds);
+    const bar = barAtTick(timeline, Math.min(tick, timeline.durationTicks));
+    const barStart = timeline.barBoundaries[bar - 1] ?? 0;
+    const barEnd = timeline.barBoundaries[bar] ?? (barStart + timeline.ticksPerQuarter * 4);
+    return {
+      seconds: safeSeconds,
+      tick,
+      bar,
+      tickInBar: tick - barStart,
+      barTicks: barEnd - barStart,
+    };
+  }
+
   const safeTempo = Number(tempo) || 100;
   const safeTpq = Number(ticksPerQuarter) || 480;
   const secondsPerTick = 60 / safeTempo / safeTpq;
@@ -39,27 +52,19 @@ export function secondsToPlaybackPosition(seconds, {
   };
 }
 
-export function compositionRevisionKey(musicJson) {
-  if (!musicJson || typeof musicJson !== 'object') {
-    return 'empty';
+export function ticksToPlaybackSeconds(tick, {
+  tempo = 100,
+  ticksPerQuarter = 480,
+  composition = null,
+} = {}) {
+  const timeline = composition ? compileTimeline(composition) : null;
+  if (timeline) {
+    return tickToSeconds(timeline, Math.max(0, Math.min(Number(tick) || 0, timeline.durationTicks)));
   }
-  try {
-    return JSON.stringify({
-      schema_version: musicJson.schema_version,
-      tempo: musicJson.tempo,
-      ticks_per_quarter: musicJson.ticks_per_quarter,
-      time_signature: musicJson.time_signature,
-      duration_ticks: musicJson.duration_ticks,
-      tracks: Array.isArray(musicJson.tracks)
-        ? musicJson.tracks.map((track) => ({
-          id: track.id,
-          volume: track.volume,
-          events: track.events,
-        }))
-        : [],
-    });
-  } catch (error) {
-    console.warn('[playbackPosition] Failed to build composition revision key', { message: error.message });
-    return `fallback:${Date.now()}`;
-  }
+  const safeTempo = Number(tempo) || 100;
+  const safeTpq = Number(ticksPerQuarter) || 480;
+  return (Math.max(0, Number(tick) || 0) / safeTpq) * (60 / safeTempo);
 }
+
+export { audibleRevisionKey as compositionRevisionKey } from './compositionCanonical.js';
+export { notationRevisionKey } from './compositionCanonical.js';

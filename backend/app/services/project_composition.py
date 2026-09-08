@@ -9,7 +9,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from ..schemas import COMPOSITION_SCHEMA_VERSION, Composition
+from app.composition_schemas import (
+    COMPOSITION_SCHEMA_VERSION_V1,
+    COMPOSITION_SCHEMA_VERSION_V2,
+    CompositionV1,
+    CompositionV2,
+    UnsupportedSchemaVersionError,
+)
+from .composition_migration import CompositionMigrationError
 from .composition_normalizer import CompositionNormalizationError, normalize_composition_json
 
 logger = logging.getLogger(__name__)
@@ -21,17 +28,17 @@ class ProjectCompositionError(ValueError):
 
 @dataclass(frozen=True)
 class NormalizedProjectComposition:
-    composition: Composition
+    composition: CompositionV2
     migration_path: str
     rewritten: bool
     previous_schema_version: str | None
 
 
 def parse_composition_payload(raw: Any) -> Any:
-    """Accept Composition, dict, or JSON string payloads."""
+    """Accept CompositionV1/V2, dict, or JSON string payloads."""
     if raw is None:
         return None
-    if isinstance(raw, Composition):
+    if isinstance(raw, (CompositionV1, CompositionV2)):
         return raw
     if isinstance(raw, str):
         try:
@@ -46,7 +53,7 @@ def parse_composition_payload(raw: Any) -> Any:
 
 
 def _schema_version(payload: Any) -> str | None:
-    if isinstance(payload, Composition):
+    if isinstance(payload, (CompositionV1, CompositionV2)):
         return payload.schema_version
     if isinstance(payload, dict):
         value = payload.get("schema_version")
@@ -60,13 +67,19 @@ def normalize_project_composition(
     project_id: str | None = None,
     persist_canonical: bool = False,
 ) -> NormalizedProjectComposition:
-    """Normalize legacy/non-canonical JSON to Composition V1."""
+    """Normalize legacy/V1 JSON to operational Composition V2."""
     payload = parse_composition_payload(raw)
     previous = _schema_version(payload)
 
     try:
         composition = normalize_composition_json(payload)
-    except (CompositionNormalizationError, ValidationError, ValueError) as exc:
+    except (
+        CompositionNormalizationError,
+        CompositionMigrationError,
+        UnsupportedSchemaVersionError,
+        ValidationError,
+        ValueError,
+    ) as exc:
         logger.error(
             "Project composition migration/validation failed",
             extra={
@@ -74,16 +87,19 @@ def normalize_project_composition(
                 "previous_schema_version": previous,
                 "error_type": type(exc).__name__,
                 "error_detail": str(exc)[:300],
+                "code": getattr(exc, "code", None),
             },
         )
         raise ProjectCompositionError(str(exc)[:500]) from exc
 
-    if isinstance(payload, Composition) or previous == COMPOSITION_SCHEMA_VERSION:
+    if previous == COMPOSITION_SCHEMA_VERSION_V2 or isinstance(payload, CompositionV2):
         migration_path = "canonical"
+    elif previous == COMPOSITION_SCHEMA_VERSION_V1 or isinstance(payload, CompositionV1):
+        migration_path = "v1_to_v2"
     else:
         migration_path = "legacy"
 
-    rewritten = bool(persist_canonical and migration_path == "legacy")
+    rewritten = bool(persist_canonical and migration_path != "canonical")
     logger.info(
         "Project composition normalized",
         extra={
@@ -99,11 +115,20 @@ def normalize_project_composition(
     )
     if migration_path == "legacy":
         logger.warning(
-            "Composition migrated to composition.v1",
+            "Composition migrated to composition.v2 via legacy path",
             extra={
                 "project_id": project_id,
                 "previous_schema_version": previous,
-                "schema_version": COMPOSITION_SCHEMA_VERSION,
+                "schema_version": COMPOSITION_SCHEMA_VERSION_V2,
+            },
+        )
+    elif migration_path == "v1_to_v2":
+        logger.warning(
+            "Composition migrated to composition.v2",
+            extra={
+                "project_id": project_id,
+                "previous_schema_version": previous,
+                "schema_version": COMPOSITION_SCHEMA_VERSION_V2,
             },
         )
 
@@ -115,5 +140,5 @@ def normalize_project_composition(
     )
 
 
-def composition_to_storage_json(composition: Composition) -> str:
+def composition_to_storage_json(composition: CompositionV2) -> str:
     return json.dumps(composition.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))

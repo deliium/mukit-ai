@@ -4,6 +4,7 @@
  */
 
 import { barDurationTicks } from './playbackPosition.js';
+import { barRangeTicks, compileTimeline, pointerXToBarFromTimeline } from './compositionTimeline.js';
 
 /**
  * Normalize an inclusive bar range and clamp to composition bounds.
@@ -46,7 +47,21 @@ export function pointerXToBar(pointerX, {
   barTicks,
   barCount,
   scrollLeft = 0,
+  timeline = null,
+  barBoundaries = null,
 } = {}) {
+  if (timeline || barBoundaries) {
+    const compiled = timeline || {
+      barCount: Number(barCount),
+      durationTicks: Array.isArray(barBoundaries) ? barBoundaries[barBoundaries.length - 1] : 0,
+      barBoundaries,
+    };
+    return pointerXToBarFromTimeline(pointerX, {
+      timeline: compiled,
+      pixelsPerTick,
+      scrollLeft,
+    });
+  }
   const ppt = Number(pixelsPerTick);
   const ticks = Number(barTicks);
   const totalBars = Number(barCount);
@@ -74,11 +89,27 @@ export function selectedTickBoundaries(startBar, endBar, {
   timeSignature = '4/4',
   ticksPerQuarter = 480,
   durationTicks = null,
+  composition = null,
 } = {}) {
   const normalized = normalizeBarRange(startBar, endBar, Number.MAX_SAFE_INTEGER);
   if (normalized.startBar === null) {
     return { startTick: null, endTick: null, barTicks: null, warning: normalized.warning };
   }
+
+  const timeline = composition ? compileTimeline(composition) : null;
+  if (timeline) {
+    const range = barRangeTicks(timeline, normalized.startBar, normalized.endBar);
+    if (!range) {
+      return { startTick: null, endTick: null, barTicks: null, warning: 'invalid bar range for timeline' };
+    }
+    let endTick = range.endTick;
+    if (Number.isFinite(Number(durationTicks))) {
+      endTick = Math.min(endTick, Number(durationTicks));
+    }
+    const firstBarTicks = timeline.barBoundaries[1] - timeline.barBoundaries[0];
+    return { startTick: range.startTick, endTick, barTicks: firstBarTicks };
+  }
+
   const barTicks = barDurationTicks(timeSignature, ticksPerQuarter);
   if (!barTicks) {
     return { startTick: null, endTick: null, barTicks: null, warning: 'unsupported time signature or ticks' };
@@ -117,14 +148,27 @@ export function selectionOverlayRect(startBar, endBar, {
   pixelsPerTick,
   barTicks,
   totalHeight,
+  barBoundaries = null,
 } = {}) {
   const ppt = Number(pixelsPerTick);
-  const ticks = Number(barTicks);
-  if (!Number.isFinite(ppt) || ppt <= 0 || !Number.isFinite(ticks) || ticks <= 0) {
-    return null;
-  }
   const normalized = normalizeBarRange(startBar, endBar, Number.MAX_SAFE_INTEGER);
   if (normalized.startBar === null) {
+    return null;
+  }
+  if (Array.isArray(barBoundaries) && barBoundaries.length > normalized.endBar) {
+    const startTick = barBoundaries[normalized.startBar - 1];
+    const endTick = barBoundaries[normalized.endBar];
+    return {
+      left: startTick * ppt,
+      width: (endTick - startTick) * ppt,
+      top: 0,
+      height: Number(totalHeight) || 0,
+      startBar: normalized.startBar,
+      endBar: normalized.endBar,
+    };
+  }
+  const ticks = Number(barTicks);
+  if (!Number.isFinite(ppt) || ppt <= 0 || !Number.isFinite(ticks) || ticks <= 0) {
     return null;
   }
   const left = (normalized.startBar - 1) * ticks * ppt;
