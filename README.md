@@ -1,10 +1,11 @@
 # 🎵 AI Music Composer
 
-A full-stack LLM music composer that generates canonical playable `composition.v2` JSON through a LangChain/LangGraph-backed FastAPI service. The React frontend lets users choose a configured provider/model, edit notes on a piano roll or in JSON, render notation from backend MusicXML, and preview canonical note-event playback in the browser. V1 remains accepted as migration input.
+A full-stack LLM music composer that generates and edits canonical playable `composition.v2` JSON through a LangChain/LangGraph-backed FastAPI service. Import MIDI or MusicXML into the same V2 workspace. The React frontend lets users choose a configured provider/model, edit notes on a piano roll or in JSON, render notation from backend MusicXML, and preview canonical note-event playback in the browser. V1 remains accepted as migration input.
 
 ## 🚀 Features
 
 - **LLM JSON Composition**: Generate structured music JSON with OpenAI or DeepSeek-compatible providers
+- **MIDI / MusicXML Import**: Upload `.mid`/`.midi`, `.musicxml`/`.xml`, or `.mxl` into strict `composition.v2` with session import warnings; no LLM required
 - **Local Project Persistence**: Create/open/rename/duplicate/delete projects backed by SQLite; debounced autosave keeps edited compositions across Docker restarts
 - **Prompt Controls**: Configure genre, mood, key, meter, tempo range, instruments, sections, complexity, duration, and freeform instructions
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
@@ -41,9 +42,9 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 
 ### V1 workflow
 
-1. **Projects** → New Project (or Open)
-2. Select a configured model (Fake deterministic, or a real provider)
-3. Generate 16–32 bar multi-track composition
+1. **Projects** → New Project (or Open), or **Import** a MIDI/MusicXML file (no LLM required)
+2. Select a configured model (Fake deterministic, or a real provider) when generating or AI-editing
+3. Generate 16–32 bar multi-track composition (or work from the imported V2)
 4. Play (Tone.js), view notation (OSMD), edit notes on the piano roll
 5. AI region edit (select bars → instruction → Regenerate Selection)
 6. Undo note edits if needed → Save
@@ -53,7 +54,8 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Named volume `mukit_project_data` persists SQLite at `/data/projects.db`. Prefer `docker compose restart` or `down` without `-v`.
 - Both services use `restart: unless-stopped` and healthchecks (`GET /health` on backend; HTTP on frontend).
 - Hot-reload override (optional): `docker compose -f docker-compose.yml -f compose.dev.yml up --build`
-- Logging: set `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` (default `INFO`). Never expect keys/prompts/raw MusicXML/MIDI/WAV in logs.
+- Logging: set `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` (default `INFO`). Never expect keys/prompts/raw MusicXML/MIDI/WAV or upload bytes in logs.
+- Import limits: `IMPORT_*` in `.env.example` (default upload 5 MiB). Details: [docs/import.md](docs/import.md).
 - Acceptance commands: see `docs/testing.md` (pytest, Playwright, Docker persistence script).
 
 ## Installation (host-local optional)
@@ -115,19 +117,28 @@ npm install
 npm run dev
 ```
 
-The frontend will be available at `http://localhost:3000` (proxies `/health`, `/ready`, `/llm`, `/export`, `/projects` to the backend).
+The frontend will be available at `http://localhost:3000` (proxies `/health`, `/ready`, `/llm`, `/export`, `/projects`, `/imports` to the backend).
 
 ## 🎼 Usage
 
 ### Local projects
 
 1. Start the backend and frontend (or `docker compose up`).
-2. On the Projects home screen, create a project or open an existing one.
-3. Generate music, edit notes, and confirm the save chip reaches **Saved**.
+2. On the Projects home screen, create a project, open an existing one, or **Import** MIDI/MusicXML.
+3. Generate or edit music, and confirm the save chip reaches **Saved**.
 4. Restart with `docker compose restart` and reopen the project — edits should match.
 5. Avoid `docker compose down -v` unless you intend to wipe the `mukit_project_data` volume.
 
 Details: [docs/project-persistence.md](docs/project-persistence.md).
+
+### Import MIDI or MusicXML
+
+1. From Projects (or an open composer), choose Import MIDI or Import MusicXML / MXL.
+2. On success the workspace installs strict `composition.v2` with regenerated notation MusicXML (never the uploaded source). Session import warnings summarize defaults, quantization, and omissions.
+3. Importing into an open project asks for replace confirmation; a failed import leaves the current composition unchanged.
+4. Play, edit, save, export, and AI region edit use the same canonical path as generated scores. Import does not require an LLM key.
+
+Formats, limits, issue codes, and security: [docs/import.md](docs/import.md).
 
 ### LLM JSON Composition
 
@@ -160,6 +171,8 @@ Details: [docs/project-persistence.md](docs/project-persistence.md).
 - `POST /export/musicxml/preview` - Render MusicXML text for notation refresh without a download header
 - `POST /export/midi` - Render canonical composition JSON as a downloadable Standard MIDI File attachment
 - `POST /export/wav` - Render canonical composition JSON as a downloadable WAV via FluidSynth (reuses MIDI note content)
+- `POST /imports/midi` - Multipart MIDI → strict `composition.v2` + regenerated MusicXML + `import_report`
+- `POST /imports/musicxml` - Multipart MusicXML/MXL → same response shape (content-detected)
 
 Example LLM request:
 
@@ -234,8 +247,11 @@ mukit-ai/
 │   │   ├── __init__.py
 │   │   ├── main.py              # FastAPI application
 │   │   ├── schemas.py           # Pydantic models
+│   │   ├── import_schemas.py    # Import DTOs / issue codes
+│   │   ├── import_settings.py   # IMPORT_* limits
 │   │   ├── llm_settings.py      # LLM provider environment settings
-│   │   └── services/            # LLM generation, normalization, MusicXML, MIDI-ready mapping
+│   │   ├── routers/             # projects, imports
+│   │   └── services/            # LLM, import, normalization, MusicXML, MIDI/WAV
 │   ├── requirements.txt
 │   └── tests/                   # Backend unit tests
 ├── frontend/
@@ -251,6 +267,7 @@ mukit-ai/
 │   └── package.json
 ├── docs/
 │   ├── composition-v2.md
+│   ├── import.md
 │   ├── composition-v1.md
 │   ├── project-persistence.md
 │   └── testing.md
@@ -262,6 +279,7 @@ mukit-ai/
 | Guide | Description |
 |-------|-------------|
 | [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
+| [MIDI / MusicXML import](docs/import.md) | Ingestion mappings, limits, issue codes, security |
 | [Composition V1](docs/composition-v1.md) | V1 compatibility, staged generation, region editing |
 | [Project persistence](docs/project-persistence.md) | SQLite projects, migrate-on-open, autosave |
 | [Testing](docs/testing.md) | Backend/frontend tests, fixtures, acceptance scripts |
@@ -307,12 +325,13 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 
 ### Common Issues
 
-1. **No LLM models visible**: Set `OPENAI_API_KEY` or `DEEPSEEK_API_KEY` before starting the backend
+1. **No LLM models visible**: Set `OPENAI_API_KEY` or `DEEPSEEK_API_KEY` before starting the backend (import still works without keys)
 2. **Generation returns 503**: No provider key is configured in the backend environment
 3. **Invalid LLM JSON**: The staged composer validates and repairs using diagnostic codes; check backend logs for `stage`, diagnostic codes, retry counts, and sanitized provider errors (never API keys)
-4. **Notation does not render**: Confirm the response includes `musicxml` and the edited JSON still matches the expected shape
+4. **Notation does not render**: Confirm the response includes `musicxml` and the edited JSON still matches the expected shape. After import, notation is regenerated from V2 — uploaded XML is never shown directly
 5. **Playback fails**: Browser audio requires a user gesture; click Play directly and check that canonical `tracks[].events[]` contain valid pitches, ticks, durations, and velocities. Use browser console for schedule summaries, instrument fallback warnings, and transport errors.
 6. **WAV export returns 503**: Install FluidSynth and a SoundFont locally, or use Docker (`fluidsynth` + `fluid-soundfont-gm`). Set `COMPOSITION_WAV_SOUNDFONT` to the `.sf2` path (default `/usr/share/sounds/sf2/FluidR3_GM.sf2`). Check logs for missing binary/SoundFont basename.
+7. **Import returns 413/415/422**: Check `IMPORT_*` limits, content type vs endpoint (`/imports/midi` vs `/imports/musicxml`), and import report/error `code` in the JSON body. Malformed or hostile files never mutate an open composition. See [docs/import.md](docs/import.md).
 
 ### Performance Tips
 

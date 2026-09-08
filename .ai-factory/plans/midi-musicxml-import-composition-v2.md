@@ -170,13 +170,13 @@ Add secure MIDI and MusicXML ingestion that converts uploaded files directly int
 ### Phase 5: Documentation Checkpoint
 
 #### Task 12: Document supported import behavior and architecture
-- [ ] Use `$aif-docs` for the mandatory documentation checkpoint. Update `README.md` with import workflows, accepted formats, limits, warning semantics, and troubleshooting; update `docs/composition-v2.md` with exact MIDI/MusicXML mappings, neutral values, defaults, quantization/padding, unsupported constructs, stable IDs, and round-trip limits.
-- [ ] Update `docs/testing.md` with fixture regeneration, focused/full commands, E2E/Docker import checks, and manual smoke cases. Clarify in `docs/composition-v1.md` that external music imports produce V2 directly and do not enter the legacy V1 parser path.
-- [ ] Update `docs/CODEBASE_MAP.md`, `AGENTS.md`, `.ai-factory/DESCRIPTION.md`, and `.ai-factory/ARCHITECTURE.md` for the new import router/services/UI/data flow; correct stale notation-regeneration statements encountered while editing.
-- [ ] Document that raw import performs no harmony/form/key analysis, source files are not retained, import reports are session diagnostics, notation is regenerated from canonical events, and later AI editing/analysis is a separate explicit action.
-- [ ] Logging: document `LOG_LEVEL`, safe diagnostic fields, import-related environment limits, stable error/issue codes, and the prohibition on logging source MIDI/XML or complete canonical payloads.
-- [ ] Files: `README.md`, `docs/composition-v2.md`, `docs/composition-v1.md`, `docs/testing.md`, `docs/CODEBASE_MAP.md`, `AGENTS.md`, `.ai-factory/DESCRIPTION.md`, `.ai-factory/ARCHITECTURE.md`, and `.env.example` verification.
-- [ ] Depends on Tasks 1-11.
+- [x] Use `$aif-docs` for the mandatory documentation checkpoint. Update `README.md` with import workflows, accepted formats, limits, warning semantics, and troubleshooting; update `docs/composition-v2.md` with exact MIDI/MusicXML mappings, neutral values, defaults, quantization/padding, unsupported constructs, stable IDs, and round-trip limits.
+- [x] Update `docs/testing.md` with fixture regeneration, focused/full commands, E2E/Docker import checks, and manual smoke cases. Clarify in `docs/composition-v1.md` that external music imports produce V2 directly and do not enter the legacy V1 parser path.
+- [x] Update `docs/CODEBASE_MAP.md`, `AGENTS.md`, `.ai-factory/DESCRIPTION.md`, and `.ai-factory/ARCHITECTURE.md` for the new import router/services/UI/data flow; correct stale notation-regeneration statements encountered while editing.
+- [x] Document that raw import performs no harmony/form/key analysis, source files are not retained, import reports are session diagnostics, notation is regenerated from canonical events, and later AI editing/analysis is a separate explicit action.
+- [x] Logging: document `LOG_LEVEL`, safe diagnostic fields, import-related environment limits, stable error/issue codes, and the prohibition on logging source MIDI/XML or complete canonical payloads.
+- [x] Files: `README.md`, `docs/composition-v2.md`, `docs/composition-v1.md`, `docs/testing.md`, `docs/CODEBASE_MAP.md`, `AGENTS.md`, `.ai-factory/DESCRIPTION.md`, `.ai-factory/ARCHITECTURE.md`, and `.env.example` verification.
+- [x] Depends on Tasks 1-11.
 
 ## Acceptance Gates
 

@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; React/Vite edits on piano roll/JSON, shows OSMD notation, and plays note events with Tone.js. Projects persist in SQLite. V1 remains migration/parser input.
+Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; React/Vite edits on piano roll/JSON, shows OSMD notation, and plays note events with Tone.js. Projects persist in SQLite. V1 remains migration/parser input.
 
 ## Tech Stack
 
@@ -21,22 +21,24 @@ mukit-ai/
 │   ├── app/
 │   │   ├── main.py          # Composition / LLM / export routes
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
-│   │   ├── routers/         # Projects HTTP API
-│   │   ├── services/        # Domain + orchestration (+ fake_llm, generation_constraints, composition_tonality)
+│   │   ├── routers/         # Projects + imports HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. import, fake_llm, constraints)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts
+│   │   ├── import_schemas.py       # Import DTOs, issue/error codes
+│   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── fixtures/        # Canonical composition JSON (V1 + V2 expressive for fake LLM / tests)
 │   │   ├── db/              # SQLite connection + migrations
 │   │   └── schemas.py       # LLM models + composition re-exports
 │   └── tests/
 ├── frontend/                # React + Vite SPA
-│   ├── e2e/                 # Playwright V1/V2 acceptance journeys
+│   ├── e2e/                 # Playwright V1/V2/import acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # Workspace, generator, piano roll, playback, …
+│       ├── components/      # Workspace, generator, import, piano roll, playback, …
 │       ├── store/           # Zustand musicStore
 │       └── utils/           # validation, playback, piano-roll helpers
-├── scripts/                 # e.g. v1_docker_acceptance.sh
-├── docs/                    # composition.v2/v1, persistence, testing, codebase map
+├── scripts/                 # e.g. v1/v2_docker_acceptance.sh
+├── docs/                    # composition.v2/v1, import, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -50,6 +52,10 @@ mukit-ai/
 |------|---------|
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
 | `backend/app/composition_schemas.py` | Strict V1/V2 document models and timeline helpers |
+| `backend/app/routers/imports.py` | `POST /imports/midi` and `/imports/musicxml` |
+| `backend/app/services/composition_import.py` | Shared source → V2 canonicalization |
+| `backend/app/services/composition_midi_import.py` | Deterministic MIDI parse |
+| `backend/app/services/composition_musicxml_import.py` | Hardened MusicXML/MXL parse |
 | `backend/app/services/composition_migration.py` | V1→V2 migration and fidelity gate |
 | `backend/app/services/composition_projection.py` | Shared export projection report + issue codes |
 | `backend/app/services/fake_llm.py` | Deterministic `LLM_FAKE_MODE` generate/edit (incl. V2 expressive fixture) |
@@ -57,10 +63,11 @@ mukit-ai/
 | `backend/app/routers/projects.py` | Project CRUD + autosave APIs |
 | `backend/run.py` / `uvicorn app.main:app` | Backend process entry |
 | `frontend/src/main.jsx` | Frontend bootstrap |
-| `frontend/src/store/musicStore.js` | Shared UI/application state |
+| `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import transitions) |
+| `frontend/src/components/ImportControls.jsx` | Import / replace UX |
 | `docker-compose.yml` | Production-local backend + nginx frontend |
 | `compose.dev.yml` | Optional hot-reload override |
-| `.env.example` | Env template for LLM/settings |
+| `.env.example` | Env template for LLM/import settings |
 | `.ai-factory/config.yaml` | AI Factory language/paths/git settings |
 
 ## Documentation
@@ -69,6 +76,7 @@ mukit-ai/
 |----------|------|-------------|
 | README | `README.md` | Install, features, env vars, run instructions |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
+| MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |
 | Project persistence | `docs/project-persistence.md` | SQLite projects and migrations |
 | Testing | `docs/testing.md` | How to run backend/frontend tests |
@@ -90,6 +98,6 @@ mukit-ai/
 - Decompose shell command chains; do not combine unrelated git operations with `&&` when a failure mid-chain is confusing
   - Incorrect: `git checkout main && git pull`
   - Correct: First `git checkout main`, then `git pull origin main`
-- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only.
+- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis.
 - Prefer extending `routers/` + `services/` over growing unrelated logic in `main.py`
-- Never log API keys, full prompts, or raw MusicXML/MIDI/WAV payloads
+- Never log API keys, full prompts, raw MusicXML/MIDI/WAV payloads, or uploaded import source bytes

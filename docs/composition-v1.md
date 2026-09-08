@@ -1,8 +1,10 @@
-[← Composition V2](composition-v2.md) · [Back to README](../README.md) · [Project Persistence →](project-persistence.md)
+[← MIDI/MusicXML Import](import.md) · [Back to README](../README.md) · [Project Persistence →](project-persistence.md)
 
 # Composition V1
 
 > **Status:** `composition.v1` is an accepted **migration and parser compatibility** input. The operational canonical document is [`composition.v2`](./composition-v2.md). Generation, project open/save, and API responses normalize to V2; V1 note events and root metadata migrate with a fidelity equality gate.
+
+**External MIDI/MusicXML imports produce `composition.v2` directly** via `/imports/*`. They do **not** enter the legacy V1 parser or V1→V2 migration path. See [import.md](import.md).
 
 This page documents V1 shape, staged generation, and region editing semantics that still apply after migration. For timeline/expression fields, ties, automation, and export projection rules, see [composition-v2.md](./composition-v2.md).
 
@@ -48,7 +50,7 @@ Useful log fields include `stage`, `provider`, `model`, `attempt`, section/track
 
 ## Partial Region Editing
 
-`POST /llm/edit-composition-region` edits an existing canonical Composition V1 document without regenerating the whole score.
+`POST /llm/edit-composition-region` edits an existing canonical composition (V1 or V2, including imported V2) without regenerating the whole score. Generation-only ensemble density checks do not block valid imported scores (for example `other` roles or a single track).
 
 Request shape:
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Mukit AI is a full-stack LLM music composer: a FastAPI backend produces and transforms canonical `composition.v2` JSON (generate, edit, validate, render, export, persist), and a React/Vite frontend edits that composition on a piano roll / JSON surface, shows notation, and plays note events in the browser. `composition.v1` remains accepted migration input.
+Mukit AI is a full-stack LLM music composer: a FastAPI backend produces and transforms canonical `composition.v2` JSON (generate, import, edit, validate, render, export, persist), and a React/Vite frontend edits that composition on a piano roll / JSON surface, shows notation, and plays note events in the browser. `composition.v1` remains accepted migration input.
 
 This project uses **Structured Modules (Technical Layer)** as the guiding pattern — feature areas with clear service boundaries and downward dependencies — while **documenting the existing layout** rather than requiring an immediate module-folder refactor. New work should strengthen module boundaries inside the current trees (`backend/app/`, `frontend/src/`) instead of introducing hexagonal ceremony or microservices.
 
@@ -25,9 +25,12 @@ mukit-ai/
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 document contracts
 │   │   ├── schemas.py              # LLM request/response models + re-exports
 │   │   ├── project_schemas.py      # Project CRUD API models
+│   │   ├── import_schemas.py       # Import response/report/issue DTOs
+│   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── llm_settings.py         # Provider config from environment
 │   │   ├── routers/
-│   │   │   └── projects.py         # Projects module HTTP routes
+│   │   │   ├── projects.py         # Projects module HTTP routes
+│   │   │   └── imports.py          # MIDI / MusicXML multipart import
 │   │   ├── services/               # Application services (orchestration + domain helpers)
 │   │   │   ├── llm_music_generator.py
 │   │   │   ├── llm_composition_editor.py
@@ -39,6 +42,10 @@ mukit-ai/
 │   │   │   ├── composition_validator.py
 │   │   │   ├── composition_normalizer.py
 │   │   │   ├── composition_migration.py   # V1→V2 migration
+│   │   │   ├── composition_import.py      # Shared import → V2 canonicalization
+│   │   │   ├── composition_midi_import.py
+│   │   │   ├── composition_musicxml_import.py
+│   │   │   ├── import_instruments.py      # GM map + role inference
 │   │   │   ├── composition_projection.py  # Export projection report
 │   │   │   ├── composition_timeline.py    # Variable tempo/meter compiler (or timing.py)
 │   │   │   ├── composition_region_patch.py
@@ -55,18 +62,18 @@ mukit-ai/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
-│   ├── e2e/                        # Playwright V1 acceptance
+│   ├── e2e/                        # Playwright V1/V2/import acceptance
 │   └── src/
 │       ├── api/                    # HTTP clients (outbound adapters)
 │       │   ├── musicApi.js
 │       │   └── projectApi.js
 │       ├── store/
 │       │   └── musicStore.js       # Zustand — shared UI/application state
-│       ├── components/             # Feature UI (projects, generate, piano roll, playback, export)
+│       ├── components/             # Feature UI (projects, import, generate, piano roll, playback, export)
 │       ├── utils/                  # Client-side composition/playback helpers
 │       ├── App.jsx
 │       └── main.jsx
-├── docs/                           # composition.v2/v1, persistence, testing
+├── docs/                           # composition.v2/v1, import, persistence, testing
 ├── docker-compose.yml
 ├── compose.dev.yml
 ├── .env.example
@@ -78,6 +85,7 @@ mukit-ai/
 | Module | Backend home | Frontend home |
 |--------|--------------|---------------|
 | **Projects** | `routers/projects.py`, `project_schemas.py`, `services/project_*` | `ProjectBrowser`, `projectApi.js`, project slice of `musicStore` |
+| **Import** | `routers/imports.py`, `import_schemas.py`, `import_settings.py`, `composition_*_import.py`, `composition_import.py` | `ImportControls`, `importMidi` / `importMusicXml` in `musicApi.js`, import slice of `musicStore` |
 | **Composition / LLM** | `main.py` LLM routes, `schemas.py`, `llm_*`, `composition_*` (plan/validate/normalize/patch) | `MusicGenerator`, `PromptJsonEditor`, `AiRegionEditPanel`, `musicApi.js` |
 | **Rendering / Export** | `music_json_renderer`, `composition_midi`, `composition_wav` | `NotationViewer`, `ExportControls`, playback components + `utils/playback*` / `tonePlaybackEngine` |
 | **Shared infrastructure** | `db/`, `llm_settings.py`, CORS/lifespan in `main.py` | `api/*`, shared store fields, `utils/downloadFile.js` |

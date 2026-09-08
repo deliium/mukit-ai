@@ -1,8 +1,8 @@
-[Back to README](../README.md) · [Composition V1 →](composition-v1.md)
+[Back to README](../README.md) · [MIDI/MusicXML Import →](import.md)
 
 # Composition V2
 
-`composition.v2` is the **operational canonical** JSON contract for generation, editing, persistence, browser playback, and export. `composition.v1` remains an accepted **migration and parser compatibility** input only; API responses and stored projects normalize to V2.
+`composition.v2` is the **operational canonical** JSON contract for generation, editing, **MIDI/MusicXML import**, persistence, browser playback, and export. `composition.v1` remains an accepted **migration and parser compatibility** input only; API responses and stored projects normalize to V2. External music files convert **directly to V2** — they do not enter the legacy V1 parser path (see [import.md](import.md)).
 
 Playable pitches live **only** in `tracks[].events[]`. Timeline metadata, markers, harmony, and track expression direct deterministic **projections** — they never synthesize notes.
 
@@ -37,9 +37,9 @@ V1 root fields are preserved. **Initial** conductor state is at tick `0`:
 | `time_signature` | Meter at tick `0` (e.g. `4/4`, `3/4`, `6/8`) |
 | `ticks_per_quarter` | Integer PPQ (default `480`) |
 | `bar_count`, `duration_ticks` | Total length; `duration_ticks` must match compiled bar map |
-| `sections` | Contiguous boundaries; optional stable `id` and free-text `label` |
-| `tracks` | Ordered track list with events and track-local expression |
-| `harmony` | Chord-symbol metadata only |
+| `sections` | Contiguous boundaries; optional stable `id` and free-text `label`. Import may use a single `unsectioned` section when form markers are absent |
+| `tracks` | Ordered track list with events and track-local expression. Import may use `role: "other"` when role metadata is insufficient |
+| `harmony` | Chord-symbol metadata only. Raw imports always set `harmony: []` (no analysis) |
 
 **Timeline change arrays** contain transitions **after** tick `0` only (no duplicate tick-`0` entries):
 
@@ -122,6 +122,20 @@ Python (`composition_timing.py` / `composition_timeline.py`) and JavaScript (`fr
 - Variable-width piano-roll bars and cursor labels derive from this map; **note start/duration ticks are never rewritten**
 
 At equal ticks, projection order is stable: conductor changes → markers/directions → track automation/pedal → note-offs → note-ons → end cleanup. Tie boundaries produce no off/on pair.
+
+## MIDI / MusicXML import (summary)
+
+`POST /imports/midi` and `POST /imports/musicxml` convert uploads into validated V2 via shared canonicalization (`composition_import.py`). Full mapping, limits, issue codes, and security gates: **[import.md](import.md)**.
+
+| Topic | Rule |
+|-------|------|
+| Playable source | After import, only `tracks[].events[]`; source file not retained |
+| Neutral values | `role: "other"`, section `unsectioned` when metadata is insufficient |
+| Defaults | Missing tempo/meter/key → `120` / `4/4` / `C major` with explicit issue codes (key default is never “inferred analysis”) |
+| Timing | Preserve absolute onsets; pad end to complete bars; quantize only under PPQ cap; reject non-representable meter relocation |
+| Stable IDs | Deterministic from source coordinates + digests; identical bytes → identical JSON |
+| Diagnostics | Session `import_report` ≠ export `ProjectionReport`; notation MusicXML is always regenerated from V2 |
+| Analysis | No harmony/form/key inference during raw import; AI edit is a later explicit action |
 
 ## Migration V1 → V2
 
@@ -206,7 +220,8 @@ Mirror copies: `backend/tests/fixtures/composition_v2_expressive.json`, `fronten
 |---------|---------|------------------------|
 | Backend | `LOG_LEVEL` | schema version, migration path, bar/track/note/change counts, projection status, issue codes, export byte length |
 | Frontend | browser devtools | version normalization, revision transitions, projection status, schedule summaries |
-| Forbidden everywhere | — | API keys, full prompts/instructions, raw composition JSON, MusicXML, MIDI, WAV |
+| Import routes/services | `LOG_LEVEL` | format, byte counts, track/note/bar counts, import status, issue/error codes, limit values — never source MIDI/XML or full compositions |
+| Forbidden everywhere | — | API keys, full prompts/instructions, raw composition JSON, MusicXML, MIDI, WAV, archive entry contents |
 
 ## Minimal example
 
@@ -260,9 +275,10 @@ Before treating V2 responses as production-ready, verify:
 
 ## Consumers
 
-- **Generation / edit:** `POST /llm/generate-music-json` and `POST /llm/edit-composition-region` return V2 in `music` (input may be V1 or V2).
-- **Projects:** SQLite stores V2 after open/save; V1 migrates on read. See [project-persistence.md](./project-persistence.md).
-- **Playback:** `tonePlaybackEngine.js` compiles V2 expression with piecewise tempo; mute/solo is UI-only.
+- **Import:** `POST /imports/midi` and `POST /imports/musicxml` return V2 in `composition` plus regenerated `musicxml` and `import_report`. See [import.md](import.md).
+- **Generation / edit:** `POST /llm/generate-music-json` and `POST /llm/edit-composition-region` return V2 in `music` (input may be V1 or V2, including imported scores). Canonical validation applies; generation ensemble density does not block imported material.
+- **Projects:** SQLite stores V2 after open/save; V1 migrates on read. Imported projects persist with `generationMeta: null`. See [project-persistence.md](./project-persistence.md).
+- **Playback:** `tonePlaybackEngine.js` compiles V2 expression with piecewise tempo; mute/solo is UI-only. Regenerated notation after import comes from backend MusicXML of the installed V2 — never from the uploaded file.
 - **Exports:** `/export/musicxml`, `/export/midi`, and `/export/wav` accept V1 or V2 input, normalize to V2, and attach `X-Mukit-Projection-*` headers (CORS-exposed). MusicXML may report notation omissions such as `automation_omitted_from_notation`; MIDI/WAV inherit the shared MIDI projection report (tempo quantization, automation sampling, articulation transforms, and related codes). WAV uses FluidSynth on the same MIDI bytes; env vars: `FLUIDSYNTH_BIN`, `COMPOSITION_WAV_SOUNDFONT` (Docker default `/usr/share/sounds/sf2/FluidR3_GM.sf2`), `COMPOSITION_WAV_SAMPLE_RATE`, `COMPOSITION_WAV_GAIN`, `COMPOSITION_WAV_TIMEOUT_SECONDS`. Missing FluidSynth/SoundFont → `503`.
 - **Editors:** Piano roll edits notes (articulations, ties); JSON editor holds full V2 including automation/timeline arrays.
 
@@ -270,6 +286,7 @@ Staged generation, region editing, and V1 compatibility details: [composition-v1
 
 ## See Also
 
+- [MIDI and MusicXML import](import.md) — ingestion mappings, limits, issue codes
 - [Composition V1](composition-v1.md) — staged generation, region editing, V1 parser compatibility
 - [Project persistence](project-persistence.md) — migrate-on-open, autosave, SQLite
-- [Testing](testing.md) — V2 fixtures, pytest targets, projection tests
+- [Testing](testing.md) — V2 fixtures, pytest targets, projection and import tests

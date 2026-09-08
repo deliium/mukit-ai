@@ -14,7 +14,7 @@ total_tokens: 891828
 
 ## System Overview
 
-Mukit AI is a full-stack AI music composer. A React/Vite frontend collects prompt parameters, discovers configured LLM providers, posts generation requests to a FastAPI backend, renders returned MusicXML with OpenSheetMusicDisplay, and plays edited JSON through Tone.js. The backend validates prompt input with Pydantic, loads LLM provider settings from environment variables, calls OpenAI-compatible models through LangChain/LangGraph, validates the generated music JSON, and renders MusicXML with music21.
+Mukit AI is a full-stack AI music composer. A React/Vite frontend collects prompt parameters, imports MIDI/MusicXML, discovers configured LLM providers, posts generation requests to a FastAPI backend, renders returned MusicXML with OpenSheetMusicDisplay, and plays edited JSON through Tone.js. The backend validates prompt input with Pydantic, loads LLM provider settings from environment variables, converts uploads to `composition.v2`, calls OpenAI-compatible models through LangChain/LangGraph, validates music JSON, and renders MusicXML with music21.
 
 ```mermaid
 flowchart LR
@@ -23,6 +23,7 @@ flowchart LR
   Store[Zustand music store]
   API[FastAPI backend]
   Settings[LLM settings]
+  Import[Import services]
   LLM[OpenAI-compatible LLM]
   Schemas[Pydantic schemas]
   Renderer[music21 MusicXML renderer]
@@ -33,6 +34,7 @@ flowchart LR
   Frontend --> Store
   Frontend --> API
   API --> Settings
+  API --> Import
   API --> Schemas
   API --> LLM
   API --> Renderer
@@ -45,28 +47,38 @@ flowchart LR
 ## Directory Structure
 
 ```text
-backend/                     FastAPI backend, LLM generation, MusicXML rendering, tests
+backend/                     FastAPI backend, LLM generation, import, MusicXML rendering, tests
   app/
     main.py                  API routes, CORS, endpoint error mapping
     schemas.py               Pydantic request/response/music JSON validation
+    import_schemas.py        Import report/issue DTOs and error codes
+    import_settings.py       IMPORT_* limits
     llm_settings.py          Environment-driven OpenAI/DeepSeek config
+    routers/
+      projects.py            Project CRUD
+      imports.py             MIDI / MusicXML multipart import
     services/
       llm_music_generator.py Prompt construction, LangGraph workflow, LLM JSON validation
+      composition_import.py  Shared source → V2 canonicalization
+      composition_midi_import.py
+      composition_musicxml_import.py
       music_json_renderer.py music21 conversion from validated JSON to MusicXML
-  tests/                     Backend unit tests for schemas, settings, routes, renderer
+  tests/                     Backend unit tests (incl. fixtures/import/)
   Dockerfile                 Backend development/runtime image
   requirements.txt           Python dependencies
 frontend/                    React/Vite client app
   src/
-    api/musicApi.js          Axios backend client
-    store/musicStore.js      Zustand global state
-    components/              Header, generation form, JSON editor, notation, playback
+    api/musicApi.js          Axios backend client (incl. importMidi / importMusicXml)
+    store/musicStore.js      Zustand global state (incl. completeImport)
+    components/              Header, import, generation, JSON editor, notation, playback
     App.jsx                  App shell and startup API status/model discovery
     main.jsx                 Active Vite entry point
   package.json               Active frontend package/scripts
-  vite.config.js             Vite server/proxy config
+  vite.config.js             Vite server/proxy config (incl. /imports)
   Dockerfile                 Frontend dev container image
 docs/
+  composition-v2.md          Canonical V2 contract
+  import.md                  MIDI/MusicXML ingestion
   testing.md                 Backend test and frontend smoke-test guide
   CODEBASE_MAP.md            This map
 .ai-factory/                 AI Factory project metadata and implementation plans
@@ -75,7 +87,7 @@ docs/
 .cursor/skills/              Cursor skill pack copy
 docker-compose.yml           Production-local compose (API + nginx SPA, named volume, healthchecks)
 compose.dev.yml              Optional Vite/uvicorn reload override
-.env.example                 Documented env template (LLM keys backend-only)
+.env.example                 Documented env template (LLM keys + IMPORT_* limits)
 start-servers.sh             Local helper script to start both servers
 README.md                    Primary project documentation
 ```
@@ -311,53 +323,52 @@ flowchart TD
 - LLM provider config is environment-driven and should not expose API keys through API responses.
 - Frontend backend calls should go through `frontend/src/api/musicApi.js`.
 - Shared frontend workflow state should go through `frontend/src/store/musicStore.js`.
-- Vite development proxy handles `/health` and `/llm`; production routing must be handled separately.
+- Vite development proxy handles `/health`, `/llm`, `/export`, `/projects`, `/imports`; production Nginx must mirror those prefixes with an upload limit slightly above `IMPORT_MAX_UPLOAD_BYTES`.
 - AI Factory skill directories are support infrastructure, not app code.
 
 ## Gotchas
 
-- No LLM provider keys means `/llm/models` returns no providers and generation returns HTTP `503`.
+- No LLM provider keys means `/llm/models` returns no providers and generation returns HTTP `503`; MIDI/MusicXML import still works.
 - Adding a new provider requires coordinated changes in `llm_settings.py`, `schemas.py`, `llm_music_generator.py`, route/model tests, and frontend provider UI assumptions.
-- JSON edits currently affect playback but do not regenerate MusicXML notation.
+- Piano-roll and AI edits refresh notation via debounced `POST /export/musicxml/preview` from canonical V2; imported source MusicXML is never shown in the browser.
 - Frontend production builds cannot rely on Vite dev proxy.
 - Backend CORS is configured via `CORS_ALLOW_ORIGINS` (defaults include `http://localhost:3000`).
-- `musicxml_filename` exists in the backend response schema but is not populated by the route.
-- `requirements.txt` and `requirements-modern.txt` are duplicates.
-- There are no active frontend tests; testing is currently backend pytest plus frontend build/lint/manual smoke checks.
-- `.gitignore` ignores `frontend/build/` but not Vite `frontend/dist/`, and ignores `venv/` but not `.venv/`.
+- Import diagnostics (`import_report`) are session-only and distinct from export `X-Mukit-Projection-*` headers.
 - README first-run path is Docker Compose + `.env.example`; host-local uses `npm run dev`.
-- The scanner skipped `backend/models/music_composer_model.keras` as too large; it appears unrelated to the current LLM JSON generation flow.
 
 ## Navigation Guide
 
-**To add or change a backend API endpoint**: Start in `backend/app/main.py`, define/update schemas in `backend/app/schemas.py`, then add tests in `backend/tests/test_llm_routes.py`.
+**To add or change a backend API endpoint**: Prefer a module under `backend/app/routers/` plus a service; keep `main.py` thin. Define DTOs in the matching `*_schemas.py`, then add route tests.
+
+**To change MIDI/MusicXML import**: Start in `backend/app/routers/imports.py` and `services/composition_*_import.py` / `composition_import.py`; update `docs/import.md`, fixtures under `backend/tests/fixtures/import/`, and `test_import_*.py`.
 
 **To change LLM provider configuration**: Start in `backend/app/llm_settings.py`; if adding a provider, also update provider literals in `backend/app/schemas.py` and provider call logic in `backend/app/services/llm_music_generator.py`.
 
-**To change prompt behavior or retry logic**: Edit `_build_prompt()`, `_extract_json()`, and `generate_music_json()` in `backend/app/services/llm_music_generator.py`; update `backend/tests/test_llm_music_generation.py`.
+**To change prompt behavior or retry logic**: Edit staged composer services under `backend/app/services/`; update the corresponding `test_llm_*` suites.
 
-**To change generated music JSON validation**: Edit `backend/app/schemas.py`; keep backend tests, frontend editor validation, and renderer behavior in sync.
+**To change generated music JSON validation**: Edit `backend/app/composition_schemas.py` / validator profiles; keep frontend `musicJsonValidation.js` and renderer behavior in sync.
 
 **To change MusicXML output**: Edit `backend/app/services/music_json_renderer.py`; update `backend/tests/test_music_json_renderer.py`.
 
 **To change the main generation UI**: Edit `frontend/src/components/MusicGenerator.jsx` and shared state in `frontend/src/store/musicStore.js`.
 
+**To change import UI**: Edit `frontend/src/components/ImportControls.jsx` and import actions in `musicStore.js` / `musicApi.js`.
+
 **To change API calls from the frontend**: Add or update wrappers in `frontend/src/api/musicApi.js`; update Vite proxy rules in `frontend/vite.config.js` if adding new route prefixes.
 
 **To change JSON editing rules**: Edit `validateMusicJson()` and editor behavior in `frontend/src/components/PromptJsonEditor.jsx`.
 
-**To make edited JSON update notation**: Add a backend or frontend JSON-to-MusicXML path, store regenerated `musicXml`, and connect it to `PromptJsonEditor` or a new action.
-
-**To change playback**: Edit `frontend/src/components/PlaybackControls.jsx`, especially `buildPlaybackEvents()`, `chordToNotes()`, and Tone transport cleanup.
+**To change playback**: Edit Tone playback utils under `frontend/src/utils/` and playback UI components; keep schedule derived from `tracks[].events[]` only.
 
 **To change Docker setup**: Edit `docker-compose.yml`, optional `compose.dev.yml`, `backend/Dockerfile`, `frontend/Dockerfile` / `nginx.conf`, and `.env.example`.
 
-**To update documentation**: Edit `README.md`, `docs/composition-v2.md`, `docs/composition-v1.md`, `docs/testing.md`, and this map as needed.
+**To update documentation**: Edit `README.md`, `docs/composition-v2.md`, `docs/import.md`, `docs/composition-v1.md`, `docs/testing.md`, and this map as needed.
 
-**To update AI workflow/tooling**: Start with `.ai-factory.json`, `.ai-factory/plans/`, `.codex/config.toml`, and `.agents/skills/cartographer/SKILL.md`; avoid changing duplicated skill packs unless intentionally updating AI assistant behavior.
+**To update AI workflow/tooling**: Start with `.ai-factory/config.yaml`, `.ai-factory/plans/`, and skill packs; avoid changing duplicated skill packs unless intentionally updating AI assistant behavior.
 
 ## See Also
 
 - [Composition V2](composition-v2.md) — operational canonical contract
+- [MIDI and MusicXML import](import.md) — ingestion flow and limits
 - [Composition V1](composition-v1.md) — staged generation and V1 compatibility
 - [Testing](testing.md) — pytest and Playwright targets

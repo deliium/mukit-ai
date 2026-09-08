@@ -45,6 +45,28 @@ Focused canonical coverage includes:
 - `backend/tests/test_project_routes.py` for `/projects` routes, 404/422 behavior, secret-field rejection, and legacy composition migration on open.
 - `backend/tests/test_project_persistence_acceptance.py` for create → edit → reopen composition equality (Docker-restart acceptance at the data layer).
 
+### MIDI / MusicXML import
+
+Deterministic fixtures live under `backend/tests/fixtures/import/` (`multitrack.mid`, `multipart.musicxml` / `.mxl`, truncated/empty/entities/zip-slip hosts, plus `manifest.json` and `expected_vectors.json`).
+
+Regenerate fixtures (when intentionally changing golden content):
+
+```bash
+cd backend
+../.venv/bin/python -m tests.fixtures.build_import_fixtures
+```
+
+Focused suites:
+
+```bash
+cd backend
+../.venv/bin/python -m pytest tests/test_midi_import.py tests/test_musicxml_import.py tests/test_import_routes.py
+../.venv/bin/python -m pytest tests/test_import_fidelity.py tests/test_import_security.py
+../.venv/bin/python -m pytest tests/test_secret_hygiene.py -k import
+```
+
+Fidelity asserts identical re-import of the same bytes, V2/timeline validity, expected note/metadata vectors, persistence ID stability, fake-provider region edit fingerprints, and re-export semantics within documented approximations. Security covers forged MIME/extensions, DTD/entities, unsafe MXL, and every configurable complexity limit. Secret hygiene asserts responses and logs never echo raw payload material.
+
 ### Opt-in Real Provider Smoke Test
 
 Normal `pytest` skips real provider calls. To intentionally spend API credits on a small bounded staged composition:
@@ -83,7 +105,7 @@ RUN_DOCKER_ACCEPTANCE=1 ./scripts/v2_docker_acceptance.sh
 RUN_DOCKER_ACCEPTANCE=1 ../.venv/bin/python -m pytest tests/test_docker_persistence_acceptance.py
 ```
 
-Uses Compose project names `mukit-v1-accept` / `mukit-v2-accept` by default and removes the volume on exit unless `KEEP_VOLUME=1`. V2 script covers V1→V2 migration on reopen plus expressive fake generate.
+Uses Compose project names `mukit-v1-accept` / `mukit-v2-accept` by default and removes the volume on exit unless `KEEP_VOLUME=1`. V2 script covers V1→V2 migration on reopen, expressive fake generate, and multipart MIDI import through Nginx with save/reopen/re-export.
 
 ## Frontend Tests
 
@@ -108,12 +130,20 @@ npm run test:e2e
 npm run test:e2e:ui
 ```
 
-Specs live in `frontend/e2e/` (`v1-user-journey`, `v1-upgrade-to-v2`, `v2-user-journey`, persistence suites). Persistence reopen after Compose restart is opt-in:
+Specs live in `frontend/e2e/` (`v1-user-journey`, `v1-upgrade-to-v2`, `v2-user-journey`, `import-user-journey`, persistence suites). Persistence reopen after Compose restart is opt-in:
 
 ```bash
 RUN_PLAYWRIGHT_DOCKER_RESTART=1 npm run test:e2e -- e2e/v1-persistence.spec.js
 RUN_PLAYWRIGHT_DOCKER_RESTART=1 npm run test:e2e -- e2e/v2-persistence.spec.js
 ```
+
+Import journey (fixtures under `backend/tests/fixtures/import/`):
+
+```bash
+npm run test:e2e -- e2e/import-user-journey.spec.js
+```
+
+Covers multi-track MIDI import, play/edit/notation, save/reopen, fake AI region edit, export downloads, MusicXML/MXL success, no-LLM availability, replace confirmation, failed import non-mutation, and grouped warning summary.
 
 Artifacts (trace/video on failure) are gitignored under `frontend/test-results/` and `frontend/playwright-report/`.
 
@@ -153,6 +183,8 @@ Use these manual checks after `npm run build` and during local development.
 15. Click Export MusicXML, Export MIDI, and Export WAV; confirm downloads use `.musicxml` / `.mid` / `.wav`, notation preview updates from the exported MusicXML, projection warnings appear when headers report approximations/omissions, WAV does not start browser playback, and a known fixture's playback positions match MIDI export note tuples.
 16. Open browser devtools and confirm sanitized playback/piano-roll diagnostics (path, event counts, note edit summaries, MusicXML preview length, instrument strategy/fallback, mute/solo gains) without raw composition dumps.
 17. Resize to a mobile viewport and confirm piano-roll controls, playback, and track controls remain usable.
+18. From Projects, import a multi-track MIDI (or MusicXML) without an LLM key: confirm tracks/notes appear, notation is regenerated MusicXML (not the upload), import warning summary shows if approximated, Play works, and a failed malformed import leaves any open composition unchanged.
+19. With a project open, import again: confirm replace prompt; after success, `generationMeta` stays cleared and save/reopen preserves event IDs.
 
 ## Frontend Build
 
@@ -168,10 +200,11 @@ The OSMD/Tone.js bundle can trigger Vite's large chunk warning; that warning is 
 
 - Backend: set `LOG_LEVEL=DEBUG` before running the server or tests when diagnosing schema, migration, rendering, export, or MIDI mapping decisions.
 - Frontend: use browser devtools console to inspect API response validation, store updates, editor validation, export requests, and playback schedule summaries.
-- Logs should include schema version, export format, event counts, timing summaries, byte lengths, projection status/issue codes, and sanitized error messages. API keys, full raw prompts, MusicXML payloads, and MIDI bytes should not appear in logs.
+- Logs should include schema version, export format, event counts, timing summaries, byte lengths, projection status/issue codes, import status/issue codes, and sanitized error messages. API keys, full raw prompts, MusicXML payloads, MIDI bytes, and uploaded source contents should not appear in logs.
 
 ## See Also
 
+- [MIDI and MusicXML import](import.md) — formats, limits, issue codes
 - [Composition V2](composition-v2.md) — V2 contract, fixtures, projection headers
 - [Composition V1](composition-v1.md) — V1 parser regressions
 - [Project persistence](project-persistence.md) — migration-on-open acceptance
