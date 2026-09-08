@@ -1,0 +1,41 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 100,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "bar_count": 1,
+  "duration_ticks": 1920,
+  "sections": [
+    {
+      "type": "verse",
+      "start_bar": 1,
+      "bar_count": 1,
+      "start_tick": 0,
+      "duration_ticks": 1920
+    }
+  ],
+  "tracks": [
+    {
+      "id": "bassoon-hi",
+      "name": "bassoon-hi",
+      "instrument": "bassoon",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "events": [
+        {
+          "pitch": "C7",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 80
+        }
+      ]
+    }
+  ],
+  "harmony": [],
+  "tempo_changes": [],
+  "time_signature_changes": [],
+  "key_changes": [],
+  "markers": []
+}

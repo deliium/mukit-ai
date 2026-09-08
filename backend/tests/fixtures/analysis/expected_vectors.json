@@ -1,0 +1,686 @@
+{
+  "sentinels": {
+    "pitch_sequence": [
+      "F#6",
+      "Bb2",
+      "Db5"
+    ],
+    "label": "SECRET_ANALYSIS_FIXTURE_LABEL",
+    "joined_pitches": "F#6-Bb2-Db5"
+  },
+  "vectors": {
+    "major_tonality": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 7680,
+      "warning_codes": [
+        "relative_key_ambiguity"
+      ],
+      "tonality_status": "ambiguous",
+      "global_key": "C major",
+      "key_candidates": [
+        {
+          "key": "C major",
+          "score": 13084.8
+        },
+        {
+          "key": "A minor",
+          "score": 12295.2
+        },
+        {
+          "key": "D minor",
+          "score": 11731.2
+        },
+        {
+          "key": "C minor",
+          "score": 11674.8
+        }
+      ],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [
+        "unclassified",
+        "unclassified"
+      ],
+      "motif_kinds": [
+        "exact",
+        "transposed",
+        "transposed",
+        "transposed",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only"
+      ],
+      "motif_transpositions": [
+        5,
+        7,
+        0
+      ],
+      "max_simultaneity": 1,
+      "tension_status": "ok",
+      "fingerprint": "ddac7a9ff93403b297f6d5cf4b824922e82284c36ea6a7e3614ceba08efad306"
+    },
+    "minor_tonality": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 7680,
+      "warning_codes": [],
+      "tonality_status": "ok",
+      "global_key": "A minor",
+      "key_candidates": [
+        {
+          "key": "A minor",
+          "score": 13084.8
+        },
+        {
+          "key": "D minor",
+          "score": 12520.8
+        },
+        {
+          "key": "C major",
+          "score": 11731.2
+        },
+        {
+          "key": "F major",
+          "score": 11449.2
+        }
+      ],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [
+        "unclassified",
+        "unclassified"
+      ],
+      "motif_kinds": [
+        "exact",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only"
+      ],
+      "motif_transpositions": [
+        5,
+        5,
+        5,
+        0
+      ],
+      "max_simultaneity": 1,
+      "tension_status": "ok",
+      "fingerprint": "df934524cad22231b2a62c994e2104c0bba83c2d2b3a72eae8ea5fa80c9f15d8"
+    },
+    "modulation": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 7680,
+      "warning_codes": [
+        "relative_key_ambiguity"
+      ],
+      "tonality_status": "ambiguous",
+      "global_key": "A minor",
+      "key_candidates": [
+        {
+          "key": "A minor",
+          "score": 12664.8
+        },
+        {
+          "key": "C major",
+          "score": 12391.2
+        },
+        {
+          "key": "D minor",
+          "score": 12151.2
+        },
+        {
+          "key": "F major",
+          "score": 11788.8
+        }
+      ],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [
+        "unclassified",
+        "unclassified"
+      ],
+      "motif_kinds": [
+        "exact",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only"
+      ],
+      "motif_transpositions": [
+        5,
+        7,
+        -5,
+        0
+      ],
+      "max_simultaneity": 1,
+      "tension_status": "ok",
+      "fingerprint": "d2f4a6c29d08f1671b625e2f13a27338322da71f4ccbe65305b76b68246439c1"
+    },
+    "chord_inversions_nct": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 3840,
+      "warning_codes": [],
+      "tonality_status": "ok",
+      "global_key": "C major",
+      "key_candidates": [
+        {
+          "key": "C major",
+          "score": 28317.6
+        },
+        {
+          "key": "E minor",
+          "score": 24688.8
+        },
+        {
+          "key": "G major",
+          "score": 22323.6
+        },
+        {
+          "key": "G minor",
+          "score": 22323.6
+        }
+      ],
+      "harmony_symbols": [
+        "C"
+      ],
+      "harmony_bass_pcs": [
+        0
+      ],
+      "cadence_kinds": [],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 4,
+      "tension_status": "ok",
+      "fingerprint": "6560a03c1455bcbe9b17188780dd29ed4e04b697365b2d8e3c470ac3e9d16f49"
+    },
+    "cadences": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 30720,
+      "warning_codes": [
+        "motif_search_truncated",
+        "result_truncated"
+      ],
+      "tonality_status": "ok",
+      "global_key": "C major",
+      "key_candidates": [
+        {
+          "key": "C major",
+          "score": 253514.4
+        },
+        {
+          "key": "C minor",
+          "score": 215414.4
+        },
+        {
+          "key": "A minor",
+          "score": 206160.0
+        },
+        {
+          "key": "E minor",
+          "score": 204441.6
+        }
+      ],
+      "harmony_symbols": [
+        "C",
+        "G",
+        "G7",
+        "C",
+        "F",
+        "C",
+        "G",
+        "G7"
+      ],
+      "harmony_bass_pcs": [
+        0,
+        7,
+        7,
+        0,
+        5,
+        0,
+        7,
+        7
+      ],
+      "cadence_kinds": [
+        "unclassified",
+        "unclassified",
+        "half",
+        "authentic_perfect",
+        "authentic_imperfect",
+        "authentic_imperfect",
+        "unclassified",
+        "plagal",
+        "plagal",
+        "plagal",
+        "plagal",
+        "half",
+        "authentic_imperfect",
+        "authentic_imperfect",
+        "half",
+        "deceptive"
+      ],
+      "motif_kinds": [
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "exact",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "transposed",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only"
+      ],
+      "motif_transpositions": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "max_simultaneity": 5,
+      "tension_status": "ok",
+      "fingerprint": "8260c17e2c381681532ca8b2c1e2edeeec316d394e8b5b150953205af836faf7"
+    },
+    "motifs": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 7680,
+      "warning_codes": [
+        "declared_key_change_conflicts_with_inference"
+      ],
+      "tonality_status": "ok",
+      "global_key": "C major",
+      "key_candidates": [
+        {
+          "key": "C major",
+          "score": 9019.2
+        },
+        {
+          "key": "E minor",
+          "score": 8925.6
+        },
+        {
+          "key": "G major",
+          "score": 8911.2
+        },
+        {
+          "key": "G minor",
+          "score": 8911.2
+        }
+      ],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [
+        "unclassified",
+        "unclassified",
+        "unclassified"
+      ],
+      "motif_kinds": [
+        "exact",
+        "transposed",
+        "transposed",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only",
+        "rhythm_only"
+      ],
+      "motif_transpositions": [
+        0,
+        2
+      ],
+      "max_simultaneity": 1,
+      "tension_status": "ok",
+      "fingerprint": "11608db0077e6f74fe1bda6e6c317b3fc204686a6fc67e749dddbd678d77cd39"
+    },
+    "mixed_meter": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 4800,
+      "warning_codes": [
+        "insufficient_tonal_evidence"
+      ],
+      "tonality_status": "insufficient_evidence",
+      "global_key": null,
+      "key_candidates": [],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [
+        "unclassified",
+        "unclassified"
+      ],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 1,
+      "tension_status": "ok",
+      "fingerprint": "8a58b5ebe454e251a02f7b8b7c78b44d43dcff5236a265ba15fec8e3c9b48059"
+    },
+    "polyphony_dissonance": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 1920,
+      "warning_codes": [],
+      "tonality_status": "ok",
+      "global_key": "E minor",
+      "key_candidates": [
+        {
+          "key": "E minor",
+          "score": 16070.4
+        },
+        {
+          "key": "C# minor",
+          "score": 15422.4
+        },
+        {
+          "key": "F minor",
+          "score": 14774.4
+        },
+        {
+          "key": "D minor",
+          "score": 14126.4
+        }
+      ],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 5,
+      "tension_status": "ok",
+      "fingerprint": "f5c99aa43c5869a1812fa07d0e3df4d91ace38f644eb64e3ca175b98615b3df5"
+    },
+    "range_violation": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 1920,
+      "warning_codes": [
+        "note_outside_instrument_range",
+        "insufficient_tonal_evidence"
+      ],
+      "tonality_status": "insufficient_evidence",
+      "global_key": null,
+      "key_candidates": [],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [
+        "unclassified"
+      ],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 1,
+      "tension_status": "ok",
+      "fingerprint": "bc2214fb606e9460bccbd6fe69cd607cb348f056dc4312eecacd21b60e9a7304"
+    },
+    "duplicate_notes": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 1920,
+      "warning_codes": [
+        "excessive_duplicate_notes",
+        "insufficient_tonal_evidence",
+        "melody_skyline_reduction"
+      ],
+      "tonality_status": "insufficient_evidence",
+      "global_key": null,
+      "key_candidates": [],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [
+        "unclassified"
+      ],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 4,
+      "tension_status": "ok",
+      "fingerprint": "35c38c401d1c3b31eb47895e8663219c1f4f4cfb384ff4d2252b10e74ed47b55"
+    },
+    "empty_section_track": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 7680,
+      "warning_codes": [
+        "empty_analysis_scope",
+        "insufficient_tonal_evidence"
+      ],
+      "tonality_status": "insufficient_evidence",
+      "global_key": null,
+      "key_candidates": [],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [
+        "unclassified"
+      ],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 1,
+      "tension_status": "ok",
+      "fingerprint": "2d1f87067b66a267cfae91c51bd182ae15f336691ee419df9e051a2517170224"
+    },
+    "percussion_only": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "composition",
+      "scope_start_tick": 0,
+      "scope_end_tick": 3840,
+      "warning_codes": [
+        "percussion_only_scope"
+      ],
+      "tonality_status": "not_applicable",
+      "global_key": null,
+      "key_candidates": [],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 1,
+      "tension_status": "not_applicable",
+      "fingerprint": "1857c4995c875daaf15c33b7f57197ecbbcef35f0f45883fce2fde762c39e11b"
+    },
+    "empty_section_scope": {
+      "status": "empty",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "section",
+      "scope_start_tick": 3840,
+      "scope_end_tick": 7680,
+      "warning_codes": [
+        "empty_analysis_scope",
+        "insufficient_tonal_evidence"
+      ],
+      "tonality_status": "insufficient_evidence",
+      "global_key": null,
+      "key_candidates": [],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 0,
+      "tension_status": "insufficient_evidence",
+      "fingerprint": "2d1f87067b66a267cfae91c51bd182ae15f336691ee419df9e051a2517170224"
+    },
+    "chord_inversions_nct_root_section": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "section",
+      "scope_start_tick": 0,
+      "scope_end_tick": 1920,
+      "warning_codes": [],
+      "tonality_status": "ok",
+      "global_key": "C major",
+      "key_candidates": [
+        {
+          "key": "C major",
+          "score": 13996.8
+        },
+        {
+          "key": "E minor",
+          "score": 12182.4
+        },
+        {
+          "key": "G major",
+          "score": 10886.4
+        },
+        {
+          "key": "G minor",
+          "score": 10886.4
+        }
+      ],
+      "harmony_symbols": [
+        "C"
+      ],
+      "harmony_bass_pcs": [
+        0
+      ],
+      "cadence_kinds": [],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 3,
+      "tension_status": "ok",
+      "fingerprint": "6560a03c1455bcbe9b17188780dd29ed4e04b697365b2d8e3c470ac3e9d16f49"
+    },
+    "chord_inversions_nct_inv_section": {
+      "status": "partial",
+      "algorithm_version": "analysis.native.v1",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "section",
+      "scope_start_tick": 1920,
+      "scope_end_tick": 3840,
+      "warning_codes": [],
+      "tonality_status": "ok",
+      "global_key": "C major",
+      "key_candidates": [
+        {
+          "key": "C major",
+          "score": 14320.8
+        },
+        {
+          "key": "E minor",
+          "score": 12506.4
+        },
+        {
+          "key": "G major",
+          "score": 11437.2
+        },
+        {
+          "key": "G minor",
+          "score": 11437.2
+        }
+      ],
+      "harmony_symbols": [
+        "C"
+      ],
+      "harmony_bass_pcs": [
+        4
+      ],
+      "cadence_kinds": [],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 4,
+      "tension_status": "ok",
+      "fingerprint": "6560a03c1455bcbe9b17188780dd29ed4e04b697365b2d8e3c470ac3e9d16f49"
+    }
+  }
+}

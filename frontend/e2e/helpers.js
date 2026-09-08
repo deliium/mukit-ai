@@ -395,3 +395,163 @@ export async function getExpressiveMetadataFromStore(page) {
     };
   });
 }
+
+/** Snapshot of analysis sidecar UI/store state (no full composition/report dump). */
+export async function getAnalysisSnapshot(page) {
+  return page.evaluate(() => {
+    const store = window.__MUKIT_MUSIC_STORE__;
+    if (!store) {
+      return null;
+    }
+    const state = store.getState();
+    const freshness = typeof state.getAnalysisFreshness === 'function'
+      ? state.getAnalysisFreshness()
+      : null;
+    const warnings = Array.isArray(state.analysisWarnings) ? state.analysisWarnings : [];
+    const result = state.analysisResult;
+    return {
+      analysisScope: state.analysisScope,
+      analysisStatus: state.analysisStatus,
+      analysisError: state.analysisError || '',
+      analysisTabVisible: state.analysisTabVisible,
+      sectionKey: state.analysisSelectedSectionKey,
+      trackId: state.pianoRollTrackId,
+      warningCount: warnings.length,
+      warningCodes: warnings.map((item) => item?.code).filter(Boolean).slice(0, 32),
+      hasResult: Boolean(result),
+      resultStatus: result?.status ?? null,
+      algorithmVersion: result?.algorithm_version ?? null,
+      resolvedScopeKind: result?.resolved_scope?.kind ?? null,
+      fingerprintPrefix: typeof result?.source_fingerprint === 'string'
+        ? result.source_fingerprint.slice(0, 12)
+        : null,
+      isCurrent: freshness?.isCurrent ?? null,
+      isStale: freshness?.isStale ?? null,
+      isLoading: freshness?.isLoading ?? null,
+      schemaVersion: state.editedMusicJson?.schema_version ?? null,
+      eventCount: Array.isArray(state.editedMusicJson?.tracks)
+        ? state.editedMusicJson.tracks.reduce((sum, track) => sum + (track.events?.length || 0), 0)
+        : 0,
+    };
+  });
+}
+
+/** Wait until analysis store reports a successful current result. */
+export async function waitForAnalysisSuccess(page, { timeout = 60_000, scopeKind = null } = {}) {
+  const { expect } = await import('@playwright/test');
+  await expect.poll(async () => {
+    const snapshot = await getAnalysisSnapshot(page);
+    if (!snapshot) {
+      return 'missing-store';
+    }
+    if (snapshot.analysisStatus === 'error') {
+      throw new Error(`Analysis failed: ${snapshot.analysisError || 'unknown'}`);
+    }
+    if (scopeKind && snapshot.resolvedScopeKind && snapshot.resolvedScopeKind !== scopeKind) {
+      return `scope:${snapshot.resolvedScopeKind}`;
+    }
+    if (snapshot.analysisStatus === 'success' && snapshot.hasResult && snapshot.isCurrent) {
+      return 'ready';
+    }
+    return `${snapshot.analysisStatus}:${snapshot.isStale ? 'stale' : 'fresh'}`;
+  }, { timeout }).toBe('ready');
+  return getAnalysisSnapshot(page);
+}
+
+/** Wait until retained analysis is marked stale after a relevant edit. */
+export async function waitForAnalysisStale(page, { timeout = 30_000 } = {}) {
+  const { expect } = await import('@playwright/test');
+  await expect.poll(async () => {
+    const snapshot = await getAnalysisSnapshot(page);
+    return Boolean(snapshot?.hasResult && snapshot?.isStale);
+  }, { timeout }).toBe(true);
+  return getAnalysisSnapshot(page);
+}
+
+export async function openAnalysisTab(page) {
+  await page.getByTestId('composer-tab-analysis').click();
+  await page.getByTestId('composition-analysis-panel').waitFor({ state: 'visible', timeout: 30_000 });
+  console.info('[e2e-analysis] Opened Analysis tab');
+}
+
+/** Intercept POST /analysis/composition with a deterministic JSON body or status. */
+export async function mockAnalysisRoute(page, {
+  body = null,
+  status = 200,
+  once = false,
+} = {}) {
+  const handler = async (route) => {
+    if (status >= 400) {
+      await route.fulfill({
+        status,
+        contentType: 'application/json',
+        body: JSON.stringify(body || {
+          detail: {
+            code: 'analysis_invalid_composition',
+            message: 'Mocked analysis failure',
+            details: { reason: 'e2e_mock' },
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(body),
+    });
+  };
+  if (once) {
+    await page.route('**/analysis/composition', async (route) => {
+      await handler(route);
+      await page.unroute('**/analysis/composition');
+    });
+  } else {
+    await page.route('**/analysis/composition', handler);
+  }
+}
+
+export function sampleAnalysisReportForE2e(overrides = {}) {
+  return {
+    schema_version: 'composition.analysis.v1',
+    algorithm_version: 'native-v1',
+    source_schema_version: 'composition.v2',
+    source_fingerprint: 'e2e-fingerprint-0123456789abcdef',
+    status: 'ok',
+    resolved_scope: {
+      kind: 'composition',
+      start_tick: 0,
+      end_tick: 7680,
+      start_bar: 1,
+      end_bar_exclusive: 5,
+    },
+    warnings: [
+      {
+        code: 'empty_analysis_scope',
+        severity: 'warning',
+        category: 'data_quality',
+        message: 'Mock empty scope warning',
+        locator: null,
+        details: {},
+      },
+    ],
+    section_summaries: [],
+    tonality: {
+      status: 'ok',
+      global: { label: 'C major', confidence: 0.9 },
+    },
+    harmony: {
+      status: 'ok',
+      chord_change_rate: 0.5,
+    },
+    melody: {
+      status: 'ok',
+      phrases: [{ cadence: 'authentic' }],
+    },
+    density: {
+      status: 'ok',
+      attacks_per_bar: 2,
+    },
+    ...overrides,
+  };
+}

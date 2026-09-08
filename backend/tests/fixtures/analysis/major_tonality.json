@@ -1,0 +1,131 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 100,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "bar_count": 4,
+  "duration_ticks": 7680,
+  "sections": [
+    {
+      "type": "verse",
+      "start_bar": 1,
+      "bar_count": 4,
+      "start_tick": 0,
+      "duration_ticks": 7680
+    }
+  ],
+  "tracks": [
+    {
+      "id": "melody-major",
+      "name": "melody-major",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "events": [
+        {
+          "pitch": "C4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "D4",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "E4",
+          "start_tick": 960,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "F4",
+          "start_tick": 1440,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "G4",
+          "start_tick": 1920,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "A4",
+          "start_tick": 2400,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "B4",
+          "start_tick": 2880,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "C5",
+          "start_tick": 3360,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "C4",
+          "start_tick": 3840,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "D4",
+          "start_tick": 4320,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "E4",
+          "start_tick": 4800,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "F4",
+          "start_tick": 5280,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "G4",
+          "start_tick": 5760,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "A4",
+          "start_tick": 6240,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "B4",
+          "start_tick": 6720,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "C5",
+          "start_tick": 7200,
+          "duration_ticks": 480,
+          "velocity": 80
+        }
+      ]
+    }
+  ],
+  "harmony": [],
+  "tempo_changes": [],
+  "time_signature_changes": [],
+  "key_changes": [],
+  "markers": []
+}

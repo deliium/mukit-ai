@@ -1,0 +1,65 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 100,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "bar_count": 4,
+  "duration_ticks": 7680,
+  "sections": [
+    {
+      "id": "filled",
+      "type": "verse",
+      "start_bar": 1,
+      "bar_count": 2,
+      "start_tick": 0,
+      "duration_ticks": 3840
+    },
+    {
+      "id": "empty-bridge",
+      "type": "bridge",
+      "start_bar": 3,
+      "bar_count": 2,
+      "start_tick": 3840,
+      "duration_ticks": 3840
+    }
+  ],
+  "tracks": [
+    {
+      "id": "active-1",
+      "name": "active-1",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "events": [
+        {
+          "pitch": "C4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "E4",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 80
+        }
+      ]
+    },
+    {
+      "id": "empty-track",
+      "name": "empty-track",
+      "instrument": "piano",
+      "role": "pad",
+      "midi_program": 0,
+      "channel": 1,
+      "events": []
+    }
+  ],
+  "harmony": [],
+  "tempo_changes": [],
+  "time_signature_changes": [],
+  "key_changes": [],
+  "markers": []
+}

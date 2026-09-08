@@ -1,0 +1,65 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 100,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "bar_count": 1,
+  "duration_ticks": 1920,
+  "sections": [
+    {
+      "type": "verse",
+      "start_bar": 1,
+      "bar_count": 1,
+      "start_tick": 0,
+      "duration_ticks": 1920
+    }
+  ],
+  "tracks": [
+    {
+      "id": "cluster-1",
+      "name": "cluster-1",
+      "instrument": "piano",
+      "role": "harmony",
+      "midi_program": 0,
+      "channel": 1,
+      "events": [
+        {
+          "pitch": "C4",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 80
+        },
+        {
+          "pitch": "C#4",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 80
+        },
+        {
+          "pitch": "D4",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 80
+        },
+        {
+          "pitch": "D#4",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 80
+        },
+        {
+          "pitch": "E4",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 80
+        }
+      ]
+    }
+  ],
+  "harmony": [],
+  "tempo_changes": [],
+  "time_signature_changes": [],
+  "key_changes": [],
+  "markers": []
+}

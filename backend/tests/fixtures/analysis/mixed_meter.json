@@ -1,0 +1,99 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 120,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "bar_count": 3,
+  "duration_ticks": 4800,
+  "tempo_changes": [
+    {
+      "tick": 1920,
+      "bpm": 90
+    }
+  ],
+  "time_signature_changes": [
+    {
+      "tick": 1920,
+      "time_signature": "3/4"
+    },
+    {
+      "tick": 3360,
+      "time_signature": "6/8"
+    }
+  ],
+  "key_changes": [
+    {
+      "tick": 1920,
+      "key": "G major"
+    }
+  ],
+  "markers": [],
+  "sections": [
+    {
+      "id": "sec-a",
+      "type": "intro",
+      "start_bar": 1,
+      "bar_count": 1,
+      "start_tick": 0,
+      "duration_ticks": 1920
+    },
+    {
+      "id": "sec-b",
+      "type": "verse",
+      "start_bar": 2,
+      "bar_count": 2,
+      "start_tick": 1920,
+      "duration_ticks": 2880
+    }
+  ],
+  "tracks": [
+    {
+      "id": "melody-mixed",
+      "name": "melody-mixed",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "events": [
+        {
+          "pitch": "C4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "D4",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "E4",
+          "start_tick": 960,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "F4",
+          "start_tick": 1440,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "E4",
+          "start_tick": 2000,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "G4",
+          "start_tick": 3500,
+          "duration_ticks": 480,
+          "velocity": 80
+        }
+      ]
+    }
+  ],
+  "harmony": []
+}

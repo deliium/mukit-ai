@@ -1,0 +1,54 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 100,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "bar_count": 2,
+  "duration_ticks": 3840,
+  "sections": [
+    {
+      "type": "verse",
+      "start_bar": 1,
+      "bar_count": 2,
+      "start_tick": 0,
+      "duration_ticks": 3840
+    }
+  ],
+  "tracks": [
+    {
+      "id": "drums-1",
+      "name": "drums-1",
+      "instrument": "drums",
+      "role": "drums",
+      "midi_program": 0,
+      "channel": 10,
+      "events": [
+        {
+          "pitch": "C2",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "D2",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "pitch": "E2",
+          "start_tick": 960,
+          "duration_ticks": 480,
+          "velocity": 80
+        }
+      ],
+      "is_drum": true
+    }
+  ],
+  "harmony": [],
+  "tempo_changes": [],
+  "time_signature_changes": [],
+  "key_changes": [],
+  "markers": []
+}

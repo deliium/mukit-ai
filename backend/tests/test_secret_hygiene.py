@@ -97,3 +97,42 @@ def test_import_routes_omit_source_sentinels_from_errors_and_logs(monkeypatch, t
     joined = "\n".join(record.getMessage() for record in caplog.records)
     assert SENTINEL_FILENAME not in joined
     assert "MTrk" not in joined
+
+
+def test_analysis_route_omits_fixture_sentinels_from_logs_and_errors(caplog):
+    from tests.fixtures.analysis import load_analysis_expected_vectors, load_analysis_fixture
+
+    sentinels = load_analysis_expected_vectors()["sentinels"]
+    composition = load_analysis_fixture("hygiene_sentinel")
+    client = TestClient(app)
+    with caplog.at_level("DEBUG"):
+        ok = client.post(
+            "/analysis/composition",
+            json={"composition": composition, "scope": {"kind": "composition"}},
+        )
+        bad = client.post(
+            "/analysis/composition",
+            json={
+                "composition": {
+                    **composition,
+                    "duration_ticks": 10,
+                },
+                "scope": {"kind": "composition"},
+            },
+        )
+    assert ok.status_code == 200, ok.text
+    assert bad.status_code == 422
+    assert_no_secret_leakage(ok.json(), context="POST /analysis/composition")
+    assert_no_secret_leakage(bad.json(), context="POST /analysis/composition error")
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert sentinels["joined_pitches"] not in joined
+    assert sentinels["label"] not in joined
+    assert sentinels["label"] not in ok.text
+    assert sentinels["label"] not in bad.text
+    assert sentinels["joined_pitches"] not in ok.text
+    assert sentinels["joined_pitches"] not in bad.text
+    for pitch in sentinels["pitch_sequence"]:
+        assert pitch not in joined
+        assert pitch not in bad.text
+    assert '"events"' not in bad.text
+    assert composition["schema_version"] and '"tracks"' not in bad.text

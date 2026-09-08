@@ -3,7 +3,17 @@ import test from 'node:test';
 
 import axios from 'axios';
 import { migrateV1ToV2 } from '../utils/compositionVersion.js';
-import { editCompositionRegion, generateLlmMusicJson, importMidi, importMusicXml, ImportApiError, parseProjectionHeaders, projectionWarningsFromHeaders } from './musicApi.js';
+import {
+  AnalysisApiError,
+  analyzeComposition,
+  editCompositionRegion,
+  generateLlmMusicJson,
+  importMidi,
+  importMusicXml,
+  ImportApiError,
+  parseProjectionHeaders,
+  projectionWarningsFromHeaders,
+} from './musicApi.js';
 
 function canonicalV1Composition() {
   return {
@@ -248,6 +258,231 @@ test('importMusicXml preserves structured error code and status', async (t) => {
       assert.equal(error.code, 'import_unsupported_media_type');
       assert.match(error.message, /Content signature/);
       assert.equal(error.details?.detected, 'midi');
+      return true;
+    },
+  );
+});
+
+function canonicalV2Composition() {
+  return migrateV1ToV2(canonicalV1Composition());
+}
+
+function sampleAnalysisReport(overrides = {}) {
+  return {
+    schema_version: 'composition.analysis.v1',
+    algorithm_version: 'native-v1',
+    source_schema_version: 'composition.v2',
+    source_fingerprint: 'a'.repeat(64),
+    status: 'ok',
+    resolved_scope: {
+      kind: 'composition',
+      start_tick: 0,
+      end_tick: 3840,
+      start_bar: 1,
+      end_bar_exclusive: 3,
+    },
+    warnings: [],
+    section_summaries: [],
+    tonality: { status: 'ok' },
+    harmony: { status: 'ok' },
+    ...overrides,
+  };
+}
+
+function installAxiosStub(handler) {
+  const previousAdapter = axios.defaults.adapter;
+  axios.defaults.adapter = handler;
+  return () => {
+    axios.defaults.adapter = previousAdapter;
+  };
+}
+
+test('analyzeComposition posts composition scope with complete V2 payload', async (t) => {
+  const composition = canonicalV2Composition();
+  let posted = null;
+  const restore = installAxiosStub(async (config) => {
+    assert.equal(String(config.method || 'get').toLowerCase(), 'post');
+    assert.equal(config.url, '/analysis/composition');
+    posted = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+    return {
+      data: sampleAnalysisReport(),
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  const report = await analyzeComposition(composition, { kind: 'composition' });
+  assert.equal(posted.composition.schema_version, 'composition.v2');
+  assert.ok(Array.isArray(posted.composition.tracks));
+  assert.ok(posted.composition.tracks[0].events.length >= 1);
+  assert.deepEqual(posted.scope, { kind: 'composition' });
+  assert.equal(report.schema_version, 'composition.analysis.v1');
+  assert.equal(report.resolved_scope.kind, 'composition');
+  assert.deepEqual(report.warnings, []);
+  assert.deepEqual(report.section_summaries, []);
+});
+
+test('analyzeComposition accepts section and track scopes', async (t) => {
+  const composition = canonicalV2Composition();
+  const seen = [];
+  const restore = installAxiosStub(async (config) => {
+    const payload = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+    seen.push(payload.scope);
+    return {
+      data: sampleAnalysisReport({
+        resolved_scope: {
+          ...sampleAnalysisReport().resolved_scope,
+          kind: payload.scope.kind,
+        },
+      }),
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  const sectionReport = await analyzeComposition(composition, {
+    kind: 'section',
+    section_index: 0,
+    expected_start_bar: composition.sections[0].start_bar,
+    expected_bar_count: composition.sections[0].bar_count,
+    expected_start_tick: composition.sections[0].start_tick,
+    expected_duration_ticks: composition.sections[0].duration_ticks,
+  });
+  assert.equal(sectionReport.resolved_scope.kind, 'section');
+  assert.equal(seen[0].kind, 'section');
+  assert.equal(seen[0].section_index, 0);
+
+  const trackReport = await analyzeComposition(composition, {
+    kind: 'track',
+    track_id: 'melody-1',
+  });
+  assert.equal(trackReport.resolved_scope.kind, 'track');
+  assert.equal(seen[1].kind, 'track');
+  assert.equal(seen[1].track_id, 'melody-1');
+});
+
+test('analyzeComposition rejects invalid local targets before network', async () => {
+  const composition = canonicalV2Composition();
+  await assert.rejects(
+    () => analyzeComposition(composition, { kind: 'track', track_id: 'missing-track' }),
+    (error) => {
+      assert.ok(error instanceof AnalysisApiError);
+      assert.equal(error.code, 'analysis_invalid_scope');
+      return true;
+    },
+  );
+  await assert.rejects(
+    () => analyzeComposition(composition, { kind: 'section', section_index: 99 }),
+    (error) => {
+      assert.ok(error instanceof AnalysisApiError);
+      assert.equal(error.code, 'analysis_invalid_scope');
+      return true;
+    },
+  );
+  await assert.rejects(
+    () => analyzeComposition(composition, {
+      kind: 'section',
+      section_index: 0,
+      expected_start_bar: 999,
+    }),
+    (error) => {
+      assert.ok(error instanceof AnalysisApiError);
+      assert.equal(error.code, 'analysis_invalid_scope');
+      assert.ok(error.details?.mismatch_fields?.includes('start_bar'));
+      return true;
+    },
+  );
+});
+
+test('analyzeComposition normalizes optional arrays and warnings', async (t) => {
+  const composition = canonicalV2Composition();
+  const restore = installAxiosStub(async (config) => ({
+    data: sampleAnalysisReport({
+      warnings: [
+        { code: 'empty_analysis_scope', severity: 'warning', message: 'empty' },
+        null,
+        { severity: 'info' },
+        { code: 'dense_overlapping_material' },
+      ],
+      section_summaries: undefined,
+    }),
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config,
+  }));
+  t.after(restore);
+
+  const report = await analyzeComposition(composition, { kind: 'composition' });
+  assert.equal(report.warnings.length, 2);
+  assert.equal(report.warnings[0].code, 'empty_analysis_scope');
+  assert.equal(report.warnings[1].code, 'dense_overlapping_material');
+  assert.equal(report.warnings[1].severity, 'warning');
+  assert.deepEqual(report.section_summaries, []);
+});
+
+test('analyzeComposition rejects malformed responses as AnalysisApiError', async (t) => {
+  const composition = canonicalV2Composition();
+  const restore = installAxiosStub(async (config) => ({
+    data: {
+      schema_version: 'wrong',
+      algorithm_version: 'native-v1',
+      source_schema_version: 'composition.v2',
+      source_fingerprint: 'a'.repeat(64),
+      status: 'ok',
+      resolved_scope: { kind: 'composition' },
+    },
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config,
+  }));
+  t.after(restore);
+
+  await assert.rejects(
+    () => analyzeComposition(composition, { kind: 'composition' }),
+    (error) => {
+      assert.ok(error instanceof AnalysisApiError);
+      assert.equal(error.code, 'analysis_invalid_response');
+      assert.match(error.message, /schema_version/);
+      return true;
+    },
+  );
+});
+
+test('analyzeComposition preserves structured backend analysis errors', async (t) => {
+  const composition = canonicalV2Composition();
+  const restore = installAxiosStub(async () => {
+    const error = new Error('Request failed');
+    error.isAxiosError = true;
+    error.response = {
+      status: 422,
+      data: {
+        detail: {
+          code: 'analysis_invalid_composition',
+          message: 'Composition failed structural validation',
+          details: { reason: 'broken_meter_map' },
+        },
+      },
+    };
+    throw error;
+  });
+  t.after(restore);
+
+  await assert.rejects(
+    () => analyzeComposition(composition, { kind: 'composition' }),
+    (error) => {
+      assert.ok(error instanceof AnalysisApiError);
+      assert.equal(error.status, 422);
+      assert.equal(error.code, 'analysis_invalid_composition');
+      assert.match(error.message, /structural validation/);
+      assert.equal(error.details?.reason, 'broken_meter_map');
       return true;
     },
   );
