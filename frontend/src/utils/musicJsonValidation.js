@@ -7,6 +7,31 @@ const SUPPORTED_DENOMINATORS = new Set([1, 2, 4, 8, 16, 32]);
 const ARTICULATION_VALUES = new Set(['staccato', 'staccatissimo', 'tenuto', 'accent', 'marcato']);
 const GATE_SHORTENING_ARTICULATIONS = new Set(['staccato', 'staccatissimo', 'marcato']);
 const ATTACK_ARTICULATIONS = new Set(['accent', 'marcato']);
+/** Mirrors backend ``SUPPORTED_SECTION_TYPES`` (includes import-neutral ``unsectioned``). */
+export const SUPPORTED_SECTION_TYPES = new Set([
+  'intro',
+  'verse',
+  'pre_chorus',
+  'chorus',
+  'bridge',
+  'solo',
+  'breakdown',
+  'outro',
+  'unsectioned',
+]);
+/** Mirrors backend ``SUPPORTED_TRACK_ROLES`` (includes import-neutral ``other``). */
+export const SUPPORTED_TRACK_ROLES = new Set([
+  'melody',
+  'harmony',
+  'bass',
+  'drums',
+  'percussion',
+  'countermelody',
+  'pad',
+  'lead',
+  'rhythm',
+  'other',
+]);
 const NOTE_TO_SEMITONE = {
   C: 0,
   'C#': 1,
@@ -162,6 +187,13 @@ function validateCanonicalSections(sections, barTicks, barCount, durationTicks, 
     if (!section.type || typeof section.type !== 'string') {
       return invalid('Every section requires a type.');
     }
+    const normalizedSectionType = String(section.type)
+      .trim()
+      .toLowerCase()
+      .replace(/[-\s]+/g, '_');
+    if (!SUPPORTED_SECTION_TYPES.has(normalizedSectionType)) {
+      return invalid(`Unsupported section type: ${section.type}`);
+    }
     if (variant === 'v2' && section.id != null && typeof section.id !== 'string') {
       return invalid('Section id must be a string when provided.');
     }
@@ -192,6 +224,13 @@ function validateCanonicalTracks(tracks, durationTicks, variant) {
     ids.add(track.id);
     if (!track.name || !track.instrument || !track.role) {
       return invalid('Each track requires name, instrument, and role metadata.');
+    }
+    const normalizedRole = String(track.role)
+      .trim()
+      .toLowerCase()
+      .replace(/[-\s]+/g, '_');
+    if (!SUPPORTED_TRACK_ROLES.has(normalizedRole)) {
+      return invalid(`Unsupported track role: ${track.role}`);
     }
     if (!Number.isInteger(Number(track.midi_program)) || Number(track.midi_program) < 0 || Number(track.midi_program) > 127) {
       return invalid('Track midi_program must be an integer from 0 to 127.');

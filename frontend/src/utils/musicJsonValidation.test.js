@@ -44,6 +44,26 @@ test('rejects unsupported schema versions', () => {
   assert.match(result.message, /Unsupported schema_version/);
 });
 
+test('accepts import-neutral other role and unsectioned section', () => {
+  const composition = migrateV1ToV2(canonicalV1Composition());
+  composition.sections[0].type = 'unsectioned';
+  composition.tracks[0].role = 'other';
+  const result = validateMusicJson(composition);
+  assert.equal(result.valid, true);
+});
+
+test('rejects unknown section type and track role', () => {
+  const badSection = migrateV1ToV2(canonicalV1Composition());
+  badSection.sections[0].type = 'coda_custom';
+  assert.equal(validateMusicJson(badSection).valid, false);
+  assert.match(validateMusicJson(badSection).message, /Unsupported section type/);
+
+  const badRole = migrateV1ToV2(canonicalV1Composition());
+  badRole.tracks[0].role = 'synth_lead_custom';
+  assert.equal(validateMusicJson(badRole).valid, false);
+  assert.match(validateMusicJson(badRole).message, /Unsupported track role/);
+});
+
 test('rejects legacy harmony-only JSON', () => {
   const result = validateMusicJson({
     tempo: 100,

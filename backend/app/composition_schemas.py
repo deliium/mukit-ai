@@ -29,6 +29,8 @@ SUPPORTED_SECTION_TYPES = {
     "solo",
     "breakdown",
     "outro",
+    # Neutral import fallback — generation prompts keep the authored form list.
+    "unsectioned",
 }
 
 SUPPORTED_TRACK_ROLES = {
@@ -41,6 +43,8 @@ SUPPORTED_TRACK_ROLES = {
     "pad",
     "lead",
     "rhythm",
+    # Neutral import fallback when source metadata is insufficient.
+    "other",
 }
 
 KEY_PATTERN = re.compile(r"^[A-G](?:#|b)?\s+(?:major|minor)$")
