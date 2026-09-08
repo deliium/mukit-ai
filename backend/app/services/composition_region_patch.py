@@ -790,7 +790,10 @@ def apply_region_replacement_patch(
 
     integrity_warnings: list[str] = []
     if validate_integrity:
-        integrity: CompositionValidationResult = validate_composition_integrity(updated_composition)
+        integrity: CompositionValidationResult = validate_composition_integrity(
+            updated_composition,
+            profile="canonical",
+        )
         if not integrity.ok:
             logger.warning(
                 "Rejected patch failing composition integrity checks",

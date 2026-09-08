@@ -12,6 +12,7 @@ from .db import ensure_database
 from .llm_settings import load_llm_settings
 from .ready import build_readiness_report, configure_logging, parse_cors_allow_origins
 from .routers.projects import router as projects_router
+from .routers.imports import router as imports_router
 from .schemas import (
     Composition,
     LLMCompositionEditRequest,
@@ -86,6 +87,7 @@ app.add_middleware(
 )
 
 app.include_router(projects_router)
+app.include_router(imports_router)
 
 
 def _composition_export_summary(composition: CompositionV2) -> dict:

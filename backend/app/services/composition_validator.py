@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 from pydantic import ValidationError
 
@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 CompositionLike = CompositionV1 | CompositionV2
 NoteEventLike = CompositionV1NoteEvent | CompositionV2NoteEvent
+ValidationProfile = Literal["generation", "canonical"]
 
 DEFAULT_TICKS_PER_QUARTER = 480
 
@@ -37,6 +38,10 @@ ROLE_PITCH_RANGES: dict[str, tuple[int, int]] = {
     # Pads often double cello/viola color; allow ensemble lows.
     "pad": (_midi_pitch_number("C2"), _midi_pitch_number("C7")),
     "rhythm": (_midi_pitch_number("C2"), _midi_pitch_number("C6")),
+    # Import-neutral / percussion: full MIDI pitch space.
+    "other": (_midi_pitch_number("C-1"), _midi_pitch_number("G9")),
+    "drums": (_midi_pitch_number("C-1"), _midi_pitch_number("G9")),
+    "percussion": (_midi_pitch_number("C-1"), _midi_pitch_number("G9")),
 }
 
 INSTRUMENT_PITCH_RANGES: dict[str, tuple[int, int]] = {
@@ -72,8 +77,13 @@ def validate_composition_integrity(
     *,
     requested_instruments: Iterable[str] | None = None,
     complexity: str = "moderate",
+    profile: ValidationProfile = "generation",
 ) -> CompositionValidationResult:
     """Run schema plus musical integrity checks; return structured diagnostics.
+
+    Profiles:
+    - ``generation``: staged LLM ensemble density, harmony, and grid policies.
+    - ``canonical``: structural/timeline integrity only (imports and post-import edits).
 
     Requested-instrument conformance is owned by generation constraint validation.
     ``requested_instruments`` is accepted for call-site compatibility but does not
@@ -84,6 +94,7 @@ def validate_composition_integrity(
     logger.debug(
         "Starting composition integrity validation",
         extra={
+            "profile": profile,
             "requested_instruments": requested,
             "requested_instrument_check": "delegated_to_generation_constraints",
             "complexity": complexity,
@@ -124,11 +135,14 @@ def validate_composition_integrity(
         return CompositionValidationResult(ok=False, errors=errors, warnings=warnings)
 
     _check_boundaries(composition, errors, warnings)
-    _check_tracks_and_density(composition, complexity, errors, warnings)
+    if profile == "generation":
+        _check_tracks_and_density(composition, complexity, errors, warnings)
+        _check_timing_grid(composition, errors, warnings)
+        _check_harmony_usefulness(composition, errors, warnings)
+        _check_bar_overflow(composition, errors, warnings)
+    else:
+        _check_canonical_tracks(composition, errors, warnings)
     _check_pitch_ranges(composition, errors, warnings)
-    _check_bar_overflow(composition, errors, warnings)
-    _check_timing_grid(composition, errors, warnings)
-    _check_harmony_usefulness(composition, errors, warnings)
     if isinstance(composition, CompositionV2):
         _check_v2_expression(composition, errors, warnings)
 
@@ -137,6 +151,7 @@ def validate_composition_integrity(
         logger.info(
             "Composition integrity validation passed",
             extra={
+                "profile": profile,
                 "schema_version": composition.schema_version,
                 "bar_count": composition.bar_count,
                 "track_count": len(composition.tracks),
@@ -149,6 +164,7 @@ def validate_composition_integrity(
         logger.warning(
             "Composition integrity validation failed",
             extra={
+                "profile": profile,
                 "schema_version": composition.schema_version,
                 "error_codes": result.error_codes(),
                 "warning_codes": [item.code for item in warnings],
@@ -160,6 +176,7 @@ def validate_composition_integrity(
     logger.debug(
         "Composition integrity validation category summary",
         extra={
+            "profile": profile,
             "error_count": len(errors),
             "warning_count": len(warnings),
             "codes": [item.code for item in result.diagnostics],
@@ -168,22 +185,69 @@ def validate_composition_integrity(
     return result
 
 
+def _check_canonical_tracks(
+    composition: CompositionLike,
+    errors: list[ValidationDiagnostic],
+    warnings: list[ValidationDiagnostic],
+) -> None:
+    """Structural track checks for imports / post-import edits (no ensemble policy)."""
+    if not composition.tracks:
+        errors.append(
+            ValidationDiagnostic(
+                code="missing_required_track",
+                message="Composition requires at least one track",
+                context={"present_roles": []},
+            )
+        )
+        return
+    total_events = sum(len(track.events) for track in composition.tracks)
+    if total_events == 0:
+        errors.append(
+            ValidationDiagnostic(
+                code="empty_required_track",
+                message="Composition has no playable note events",
+                context={"track_count": len(composition.tracks)},
+            )
+        )
+    logger.debug(
+        "Canonical track checks complete",
+        extra={
+            "track_count": len(composition.tracks),
+            "event_count": total_events,
+            "roles": sorted({track.role for track in composition.tracks}),
+        },
+    )
+
 def _check_boundaries(
     composition: CompositionLike,
     errors: list[ValidationDiagnostic],
     warnings: list[ValidationDiagnostic],
 ) -> None:
-    expected = composition.bar_count * bar_duration_ticks(
-        composition.time_signature, composition.ticks_per_quarter
-    )
-    if composition.duration_ticks != expected:
-        errors.append(
-            ValidationDiagnostic(
-                code="event_out_of_range",
-                message="duration_ticks does not match bar_count and meter",
-                context={"duration_ticks": composition.duration_ticks, "expected": expected},
+    if isinstance(composition, CompositionV2):
+        try:
+            from .composition_timeline import compile_timeline
+
+            compile_timeline(composition)
+        except ValueError as exc:
+            errors.append(
+                ValidationDiagnostic(
+                    code="event_out_of_range",
+                    message="duration_ticks / meter map failed timeline compilation",
+                    context={"reason": type(exc).__name__},
+                )
             )
+    else:
+        expected = composition.bar_count * bar_duration_ticks(
+            composition.time_signature, composition.ticks_per_quarter
         )
+        if composition.duration_ticks != expected:
+            errors.append(
+                ValidationDiagnostic(
+                    code="event_out_of_range",
+                    message="duration_ticks does not match bar_count and meter",
+                    context={"duration_ticks": composition.duration_ticks, "expected": expected},
+                )
+            )
 
     for track in composition.tracks:
         for event in track.events:
@@ -201,7 +265,6 @@ def _check_boundaries(
                         },
                     )
                 )
-
 
 def _check_tracks_and_density(
     composition: CompositionLike,

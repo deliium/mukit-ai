@@ -393,3 +393,102 @@ def test_validator_accepts_native_v2_expressive_fixture():
     assert result.ok
     assert composition.tempo_changes
     assert any(event.articulations for track in composition.tracks for event in track.events)
+
+
+def test_canonical_profile_accepts_imported_solo_other_unsectioned():
+    payload = {
+        "schema_version": "composition.v2",
+        "tempo": 120,
+        "key": "C major",
+        "time_signature": "4/4",
+        "ticks_per_quarter": 480,
+        "bar_count": 1,
+        "duration_ticks": 1920,
+        "sections": [
+            {
+                "id": "section-1",
+                "type": "unsectioned",
+                "start_bar": 1,
+                "bar_count": 1,
+                "start_tick": 0,
+                "duration_ticks": 1920,
+            }
+        ],
+        "tracks": [
+            {
+                "id": "track-1",
+                "name": "Imported",
+                "instrument": "piano",
+                "role": "other",
+                "midi_program": 0,
+                "channel": 1,
+                "events": [
+                    {"type": "note", "pitch": "C4", "start_tick": 0, "duration_ticks": 480, "velocity": 80},
+                ],
+                "dynamic_marks": [],
+                "sustain_pedals": [],
+                "automation": [],
+            }
+        ],
+        "harmony": [],
+        "tempo_changes": [],
+        "time_signature_changes": [],
+        "key_changes": [],
+        "markers": [],
+    }
+    generation = validate_composition_integrity(payload, profile="generation", complexity="simple")
+    assert not generation.ok
+    assert "missing_required_track" in generation.error_codes()
+
+    canonical = validate_composition_integrity(payload, profile="canonical")
+    assert canonical.ok
+
+
+def test_canonical_profile_accepts_mixed_meter_timeline():
+    payload = {
+        "schema_version": "composition.v2",
+        "tempo": 100,
+        "key": "C major",
+        "time_signature": "4/4",
+        "ticks_per_quarter": 480,
+        "bar_count": 2,
+        "duration_ticks": 1920 + 1440,
+        "sections": [
+            {
+                "id": "section-1",
+                "type": "unsectioned",
+                "start_bar": 1,
+                "bar_count": 2,
+                "start_tick": 0,
+                "duration_ticks": 3360,
+            }
+        ],
+        "tracks": [
+            {
+                "id": "track-1",
+                "name": "Solo",
+                "instrument": "violin",
+                "role": "other",
+                "midi_program": 40,
+                "channel": 1,
+                "events": [
+                    {"type": "note", "pitch": "E5", "start_tick": 0, "duration_ticks": 480, "velocity": 90},
+                    {"type": "note", "pitch": "G5", "start_tick": 1920, "duration_ticks": 480, "velocity": 90},
+                ],
+                "dynamic_marks": [],
+                "sustain_pedals": [],
+                "automation": [],
+            }
+        ],
+        "harmony": [],
+        "tempo_changes": [],
+        "time_signature_changes": [{"tick": 1920, "time_signature": "3/4"}],
+        "key_changes": [],
+        "markers": [],
+    }
+    # Generation profile wrongly assumes constant meter for duration equality.
+    generation = validate_composition_integrity(payload, profile="generation", complexity="simple")
+    assert not generation.ok
+
+    canonical = validate_composition_integrity(payload, profile="canonical")
+    assert canonical.ok

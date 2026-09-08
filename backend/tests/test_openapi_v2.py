@@ -46,3 +46,17 @@ def test_openapi_project_detail_returns_composition_v2():
     composition = detail["properties"]["composition"]
     ref = composition.get("$ref") or composition.get("anyOf", [{}])[0].get("$ref", "")
     assert ref.endswith("/CompositionV2") or "CompositionV2" in json.dumps(composition)
+
+
+def test_openapi_import_endpoints_and_response_contract():
+    schema = app.openapi()
+    paths = schema["paths"]
+    assert "/imports/midi" in paths
+    assert "/imports/musicxml" in paths
+    midi = paths["/imports/midi"]["post"]
+    assert "multipart/form-data" in json.dumps(midi.get("requestBody", {}))
+    response = _component("CompositionImportResponse")
+    assert response["properties"]["composition"]["$ref"].endswith("/CompositionV2")
+    assert "import_report" in response["properties"]
+    assert "musicxml" in response["properties"]
+    assert "notation_report" in response["properties"]

@@ -199,6 +199,62 @@ def test_fake_region_edit_patches_only_selected_bars(fake_env):
     assert composition.model_dump(mode="json") == original
 
 
+def test_fake_edit_imported_midi_preserves_outside_region_and_exports(fake_env):
+    """Imported solo/other compositions must be AI-editable under the canonical integrity profile."""
+    import io
+
+    import mido
+
+    from app.services.composition_midi_import import import_midi_bytes
+
+    mid = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    track.append(mido.MetaMessage("set_tempo", tempo=500000, time=0))
+    track.append(mido.MetaMessage("time_signature", numerator=4, denominator=4, time=0))
+    for bar in range(4):
+        start = bar * 1920
+        track.append(mido.Message("note_on", note=60 + bar, velocity=90, time=0 if bar == 0 else 1440))
+        track.append(mido.Message("note_off", note=60 + bar, velocity=0, time=480))
+    track.append(mido.MetaMessage("end_of_track", time=0))
+    buf = io.BytesIO()
+    mid.save(file=buf)
+    imported = import_midi_bytes(buf.getvalue(), display_filename="solo.mid").composition
+    track_id = imported.tracks[0].id
+
+    request = LLMCompositionEditRequest.model_validate(
+        {
+            "composition": imported.model_dump(mode="json"),
+            "edit": {
+                "instruction": "reshape notes in these bars",
+                "selection": {"start_bar": 1, "end_bar": 2, "track_ids": [track_id]},
+            },
+            "selection": {"provider": "fake"},
+        }
+    )
+    response = asyncio.run(edit_llm_composition_region(request))
+    assert response.composition.schema_version == "composition.v2"
+    bounds = selection_tick_bounds(imported, request.edit.selection)
+    orig = imported.tracks[0]
+    updated = next(track for track in response.composition.tracks if track.id == track_id)
+    outside_orig = [
+        (event.id, event.pitch, event.start_tick, event.duration_ticks)
+        for event in orig.events
+        if not event_in_region(event, bounds)
+    ]
+    outside_new = [
+        (event.id, event.pitch, event.start_tick, event.duration_ticks)
+        for event in updated.events
+        if not event_in_region(event, bounds)
+    ]
+    assert outside_orig == outside_new
+
+    midi_bytes = render_midi(response.composition)
+    assert midi_bytes.startswith(b"MThd")
+    musicxml, _report = render_musicxml(response.composition)
+    assert "<score-partwise" in musicxml
+
+
 def test_fake_region_edit_preserves_integrity_on_v2_expressive(fake_env):
     """Short-window edits on the 4-bar expressive fixture must stay density-valid."""
     composition = load_composition_fixture(FIXTURE_V2_EXPRESSIVE)

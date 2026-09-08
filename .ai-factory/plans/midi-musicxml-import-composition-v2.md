@@ -92,30 +92,30 @@ Add secure MIDI and MusicXML ingestion that converts uploaded files directly int
 ### Phase 2: MusicXML, HTTP, And AI Compatibility
 
 #### Task 4: Implement hardened MusicXML and MXL parsing
-- [ ] Create `backend/app/services/composition_musicxml_import.py` with a hardened preflight for uncompressed MusicXML and an in-memory safe ZIP/container reader for MXL before calling `music21`. Support score-partwise and normalize/reject score-timewise according to verified `music21` behavior.
-- [ ] Extract parts, instruments, concert pitches, offsets/durations, chords, voices, staves, ties, supported articulations, dynamics, pedals, tempo, meter, key changes, markers, and repeat-expanded linear playback order. Preserve enharmonic spelling where V2 accepts it and preserve polyphony as overlapping events.
-- [ ] Compute bounded exact PPQ from source divisions/tuplets using rational arithmetic. Quantize only when the configured PPQ cap is exceeded, report counts/error bounds, prevent zero-duration notes, and reject timing/meter maps that cannot be represented without relocating source events.
-- [ ] Normalize pickups/partial final measures into the complete-bar V2 timeline and report the change. Omit unsupported semantics such as grace/cue notes, lyrics, slurs, wedges that cannot map to automation, ornaments, microtones, and arbitrary directions using grouped issue counts rather than one unbounded issue per element.
-- [ ] Logging: DEBUG safe container/parser metrics, part/measure/note counts, PPQ selection, repeat expansion, and conversion duration; INFO parse success; WARNING issue codes/counts; ERROR stable sanitized error code/type. Never log XML, titles, lyrics, direction text, or archive entry contents.
-- [ ] Files: `backend/app/services/composition_musicxml_import.py`, synchronized backend requirement manifests for XML hardening, and `backend/tests/test_musicxml_import.py`.
-- [ ] Depends on Tasks 1-2.
+- [x] Create `backend/app/services/composition_musicxml_import.py` with a hardened preflight for uncompressed MusicXML and an in-memory safe ZIP/container reader for MXL before calling `music21`. Support score-partwise and normalize/reject score-timewise according to verified `music21` behavior.
+- [x] Extract parts, instruments, concert pitches, offsets/durations, chords, voices, staves, ties, supported articulations, dynamics, pedals, tempo, meter, key changes, markers, and repeat-expanded linear playback order. Preserve enharmonic spelling where V2 accepts it and preserve polyphony as overlapping events.
+- [x] Compute bounded exact PPQ from source divisions/tuplets using rational arithmetic. Quantize only when the configured PPQ cap is exceeded, report counts/error bounds, prevent zero-duration notes, and reject timing/meter maps that cannot be represented without relocating source events.
+- [x] Normalize pickups/partial final measures into the complete-bar V2 timeline and report the change. Omit unsupported semantics such as grace/cue notes, lyrics, slurs, wedges that cannot map to automation, ornaments, microtones, and arbitrary directions using grouped issue counts rather than one unbounded issue per element.
+- [x] Logging: DEBUG safe container/parser metrics, part/measure/note counts, PPQ selection, repeat expansion, and conversion duration; INFO parse success; WARNING issue codes/counts; ERROR stable sanitized error code/type. Never log XML, titles, lyrics, direction text, or archive entry contents.
+- [x] Files: `backend/app/services/composition_musicxml_import.py`, synchronized backend requirement manifests for XML hardening, and `backend/tests/test_musicxml_import.py`.
+- [x] Depends on Tasks 1-2.
 
 #### Task 5: Add bounded multipart import routes and canonical preview response
-- [ ] Add `backend/app/routers/imports.py` with separate `POST /imports/midi` and `POST /imports/musicxml` endpoints using `UploadFile`. Stream each upload with byte counting, verify content signatures against the selected endpoint, call format-specific and shared services, then render fresh MusicXML from the validated V2 through `music_json_renderer.py`.
-- [ ] Keep handlers thin and map domain exceptions to the agreed `413`/`415`/`422`/`503`/`500` responses with stable code plus bounded detail. Ensure a notation projection warning is reported separately from import conversion issues.
-- [ ] Register the router in `backend/app/main.py`, add `/imports` to `frontend/vite.config.js`, and add a production Nginx proxy location with an upload limit slightly above the application limit so structured backend `413` responses remain reachable.
-- [ ] Verify OpenAPI describes multipart files and strict V2/report output. Avoid CORS custom headers unless the report is moved out of the JSON body.
-- [ ] Logging: INFO route start/completion with endpoint format, byte count, result counts, status, and issue codes; DEBUG parser/render timing and configured limit; WARNING client rejection code; ERROR unexpected sanitized failure. Never log raw payloads, source names beyond a sanitized extension, or generated MusicXML.
-- [ ] Files: `backend/app/routers/imports.py`, `backend/app/main.py`, `frontend/vite.config.js`, `frontend/nginx.conf`, `backend/tests/test_import_routes.py`, and `backend/tests/test_openapi_v2.py`.
-- [ ] Depends on Tasks 3-4.
+- [x] Add `backend/app/routers/imports.py` with separate `POST /imports/midi` and `POST /imports/musicxml` endpoints using `UploadFile`. Stream each upload with byte counting, verify content signatures against the selected endpoint, call format-specific and shared services, then render fresh MusicXML from the validated V2 through `music_json_renderer.py`.
+- [x] Keep handlers thin and map domain exceptions to the agreed `413`/`415`/`422`/`503`/`500` responses with stable code plus bounded detail. Ensure a notation projection warning is reported separately from import conversion issues.
+- [x] Register the router in `backend/app/main.py`, add `/imports` to `frontend/vite.config.js`, and add a production Nginx proxy location with an upload limit slightly above the application limit so structured backend `413` responses remain reachable.
+- [x] Verify OpenAPI describes multipart files and strict V2/report output. Avoid CORS custom headers unless the report is moved out of the JSON body.
+- [x] Logging: INFO route start/completion with endpoint format, byte count, result counts, status, and issue codes; DEBUG parser/render timing and configured limit; WARNING client rejection code; ERROR unexpected sanitized failure. Never log raw payloads, source names beyond a sanitized extension, or generated MusicXML.
+- [x] Files: `backend/app/routers/imports.py`, `backend/app/main.py`, `frontend/vite.config.js`, `frontend/nginx.conf`, `backend/tests/test_import_routes.py`, and `backend/tests/test_openapi_v2.py`.
+- [x] Depends on Tasks 3-4.
 
 #### Task 6: Make validation and AI editing source-neutral
-- [ ] Separate strict canonical/timeline integrity from LLM-generation arrangement policy in `backend/app/services/composition_validator.py`. Fix any root-meter-only checks to use `composition_timeline.py`; keep melody/bass/harmony density requirements on generation only, not raw imports or post-import region edits.
-- [ ] Update `backend/app/services/llm_composition_editor.py` and `backend/app/services/composition_region_patch.py` so schema-valid imported compositions with `other` roles, one track, percussion, polyphony, tuplets, or variable meter can be selected and edited without requiring a generated ensemble. Preserve all untouched imported event IDs and metadata.
-- [ ] Confirm render/export/playback paths tolerate `other` and `unsectioned` without inventing parts or harmony. Add regression coverage for AI fake-mode editing of an imported fixture, including an untouched-region fingerprint and successful MIDI/MusicXML export.
-- [ ] Logging: DEBUG selected validation profile and timeline facts; INFO edit validation success; WARNING advisory musical-policy findings only in generation contexts; ERROR bounded structural failures with track/bar identifiers, never full compositions or prompts.
-- [ ] Files: `backend/app/services/composition_validator.py`, `backend/app/services/llm_composition_editor.py`, `backend/app/services/composition_region_patch.py`, relevant renderer/export services only if neutral values expose assumptions, and validator/editor regression tests.
-- [ ] Depends on Tasks 1-5.
+- [x] Separate strict canonical/timeline integrity from LLM-generation arrangement policy in `backend/app/services/composition_validator.py`. Fix any root-meter-only checks to use `composition_timeline.py`; keep melody/bass/harmony density requirements on generation only, not raw imports or post-import region edits.
+- [x] Update `backend/app/services/llm_composition_editor.py` and `backend/app/services/composition_region_patch.py` so schema-valid imported compositions with `other` roles, one track, percussion, polyphony, tuplets, or variable meter can be selected and edited without requiring a generated ensemble. Preserve all untouched imported event IDs and metadata.
+- [x] Confirm render/export/playback paths tolerate `other` and `unsectioned` without inventing parts or harmony. Add regression coverage for AI fake-mode editing of an imported fixture, including an untouched-region fingerprint and successful MIDI/MusicXML export.
+- [x] Logging: DEBUG selected validation profile and timeline facts; INFO edit validation success; WARNING advisory musical-policy findings only in generation contexts; ERROR bounded structural failures with track/bar identifiers, never full compositions or prompts.
+- [x] Files: `backend/app/services/composition_validator.py`, `backend/app/services/llm_composition_editor.py`, `backend/app/services/composition_region_patch.py`, relevant renderer/export services only if neutral values expose assumptions, and validator/editor regression tests.
+- [x] Depends on Tasks 1-5.
 
 ### Phase 3: Frontend Import State And UX
 

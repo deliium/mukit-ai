@@ -261,13 +261,17 @@ class ImportReport(BaseModel):
 
 
 class CompositionImportResponse(BaseModel):
-    """Successful import payload: canonical V2, regenerated MusicXML, and report."""
+    """Successful import payload: canonical V2, regenerated MusicXML, and reports."""
 
     model_config = ConfigDict(extra="forbid")
 
     composition: CompositionV2
     musicxml: str = Field(..., min_length=1)
     import_report: ImportReport
+    notation_report: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Compact MusicXML projection summary separate from import conversion issues.",
+    )
 
 
 def empty_import_report(*, summary: ImportSourceSummary) -> ImportReport:
