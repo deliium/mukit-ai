@@ -1,4 +1,5 @@
 import { classifyCompositionVersion, SCHEMA_VERSION_V2 } from './compositionVersion.js';
+import { barEndTick, barStartTick, compileTimeline } from './compositionTimeline.js';
 
 const KEY_PATTERN = /^[A-G](?:#|b)?\s+(?:major|minor)$/;
 const TIME_SIGNATURE_PATTERN = /^\d{1,2}\/\d{1,2}$/;
@@ -98,11 +99,39 @@ function validateCanonicalComposition(value, variant) {
   if (!Number.isInteger(barTicks)) {
     return invalid('time_signature must convert to whole canonical ticks.');
   }
-  if (durationTicks !== barCount * barTicks) {
+
+  // V2 duration/sections must match the compiled variable-meter bar map, not root meter alone.
+  let timeline = null;
+  if (variant === 'v2') {
+    timeline = compileTimeline(value);
+    if (!timeline) {
+      console.debug('[FIX:variable-meter-validation] compileTimeline rejected composition', {
+        barCount,
+        durationTicks,
+        rootMeter: value.time_signature,
+        meterChangeCount: Array.isArray(value.time_signature_changes)
+          ? value.time_signature_changes.length
+          : 0,
+      });
+      return invalid('duration_ticks must match bar_count and the compiled meter map.');
+    }
+    console.debug('[FIX:variable-meter-validation] compiled V2 timeline accepted', {
+      barCount: timeline.barCount,
+      durationTicks: timeline.durationTicks,
+      meterChangeCount: timeline.timeSignatureChanges.length,
+    });
+  } else if (durationTicks !== barCount * barTicks) {
     return invalid('duration_ticks must match bar_count and time_signature.');
   }
 
-  const sectionsResult = validateCanonicalSections(value.sections, barTicks, barCount, durationTicks, variant);
+  const sectionsResult = validateCanonicalSections(
+    value.sections,
+    barTicks,
+    barCount,
+    durationTicks,
+    variant,
+    timeline,
+  );
   if (!sectionsResult.valid) {
     return sectionsResult;
   }
@@ -113,7 +142,7 @@ function validateCanonicalComposition(value, variant) {
   }
 
   if (variant === 'v2') {
-    const timelineResult = validateV2TimelineChanges(value, barTicks, durationTicks);
+    const timelineResult = validateV2TimelineChanges(value, durationTicks, timeline);
     if (!timelineResult.valid) {
       return timelineResult;
     }
@@ -129,6 +158,7 @@ function validateCanonicalComposition(value, variant) {
     trackCount: value.tracks.length,
     eventCount: value.tracks.reduce((count, track) => count + (Array.isArray(track.events) ? track.events.length : 0), 0),
     durationTicks,
+    meterChangeCount: timeline ? timeline.timeSignatureChanges.length : 0,
   });
   const label = value.schema_version === SCHEMA_VERSION_V2 ? 'composition.v2' : 'composition.v1';
   return valid(`Canonical ${label} JSON is valid for preview and playback.`);
@@ -176,7 +206,7 @@ function validateCommonFields(value) {
   return valid('Common music JSON fields are valid.');
 }
 
-function validateCanonicalSections(sections, barTicks, barCount, durationTicks, variant) {
+function validateCanonicalSections(sections, barTicks, barCount, durationTicks, variant, timeline = null) {
   let expectedStartBar = 1;
   let expectedStartTick = 0;
   for (const section of sections) {
@@ -203,7 +233,16 @@ function validateCanonicalSections(sections, barTicks, barCount, durationTicks, 
     if (sectionStartBar !== expectedStartBar || sectionStartTick !== expectedStartTick) {
       return invalid('Sections must be contiguous and non-overlapping.');
     }
-    if (sectionDurationTicks !== sectionBarCount * barTicks) {
+    if (timeline) {
+      const expectedStart = barStartTick(timeline, sectionStartBar);
+      const expectedEnd = barEndTick(timeline, sectionStartBar + sectionBarCount - 1);
+      if (expectedStart == null || expectedEnd == null) {
+        return invalid('Section bar range must fit within the composition.');
+      }
+      if (sectionStartTick !== expectedStart || sectionDurationTicks !== expectedEnd - expectedStart) {
+        return invalid('Section duration_ticks must match bar_count and meter.');
+      }
+    } else if (sectionDurationTicks !== sectionBarCount * barTicks) {
       return invalid('Section duration_ticks must match bar_count and meter.');
     }
     expectedStartBar += sectionBarCount;
@@ -411,10 +450,11 @@ function validateSustainPedals(pedals, durationTicks, trackId) {
   return valid('Sustain pedals are valid.');
 }
 
-function validateV2TimelineChanges(value, barTicks, durationTicks) {
+function validateV2TimelineChanges(value, durationTicks, timeline) {
   const tempoChanges = Array.isArray(value.tempo_changes) ? value.tempo_changes : [];
   const meterChanges = Array.isArray(value.time_signature_changes) ? value.time_signature_changes : [];
   const keyChanges = Array.isArray(value.key_changes) ? value.key_changes : [];
+  const barStarts = new Set(timeline.barBoundaries.slice(0, -1));
 
   let previousTempoTick = -1;
   for (const change of tempoChanges) {
@@ -444,7 +484,7 @@ function validateV2TimelineChanges(value, barTicks, durationTicks) {
     if (!isValidTimeSignature(change.time_signature)) {
       return invalid('time_signature_changes must use supported meters.');
     }
-    if (tick % barTicks !== 0) {
+    if (!barStarts.has(tick)) {
       return invalid('time_signature_changes must occur on bar boundaries.');
     }
     previousMeterTick = tick;
@@ -462,7 +502,7 @@ function validateV2TimelineChanges(value, barTicks, durationTicks) {
     if (!change.key || typeof change.key !== 'string' || !KEY_PATTERN.test(change.key.trim())) {
       return invalid('key_changes key must use format like C minor or F# major.');
     }
-    if (tick % barTicks !== 0) {
+    if (!barStarts.has(tick)) {
       return invalid('key_changes must occur on bar boundaries.');
     }
     previousKeyTick = tick;

@@ -52,6 +52,63 @@ test('accepts import-neutral other role and unsectioned section', () => {
   assert.equal(result.valid, true);
 });
 
+test('accepts variable-meter V2 duration and section spans from compiled bar map', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const path = await import('node:path');
+  const fixturePath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    'fixtures/timeline_mixed_meter_tempo.json',
+  );
+  const raw = JSON.parse(await readFile(fixturePath, 'utf8'));
+  delete raw.expectations;
+  for (const track of raw.tracks) {
+    if (track.expression == null) {
+      track.expression = 127;
+    }
+  }
+
+  const result = validateMusicJson(raw);
+  assert.equal(result.valid, true, result.message);
+
+  // Same shape as the import multitrack fixture: 4/4 then 3/4 → 3360 ticks / 2 bars.
+  const importLike = {
+    schema_version: 'composition.v2',
+    tempo: 100,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    duration_ticks: 3360,
+    bar_count: 2,
+    sections: [{
+      id: 'section-1',
+      type: 'unsectioned',
+      label: null,
+      start_bar: 1,
+      bar_count: 2,
+      start_tick: 0,
+      duration_ticks: 3360,
+    }],
+    tracks: [{
+      id: 'track-1',
+      name: 'Piano',
+      instrument: 'piano',
+      role: 'other',
+      midi_program: 0,
+      channel: 1,
+      expression: 127,
+      events: [{ type: 'note', pitch: 'C4', start_tick: 0, duration_ticks: 480, velocity: 90 }],
+      sustain_pedals: [],
+    }],
+    harmony: [],
+    tempo_changes: [{ tick: 1920, bpm: 120 }],
+    time_signature_changes: [{ tick: 1920, time_signature: '3/4' }],
+    key_changes: [{ tick: 1920, key: 'G major' }],
+    markers: [],
+  };
+  assert.equal(validateMusicJson(importLike).valid, true, validateMusicJson(importLike).message);
+});
+
 test('rejects unknown section type and track role', () => {
   const badSection = migrateV1ToV2(canonicalV1Composition());
   badSection.sections[0].type = 'coda_custom';

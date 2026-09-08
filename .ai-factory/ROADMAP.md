@@ -14,6 +14,7 @@
 - [x] **Production-local V1 workspace** — Compose healthchecks, env template, polished SPA workflow
 - [x] **V1 acceptance suite** — Fake LLM, fixtures, Playwright journey, Docker persistence gate
 - [x] **Canonical Composition V2** — Timeline/expression contract, migration, playback/export fidelity, V2 acceptance
+- [x] **MIDI and MusicXML import** — Secure MIDI/MusicXML/MXL ingestion into canonical `composition.v2` with session import reports
 
 ## Completed
 
@@ -29,3 +30,4 @@
 | Production-local V1 workspace | 2026-09-07 |
 | V1 acceptance suite | 2026-09-07 |
 | Canonical Composition V2 | 2026-09-08 |
+| MIDI and MusicXML import | 2026-09-08 |
