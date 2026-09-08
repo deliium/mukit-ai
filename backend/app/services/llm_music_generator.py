@@ -40,6 +40,8 @@ from .composition_planner import (
 )
 from .composition_timing import bar_duration_ticks, derive_section_boundaries
 from .composition_validator import validate_composition_integrity
+from .composition_analysis import analyze_composition, build_llm_analysis_context
+from ..analysis_schemas import CompositionAnalysisError
 from .generation_constraints import (
     DUPLICATE_INSTRUMENT_ROLE_CODE,
     GenerationConstraints,
@@ -142,6 +144,7 @@ class _GenerationState(TypedDict, total=False):
     stage_raw_outputs: dict[str, str]
     pre_normalize_hard_summary: dict[str, Any]
     repair_actions: list[GenerationRepairAction]
+    repair_analysis_context: str
 
 
 async def generate_music_json(
@@ -953,6 +956,9 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
     }:
         repair_target = "assemble_composition"
 
+    # Capture advisory analysis from the post-assembly candidate before clearing music.
+    repair_analysis_context = _safe_repair_analysis_context(state.get("music"))
+
     # Preserve valid upstream drafts when repairing a later stage.
     cleared: _GenerationState = {**state}
     if repair_target == "plan_form":
@@ -1047,6 +1053,7 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
         "warnings": warnings,
         "validation_ok": False,
         "repair_actions": repair_actions,
+        "repair_analysis_context": repair_analysis_context,
     }
     logger.info(
         "Composer repair routed to stage",
@@ -1055,6 +1062,7 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
             "repair_target": repair_target,
             "diagnostic_codes": codes,
             "diagnostic_count": len(diagnostics),
+            "repair_analysis_chars": len(repair_analysis_context),
         },
     )
     return updated
@@ -1094,7 +1102,11 @@ async def _run_json_stage(
     )
 
     if state.get("repair_target") == stage and state.get("validation_diagnostics"):
-        prompt = _append_repair_diagnostics(prompt, state.get("validation_diagnostics") or [])
+        prompt = _append_repair_diagnostics(
+            prompt,
+            state.get("validation_diagnostics") or [],
+            analysis_context=state.get("repair_analysis_context") or "",
+        )
 
     raw_output = await _invoke_chat(state, prompt)
     stage_raw_outputs = dict(state.get("stage_raw_outputs") or {})
@@ -2094,15 +2106,55 @@ def _assignment_aware_accompaniment_example(
     return examples
 
 
-def _append_repair_diagnostics(prompt: str, diagnostics: list[ValidationDiagnostic]) -> str:
+def _safe_repair_analysis_context(music: Composition | None) -> str:
+    """Build advisory analysis from a post-assembly candidate for repair prompts only."""
+    if music is None:
+        return ""
+    try:
+        normalized = normalize_composition_json(music)
+        report = analyze_composition(normalized, {"kind": "composition"})
+        context = build_llm_analysis_context(report, purpose="generation_repair")
+        logger.debug(
+            "Repair analysis context ready",
+            extra={
+                "char_count": len(context),
+                "report_status": report.status,
+                "warning_count": len(report.warnings),
+                "scope_kind": report.resolved_scope.kind,
+            },
+        )
+        return context
+    except CompositionAnalysisError as exc:
+        logger.warning(
+            "Repair analysis context skipped",
+            extra={"error_code": exc.code},
+        )
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Repair analysis context skipped",
+            extra={"error_type": type(exc).__name__},
+        )
+        return ""
+
+
+def _append_repair_diagnostics(
+    prompt: str,
+    diagnostics: list[ValidationDiagnostic],
+    *,
+    analysis_context: str = "",
+) -> str:
     payload = [item.model_dump() for item in diagnostics[:20]]
-    return (
+    text = (
         prompt
         + "\n\nPrevious output failed validation. Return corrected JSON only for this stage.\n"
         + "Diagnostics:\n"
         + json.dumps(payload, ensure_ascii=True)
         + "\nHard constraints above remain immutable and MUST be satisfied.\n"
     )
+    if analysis_context:
+        text += f"\n{analysis_context}\n"
+    return text
 
 
 def _infer_failed_stage(errors: list[ValidationDiagnostic]) -> str:

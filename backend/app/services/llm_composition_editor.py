@@ -21,6 +21,8 @@ from .composition_region_patch import (
     apply_region_replacement_patch,
     summarize_region_selection,
 )
+from .composition_analysis import analyze_composition, build_llm_analysis_context
+from ..analysis_schemas import CompositionAnalysisError
 from .llm_music_generator import (
     InvalidLLMOutputError,
     LLMGenerationError,
@@ -48,6 +50,7 @@ class _EditState(TypedDict, total=False):
     request: LLMCompositionEditRequest
     provider: LLMProviderSettings
     scope_summary: RegionSelectionSummary
+    analysis_context: str
     raw_output: str
     parsed_json: dict[str, Any]
     patch: CompositionRegionReplacementPatch
@@ -80,6 +83,59 @@ def _scope_log_extra(summary: RegionSelectionSummary | None) -> dict[str, Any]:
         "in_region_event_count": summary.total_in_region_events,
         "outside_region_event_count": summary.total_outside_region_events,
     }
+
+
+def _analysis_scope_for_edit(
+    composition: CompositionV2,
+    summary: RegionSelectionSummary,
+) -> dict[str, Any]:
+    """Map a region selection onto the closest analysis scope selector."""
+    start_bar = summary.bounds.start_bar
+    end_bar = summary.bounds.end_bar
+    for index, section in enumerate(composition.sections):
+        section_end = section.start_bar + section.bar_count - 1
+        if section.start_bar == start_bar and section_end == end_bar:
+            scope: dict[str, Any] = {"kind": "section", "section_index": index}
+            if section.id:
+                scope["section_id"] = section.id
+            return scope
+    if len(summary.target_track_ids) == 1:
+        return {"kind": "track", "track_id": summary.target_track_ids[0]}
+    return {"kind": "composition"}
+
+
+def _safe_edit_analysis_context(
+    composition: CompositionV2,
+    summary: RegionSelectionSummary,
+) -> str:
+    """Recompute advisory analysis for the selected edit scope; never fails the edit."""
+    try:
+        normalized = normalize_composition_json(composition)
+        scope = _analysis_scope_for_edit(normalized, summary)
+        report = analyze_composition(normalized, scope)
+        context = build_llm_analysis_context(report, purpose="region_edit")
+        logger.debug(
+            "Edit analysis context ready",
+            extra={
+                "scope_kind": report.resolved_scope.kind,
+                "char_count": len(context),
+                "report_status": report.status,
+                "warning_count": len(report.warnings),
+            },
+        )
+        return context
+    except CompositionAnalysisError as exc:
+        logger.warning(
+            "Edit analysis context skipped",
+            extra={"error_code": exc.code},
+        )
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Edit analysis context skipped",
+            extra={"error_type": type(exc).__name__},
+        )
+        return ""
 
 
 async def edit_composition_region(
@@ -262,9 +318,11 @@ def _analyze_edit_scope(state: _EditState) -> _EditState:
             "target_track_ids": summary.target_track_ids,
         },
     )
+    analysis_context = _safe_edit_analysis_context(request.composition, summary)
     return {
         **state,
         "scope_summary": summary,
+        "analysis_context": analysis_context,
         "current_stage": "analyze_edit_scope",
         "failed_stage": "",
     }
@@ -277,7 +335,12 @@ async def _draft_region_patch(state: _EditState) -> _EditState:
         "Edit graph stage transition",
         extra={"stage": "draft_region_patch", "from_stage": state.get("current_stage")},
     )
-    prompt = _build_draft_prompt(request, summary, diagnostics=None)
+    prompt = _build_draft_prompt(
+        request,
+        summary,
+        diagnostics=None,
+        analysis_context=state.get("analysis_context") or "",
+    )
     try:
         raw_output = await _invoke_edit_chat(state, prompt)
         parsed = _extract_json(raw_output)
@@ -408,7 +471,14 @@ async def _repair_patch(state: _EditState) -> _EditState:
             **_scope_log_extra(summary),
         },
     )
-    prompt = _build_draft_prompt(request, summary, diagnostics=diagnostics)
+    # Refresh advisory analysis from the normalized current composition on repair.
+    analysis_context = _safe_edit_analysis_context(request.composition, summary)
+    prompt = _build_draft_prompt(
+        request,
+        summary,
+        diagnostics=diagnostics,
+        analysis_context=analysis_context,
+    )
     try:
         raw_output = await _invoke_edit_chat(state, prompt)
         parsed = _extract_json(raw_output)
@@ -481,6 +551,7 @@ def _build_draft_prompt(
     request: LLMCompositionEditRequest,
     summary: RegionSelectionSummary,
     diagnostics: list[dict[str, Any]] | None,
+    analysis_context: str = "",
 ) -> str:
     selection = request.edit.selection
     composition = request.composition
@@ -590,6 +661,8 @@ def _build_draft_prompt(
         f"Selected track region events:\n{json.dumps(tracks_payload, ensure_ascii=True)}\n"
         f"Selected harmony metadata:\n{json.dumps(harmony_in_region, ensure_ascii=True)}\n"
     )
+    if analysis_context:
+        prompt += f"\n{analysis_context}\n"
     if diagnostics:
         prompt += (
             "Previous patch failed validation. Fix these diagnostics without changing out-of-scope notes:\n"

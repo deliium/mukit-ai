@@ -60,3 +60,16 @@ def test_openapi_import_endpoints_and_response_contract():
     assert "import_report" in response["properties"]
     assert "musicxml" in response["properties"]
     assert "notation_report" in response["properties"]
+
+
+def test_openapi_analysis_endpoint_and_response_contract():
+    schema = app.openapi()
+    paths = schema["paths"]
+    assert "/analysis/composition" in paths
+    post = paths["/analysis/composition"]["post"]
+    assert "application/json" in json.dumps(post.get("requestBody", {}))
+    response = _component("CompositionAnalysisReport")
+    assert response["properties"]["schema_version"]["const"] == "composition.analysis.v1"
+    assert "resolved_scope" in response["properties"]
+    assert "source_fingerprint" in response["properties"]
+    assert "warnings" in response["properties"]
