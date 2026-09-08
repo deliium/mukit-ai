@@ -83,6 +83,8 @@ log "Fake-generating composition"
 GEN=$(curl -fsS -X POST "${BACKEND_URL}/llm/generate-music-json" \
   -H "Content-Type: application/json" \
   -d '{"prompt":{"genre":"pop","mood":"bright","duration_bars":16,"instruments":["piano","bass"]},"selection":{"provider":"fake"}}')
+SCHEMA=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["music"]["schema_version"])' <<<"${GEN}")
+[[ "${SCHEMA}" == "composition.v2" ]] || fail "Fake generate must return composition.v2 (got ${SCHEMA})"
 COMPOSITION=$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["music"]))' <<<"${GEN}")
 EVENT_COUNT=$(python3 -c 'import json,sys; m=json.load(sys.stdin); print(sum(len(t.get("events") or []) for t in m.get("tracks") or []))' <<<"${COMPOSITION}")
 [[ "${EVENT_COUNT}" -gt 0 ]] || fail "Fake generate returned zero note events"

@@ -1,6 +1,6 @@
 # 🎵 AI Music Composer
 
-A full-stack LLM music composer that generates canonical playable `composition.v1` JSON through a LangChain/LangGraph-backed FastAPI service. The React frontend lets users choose a configured provider/model, edit notes on a piano roll or in JSON, render notation from backend MusicXML, and preview canonical note-event playback in the browser.
+A full-stack LLM music composer that generates canonical playable `composition.v2` JSON through a LangChain/LangGraph-backed FastAPI service. The React frontend lets users choose a configured provider/model, edit notes on a piano roll or in JSON, render notation from backend MusicXML, and preview canonical note-event playback in the browser. V1 remains accepted as migration input.
 
 ## 🚀 Features
 
@@ -10,7 +10,7 @@ A full-stack LLM music composer that generates canonical playable `composition.v
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
 - **Piano-Roll Editor**: Create, select, drag/transpose, resize, and delete notes on `tracks[].events[]` with snap/zoom, track focus, context tracks, and note-edit undo/redo; shares the same `editedMusicJson` as the JSON editor
 - **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start, piano-roll playback cursor)
-- **Deterministic Export**: Download MusicXML, MIDI, and server-rendered WAV from the same canonical `tracks[].events[]` used by notation and playback
+- **Deterministic Export**: Download MusicXML, MIDI, and server-rendered WAV from the same canonical `tracks[].events[]`; export responses include projection status headers when approximations apply
 
 ## 🏗️ Architecture
 
@@ -152,14 +152,14 @@ Details: [docs/project-persistence.md](docs/project-persistence.md).
 - `POST /llm/edit-composition-region` - Apply a validated `replace_region` AI edit to selected bars/tracks
 - `GET /projects` - List local project summaries
 - `POST /projects` - Create a local project
-- `GET /projects/{id}` - Open a project (migrates legacy composition JSON to `composition.v1` when needed)
+- `GET /projects/{id}` - Open a project (migrates stored composition to `composition.v2` when needed)
 - `PATCH /projects/{id}` - Rename and/or save composition + generation metadata
 - `POST /projects/{id}/duplicate` - Duplicate a project
 - `DELETE /projects/{id}` - Delete a project
-- `POST /export/musicxml` - Render canonical `composition.v1` JSON as a downloadable MusicXML attachment
+- `POST /export/musicxml` - Render canonical composition JSON (V1 or V2 input) as a downloadable MusicXML attachment
 - `POST /export/musicxml/preview` - Render MusicXML text for notation refresh without a download header
-- `POST /export/midi` - Render canonical `composition.v1` JSON as a downloadable Standard MIDI File attachment
-- `POST /export/wav` - Render canonical `composition.v1` JSON as a downloadable WAV via FluidSynth (reuses MIDI note content)
+- `POST /export/midi` - Render canonical composition JSON as a downloadable Standard MIDI File attachment
+- `POST /export/wav` - Render canonical composition JSON as a downloadable WAV via FluidSynth (reuses MIDI note content)
 
 Example LLM request:
 
@@ -183,15 +183,15 @@ Example LLM request:
 }
 ```
 
-`POST /llm/generate-music-json` returns canonical `composition.v1` JSON in `music`, derived `musicxml`, human-readable `warnings`, and optional structured `validation` (constraint status, errors/warnings, repair attempts, tonality, instrumentation satisfaction/duplicates, ordered repair actions). Hard prompt fields (`key`, meter, `duration_bars`, tempo bounds, explicit sections, requested instrument sound sources) are enforced through every composer stage; soft fields (`genre`, `mood`, `complexity`, instructions) guide style only. Requested instruments require matching sound sources via normalized `track.instrument` (aliases allowed; display names are not authoritative; track count need not equal request count). Explicit `sections` must sum to `duration_bars`. Legacy LLM output with explicit notes is normalized before returning; harmony-only legacy output is rejected as non-playable. Constraint/repair exhaustion returns HTTP `502` with sanitized diagnostic codes (never full prompts).
+`POST /llm/generate-music-json` returns canonical `composition.v2` JSON in `music`, derived `musicxml`, human-readable `warnings`, and optional structured `validation` (constraint status, errors/warnings, repair attempts, tonality, instrumentation satisfaction/duplicates, ordered repair actions). Request bodies may still send V1 compositions for edit/migration paths; responses are always V2 after normalization. Hard/soft prompt constraints: [docs/composition-v1.md](docs/composition-v1.md). V2 timeline/expression: [docs/composition-v2.md](docs/composition-v2.md).
 
 `POST /llm/edit-composition-region` accepts an existing composition, bar/track selection, and instruction, then returns a validated `replace_region` `patch`, the applied `composition`, and preview `musicxml`. Outside-region notes and metadata stay unchanged unless the request explicitly expands scope. Invalid provider patches return `502` without mutating the input composition.
 
-Example canonical music JSON shape returned in `music`:
+Example canonical music JSON shape returned in `music` (abbreviated; see docs for expression/timeline fields):
 
 ```json
 {
-  "schema_version": "composition.v1",
+  "schema_version": "composition.v2",
   "tempo": 92,
   "key": "C minor",
   "time_signature": "4/4",
@@ -250,11 +250,22 @@ mukit-ai/
 │   │   └── index.css
 │   └── package.json
 ├── docs/
+│   ├── composition-v2.md
 │   ├── composition-v1.md
 │   ├── project-persistence.md
 │   └── testing.md
 └── README.md
 ```
+
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
+| [Composition V1](docs/composition-v1.md) | V1 compatibility, staged generation, region editing |
+| [Project persistence](docs/project-persistence.md) | SQLite projects, migrate-on-open, autosave |
+| [Testing](docs/testing.md) | Backend/frontend tests, fixtures, acceptance scripts |
+| [Codebase map](docs/CODEBASE_MAP.md) | Architecture navigation map |
 
 ## ✅ Testing
 
@@ -285,7 +296,7 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 - **Prompt orchestration**: the backend runs a multi-stage LangGraph composer (form → harmony → melody → bass → accompaniment → assemble → validate → repair) that emits canonical note events rather than one full-score blob.
 - **Generation bounds**: initial LLM Composition V1 generation rejects requests above 32 bars or 6 non-drum instruments with HTTP `422` and an actionable message. Hard musical parameters are constraint-checked through staged generation; contradictory tonal centers fail with structured `502` diagnostics.
 - **Validation**: Pydantic schema checks plus deterministic integrity validation cover required roles, note density, pitch ranges, timing bounds, and harmony-only rejection. Failed stages repair using structured diagnostics until `max_retries` is exhausted; final failures return HTTP `502` with sanitized detail.
-- **Normalization**: legacy LLM output with explicit notes is still migrated to canonical track-local events when encountered; harmony-only legacy output is rejected with an actionable error.
+- **Normalization**: legacy and V1 input migrates to operational `composition.v2`; harmony-only legacy output is rejected with an actionable error.
 - **Testing**: normal backend tests mock providers. Opt-in real-provider smoke: `RUN_LLM_SMOKE=1 LLM_SMOKE_PROVIDER=openai ../.venv/bin/python -m pytest tests/test_llm_real_provider_smoke.py` from `backend/`.
 - **MusicXML rendering**: canonical note events are converted to deterministic MusicXML with music21 for notation preview and `/export/musicxml`; harmony remains chord-symbol metadata.
 - **MIDI export**: `/export/midi` writes a Standard MIDI File via `mido` from the same track-local events, preserving velocity, program, channel, volume, and pan.

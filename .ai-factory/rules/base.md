@@ -14,7 +14,7 @@
 
 - Backend: `backend/app/` with `main.py` + `routers/`, `services/`, `db/`, Pydantic schemas (`schemas.py`, `project_schemas.py`)
 - Frontend: `frontend/src/` with `components/`, `api/`, `store/`, `utils/`
-- Docs: `docs/` for composition.v1, persistence, testing; AI Factory artifacts under `.ai-factory/`
+- Docs: `docs/` for composition.v2 (canonical), composition.v1 (compat), persistence, testing; AI Factory artifacts under `.ai-factory/` (axioms in `RULES.md`)
 - Prefer new HTTP surface under `routers/` and cohesive service modules over growing unrelated logic in `main.py`
 
 ## Error Handling

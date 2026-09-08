@@ -10,7 +10,7 @@ from typing import NamedTuple
 
 import pytest
 
-from app.schemas import Composition
+from app.schemas import Composition, CompositionV2
 
 
 class CanonicalNoteTuple(NamedTuple):
@@ -21,11 +21,11 @@ class CanonicalNoteTuple(NamedTuple):
     velocity: int
 
 
-def build_export_fidelity_composition() -> Composition:
+def build_export_fidelity_composition() -> CompositionV2:
     """Build a deterministic multi-track Composition for export fidelity checks.
 
     Prefers the shared JSON fixture when present; falls back to the inline builder
-    so older checkouts without fixtures still work.
+    so older checkouts without fixtures still work. Always returns CompositionV2.
     """
     try:
         from app.services.fixture_compositions import (
@@ -35,7 +35,9 @@ def build_export_fidelity_composition() -> Composition:
 
         return load_composition_fixture(FIXTURE_EXPORT_FIDELITY)
     except Exception:
-        return _build_export_fidelity_composition_inline()
+        from app.services.composition_normalizer import normalize_composition_json
+
+        return normalize_composition_json(_build_export_fidelity_composition_inline())
 
 
 def _build_export_fidelity_composition_inline() -> Composition:
@@ -484,9 +486,61 @@ def test_musicxml_matches_canonical_note_timing():
 
     composition = build_export_fidelity_composition()
     expected = note_tuples_without_velocity(canonical_note_tuples(composition))
-    musicxml, _warnings = render_musicxml(composition)
+    musicxml, _report = render_musicxml(composition)
     actual = musicxml_note_tuples(musicxml, composition, include_velocity=False)
     assert_note_tuples_equal(expected, actual, source_format="musicxml")
+
+
+def test_midi_projection_report_on_expressive_fixture():
+    from app.services.composition_midi import render_midi_with_report
+    from app.services.fixture_compositions import FIXTURE_V2_EXPRESSIVE, load_composition_fixture
+
+    composition = load_composition_fixture(FIXTURE_V2_EXPRESSIVE)
+    result = render_midi_with_report(composition)
+    assert result.midi_bytes[:4] == b"MThd"
+    assert result.report.status in {"approximated", "exact"}
+    assert "pitch_spelling_lost" in result.report.compact_codes()
+
+
+def test_wav_reuses_midi_projection_report(monkeypatch, tmp_path):
+    from app.services import composition_wav as wav_module
+    from app.services.composition_wav import render_wav_with_report
+    from app.services.fixture_compositions import FIXTURE_V2_EXPRESSIVE, load_composition_fixture
+
+    composition = load_composition_fixture(FIXTURE_V2_EXPRESSIVE)
+    fake_bin = tmp_path / "fluidsynth"
+    fake_bin.write_text("#!/bin/sh\n")
+    fake_bin.chmod(0o755)
+    soundfont = tmp_path / "FluidR3_GM.sf2"
+    soundfont.write_bytes(b"SF2")
+    monkeypatch.setenv("FLUIDSYNTH_BIN", str(fake_bin))
+    monkeypatch.setenv("COMPOSITION_WAV_SOUNDFONT", str(soundfont))
+
+    def fake_run(command, **_kwargs):
+        from pathlib import Path
+        import io
+        import wave
+
+        wav_path = Path(command[command.index("-F") + 1])
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(44100)
+            wf.writeframes(b"\x00" * 44100)
+        wav_path.write_bytes(buf.getvalue())
+
+        class Result:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+
+        return Result()
+
+    monkeypatch.setattr(wav_module.subprocess, "run", fake_run)
+    result = render_wav_with_report(composition)
+    assert result.wav_bytes[:4] == b"RIFF"
+    assert "sustain_projected" in result.report.compact_codes()
 
 
 def test_wav_silence_and_multi_track_duration_anchored_to_midi(monkeypatch):
@@ -508,7 +562,9 @@ def test_wav_silence_and_multi_track_duration_anchored_to_midi(monkeypatch):
     silent_data = composition.model_dump()
     for track in silent_data["tracks"]:
         track["events"] = []
-    silent = Composition.model_validate(silent_data)
+    from app.schemas import CompositionV2
+
+    silent = CompositionV2.model_validate(silent_data)
     silent_wav = render_wav(silent)
     assert silent_wav[:4] == b"RIFF" and silent_wav[8:12] == b"WAVE", "all-silence WAV must be valid RIFF/WAVE"
     with wave.open(io.BytesIO(silent_wav), "rb") as wf:
@@ -520,11 +576,11 @@ def test_wav_silence_and_multi_track_duration_anchored_to_midi(monkeypatch):
     captured_midi: list[bytes] = []
 
     def fake_midi(comp):
-        from app.services.composition_midi import render_midi
+        from app.services.composition_midi import render_midi_with_report
 
-        midi = render_midi(comp)
-        captured_midi.append(midi)
-        return midi
+        result = render_midi_with_report(comp)
+        captured_midi.append(result.midi_bytes)
+        return result
 
     def fake_run(command, **_kwargs):
         from pathlib import Path
@@ -549,7 +605,7 @@ def test_wav_silence_and_multi_track_duration_anchored_to_midi(monkeypatch):
 
     monkeypatch.setenv("FLUIDSYNTH_BIN", "/usr/bin/fluidsynth")
     monkeypatch.setenv("COMPOSITION_WAV_SOUNDFONT", "/tmp/fake-for-test.sf2")
-    monkeypatch.setattr(wav_module, "render_midi", fake_midi)
+    monkeypatch.setattr(wav_module, "render_midi_with_report", fake_midi)
     monkeypatch.setattr(wav_module, "_ensure_renderer_available", lambda _config: None)
     monkeypatch.setattr(wav_module.subprocess, "run", fake_run)
 

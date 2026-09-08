@@ -1,6 +1,8 @@
+[← Composition V1](composition-v1.md) · [Back to README](../README.md) · [Testing →](testing.md)
+
 # Local Project Persistence
 
-Projects store metadata and canonical `composition.v1` JSON in a backend **SQLite** database so edits survive Docker restarts.
+Projects store metadata and operational **`composition.v2`** JSON in a backend **SQLite** database so edits survive Docker restarts. Stored V1 and legacy payloads migrate to V2 on open.
 
 ## User workflow
 
@@ -34,11 +36,19 @@ Rename, duplicate, and delete (with confirmation) are available on the home scre
 
 ## Composition migration on open
 
-Opening or saving a project runs compositions through `normalize_composition_json` / `Composition` validation:
+Opening or saving a project runs compositions through `normalize_composition_json`, which **always returns validated V2**:
 
-- Already-canonical `composition.v1` → validate only.
-- Legacy / non-canonical JSON → migrate to `composition.v1`, then optionally rewrite the DB row.
-- Unrecoverable JSON → HTTP `422` with an actionable detail (project id logged; no secrets).
+| Source | Behavior |
+|--------|----------|
+| `composition.v2` | Validate only |
+| `composition.v1` | Migrate to V2; optional DB rewrite on success |
+| Unversioned legacy top-level `notes` | Legacy → V1 → V2 |
+| Unknown explicit `schema_version` | HTTP `422` / domain error — no legacy fallback |
+| V1→V2 fidelity mismatch | `v1_v2_migration_fidelity_failed` — row **not** rewritten |
+
+Migration is **source-immutable** and **idempotent**: repeated opens of an already-migrated project do not change note sequences. Failed migration leaves stored JSON untouched.
+
+Unrecoverable JSON → HTTP `422` with actionable detail (project id logged; no secrets).
 
 ## API endpoints
 
@@ -46,7 +56,7 @@ Opening or saving a project runs compositions through `normalize_composition_jso
 |--------|------|---------|
 | `GET` | `/projects` | List summaries (`id`, `name`, timestamps, counts, `has_composition`) |
 | `POST` | `/projects` | Create project (optional composition + generation meta) |
-| `GET` | `/projects/{id}` | Open full project (migrate composition on read) |
+| `GET` | `/projects/{id}` | Open full project (migrate composition to V2 on read) |
 | `PATCH` | `/projects/{id}` | Rename and/or save composition + generation meta |
 | `POST` | `/projects/{id}/duplicate` | Clone with new id and ` (copy)` name |
 | `DELETE` | `/projects/{id}` | Hard delete (`404` if missing) |
@@ -59,7 +69,7 @@ Useful structured fields (never API keys or full freeform prompts):
 
 - Startup: `project_db_path`, applied migration versions
 - CRUD: `project_id`, name length, track/event/bar counts, provider/model
-- Open migration: `migration_path` (`legacy` / `canonical`), `rewritten`
+- Open migration: `source_version`, `target_version` (`composition.v2`), `migration_path`, `rewritten`
 - Autosave (frontend console): dirty → saving → saved, debounce schedule/cancel/fire
 - Errors: sanitized `error_type` / `error_detail`
 
@@ -68,10 +78,14 @@ Control verbosity with `LOG_LEVEL` on the backend.
 ## Testing
 
 ```bash
-cd backend && ../.venv/bin/python -m pytest tests/test_project_store.py tests/test_project_routes.py tests/test_project_persistence_acceptance.py
+cd backend && ../.venv/bin/python -m pytest tests/test_project_store.py tests/test_project_routes.py tests/test_project_persistence_acceptance.py tests/test_composition_v2_migration.py
 cd frontend && npm test
 ```
 
 No persistence test requires provider API keys.
 
-See also: [composition-v1.md](./composition-v1.md), [testing.md](./testing.md).
+## See Also
+
+- [Composition V2](composition-v2.md) — V2 contract and migrate-on-open fidelity rules
+- [Composition V1](composition-v1.md) — V1 parser compatibility
+- [Testing](testing.md) — full test matrix including V2 suites

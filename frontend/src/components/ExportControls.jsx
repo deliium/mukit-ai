@@ -71,7 +71,7 @@ const ExportControls = () => {
         valid: validation.valid,
         exportStatus,
       });
-      setStatusMessage(validation.message || 'Canonical composition.v1 JSON is required for export');
+      setStatusMessage(validation.message || 'Canonical composition JSON is required for export');
       return;
     }
 
@@ -92,8 +92,12 @@ const ExportControls = () => {
         console.debug('[ExportControls] MusicXML store updated from export', {
           musicXmlLength: musicxmlText.length,
           filename: result.filename,
+          projectionStatus: result.projection?.status,
         });
-        setStatusMessage(`Downloaded ${result.filename} and refreshed notation preview`);
+        const warningSuffix = result.warnings?.length
+          ? ` (${result.warnings.join('; ')})`
+          : '';
+        setStatusMessage(`Downloaded ${result.filename} and refreshed notation preview${warningSuffix}`);
       } else if (format === 'wav') {
         const result = await exportWav(editedMusicJson);
         console.debug('[ExportControls] WAV export state transition', {
@@ -101,10 +105,16 @@ const ExportControls = () => {
           filename: result.filename,
           blobSize: result.blob?.size,
         });
-        setStatusMessage(`Downloaded ${result.filename} (server-rendered WAV export)`);
+        const warningSuffix = result.warnings?.length
+          ? ` (${result.warnings.join('; ')})`
+          : '';
+        setStatusMessage(`Downloaded ${result.filename} (server-rendered WAV export)${warningSuffix}`);
       } else {
         const result = await exportMidi(editedMusicJson);
-        setStatusMessage(`Downloaded ${result.filename}`);
+        const warningSuffix = result.warnings?.length
+          ? ` (${result.warnings.join('; ')})`
+          : '';
+        setStatusMessage(`Downloaded ${result.filename}${warningSuffix}`);
       }
       setExportStatus('success');
     } catch (error) {

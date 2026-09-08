@@ -1,6 +1,6 @@
 # Project Roadmap
 
-> Full-stack LLM music composer: generate and edit canonical playable `composition.v1`, persist locally, and export/play with fidelity.
+> Full-stack LLM music composer: generate and edit canonical playable `composition.v2`, migrate V1 input, persist locally, and export/play with fidelity.
 
 ## Milestones
 
@@ -13,6 +13,7 @@
 - [x] **AI region editing** — Non-destructive LLM `replace_region` patch workflow
 - [x] **Production-local V1 workspace** — Compose healthchecks, env template, polished SPA workflow
 - [x] **V1 acceptance suite** — Fake LLM, fixtures, Playwright journey, Docker persistence gate
+- [x] **Canonical Composition V2** — Timeline/expression contract, migration, playback/export fidelity, V2 acceptance
 
 ## Completed
 
@@ -27,3 +28,4 @@
 | AI region editing | 2026-09-07 |
 | Production-local V1 workspace | 2026-09-07 |
 | V1 acceptance suite | 2026-09-07 |
+| Canonical Composition V2 | 2026-09-08 |

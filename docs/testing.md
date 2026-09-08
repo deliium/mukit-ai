@@ -1,3 +1,5 @@
+[← Project Persistence](project-persistence.md) · [Back to README](../README.md) · [Codebase Map →](CODEBASE_MAP.md)
+
 # Testing
 
 ## Backend
@@ -11,7 +13,8 @@ Run backend unit tests from the `backend/` directory:
 The LLM tests mock provider behavior and do not call OpenAI or DeepSeek APIs.
 Set `LLM_FAKE_MODE=1` for a deterministic in-process fake provider (fixtures under
 `backend/app/fixtures/` / `backend/tests/fixtures/`) used by unit tests, Docker
-acceptance, and Playwright.
+acceptance, and Playwright. Fake generation prefers native V2 `composition_v2_expressive.json`
+when duration matches; otherwise V1 fixtures migrate to V2.
 
 Focused canonical coverage includes:
 
@@ -21,13 +24,16 @@ Focused canonical coverage includes:
 - `backend/tests/test_secret_hygiene.py` for `/ready`, `/llm/models`, project CRUD, and committed config secret leakage checks.
 - `backend/tests/test_docker_persistence_acceptance.py` opt-in Compose restart persistence (`RUN_DOCKER_ACCEPTANCE=1`).
 - `backend/tests/test_composition_schema.py` for `composition.v1` validation, 4/4, 3/4, 6/8 timing, invalid pitches, velocities, durations, duplicate tracks, and section boundaries.
+- `backend/tests/test_composition_v2_schema.py` for strict V2 invariants: mixed meter, malformed ties, conflicting articulations, automation/pedal overlap, unknown fields/versions.
+- `backend/tests/test_composition_v2_migration.py` for V1→V2 note-sequence equality, source immutability, idempotence, and `v1_v2_migration_fidelity_failed`.
+- `backend/tests/test_composition_timing.py` and `frontend/src/utils/compositionTimeline.test.js` for variable tempo/meter bar boundaries and tick/seconds parity.
 - `backend/tests/test_composition_normalizer.py` for legacy migration, velocity defaults, canonical pass-through, and harmony-only rejection.
 - `backend/tests/test_composition_midi.py` for MIDI-ready timing, channel, program, velocity preservation, and Standard MIDI File rendering.
 - `backend/tests/test_composition_wav.py` for mocked FluidSynth argv construction (`shell=False`), config/env discovery, silence path, timeout/non-zero/invalid output errors, duration padding, and temp cleanup.
-- `backend/tests/test_export_fidelity.py` for deterministic fixture comparisons across canonical JSON, MIDI bytes, MusicXML note timing, and WAV duration/silence anchored to `render_midi`.
-- `backend/tests/test_export_routes.py` for `/export/musicxml`, `/export/musicxml/preview`, `/export/midi`, and `/export/wav` content types, attachments vs preview (no download header), `503`/`500` WAV mapping, and validation errors.
+- `backend/tests/test_export_fidelity.py` for deterministic fixture comparisons across canonical JSON, MIDI bytes, MusicXML note timing, WAV duration/silence, and V2 projection issue codes.
+- `backend/tests/test_export_routes.py` for `/export/musicxml`, `/export/musicxml/preview`, `/export/midi`, and `/export/wav` content types, attachments vs preview (no download header), `503`/`500` WAV mapping, validation errors, and `X-Mukit-Projection-*` headers.
 - `backend/tests/test_wav_renderer_smoke.py` opt-in real FluidSynth smoke (`RUN_WAV_RENDERER_SMOKE=1`).
-- `backend/tests/test_music_json_renderer.py` for canonical MusicXML rendering from events without harmony fallback.
+- `backend/tests/test_music_json_renderer.py` for canonical MusicXML rendering from events without harmony fallback, plus V2 tempo/meter/key changes, ties, articulations, dynamics, pedal, markers, and automation omission reports.
 - `backend/tests/test_composition_validator.py` for integrity diagnostics such as missing roles, empty/sparse tracks, pitch/range issues, harmony-only rejection, and generation-constraint instrumentation/duplicate diagnostics (requested-instrument ownership lives here, not in integrity matching).
 - `backend/tests/test_composition_tonality.py` for tonal-center scoring, F#-minor chromatic pass cases, and A-minor contradiction detection.
 - `backend/tests/test_llm_staged_composer.py` for mocked multi-stage sequencing, repair/retry (including duplicate bass/bass accompaniment regression), oversized request rejection, provider/model override, F#-minor constraint repair/exhaustion, and actionable API errors.
@@ -72,11 +78,12 @@ Proves healthchecks + named-volume reopen after Compose restart with **fake LLM 
 
 ```bash
 RUN_DOCKER_ACCEPTANCE=1 ./scripts/v1_docker_acceptance.sh
+RUN_DOCKER_ACCEPTANCE=1 ./scripts/v2_docker_acceptance.sh
 # or
 RUN_DOCKER_ACCEPTANCE=1 ../.venv/bin/python -m pytest tests/test_docker_persistence_acceptance.py
 ```
 
-Uses Compose project name `mukit-v1-accept` by default and removes the volume on exit unless `KEEP_VOLUME=1`.
+Uses Compose project names `mukit-v1-accept` / `mukit-v2-accept` by default and removes the volume on exit unless `KEEP_VOLUME=1`. V2 script covers V1→V2 migration on reopen plus expressive fake generate.
 
 ## Frontend Tests
 
@@ -86,7 +93,7 @@ Run from `frontend/`:
 npm test
 ```
 
-### Playwright V1 E2E (fake LLM)
+### Playwright E2E (fake LLM)
 
 Requires a running stack with `LLM_FAKE_MODE=1` (Compose preferred):
 
@@ -101,10 +108,11 @@ npm run test:e2e
 npm run test:e2e:ui
 ```
 
-Specs live in `frontend/e2e/`. Persistence reopen after Compose restart is opt-in:
+Specs live in `frontend/e2e/` (`v1-user-journey`, `v1-upgrade-to-v2`, `v2-user-journey`, persistence suites). Persistence reopen after Compose restart is opt-in:
 
 ```bash
 RUN_PLAYWRIGHT_DOCKER_RESTART=1 npm run test:e2e -- e2e/v1-persistence.spec.js
+RUN_PLAYWRIGHT_DOCKER_RESTART=1 npm run test:e2e -- e2e/v2-persistence.spec.js
 ```
 
 Artifacts (trace/video on failure) are gitignored under `frontend/test-results/` and `frontend/playwright-report/`.
@@ -133,7 +141,7 @@ Use these manual checks after `npm run build` and during local development.
 3. With no `OPENAI_API_KEY` or `DEEPSEEK_API_KEY`, confirm the LLM composer shows the provider configuration message.
 4. With one provider key configured, confirm the provider/model selector shows one option.
 5. With both provider keys configured, confirm both provider/model options appear and selection changes are retained.
-6. Generate LLM music JSON with a mocked or real configured provider and confirm the editable JSON includes `schema_version: "composition.v1"`.
+6. Generate LLM music JSON with a mocked or real configured provider and confirm the editable JSON includes `schema_version: "composition.v2"` (V1 fixtures migrate on load).
 7. Edit the JSON to an invalid velocity, pitch, duration, section boundary, or track event shape and confirm a validation error appears.
 8. Reset the editor and confirm the generated JSON is restored.
 9. Confirm notation renders from backend MusicXML.
@@ -142,7 +150,7 @@ Use these manual checks after `npm run build` and during local development.
 12. Edit a note event while idle, then Play again; confirm playback uses the edited events. Edit during playback and confirm active playback stops.
 13. Open the piano-roll editor: select the melody track, set snap to `1/8` or `1/16`, drag a note to another pitch/time, resize duration, confirm the JSON editor shows the same `tracks[].events[]` change, confirm notation refreshes after the debounce, then Play and confirm the edited pitch/duration are heard with the red playback cursor moving.
 14. Use piano-roll Undo/Redo and Play again; confirm audible result follows the current edited state. Undo/redo applies only to note edits (not arbitrary JSON editor typing).
-15. Click Export MusicXML, Export MIDI, and Export WAV; confirm downloads use `.musicxml` / `.mid` / `.wav`, notation preview updates from the exported MusicXML, WAV does not start browser playback, and a known fixture's playback positions match MIDI export note tuples.
+15. Click Export MusicXML, Export MIDI, and Export WAV; confirm downloads use `.musicxml` / `.mid` / `.wav`, notation preview updates from the exported MusicXML, projection warnings appear when headers report approximations/omissions, WAV does not start browser playback, and a known fixture's playback positions match MIDI export note tuples.
 16. Open browser devtools and confirm sanitized playback/piano-roll diagnostics (path, event counts, note edit summaries, MusicXML preview length, instrument strategy/fallback, mute/solo gains) without raw composition dumps.
 17. Resize to a mobile viewport and confirm piano-roll controls, playback, and track controls remain usable.
 
@@ -160,4 +168,10 @@ The OSMD/Tone.js bundle can trigger Vite's large chunk warning; that warning is 
 
 - Backend: set `LOG_LEVEL=DEBUG` before running the server or tests when diagnosing schema, migration, rendering, export, or MIDI mapping decisions.
 - Frontend: use browser devtools console to inspect API response validation, store updates, editor validation, export requests, and playback schedule summaries.
-- Logs should include schema version, export format, event counts, timing summaries, byte lengths, and sanitized error messages. API keys, full raw prompts, MusicXML payloads, and MIDI bytes should not appear in logs.
+- Logs should include schema version, export format, event counts, timing summaries, byte lengths, projection status/issue codes, and sanitized error messages. API keys, full raw prompts, MusicXML payloads, and MIDI bytes should not appear in logs.
+
+## See Also
+
+- [Composition V2](composition-v2.md) — V2 contract, fixtures, projection headers
+- [Composition V1](composition-v1.md) — V1 parser regressions
+- [Project persistence](project-persistence.md) — migration-on-open acceptance

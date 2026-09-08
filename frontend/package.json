@@ -7,7 +7,7 @@
     "dev": "node node_modules/vite/bin/vite.js",
     "build": "node node_modules/vite/bin/vite.js build",
     "preview": "node node_modules/vite/bin/vite.js preview",
-    "test": "node --test src/utils/*.test.js src/store/*.test.js src/api/*.test.js",
+    "test": "node --test src/utils/*.test.js src/store/*.test.js src/api/*.test.js e2e/helpers.test.js",
     "lint": "node node_modules/eslint/bin/eslint.js . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"

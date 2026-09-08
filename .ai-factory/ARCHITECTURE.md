@@ -2,7 +2,7 @@
 
 ## Overview
 
-Mukit AI is a full-stack LLM music composer: a FastAPI backend produces and transforms canonical `composition.v1` JSON (generate, edit, validate, render, export, persist), and a React/Vite frontend edits that composition on a piano roll / JSON surface, shows notation, and plays note events in the browser.
+Mukit AI is a full-stack LLM music composer: a FastAPI backend produces and transforms canonical `composition.v2` JSON (generate, edit, validate, render, export, persist), and a React/Vite frontend edits that composition on a piano roll / JSON surface, shows notation, and plays note events in the browser. `composition.v1` remains accepted migration input.
 
 This project uses **Structured Modules (Technical Layer)** as the guiding pattern — feature areas with clear service boundaries and downward dependencies — while **documenting the existing layout** rather than requiring an immediate module-folder refactor. New work should strengthen module boundaries inside the current trees (`backend/app/`, `frontend/src/`) instead of introducing hexagonal ceremony or microservices.
 
@@ -22,7 +22,8 @@ mukit-ai/
 │   ├── app/
 │   │   ├── main.py                 # Composition / LLM / export HTTP handlers (composition module surface)
 │   │   ├── ready.py                # LOG_LEVEL, CORS origins, readiness report helpers
-│   │   ├── schemas.py              # composition.v1 + LLM request/response models
+│   │   ├── composition_schemas.py  # composition.v1 / composition.v2 document contracts
+│   │   ├── schemas.py              # LLM request/response models + re-exports
 │   │   ├── project_schemas.py      # Project CRUD API models
 │   │   ├── llm_settings.py         # Provider config from environment
 │   │   ├── routers/
@@ -37,14 +38,16 @@ mukit-ai/
 │   │   │   ├── composition_tonality.py   # Deterministic tonal-center analysis
 │   │   │   ├── composition_validator.py
 │   │   │   ├── composition_normalizer.py
-│   │   │   ├── composition_timing.py
+│   │   │   ├── composition_migration.py   # V1→V2 migration
+│   │   │   ├── composition_projection.py  # Export projection report
+│   │   │   ├── composition_timeline.py    # Variable tempo/meter compiler (or timing.py)
 │   │   │   ├── composition_region_patch.py
 │   │   │   ├── music_json_renderer.py   # MusicXML
 │   │   │   ├── composition_midi.py
 │   │   │   ├── composition_wav.py
 │   │   │   ├── project_store.py         # SQLite persistence
 │   │   │   └── project_composition.py   # Project ↔ composition mapping
-│   │   ├── fixtures/               # Shared composition.v1 JSON (fake LLM + tests)
+│   │   ├── fixtures/               # composition.v1 + composition_v2_expressive JSON
 │   │   └── db/                     # Shared infrastructure: connection + SQL migrations
 │   │       ├── connection.py
 │   │       └── migrations/
@@ -63,7 +66,7 @@ mukit-ai/
 │       ├── utils/                  # Client-side composition/playback helpers
 │       ├── App.jsx
 │       └── main.jsx
-├── docs/                           # composition.v1, persistence, testing
+├── docs/                           # composition.v2/v1, persistence, testing
 ├── docker-compose.yml
 ├── compose.dev.yml
 ├── .env.example
@@ -107,7 +110,7 @@ FastAPI backend
 
 - ✅ Route handlers call services; services call `db` / LLM / render libraries
 - ✅ Frontend components call Zustand actions and API modules; playback/notation utils stay free of React components
-- ✅ Cross-module use goes through service functions or shared schemas (`composition.v1`), not private helpers inside another module’s files when avoidable
+- ✅ Cross-module use goes through service functions or shared schemas (`composition.v2` operational, `composition.v1` migration input), not private helpers inside another module’s files when avoidable
 - ❌ Services must not import FastAPI routers or request objects
 - ❌ `db/` / store implementations must not import route handlers
 - ❌ Frontend `utils/` must not import React components or the Zustand store (keep pure functions testable)
@@ -116,7 +119,7 @@ FastAPI backend
 ## Layer/Module Communication
 
 - **HTTP boundary:** FastAPI routers and `main.py` endpoints validate with Pydantic, map domain/service errors to HTTP status codes, and return DTOs — no composition business rules in handlers beyond thin orchestration.
-- **Canonical contract:** `composition.v1` (see `docs/composition-v1.md` and `schemas.py`) is the shared language between generate, edit, persist, render, export, and the frontend editors/playback.
+- **Canonical contract:** `composition.v2` (see `docs/composition-v2.md` and `composition_schemas.py`) is the operational shared language between generate, edit, persist, render, export, and the frontend editors/playback. `composition.v1` remains migration/parser input (`docs/composition-v1.md`).
 - **Projects module:** `project_store` owns SQLite; `project_composition` normalizes stored JSON to the canonical model before API responses.
 - **Composition pipeline:** LLM generate/edit services produce or patch JSON; validator/normalizer/timing services enforce and shape the model; render/export services consume validated compositions only.
 - **Frontend state:** Zustand `musicStore` holds API status, models, project browser/save status, edited composition, piano-roll and playback transport state. Feature components subscribe to slices; they do not own parallel sources of truth for the same composition.
@@ -126,7 +129,7 @@ FastAPI backend
 
 1. **Module boundaries by convention:** Treat Projects, Composition/LLM, and Rendering/Export as modules even while files live in shared `services/` / `components/` folders. Prefer new files named and clustered by module.
 2. **Thin HTTP, fat services:** Keep `main.py` / routers focused on transport. Put generation, validation, patching, persistence, and export logic in `services/`.
-3. **Canonical composition first:** Any path that mutates or exports music should go through validated `composition.v1` (or an explicit migration/normalize step), not ad-hoc JSON shapes.
+3. **Canonical composition first:** Any path that mutates or exports music should go through validated `composition.v2` (or explicit legacy/V1 migration), not ad-hoc JSON shapes.
 4. **Application services orchestrate:** Services coordinate LLM calls, validation, and I/O. Push invariants into schema validation and dedicated composition helpers rather than scattering rules across handlers and React components.
 5. **Frontend purity where it matters:** Keep event math, validation mirrors, and Tone.js engine code in `utils/` with unit tests; keep UI in `components/`.
 6. **Infrastructure stays small and shared:** `db/`, env-based `llm_settings`, Docker, and CORS belong to shared infrastructure — not copied per feature.

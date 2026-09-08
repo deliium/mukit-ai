@@ -1,6 +1,10 @@
+[← Composition V2](composition-v2.md) · [Back to README](../README.md) · [Project Persistence →](project-persistence.md)
+
 # Composition V1
 
-`composition.v1` is the canonical playable JSON contract returned by `POST /llm/generate-music-json`.
+> **Status:** `composition.v1` is an accepted **migration and parser compatibility** input. The operational canonical document is [`composition.v2`](./composition-v2.md). Generation, project open/save, and API responses normalize to V2; V1 note events and root metadata migrate with a fidelity equality gate.
+
+This page documents V1 shape, staged generation, and region editing semantics that still apply after migration. For timeline/expression fields, ties, automation, and export projection rules, see [composition-v2.md](./composition-v2.md).
 
 ## Staged Generation
 
@@ -11,7 +15,7 @@ The backend generates compositions through a multi-stage LangGraph composer rath
 3. `compose_melody` — primary melody track events plus motif/context handoff
 4. `compose_bass` — bass events guided by harmony and form
 5. `compose_accompaniment` — harmony/accompaniment events and practical optional instruments (for example strings/pad)
-6. `assemble_composition` — merge stage drafts into canonical `composition.v1` using locked hard constraints
+6. `assemble_composition` — merge stage drafts into operational `composition.v2` using locked hard constraints
 7. `normalize_composition` — canonical normalization that must not rewrite locked hard fields
 8. `validate_composition` — generic integrity checks **plus** request-conformance / tonal-center checks
 9. `repair_composition` — retry the failed stage using structured diagnostics until `options.max_retries` is exhausted
@@ -118,18 +122,19 @@ Legacy music JSON has harmony/tracks but no note events; regenerate or add notes
 
 ## Consumers
 
-- Backend generation returns `Composition` in the response `music` field.
+- Backend generation returns `CompositionV2` in the response `music` field (V1 input migrates first).
 - Backend MusicXML rendering consumes canonical track events and inserts rests for empty ranges.
-- `POST /export/musicxml` accepts canonical `composition.v1` JSON and returns a downloadable MusicXML attachment (`application/vnd.recordare.musicxml+xml`).
-- `POST /export/musicxml/preview` accepts the same JSON and returns MusicXML text for notation refresh **without** a `Content-Disposition` download header.
-- `POST /export/midi` accepts the same JSON and returns a Standard MIDI File attachment (`audio/midi`) built with `mido`.
-- `POST /export/wav` accepts the same JSON and returns a WAV attachment (`audio/wav`) synthesized by FluidSynth from `render_midi()` bytes. Notes, programs, channels, tempo, and duration come from MIDI; Tone.js remains browser preview only. Empty compositions yield silent WAV matching `duration_ticks`. Short FluidSynth output is padded. Missing FluidSynth/SoundFont → `503`; synthesis failures → `500`.
+- `POST /export/musicxml` accepts V1 or V2 JSON (normalized to V2) and returns a downloadable MusicXML attachment (`application/vnd.recordare.musicxml+xml`).
+- `POST /export/musicxml/preview` accepts the same and returns MusicXML text for notation refresh **without** a `Content-Disposition` download header.
+- `POST /export/midi` accepts the same and returns a Standard MIDI File attachment (`audio/midi`) built with `mido`.
+- `POST /export/wav` accepts the same and returns a WAV attachment (`audio/wav`) synthesized by FluidSynth from `render_midi()` bytes.
 - Env vars: `FLUIDSYNTH_BIN`, `COMPOSITION_WAV_SOUNDFONT` (Docker default `/usr/share/sounds/sf2/FluidR3_GM.sf2` from Debian `fluid-soundfont-gm` / FluidR3_GM), `COMPOSITION_WAV_SAMPLE_RATE`, `COMPOSITION_WAV_GAIN`, `COMPOSITION_WAV_TIMEOUT_SECONDS`.
 - SoundFont package: Debian/Ubuntu `fluid-soundfont-gm` (Fluid R3 GM). License/attribution: see `/usr/share/doc/fluid-soundfont-gm/copyright` in the image (MIT-style Fluid R3 license; do not bundle the `.sf2` in this repo).
-- Browser playback schedules exact `tracks[].events[]` note tuples through a multi-track Tone.js engine (`frontend/src/utils/tonePlaybackEngine.js`), converting ticks to seconds from `tempo` and `ticks_per_quarter`.
+- Browser playback schedules exact `tracks[].events[]` note tuples through a multi-track Tone.js engine (`frontend/src/utils/tonePlaybackEngine.js`), compiling V2 expression and piecewise tempo. See [composition-v2.md](./composition-v2.md) for projection rules.
 - Playback preserves track identity, pitch, start tick/time, duration, velocity, and polyphonic simultaneity. It never invents substitute notes from `harmony`.
 - Per-track mute, solo, and volume controls change routing gain only; they do not mutate the canonical composition JSON.
 - Unsupported instruments use an explicit fallback synth strategy (logged with track ID, instrument, role, program) rather than silently rewriting musical content.
+- Tone.js remains browser preview only; WAV export is server-side FluidSynth. Empty compositions yield silent WAV matching `duration_ticks`.
 - The piano-roll editor (`frontend/src/components/PianoRollEditor.jsx`) edits the same Zustand `editedMusicJson` as the JSON editor: create/move/transpose/resize/delete notes on `tracks[].events[]` with snap (`1/4`, `1/8`, `1/16`), zoom, track focus, context tracks, and bounded undo/redo for note edits only.
 - AI region editing selects inclusive bars (Shift+drag or controls), defaults target tracks to the focused piano-roll track (or all tracks), and calls `POST /llm/edit-composition-region` via `AiRegionEditPanel`.
 - After valid piano-roll note edits or successful AI region edits, the frontend debounces/refreshes `POST /export/musicxml/preview` and updates `musicXml` so OSMD notation stays in sync without forcing a download.
@@ -156,4 +161,10 @@ Logs include schema version, normalization path, track count, event count, durat
 
 ## Project persistence
 
-Saved projects store canonical `composition.v1` JSON in SQLite. Opening a project re-runs normalization so older/legacy payloads upgrade before the client receives them. See [project-persistence.md](./project-persistence.md).
+Saved projects store operational `composition.v2` JSON in SQLite. V1 and legacy payloads migrate on open (V1 → V2 fidelity gate) before the client receives them. See [project-persistence.md](./project-persistence.md).
+
+## See Also
+
+- [Composition V2](composition-v2.md) — canonical contract, timeline, expression, export fidelity
+- [Project persistence](project-persistence.md) — migrate-on-open and autosave
+- [Testing](testing.md) — V1 parser regressions and V2 migration tests

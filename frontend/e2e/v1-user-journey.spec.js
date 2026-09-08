@@ -27,6 +27,8 @@ test('V1 user journey: generate → play → notation → edit → AI edit → s
   expect(before?.trackCount).toBeGreaterThanOrEqual(3);
   expect(before?.selectedProvider).toBe('fake');
   expect(before?.projectId).toBeTruthy();
+  // Generate/edit responses install operational composition.v2 (V1 fixtures migrate on ingest).
+  expect(before?.schemaVersion).toBe('composition.v2');
 
   // Playback (Tone needs a user gesture — Play click)
   await page.getByTestId('playback-play').click();

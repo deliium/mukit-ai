@@ -1,17 +1,31 @@
 import logging
 import re
 import tempfile
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..schemas import Composition, CompositionTrack, LLMMusicJson, LLMMusicNoteItem, LLMMusicTrack, NoteEvent
-from .composition_timing import bar_duration_ticks
+from ..composition_schemas import CompositionV1, CompositionV2, CompositionV1Track, CompositionV2Track, CompositionV1NoteEvent, CompositionV2NoteEvent
+from ..schemas import LLMMusicJson, LLMMusicNoteItem, LLMMusicTrack
+from .composition_projection import ProjectionReport, empty_projection_report
+from .composition_timeline import CompiledTimeline, compile_timeline
+
+
+CompositionLike = CompositionV1 | CompositionV2
+CompositionTrackLike = CompositionV1Track | CompositionV2Track
+NoteEventLike = CompositionV1NoteEvent | CompositionV2NoteEvent
 
 
 logger = logging.getLogger(__name__)
 FLAT_CHORD_PATTERN = re.compile(r"^([A-G])b")
+_ARTICULATION_CLASS_NAMES = {
+    "staccato": "Staccato",
+    "staccatissimo": "Staccatissimo",
+    "tenuto": "Tenuto",
+    "accent": "Accent",
+    "marcato": "StrongAccent",
+}
 
 
 class MusicJsonRenderError(RuntimeError):
@@ -26,15 +40,42 @@ class _MeasureNoteFragment:
     velocity: int
     tie: str | None  # None | "start" | "continue" | "stop"
     voice: int | None
+    articulations: tuple[str, ...] = ()
 
 
-def render_musicxml(music: Composition | LLMMusicJson) -> tuple[str, list[str]]:
-    if isinstance(music, Composition):
+@dataclass(frozen=True)
+class _LogicalNote:
+    pitch: str
+    start_tick: int
+    duration_ticks: int
+    velocity: int
+    voice: int | None
+    staff: str | None
+    articulations: tuple[str, ...] = ()
+
+
+@dataclass
+class _NotationContext:
+    composition: CompositionLike
+    timeline: CompiledTimeline
+    harmony_by_bar: dict[int, str]
+    section_label_by_bar: dict[int, str] = field(default_factory=dict)
+    markers_by_bar: dict[int, list[tuple[str, str]]] = field(default_factory=dict)
+    tempo_by_bar: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
+    meter_by_bar: dict[int, str] = field(default_factory=dict)
+    key_by_bar: dict[int, str] = field(default_factory=dict)
+    dynamic_marks_by_track_bar: dict[str, dict[int, list[tuple[int, str]]]] = field(default_factory=dict)
+    sustain_pedals_by_track: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    report: ProjectionReport = field(default_factory=empty_projection_report)
+
+
+def render_musicxml(music: CompositionLike | LLMMusicJson) -> tuple[str, ProjectionReport]:
+    if isinstance(music, (CompositionV1, CompositionV2)):
         return _render_canonical_musicxml(music)
     return _render_legacy_musicxml(music)
 
 
-def _render_canonical_musicxml(composition: Composition) -> tuple[str, list[str]]:
+def _render_canonical_musicxml(composition: CompositionLike) -> tuple[str, ProjectionReport]:
     event_count = sum(len(track.events) for track in composition.tracks)
     logger.info(
         "Canonical MusicXML render started",
@@ -60,17 +101,12 @@ def _render_canonical_musicxml(composition: Composition) -> tuple[str, list[str]
     except ImportError as exc:
         raise MusicJsonRenderError("music21 is not installed") from exc
 
-    warnings: list[str] = []
+    context = _build_notation_context(composition)
     try:
-        score = stream.Score(id="composition_v1_score")
+        score = stream.Score(id="composition_score")
         score.metadata = metadata.Metadata(
-            title=f"Composition V1 - {composition.key} - {composition.time_signature}"
+            title=f"Composition - {composition.key} - {composition.time_signature}"
         )
-
-        harmony_by_bar = {item.bar: item.chord for item in composition.harmony}
-        bar_ticks = bar_duration_ticks(composition.time_signature, composition.ticks_per_quarter)
-        measure_ql = _measure_quarter_length(composition.time_signature)
-        tpq = composition.ticks_per_quarter
 
         for index, track in enumerate(composition.tracks, start=1):
             if _is_piano_composition_track(track):
@@ -85,20 +121,20 @@ def _render_canonical_musicxml(composition: Composition) -> tuple[str, list[str]
                     stream_module=stream,
                     tempo_module=tempo,
                     tie_module=tie,
-                    composition=composition,
+                    context=context,
                     track=track,
                     track_index=index,
-                    harmony_by_bar=harmony_by_bar,
-                    bar_ticks=bar_ticks,
-                    measure_ql=measure_ql,
-                    ticks_per_quarter=tpq,
-                    warnings=warnings,
                 )
                 for piano_part in piano_parts:
                     score.append(piano_part)
                 score.insert(
                     0,
-                    layout.StaffGroup(piano_parts, name=track.name or track.instrument, symbol="brace", barTogether=True),
+                    layout.StaffGroup(
+                        piano_parts,
+                        name=track.name or track.instrument,
+                        symbol="brace",
+                        barTogether=True,
+                    ),
                 )
                 continue
 
@@ -107,8 +143,7 @@ def _render_canonical_musicxml(composition: Composition) -> tuple[str, list[str]
             part.insert(0, _instrument_for_composition_track(instrument, track))
             fragments_by_bar = _split_events_into_measure_fragments(
                 track.events,
-                bar_count=composition.bar_count,
-                bar_ticks=bar_ticks,
+                timeline=context.timeline,
             )
             for bar_number in range(1, composition.bar_count + 1):
                 measure = stream.Measure(number=bar_number)
@@ -124,10 +159,26 @@ def _render_canonical_musicxml(composition: Composition) -> tuple[str, list[str]
                         include_markings=index == 1,
                     )
                     measure.insert(0, _clef_for_composition_track(clef, track))
-                # Chord symbols are notation metadata only; attach once on the first part.
+                else:
+                    _insert_bar_attribute_changes(
+                        key,
+                        meter,
+                        measure,
+                        context,
+                        bar_number,
+                    )
                 if index == 1:
-                    _append_chord_symbol(harmony, measure, harmony_by_bar.get(bar_number), warnings)
+                    _append_chord_symbol(harmony, measure, context.harmony_by_bar.get(bar_number), context.report)
+                    _insert_visible_part_directions(
+                        tempo,
+                        measure,
+                        context,
+                        bar_number,
+                        include_markings=True,
+                    )
+                _insert_track_dynamic_marks(measure, context, track.id, bar_number)
                 bar_fragments = fragments_by_bar.get(bar_number, [])
+                measure_ql = _bar_measure_quarter_length(context.timeline, bar_number)
                 if bar_fragments:
                     _append_canonical_fragments(
                         chord,
@@ -136,7 +187,7 @@ def _render_canonical_musicxml(composition: Composition) -> tuple[str, list[str]
                         measure,
                         bar_fragments,
                         measure_ql=measure_ql,
-                        ticks_per_quarter=tpq,
+                        ticks_per_quarter=context.timeline.ticks_per_quarter,
                         stream_module=stream,
                     )
                 else:
@@ -146,6 +197,7 @@ def _render_canonical_musicxml(composition: Composition) -> tuple[str, list[str]
                     )
                     measure.append(note.Rest(quarterLength=measure_ql))
                 part.append(measure)
+            _attach_track_pedal_spanners(part, context, track.id)
             score.append(part)
 
         musicxml = _write_score_musicxml(score)
@@ -153,11 +205,11 @@ def _render_canonical_musicxml(composition: Composition) -> tuple[str, list[str]
             "Canonical MusicXML render completed",
             extra={
                 "schema_version": composition.schema_version,
-                "warning_count": len(warnings),
+                **context.report.summary_extra(),
                 "musicxml_length": len(musicxml),
             },
         )
-        return musicxml, warnings
+        return musicxml, context.report
     except MusicJsonRenderError:
         raise
     except Exception as exc:
@@ -175,7 +227,311 @@ def _render_canonical_musicxml(composition: Composition) -> tuple[str, list[str]
         raise MusicJsonRenderError("Failed to render MusicXML from composition") from exc
 
 
-def _render_legacy_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
+def _build_notation_context(composition: CompositionLike) -> _NotationContext:
+    timeline = compile_timeline(composition)
+    report = empty_projection_report()
+    harmony_by_bar = {item.bar: item.chord for item in composition.harmony}
+
+    section_label_by_bar: dict[int, str] = {}
+    for section in composition.sections:
+        label = getattr(section, "label", None)
+        if label:
+            section_label_by_bar[int(section.start_bar)] = str(label)
+
+    markers_by_bar: dict[int, list[tuple[str, str]]] = {}
+    for marker in getattr(composition, "markers", ()) or ():
+        bar = timeline.bar_at_tick(int(marker.tick))
+        markers_by_bar.setdefault(bar, []).append((str(marker.kind), str(marker.label)))
+
+    tempo_by_bar: dict[int, list[tuple[int, int]]] = {}
+    for change in getattr(composition, "tempo_changes", ()) or ():
+        tick = int(change.tick)
+        bar = timeline.bar_at_tick(tick)
+        offset = tick - timeline.bar_start_tick(bar)
+        tempo_by_bar.setdefault(bar, []).append((offset, int(change.bpm)))
+
+    meter_by_bar: dict[int, str] = {}
+    for change in getattr(composition, "time_signature_changes", ()) or ():
+        tick = int(change.tick)
+        bar = timeline.bar_at_tick(tick)
+        if tick == timeline.bar_start_tick(bar):
+            meter_by_bar[bar] = str(change.time_signature)
+
+    key_by_bar: dict[int, str] = {}
+    for change in getattr(composition, "key_changes", ()) or ():
+        tick = int(change.tick)
+        bar = timeline.bar_at_tick(tick)
+        if tick == timeline.bar_start_tick(bar):
+            key_by_bar[bar] = str(change.key)
+
+    dynamic_marks_by_track_bar: dict[str, dict[int, list[tuple[int, str]]]] = {}
+    sustain_pedals_by_track: dict[str, list[tuple[int, int]]] = {}
+    if isinstance(composition, CompositionV2):
+        for track in composition.tracks:
+            if track.automation:
+                report.add_issue(
+                    code="automation_omitted_from_notation",
+                    severity="info",
+                    status="omitted",
+                    path=f"tracks/{track.id}/automation",
+                    details={"lane_count": len(track.automation)},
+                )
+            per_bar: dict[int, list[tuple[int, str]]] = {}
+            for mark in track.dynamic_marks:
+                bar = timeline.bar_at_tick(int(mark.tick))
+                offset = int(mark.tick) - timeline.bar_start_tick(bar)
+                per_bar.setdefault(bar, []).append((offset, str(mark.level)))
+            if per_bar:
+                dynamic_marks_by_track_bar[track.id] = per_bar
+            pedals: list[tuple[int, int]] = []
+            for pedal in track.sustain_pedals:
+                start = int(pedal.start_tick)
+                end = start + int(pedal.duration_ticks)
+                pedals.append((start, end))
+            if pedals:
+                sustain_pedals_by_track[track.id] = pedals
+                report.add_issue(
+                    code="sustain_projected",
+                    severity="info",
+                    status="exact",
+                    path=f"tracks/{track.id}/sustain_pedals",
+                    details={"span_count": len(pedals)},
+                )
+
+    logger.debug(
+        "MusicXML notation context compiled",
+        extra={
+            "bar_count": timeline.bar_count,
+            "tempo_change_bars": sorted(tempo_by_bar),
+            "meter_change_bars": sorted(meter_by_bar),
+            "key_change_bars": sorted(key_by_bar),
+            "marker_bars": sorted(markers_by_bar),
+            "section_label_bars": sorted(section_label_by_bar),
+            **report.summary_extra(),
+        },
+    )
+    return _NotationContext(
+        composition=composition,
+        timeline=timeline,
+        harmony_by_bar=harmony_by_bar,
+        section_label_by_bar=section_label_by_bar,
+        markers_by_bar=markers_by_bar,
+        tempo_by_bar=tempo_by_bar,
+        meter_by_bar=meter_by_bar,
+        key_by_bar=key_by_bar,
+        dynamic_marks_by_track_bar=dynamic_marks_by_track_bar,
+        sustain_pedals_by_track=sustain_pedals_by_track,
+        report=report,
+    )
+
+
+def _bar_measure_quarter_length(timeline: CompiledTimeline, bar_number: int) -> float:
+    bar_ticks = timeline.bar_end_tick(bar_number) - timeline.bar_start_tick(bar_number)
+    return bar_ticks / timeline.ticks_per_quarter
+
+
+def _insert_bar_attribute_changes(
+    key_module,
+    meter_module,
+    measure,
+    context: _NotationContext,
+    bar_number: int,
+) -> None:
+    meter = context.meter_by_bar.get(bar_number)
+    if meter:
+        measure.insert(0, meter_module.TimeSignature(meter))
+    key_name = context.key_by_bar.get(bar_number)
+    if key_name:
+        measure.insert(0, _music21_key(key_module, key_name))
+
+
+def _insert_visible_part_directions(
+    tempo_module,
+    measure,
+    context: _NotationContext,
+    bar_number: int,
+    *,
+    include_markings: bool,
+) -> None:
+    if not include_markings:
+        return
+    tpq = context.timeline.ticks_per_quarter
+    label = context.section_label_by_bar.get(bar_number)
+    if label:
+        from music21 import expressions
+
+        measure.insert(0, expressions.TextExpression(label))
+    for kind, text in context.markers_by_bar.get(bar_number, ()):
+        from music21 import expressions
+
+        if kind == "rehearsal":
+            measure.insert(0, expressions.RehearsalMark(text))
+        else:
+            measure.insert(0, expressions.TextExpression(text))
+    for offset_ticks, bpm in context.tempo_by_bar.get(bar_number, ()):
+        measure.insert(offset_ticks / tpq, tempo_module.MetronomeMark(number=bpm))
+
+
+def _insert_track_dynamic_marks(
+    measure,
+    context: _NotationContext,
+    track_id: str,
+    bar_number: int,
+) -> None:
+    marks = context.dynamic_marks_by_track_bar.get(track_id, {}).get(bar_number, ())
+    if not marks:
+        return
+    from music21 import dynamics
+
+    tpq = context.timeline.ticks_per_quarter
+    for offset_ticks, level in marks:
+        measure.insert(offset_ticks / tpq, dynamics.Dynamic(level))
+
+
+def _attach_track_pedal_spanners(part, context: _NotationContext, track_id: str) -> None:
+    pedals = context.sustain_pedals_by_track.get(track_id, ())
+    if not pedals:
+        return
+    from music21 import expressions
+
+    timeline = context.timeline
+    for start_tick, end_tick in pedals:
+        start_element = _find_part_element_near_tick(part, start_tick, timeline)
+        end_element = _find_part_element_near_tick(part, max(start_tick, end_tick - 1), timeline)
+        if start_element is None or end_element is None:
+            logger.debug(
+                "Skipped sustain pedal spanner without anchor notes",
+                extra={"track_id": track_id, "start_tick": start_tick, "end_tick": end_tick},
+            )
+            continue
+        part.append(expressions.PedalMark(start_element, end_element))
+
+
+def _find_part_element_near_tick(part, tick: int, timeline: CompiledTimeline):
+    from music21 import chord as m21_chord
+    from music21 import note as m21_note
+
+    best = None
+    best_distance = None
+    for element in part.recurse().notes:
+        if isinstance(element, (m21_note.Note, m21_chord.Chord)):
+            element_tick = int(round(float(element.getOffsetInHierarchy(part)) * timeline.ticks_per_quarter))
+            distance = abs(element_tick - tick)
+            if best_distance is None or distance < best_distance:
+                best = element
+                best_distance = distance
+    return best
+
+
+def _logical_notes_from_events(events: Sequence[NoteEventLike]) -> list[_LogicalNote]:
+    chains: dict[str, list[NoteEventLike]] = {}
+    logical: list[_LogicalNote] = []
+    for event in events:
+        tie = getattr(event, "tie", None)
+        if tie is None:
+            logical.append(
+                _LogicalNote(
+                    pitch=event.pitch,
+                    start_tick=event.start_tick,
+                    duration_ticks=event.duration_ticks,
+                    velocity=event.velocity,
+                    voice=event.voice,
+                    staff=event.staff,
+                    articulations=tuple(getattr(event, "articulations", ()) or ()),
+                )
+            )
+            continue
+        group_id = tie.group_id
+        if tie.type == "start":
+            chains[group_id] = [event]
+        elif group_id in chains:
+            chains[group_id].append(event)
+        if tie.type == "stop" and group_id in chains:
+            ordered = chains.pop(group_id)
+            head = ordered[0]
+            logical.append(
+                _LogicalNote(
+                    pitch=head.pitch,
+                    start_tick=head.start_tick,
+                    duration_ticks=sum(item.duration_ticks for item in ordered),
+                    velocity=head.velocity,
+                    voice=head.voice,
+                    staff=head.staff,
+                    articulations=tuple(getattr(head, "articulations", ()) or ()),
+                )
+            )
+    for leftover in chains.values():
+        head = leftover[0]
+        logical.append(
+            _LogicalNote(
+                pitch=head.pitch,
+                start_tick=head.start_tick,
+                duration_ticks=sum(item.duration_ticks for item in leftover),
+                velocity=head.velocity,
+                voice=head.voice,
+                staff=head.staff,
+                articulations=tuple(getattr(head, "articulations", ()) or ()),
+            )
+        )
+    return sorted(logical, key=lambda note: (note.start_tick, note.pitch))
+
+
+def _split_events_into_measure_fragments(
+    events: Sequence[NoteEventLike],
+    *,
+    timeline: CompiledTimeline,
+) -> dict[int, list[_MeasureNoteFragment]]:
+    fragments_by_bar: dict[int, list[_MeasureNoteFragment]] = {
+        bar: [] for bar in range(1, timeline.bar_count + 1)
+    }
+    for logical in _logical_notes_from_events(events):
+        note_end = logical.start_tick + logical.duration_ticks
+        first_segment = True
+        for bar_number in range(1, timeline.bar_count + 1):
+            bar_start = timeline.bar_start_tick(bar_number)
+            bar_end = timeline.bar_end_tick(bar_number)
+            if logical.start_tick >= bar_end or note_end <= bar_start:
+                continue
+            segment_start = max(logical.start_tick, bar_start)
+            segment_end = min(note_end, bar_end)
+            segment = segment_end - segment_start
+            if segment <= 0:
+                continue
+            remaining_after = note_end - segment_end
+            if first_segment and remaining_after == 0:
+                tie_type = None
+            elif first_segment:
+                tie_type = "start"
+            elif remaining_after == 0:
+                tie_type = "stop"
+            else:
+                tie_type = "continue"
+            fragments_by_bar[bar_number].append(
+                _MeasureNoteFragment(
+                    pitch=logical.pitch,
+                    offset_ticks=segment_start - bar_start,
+                    duration_ticks=segment,
+                    velocity=logical.velocity,
+                    tie=tie_type,
+                    voice=logical.voice,
+                    articulations=logical.articulations if first_segment else (),
+                )
+            )
+            if tie_type in {"start", "continue"}:
+                logger.debug(
+                    "Split canonical note across measure boundary",
+                    extra={
+                        "pitch": logical.pitch,
+                        "bar_number": bar_number,
+                        "segment_ticks": segment,
+                        "tie": tie_type,
+                    },
+                )
+            first_segment = False
+    return fragments_by_bar
+
+
+def _render_legacy_musicxml(music: LLMMusicJson) -> tuple[str, ProjectionReport]:
     logger.info("Music JSON to MusicXML conversion started", extra={"schema_version": "legacy"})
     logger.debug(
         "Legacy Music JSON render metadata",
@@ -194,7 +550,7 @@ def _render_legacy_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
     except ImportError as exc:
         raise MusicJsonRenderError("music21 is not installed") from exc
 
-    warnings: list[str] = []
+    report = empty_projection_report()
     try:
         score = stream.Score(id="llm_music_json_score")
         score.metadata = metadata.Metadata(
@@ -223,7 +579,7 @@ def _render_legacy_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
                     total_bars,
                     harmony_by_bar,
                     notes_by_track_staff_bar,
-                    warnings,
+                    report,
                 )
                 for piano_part in piano_parts:
                     score.append(piano_part)
@@ -240,7 +596,7 @@ def _render_legacy_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
                     _insert_staff_metadata(key, meter, tempo, measure, music, index == 1)
                     measure.insert(0, _clef_for_legacy_track(clef, track))
                 chord_name = harmony_by_bar.get(bar_number)
-                _append_chord_symbol(harmony, measure, chord_name, warnings)
+                _append_chord_symbol(harmony, measure, chord_name, report)
                 measure_notes = notes_by_track_staff_bar.get((index, "treble", bar_number), [])
                 if measure_notes:
                     _append_notes(
@@ -251,7 +607,7 @@ def _render_legacy_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
                         _measure_quarter_length(music.time_signature),
                     )
                 else:
-                    element = _fallback_element_for_track(chord, harmony, note, track, chord_name, warnings)
+                    element = _fallback_element_for_track(chord, harmony, note, track, chord_name, report)
                     measure.append(element)
                 part.append(measure)
 
@@ -260,9 +616,9 @@ def _render_legacy_musicxml(music: LLMMusicJson) -> tuple[str, list[str]]:
         musicxml = _write_score_musicxml(score)
         logger.info(
             "Music JSON to MusicXML conversion completed",
-            extra={"schema_version": "legacy", "warning_count": len(warnings)},
+            extra={"schema_version": "legacy", **report.summary_extra()},
         )
-        return musicxml, warnings
+        return musicxml, report
     except Exception as exc:
         logger.error(
             "Music JSON to MusicXML conversion failed",
@@ -288,60 +644,6 @@ def _write_score_musicxml(score) -> str:
         return musicxml
 
 
-def _split_events_into_measure_fragments(
-    events: list[NoteEvent],
-    *,
-    bar_count: int,
-    bar_ticks: int,
-) -> dict[int, list[_MeasureNoteFragment]]:
-    fragments_by_bar: dict[int, list[_MeasureNoteFragment]] = {bar: [] for bar in range(1, bar_count + 1)}
-    for event in events:
-        remaining = event.duration_ticks
-        cursor = event.start_tick
-        first_segment = True
-        while remaining > 0:
-            bar_index = cursor // bar_ticks
-            bar_number = bar_index + 1
-            if bar_number > bar_count:
-                break
-            offset_ticks = cursor % bar_ticks
-            available = bar_ticks - offset_ticks
-            segment = min(remaining, available)
-            remaining_after = remaining - segment
-            if first_segment and remaining_after == 0:
-                tie_type = None
-            elif first_segment:
-                tie_type = "start"
-            elif remaining_after == 0:
-                tie_type = "stop"
-            else:
-                tie_type = "continue"
-            fragments_by_bar[bar_number].append(
-                _MeasureNoteFragment(
-                    pitch=event.pitch,
-                    offset_ticks=offset_ticks,
-                    duration_ticks=segment,
-                    velocity=event.velocity,
-                    tie=tie_type,
-                    voice=event.voice,
-                )
-            )
-            if tie_type in {"start", "continue"}:
-                logger.debug(
-                    "Split/tied canonical note across measure boundary",
-                    extra={
-                        "pitch": event.pitch,
-                        "bar_number": bar_number,
-                        "segment_ticks": segment,
-                        "tie": tie_type,
-                    },
-                )
-            cursor += segment
-            remaining = remaining_after
-            first_segment = False
-    return fragments_by_bar
-
-
 def _append_canonical_fragments(
     chord_module,
     note_module,
@@ -353,7 +655,6 @@ def _append_canonical_fragments(
     ticks_per_quarter: int,
     stream_module=None,
 ) -> None:
-    # Group by (offset, duration, voice) so equal-duration simultaneous pitches become chords.
     grouped: dict[tuple[int, int, int | None], list[_MeasureNoteFragment]] = {}
     for fragment in fragments:
         grouped.setdefault((fragment.offset_ticks, fragment.duration_ticks, fragment.voice), []).append(fragment)
@@ -406,7 +707,6 @@ def _append_canonical_fragments(
 def _assign_fragment_groups_to_voices(
     groups: list[tuple[tuple[int, int, int | None], list[_MeasureNoteFragment]]],
 ) -> dict[tuple[int, int, int | None], int]:
-    """Greedy interval coloring so overlapping unequal durations become distinct voices."""
     assignments: dict[tuple[int, int, int | None], int] = {}
     voice_ends: dict[int, int] = {}
     next_voice = 1
@@ -459,11 +759,13 @@ def _fill_measure_with_groups(
             element = note_module.Note(pitches[0], quarterLength=duration_ql)
             _apply_velocity(element, items[0].velocity)
             _apply_tie(tie_module, element, items[0].tie)
+            _apply_articulations(element, items[0].articulations)
         else:
             element = chord_module.Chord(pitches, quarterLength=duration_ql)
             for note_obj, item in zip(element.notes, items):
                 _apply_velocity(note_obj, item.velocity)
                 _apply_tie(tie_module, note_obj, item.tie)
+                _apply_articulations(note_obj, item.articulations)
         container.insert(offset_ql, element)
         occupied_until = max(occupied_until, offset_ticks + duration_ticks)
 
@@ -488,6 +790,21 @@ def _apply_tie(tie_module, element, tie_type: str | None) -> None:
     element.tie = tie_module.Tie(tie_type)
 
 
+def _apply_articulations(element, articulation_names: Sequence[str]) -> None:
+    if not articulation_names:
+        return
+    from music21 import articulations as m21_articulations
+
+    for name in articulation_names:
+        class_name = _ARTICULATION_CLASS_NAMES.get(name)
+        if not class_name:
+            continue
+        cls = getattr(m21_articulations, class_name, None)
+        if cls is None:
+            continue
+        element.articulations.append(cls())
+
+
 def _canonical_piano_parts(
     *,
     chord_module,
@@ -500,16 +817,12 @@ def _canonical_piano_parts(
     stream_module,
     tempo_module,
     tie_module,
-    composition: Composition,
-    track: CompositionTrack,
+    context: _NotationContext,
+    track: CompositionTrackLike,
     track_index: int,
-    harmony_by_bar: Mapping[int, str],
-    bar_ticks: int,
-    measure_ql: float,
-    ticks_per_quarter: int,
-    warnings: list[str],
 ) -> list:
     parts = []
+    composition = context.composition
     for staff_name in ("treble", "bass"):
         staff_events = [
             event
@@ -518,8 +831,7 @@ def _canonical_piano_parts(
         ]
         fragments_by_bar = _split_events_into_measure_fragments(
             staff_events,
-            bar_count=composition.bar_count,
-            bar_ticks=bar_ticks,
+            timeline=context.timeline,
         )
         part = stream_module.PartStaff(id=f"track_{track_index}_{track.id}_{staff_name}")
         part.partName = track.name or track.instrument if staff_name == "treble" else ""
@@ -538,9 +850,27 @@ def _canonical_piano_parts(
                     include_markings=staff_name == "treble" and track_index == 1,
                 )
                 measure.insert(0, clef_module.TrebleClef() if staff_name == "treble" else clef_module.BassClef())
+            else:
+                _insert_bar_attribute_changes(
+                    key_module,
+                    meter_module,
+                    measure,
+                    context,
+                    bar_number,
+                )
             if staff_name == "treble" and track_index == 1:
-                _append_chord_symbol(harmony_module, measure, harmony_by_bar.get(bar_number), warnings)
+                _append_chord_symbol(harmony_module, measure, context.harmony_by_bar.get(bar_number), context.report)
+                _insert_visible_part_directions(
+                    tempo_module,
+                    measure,
+                    context,
+                    bar_number,
+                    include_markings=True,
+                )
+            if staff_name == "treble":
+                _insert_track_dynamic_marks(measure, context, track.id, bar_number)
             bar_fragments = fragments_by_bar.get(bar_number, [])
+            measure_ql = _bar_measure_quarter_length(context.timeline, bar_number)
             if bar_fragments:
                 _append_canonical_fragments(
                     chord_module,
@@ -549,12 +879,14 @@ def _canonical_piano_parts(
                     measure,
                     bar_fragments,
                     measure_ql=measure_ql,
-                    ticks_per_quarter=ticks_per_quarter,
+                    ticks_per_quarter=context.timeline.ticks_per_quarter,
                     stream_module=stream_module,
                 )
             else:
                 measure.append(note_module.Rest(quarterLength=measure_ql))
             part.append(measure)
+        if staff_name == "treble":
+            _attach_track_pedal_spanners(part, context, track.id)
         parts.append(part)
     return parts
 
@@ -567,7 +899,7 @@ def _default_staff_for_pitch(pitch: str) -> str:
     return "bass" if octave < 4 else "treble"
 
 
-def _is_piano_composition_track(track: CompositionTrack) -> bool:
+def _is_piano_composition_track(track: CompositionTrackLike) -> bool:
     return "piano" in track.instrument.lower() or track.staff == "grand"
 
 
@@ -579,7 +911,7 @@ def _uses_bass_clef(*, role: str, instrument: str, staff: str | None = None) -> 
     return "bass" in instrument.lower()
 
 
-def _clef_for_composition_track(clef_module, track: CompositionTrack):
+def _clef_for_composition_track(clef_module, track: CompositionTrackLike):
     uses_bass = _uses_bass_clef(role=track.role, instrument=track.instrument, staff=track.staff)
     clef_name = "bass" if uses_bass else "treble"
     logger.info(
@@ -609,7 +941,7 @@ def _clef_for_legacy_track(clef_module, track: LLMMusicTrack):
     return clef_module.BassClef() if uses_bass else clef_module.TrebleClef()
 
 
-def _instrument_for_composition_track(instrument_module, track: CompositionTrack):
+def _instrument_for_composition_track(instrument_module, track: CompositionTrackLike):
     instrument_name = track.instrument.lower()
     if "flute" in instrument_name:
         return instrument_module.Flute()
@@ -664,7 +996,7 @@ def _piano_parts(
     total_bars: int,
     harmony_by_bar: dict[int, str],
     notes_by_track_staff_bar: dict[tuple[int, str, int], list[LLMMusicNoteItem]],
-    warnings: list[str],
+    report: ProjectionReport,
 ) -> list:
     parts = []
     for staff_name in ("treble", "bass"):
@@ -685,7 +1017,7 @@ def _piano_parts(
                 )
                 measure.insert(0, clef_module.TrebleClef() if staff_name == "treble" else clef_module.BassClef())
             if staff_name == "treble":
-                _append_chord_symbol(harmony_module, measure, harmony_by_bar.get(bar_number), warnings)
+                _append_chord_symbol(harmony_module, measure, harmony_by_bar.get(bar_number), report)
 
             measure_notes = notes_by_track_staff_bar.get((track_index, staff_name, bar_number), [])
             if measure_notes:
@@ -746,7 +1078,7 @@ def _insert_staff_metadata_fields(
         measure.insert(0, tempo_module.MetronomeMark(number=tempo_bpm))
 
 
-def _append_chord_symbol(harmony_module, measure, chord_name: str | None, warnings: list[str]) -> None:
+def _append_chord_symbol(harmony_module, measure, chord_name: str | None, report: ProjectionReport) -> None:
     if not chord_name:
         return
     try:
@@ -755,7 +1087,13 @@ def _append_chord_symbol(harmony_module, measure, chord_name: str | None, warnin
         measure.insert(0, chord_symbol)
     except Exception:
         logger.warning("Unsupported chord symbol skipped during MusicXML render", extra={"chord": chord_name})
-        warnings.append(f"Unsupported chord symbol skipped: {chord_name}")
+        report.add_issue(
+            code="marker_normalized",
+            severity="warning",
+            status="approximated",
+            message=f"Unsupported chord symbol skipped: {chord_name}",
+            details={"chord": chord_name},
+        )
 
 
 def _append_notes(
@@ -791,7 +1129,7 @@ def _fallback_element_for_track(
     note_module,
     track: LLMMusicTrack,
     chord_name: str | None,
-    warnings: list[str],
+    report: ProjectionReport,
 ):
     if track.role in {"drums", "percussion"}:
         hit = note_module.Note("C4", quarterLength=4)
@@ -806,7 +1144,13 @@ def _fallback_element_for_track(
         harmony_chord.quarterLength = 4
     except Exception:
         logger.warning("Unsupported chord simplified during MusicXML render", extra={"chord": chord_name})
-        warnings.append(f"Unsupported chord simplified: {chord_name}")
+        report.add_issue(
+            code="marker_normalized",
+            severity="warning",
+            status="approximated",
+            message=f"Unsupported chord simplified: {chord_name}",
+            details={"chord": chord_name},
+        )
         return note_module.Rest(quarterLength=4)
 
     if track.role == "bass":
