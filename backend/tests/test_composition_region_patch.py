@@ -421,3 +421,178 @@ def test_outside_region_mutation_is_rejected_by_preservation_check():
         apply_region_replacement_patch(composition, patch, selection=selection)
 
     assert exc_info.value.code == "non_target_track_replacement"
+
+
+def test_expressive_replacement_preserves_outside_region_byte_equal():
+    from app.services.fixture_compositions import FIXTURE_V2_EXPRESSIVE, load_composition_fixture
+
+    composition = load_composition_fixture(FIXTURE_V2_EXPRESSIVE)
+    selection = CompositionEditSelection(start_bar=3, end_bar=3, track_ids=["melody-1"])
+    bounds = selection_tick_bounds(composition, selection)
+    patch = CompositionRegionReplacementPatch(
+        schema_version="composition.v2",
+        start_bar=3,
+        end_bar=3,
+        target_track_ids=["melody-1"],
+        replace_tracks=[
+            CompositionRegionTrackReplacement(
+                track_id="melody-1",
+                events=[
+                    {
+                        "type": "note",
+                        "pitch": "D5",
+                        "start_tick": 3840,
+                        "duration_ticks": 960,
+                        "velocity": 95,
+                        "articulations": ["marcato"],
+                        "tie": None,
+                    }
+                ],
+            )
+        ],
+    )
+    result = apply_region_replacement_patch(composition, patch, selection=selection)
+    assert result.composition.schema_version == "composition.v2"
+    melody = next(track for track in result.composition.tracks if track.id == "melody-1")
+    assert any(event.articulations == ["marcato"] for event in melody.events)
+    # Tempo map / markers / pedals preserved.
+    assert result.composition.tempo_changes == composition.tempo_changes
+    assert result.composition.markers == composition.markers
+    original_melody = next(track for track in composition.tracks if track.id == "melody-1")
+    assert melody.sustain_pedals == original_melody.sustain_pedals
+    comparison = compare_preserved_regions(
+        composition, result.composition, bounds, ["melody-1"]
+    )
+    assert comparison["ok"]
+    assert "melody-1" in comparison["byte_equal_tracks"]
+
+
+def test_boundary_crossing_note_is_rejected():
+    composition = _sixteen_bar_composition(
+        tracks=[
+            {
+                "id": "melody-1",
+                "name": "Melody",
+                "instrument": "piano",
+                "role": "melody",
+                "midi_program": 0,
+                "channel": 1,
+                "events": [
+                    _note("C4", BAR_TICKS_4_4 - 240, duration_ticks=480, note_id="cross"),
+                    *[_note("E4", bar * BAR_TICKS_4_4, note_id=f"m-{bar}") for bar in range(2, 16)],
+                ],
+            },
+            {
+                "id": "bass-1",
+                "name": "Bass",
+                "instrument": "bass",
+                "role": "bass",
+                "midi_program": 32,
+                "channel": 2,
+                "events": [_note("C2", bar * BAR_TICKS_4_4, note_id=f"b-{bar}") for bar in range(16)],
+            },
+            {
+                "id": "harmony-1",
+                "name": "Harmony",
+                "instrument": "piano",
+                "role": "harmony",
+                "midi_program": 0,
+                "channel": 3,
+                "events": [_note("E4", bar * BAR_TICKS_4_4, note_id=f"h-{bar}") for bar in range(16)],
+            },
+        ]
+    )
+    selection = CompositionEditSelection(start_bar=2, end_bar=2, track_ids=["melody-1"])
+    patch = CompositionRegionReplacementPatch(
+        start_bar=2,
+        end_bar=2,
+        target_track_ids=["melody-1"],
+        replace_tracks=[
+            CompositionRegionTrackReplacement(
+                track_id="melody-1",
+                events=[NoteEvent(pitch="G4", start_tick=BAR_TICKS_4_4, duration_ticks=480, velocity=90)],
+            )
+        ],
+    )
+    with pytest.raises(CompositionRegionPatchError) as exc_info:
+        apply_region_replacement_patch(composition, patch, selection=selection)
+    assert exc_info.value.code == "boundary_crossing_note"
+
+
+def test_boundary_crossing_tie_chain_is_rejected():
+    from app.composition_schemas import CompositionV2
+    from app.services.fixture_compositions import FIXTURE_V2_EXPRESSIVE, load_composition_fixture
+
+    composition = load_composition_fixture(FIXTURE_V2_EXPRESSIVE)
+    assert isinstance(composition, CompositionV2)
+    # Select only bar 1 while a tie continues? Expressive fixture tie is fully in bar 1.
+    # Build a native V2 document with a chain crossing bar 1→2.
+    payload = composition.model_dump(mode="json")
+    payload["tracks"][0]["events"] = [
+        {
+            "type": "note",
+            "pitch": "C4",
+            "start_tick": BAR_TICKS_4_4 - 480,
+            "duration_ticks": 480,
+            "velocity": 90,
+            "id": "t-start",
+            "articulations": [],
+            "tie": {"group_id": "tie-cross", "type": "start"},
+        },
+        {
+            "type": "note",
+            "pitch": "C4",
+            "start_tick": BAR_TICKS_4_4,
+            "duration_ticks": 480,
+            "velocity": 90,
+            "id": "t-stop",
+            "articulations": [],
+            "tie": {"group_id": "tie-cross", "type": "stop"},
+        },
+        {
+            "type": "note",
+            "pitch": "E4",
+            "start_tick": 2 * BAR_TICKS_4_4,
+            "duration_ticks": 480,
+            "velocity": 88,
+            "id": "m-later",
+            "articulations": [],
+            "tie": None,
+        },
+        {
+            "type": "note",
+            "pitch": "G4",
+            "start_tick": 3 * BAR_TICKS_4_4,
+            "duration_ticks": 480,
+            "velocity": 88,
+            "id": "m-end",
+            "articulations": [],
+            "tie": None,
+        },
+    ]
+    composition = CompositionV2.model_validate(payload)
+    selection = CompositionEditSelection(start_bar=2, end_bar=2, track_ids=["melody-1"])
+    patch = CompositionRegionReplacementPatch(
+        schema_version="composition.v2",
+        start_bar=2,
+        end_bar=2,
+        target_track_ids=["melody-1"],
+        replace_tracks=[
+            CompositionRegionTrackReplacement(
+                track_id="melody-1",
+                events=[
+                    {
+                        "pitch": "G4",
+                        "start_tick": BAR_TICKS_4_4,
+                        "duration_ticks": 480,
+                        "velocity": 90,
+                        "articulations": [],
+                        "tie": None,
+                    }
+                ],
+            )
+        ],
+    )
+    with pytest.raises(CompositionRegionPatchError) as exc_info:
+        apply_region_replacement_patch(composition, patch, selection=selection)
+    assert exc_info.value.code == "boundary_crossing_tie_chain"

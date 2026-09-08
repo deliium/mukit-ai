@@ -383,3 +383,13 @@ def test_validator_detects_bar_overflow_density():
     result = validate_composition_integrity(payload, complexity="simple")
     assert not result.ok
     assert "bar_overflow" in result.error_codes()
+
+
+def test_validator_accepts_native_v2_expressive_fixture():
+    from app.services.fixture_compositions import FIXTURE_V2_EXPRESSIVE, load_composition_fixture
+
+    composition = load_composition_fixture(FIXTURE_V2_EXPRESSIVE)
+    result = validate_composition_integrity(composition, complexity="simple")
+    assert result.ok
+    assert composition.tempo_changes
+    assert any(event.articulations for track in composition.tracks for event in track.events)

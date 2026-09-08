@@ -332,9 +332,21 @@ def test_staged_generation_acceptance_shape(monkeypatch, caplog):
     music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
 
     assert provider.provider == "openai"
-    assert music.schema_version == "composition.v1"
+    assert music.schema_version == "composition.v2"
     assert music.bar_count == 16
     assert music.key == "A minor"
+    assert music.tempo_changes == []
+    assert music.time_signature_changes == []
+    assert music.key_changes == []
+    assert music.markers == []
+    for track in music.tracks:
+        assert track.expression == 127
+        assert track.dynamic_marks == []
+        assert track.sustain_pedals == []
+        assert track.automation == []
+        for event in track.events:
+            assert event.articulations == []
+            assert event.tie is None
     roles = {track.role for track in music.tracks}
     assert {"melody", "bass", "harmony"}.issubset(roles)
     assert any(track.instrument == "strings" for track in music.tracks)
@@ -363,7 +375,7 @@ def test_staged_generation_preserves_model_override(monkeypatch):
     )
     settings = _settings(model="base-model")
     music, warnings, provider, _validation = asyncio.run(generate_music_json(request, settings))
-    assert music.schema_version == "composition.v1"
+    assert music.schema_version == "composition.v2"
     assert provider.model == "gpt-override"
 
 
@@ -403,7 +415,7 @@ def test_staged_generation_repairs_sparse_melody(monkeypatch, caplog):
     payloads = _stage_payloads()
     _install_stage_mock(monkeypatch, payloads, fail_melody_once=True)
     music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
-    assert music.schema_version == "composition.v1"
+    assert music.schema_version == "composition.v2"
     assert any("retrying" in warning.lower() or "failed validation" in warning.lower() for warning in warnings)
     assert "Composer repair attempt started" in caplog.text
 
@@ -422,7 +434,7 @@ def test_stage_parse_retry_preserves_integrity_repair_budget(monkeypatch, caplog
         {**_request().model_dump(), "options": {"max_retries": 1}}
     )
     music, warnings, provider, _validation = asyncio.run(generate_music_json(request, _settings()))
-    assert music.schema_version == "composition.v1"
+    assert music.schema_version == "composition.v2"
     assert "[FIX] Preserved integrity repair budget after stage parse retry" in caplog.text
     assert "Composer repair attempt started" in caplog.text
     assert "Repair budget exhausted after validation failure" not in caplog.text

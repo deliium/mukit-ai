@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { migrateV1ToV2 } from '../utils/compositionVersion.js';
 import { useMusicStore } from './musicStore.js';
 
 function resetGenerationState(overrides = {}) {
@@ -20,7 +21,7 @@ function resetGenerationState(overrides = {}) {
     aiEditStartBar: 1,
     aiEditEndBar: 2,
     aiEditInstruction: 'make brighter',
-    editedMusicJson: {
+    editedMusicJson: migrateV1ToV2({
       schema_version: 'composition.v1',
       tempo: 100,
       key: 'C major',
@@ -41,7 +42,7 @@ function resetGenerationState(overrides = {}) {
         },
       ],
       harmony: [{ bar: 1, chord: 'C' }],
-    },
+    }),
     ...overrides,
   });
 }

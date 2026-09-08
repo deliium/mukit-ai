@@ -19,6 +19,7 @@ from app.services.fake_llm import FAKE_DISPLAY_NAME, FAKE_MALFORMED_ENV
 from app.services.fixture_compositions import (
     FIXTURE_16BAR_MULTITRACK,
     FIXTURE_UNSUPPORTED_INSTRUMENT,
+    FIXTURE_V2_EXPRESSIVE,
     load_composition_fixture,
 )
 from app.services.music_json_renderer import render_musicxml
@@ -103,6 +104,7 @@ def test_fake_generate_returns_canonical_notes(fake_env):
     )
     response = asyncio.run(generate_llm_music_json(request))
     assert response.provider == FAKE_PROVIDER
+    assert response.music.schema_version == "composition.v2"
     assert response.music.bar_count >= 16
     assert len(response.music.tracks) >= 3
     event_count = sum(len(track.events) for track in response.music.tracks)
@@ -110,7 +112,32 @@ def test_fake_generate_returns_canonical_notes(fake_env):
     assert response.musicxml
     fixture = load_composition_fixture(FIXTURE_16BAR_MULTITRACK)
     assert response.music.bar_count == fixture.bar_count
+    assert response.music.tempo_changes == []
+    assert all(event.articulations == [] for track in response.music.tracks for event in track.events)
 
+
+def test_fake_generate_expressive_v2_fixture(fake_env):
+    request = LLMMusicGenerationRequest.model_validate(
+        {
+            "prompt": {
+                "genre": "classical",
+                "mood": "expressive",
+                "duration_bars": 4,
+                "tempo_min": 80,
+                "tempo_max": 120,
+                "instruments": ["piano", "bass"],
+            },
+            "selection": {"provider": "fake"},
+        }
+    )
+    response = asyncio.run(generate_llm_music_json(request))
+    assert response.music.schema_version == "composition.v2"
+    assert response.music.bar_count == 4
+    assert response.music.tempo_changes
+    assert any(
+        event.articulations for track in response.music.tracks for event in track.events
+    )
+    assert any(event.tie is not None for track in response.music.tracks for event in track.events)
 
 def test_fake_generate_rejects_contradictory_duration(fake_env):
     request = LLMMusicGenerationRequest.model_validate(
@@ -145,7 +172,8 @@ def test_fake_region_edit_patches_only_selected_bars(fake_env):
     original = composition.model_dump(mode="json")
     response = asyncio.run(edit_llm_composition_region(request))
     assert response.provider == FAKE_PROVIDER
-    assert response.patch.operation == "replace_region"
+    assert response.composition.schema_version == "composition.v2"
+    assert response.patch.schema_version == "composition.v2"
     assert response.patch.start_bar == 4
     assert response.patch.end_bar == 5
 
@@ -164,8 +192,32 @@ def test_fake_region_edit_patches_only_selected_bars(fake_env):
     ]
     assert outside_orig == outside_new
     assert any(event_in_region(event, bounds) for event in new_melody.events)
+    assert any(
+        event.articulations for event in new_melody.events if event_in_region(event, bounds)
+    )
     # Stored request composition object identity is irrelevant; ensure caller's dump unchanged.
     assert composition.model_dump(mode="json") == original
+
+
+def test_fake_region_edit_preserves_integrity_on_v2_expressive(fake_env):
+    """Short-window edits on the 4-bar expressive fixture must stay density-valid."""
+    composition = load_composition_fixture(FIXTURE_V2_EXPRESSIVE)
+    request = LLMCompositionEditRequest.model_validate(
+        {
+            "composition": composition.model_dump(mode="json"),
+            "edit": {
+                "instruction": "reshape the melody with clearer articulation",
+                "selection": {"start_bar": 1, "end_bar": 2, "track_ids": ["melody-1"]},
+            },
+            "selection": {"provider": "fake"},
+        }
+    )
+    response = asyncio.run(edit_llm_composition_region(request))
+    assert response.composition.schema_version == "composition.v2"
+    assert response.composition.bar_count == 4
+    melody = next(track for track in response.composition.tracks if track.id == "melody-1")
+    assert len(melody.events) >= 4
+    assert any(event.articulations for event in melody.events)
 
 
 def test_malformed_fake_generate_returns_502_and_leaves_project_unchanged(client, monkeypatch, caplog):
@@ -198,7 +250,7 @@ def test_malformed_fake_generate_returns_502_and_leaves_project_unchanged(client
 
     opened = client.get(f"/projects/{project_id}")
     assert opened.status_code == 200
-    assert opened.json()["composition"] == composition
+    assert opened.json()["composition"] == patched.json()["composition"]
     joined = " ".join(record.message for record in caplog.records)
     assert "OPENAI_API_KEY" not in joined
     assert "sk-" not in joined
@@ -213,14 +265,15 @@ def test_unsupported_instrument_fixture_exports_and_keeps_notes():
     assert midi_bytes.startswith(b"MThd")
     assert len(midi_bytes) > 20
 
-    musicxml, warnings = render_musicxml(composition)
+    musicxml, report = render_musicxml(composition)
     assert "<score-partwise" in musicxml or "score-partwise" in musicxml
     assert len(musicxml) > 100
+    assert report.status == "exact"
     # Unknown instrument should not wipe notes; program 0 / piano fallback is acceptable.
     lead = next(track for track in composition.tracks if "quantum" in track.instrument.lower())
     assert lead.midi_program == 0
     assert lead.events
-    assert isinstance(warnings, list)
+    assert isinstance(report.issues, list)
 
 
 def test_fake_generate_honors_aliases_and_reports_instrumentation(fake_env, caplog):

@@ -16,19 +16,25 @@ from ..schemas import (
     CompositionEditSelection,
     CompositionRegionReplacementPatch,
     CompositionRegionTrackReplacement,
+    CompositionV2,
+    CompositionV2NoteEvent,
     GenerationValidationReport,
     LLMCompositionEditRequest,
     LLMMusicGenerationRequest,
-    NoteEvent,
 )
 from .composition_region_patch import (
+    CompositionRegionPatchError,
     apply_region_replacement_patch,
+    event_in_region,
     selection_tick_bounds,
     summarize_region_selection,
 )
 from .composition_timing import bar_duration_ticks
+from .composition_normalizer import normalize_composition_json
+from .composition_validator import _min_events_for_track
 from .fixture_compositions import (
     FIXTURE_16BAR_MULTITRACK,
+    FIXTURE_V2_EXPRESSIVE,
     FixtureCompositionError,
     load_composition_fixture_cached,
 )
@@ -59,8 +65,8 @@ async def generate_fake_music_json(
     provider: LLMProviderSettings,
     *,
     constraints: GenerationConstraints | None = None,
-) -> tuple[Composition, list[str], LLMProviderSettings, GenerationValidationReport | None]:
-    """Return a fixture-backed multi-track Composition without calling a real LLM."""
+) -> tuple[CompositionV2, list[str], LLMProviderSettings, GenerationValidationReport | None]:
+    """Return a fixture-backed multi-track CompositionV2 without calling a real LLM."""
     from .generation_constraints import (
         build_generation_constraints,
         validate_generation_constraints,
@@ -69,6 +75,16 @@ async def generate_fake_music_json(
     _maybe_inject_malformed("generate")
     active_constraints = constraints or build_generation_constraints(request)
 
+    # Prefer native V2 expressive fixture when duration matches; otherwise 16-bar V1 migrate path.
+    fixture_name = (
+        FIXTURE_V2_EXPRESSIVE
+        if active_constraints.duration_bars == 4
+        and active_constraints.time_signature == "4/4"
+        and not active_constraints.key_user_specified
+        and not active_constraints.sections_user_specified
+        else FIXTURE_16BAR_MULTITRACK
+    )
+
     logger.info(
         "Fake LLM music generation started",
         extra={
@@ -76,22 +92,22 @@ async def generate_fake_music_json(
             "model": provider.model,
             "duration_bars": request.prompt.duration_bars,
             "instrument_count": len(request.prompt.instruments),
-            "fixture": FIXTURE_16BAR_MULTITRACK,
+            "fixture": fixture_name,
             "constraint_key": active_constraints.key,
         },
     )
 
     try:
-        composition = load_composition_fixture_cached(FIXTURE_16BAR_MULTITRACK)
+        composition = load_composition_fixture_cached(fixture_name)
     except FixtureCompositionError as exc:
         logger.error(
             "Fake LLM generate failed to load fixture",
-            extra={"fixture": FIXTURE_16BAR_MULTITRACK, "error_type": type(exc).__name__},
+            extra={"fixture": fixture_name, "error_type": type(exc).__name__},
         )
         raise FakeLLMError(str(exc)) from exc
 
     # Deep copy via dump/validate so callers cannot mutate the cached fixture.
-    music = Composition.model_validate(composition.model_dump(mode="json"))
+    music = CompositionV2.model_validate(composition.model_dump(mode="json"))
     warnings: list[str] = [
         "Fake LLM mode: returned deterministic fixture composition (no API credits used).",
     ]
@@ -188,9 +204,14 @@ async def generate_fake_music_json(
     logger.debug(
         "Fake LLM generate fixture summary",
         extra={
-            "fixture": FIXTURE_16BAR_MULTITRACK,
+            "fixture": fixture_name,
+            "schema_version": music.schema_version,
             "tempo": music.tempo,
             "time_signature": music.time_signature,
+            "tempo_change_count": len(music.tempo_changes),
+            "articulation_note_count": sum(
+                1 for track in music.tracks for event in track.events if event.articulations
+            ),
             "track_ids": [track.id for track in music.tracks],
             "constraint_error_count": len(report.errors),
         },
@@ -201,7 +222,7 @@ async def generate_fake_music_json(
 async def edit_fake_composition_region(
     request: LLMCompositionEditRequest,
     provider: LLMProviderSettings,
-) -> tuple[Composition, CompositionRegionReplacementPatch, list[str], LLMProviderSettings]:
+) -> tuple[CompositionV2, CompositionRegionReplacementPatch, list[str], LLMProviderSettings]:
     """Build and apply a deterministic replace_region patch for the selection."""
     _maybe_inject_malformed("edit")
 
@@ -218,9 +239,10 @@ async def edit_fake_composition_region(
         },
     )
 
-    scope = summarize_region_selection(request.composition, selection)
+    composition = normalize_composition_json(request.composition)
+    scope = summarize_region_selection(composition, selection)
     patch = _build_deterministic_region_patch(
-        request.composition,
+        composition,
         scope.target_track_ids,
         selection.start_bar,
         selection.end_bar,
@@ -239,7 +261,7 @@ async def edit_fake_composition_region(
     )
 
     result = apply_region_replacement_patch(
-        request.composition,
+        composition,
         patch,
         allow_harmony_changes=request.edit.allow_harmony_changes,
         allow_added_tracks=request.edit.allow_added_tracks,
@@ -268,16 +290,21 @@ async def edit_fake_composition_region(
             "warning_count": len(warnings),
         },
     )
-    return result.composition, result.patch, warnings, provider
+    return normalize_composition_json(result.composition), result.patch, warnings, provider
 
 
 def _build_deterministic_region_patch(
-    composition: Composition,
+    composition: Composition | CompositionV2,
     target_track_ids: list[str],
     start_bar: int,
     end_bar: int,
 ) -> CompositionRegionReplacementPatch:
-    """Replace in-region notes with a transposed, clearly different pattern."""
+    """Replace in-region notes with a transposed, clearly different pattern.
+
+    Emits enough notes per track so post-apply integrity density checks still
+    pass when the selection is a short window of a short composition (e.g. bars
+    1–2 of the 4-bar V2 expressive fixture).
+    """
     selection = CompositionEditSelection(
         start_bar=start_bar,
         end_bar=end_bar,
@@ -285,35 +312,58 @@ def _build_deterministic_region_patch(
     )
     bounds = selection_tick_bounds(composition, selection)
     bar_ticks = bar_duration_ticks(composition.time_signature, composition.ticks_per_quarter)
+    selected_bars = end_bar - start_bar + 1
     replace_tracks: list[CompositionRegionTrackReplacement] = []
 
     for track in composition.tracks:
         if track.id not in target_track_ids:
             continue
-        new_events: list[NoteEvent] = []
+        outside_count = sum(1 for event in track.events if not event_in_region(event, bounds))
+        min_events = _min_events_for_track(composition.bar_count, "moderate", track.role)
+        needed_in_region = max(selected_bars, min_events - outside_count)
+        notes_per_bar = max(1, (needed_in_region + selected_bars - 1) // selected_bars)
+        slot_ticks = max(1, min(composition.ticks_per_quarter, bar_ticks // notes_per_bar))
+        logger.debug(
+            "[FIX:fake-region-density] Planning replacement note density",
+            extra={
+                "track_id": track.id,
+                "role": track.role,
+                "outside_count": outside_count,
+                "min_events": min_events,
+                "needed_in_region": needed_in_region,
+                "notes_per_bar": notes_per_bar,
+                "selected_bars": selected_bars,
+            },
+        )
+        new_events: list[CompositionV2NoteEvent] = []
         for bar in range(start_bar, end_bar + 1):
             bar_start = bounds.start_tick + (bar - start_bar) * bar_ticks
-            pitch = _shifted_pitch_for_track(track.role, bar)
-            duration = min(composition.ticks_per_quarter, bar_ticks)
-            if bar_start + duration > bounds.end_tick:
-                duration = max(1, bounds.end_tick - bar_start)
-            if duration <= 0:
-                continue
-            new_events.append(
-                NoteEvent(
-                    type="note",
-                    pitch=pitch,
-                    start_tick=bar_start,
-                    duration_ticks=duration,
-                    velocity=100,
+            for slot in range(notes_per_bar):
+                start_tick = bar_start + slot * slot_ticks
+                if start_tick >= bounds.end_tick:
+                    break
+                duration = min(slot_ticks, bounds.end_tick - start_tick, bar_start + bar_ticks - start_tick)
+                if duration <= 0:
+                    continue
+                pitch = _shifted_pitch_for_track(track.role, bar + slot)
+                articulations = ["accent"] if bar == start_bar and slot == 0 else []
+                new_events.append(
+                    CompositionV2NoteEvent(
+                        type="note",
+                        pitch=pitch,
+                        start_tick=start_tick,
+                        duration_ticks=duration,
+                        velocity=100,
+                        articulations=articulations,
+                        tie=None,
+                    )
                 )
-            )
         replace_tracks.append(
             CompositionRegionTrackReplacement(track_id=track.id, events=new_events)
         )
 
     return CompositionRegionReplacementPatch(
-        schema_version="composition.v1",
+        schema_version="composition.v2",
         operation="replace_region",
         start_bar=start_bar,
         end_bar=end_bar,

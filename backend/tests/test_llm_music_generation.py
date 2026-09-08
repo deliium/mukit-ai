@@ -149,7 +149,7 @@ def test_generation_success_with_mocked_graph(monkeypatch):
     music, warnings, provider, _validation = asyncio.run(generate_music_json(request, settings))
 
     assert music.tempo == 100
-    assert music.schema_version == "composition.v1"
+    assert music.schema_version == "composition.v2"
     assert warnings == []
     assert provider.provider == "openai"
 

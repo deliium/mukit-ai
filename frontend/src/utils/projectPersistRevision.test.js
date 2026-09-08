@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { migrateV1ToV2 } from './compositionVersion.js';
 import { compositionRevisionKey } from './playbackPosition.js';
 import { projectPersistRevisionKey } from './projectPersistRevision.js';
+import { ensureCompositionNoteIds } from './pianoRollEvents.js';
 
-const BASE = {
+const BASE = migrateV1ToV2({
   schema_version: 'composition.v1',
   tempo: 100,
   key: 'C major',
@@ -30,15 +32,24 @@ const BASE = {
     },
   ],
   harmony: [{ bar: 1, chord: 'C' }],
-};
+});
 
-test('persist revision changes when harmony changes but playback key stays stable', () => {
+test('persist revision changes when harmony changes', () => {
   const first = structuredClone(BASE);
   const second = structuredClone(BASE);
   second.harmony = [{ bar: 1, chord: 'G' }];
 
-  assert.equal(compositionRevisionKey(first), compositionRevisionKey(second));
   assert.notEqual(projectPersistRevisionKey(first), projectPersistRevisionKey(second));
+  assert.notEqual(compositionRevisionKey(first), compositionRevisionKey(second));
+});
+
+test('persist revision changes when V2 track expression changes', () => {
+  const first = structuredClone(BASE);
+  const second = structuredClone(BASE);
+  second.tracks[0].expression = 90;
+
+  assert.notEqual(projectPersistRevisionKey(first), projectPersistRevisionKey(second));
+  assert.notEqual(compositionRevisionKey(first), compositionRevisionKey(second));
 });
 
 test('persist revision changes when key/sections/track metadata change', () => {
@@ -47,7 +58,7 @@ test('persist revision changes when key/sections/track metadata change', () => {
   byKey.key = 'G major';
   const bySections = structuredClone(BASE);
   bySections.sections = [
-    { type: 'verse', start_bar: 1, bar_count: 1, start_tick: 0, duration_ticks: 1920 },
+    { id: 'section-1', type: 'verse', label: null, start_bar: 1, bar_count: 1, start_tick: 0, duration_ticks: 1920 },
   ];
   const byTrackName = structuredClone(BASE);
   byTrackName.tracks[0].name = 'Grand Piano';
@@ -55,8 +66,7 @@ test('persist revision changes when key/sections/track metadata change', () => {
   assert.notEqual(projectPersistRevisionKey(first), projectPersistRevisionKey(byKey));
   assert.notEqual(projectPersistRevisionKey(first), projectPersistRevisionKey(bySections));
   assert.notEqual(projectPersistRevisionKey(first), projectPersistRevisionKey(byTrackName));
-  assert.equal(compositionRevisionKey(first), compositionRevisionKey(byKey));
-  assert.equal(compositionRevisionKey(first), compositionRevisionKey(byTrackName));
+  assert.notEqual(compositionRevisionKey(first), compositionRevisionKey(byKey));
 });
 
 test('persist revision includes generationMeta without requiring event changes', () => {
@@ -75,12 +85,16 @@ test('persist revision includes generationMeta without requiring event changes',
 
   assert.notEqual(withoutMeta, withMeta);
   assert.notEqual(withMeta, otherMeta);
-  assert.equal(compositionRevisionKey(composition), compositionRevisionKey(composition));
 });
 
-test('persist revision returns empty-shaped key for null composition', () => {
-  const key = projectPersistRevisionKey(null, null);
-  assert.equal(typeof key, 'string');
-  assert.ok(key.length > 0);
-  assert.equal(key, projectPersistRevisionKey(undefined, null));
+test('persist revision ignores hydration-only note id differences', () => {
+  const withoutIds = structuredClone(BASE);
+  withoutIds.tracks[0].events = [
+    { type: 'note', pitch: 'C4', start_tick: 0, duration_ticks: 480, velocity: 80 },
+  ];
+  const hydrated = ensureCompositionNoteIds(withoutIds).composition;
+  assert.equal(
+    projectPersistRevisionKey(withoutIds),
+    projectPersistRevisionKey(hydrated),
+  );
 });

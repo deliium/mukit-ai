@@ -7,16 +7,18 @@ from pydantic import ValidationError
 
 from ..llm_settings import LLMProviderSettings, LLMSettings, load_llm_settings
 from ..schemas import (
-    COMPOSITION_SCHEMA_VERSION,
     Composition,
-    CompositionSection,
-    CompositionTrack,
+    CompositionV2,
+    CompositionV2HarmonyItem,
+    CompositionV2NoteEvent,
+    CompositionV2Section,
+    CompositionV2Track,
     GenerationRepairAction,
     GenerationValidationReport,
-    LLMMusicHarmonyItem,
     LLMMusicGenerationRequest,
     NoteEvent,
 )
+from ..composition_schemas import COMPOSITION_SCHEMA_VERSION_V2
 from .composition_normalizer import (
     CompositionNormalizationError,
     INSTRUMENT_PROGRAMS,
@@ -145,7 +147,7 @@ class _GenerationState(TypedDict, total=False):
 async def generate_music_json(
     request: LLMMusicGenerationRequest,
     settings: LLMSettings | None = None,
-) -> tuple[Composition, list[str], LLMProviderSettings, GenerationValidationReport | None]:
+) -> tuple[CompositionV2, list[str], LLMProviderSettings, GenerationValidationReport | None]:
     active_settings = settings or load_llm_settings()
     enforce_llm_generation_bounds(request)
     constraints = build_generation_constraints(request)
@@ -605,10 +607,13 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
                 {"type": section.type, "bar_count": section.bar_count} for section in form.sections
             ]
         derived_sections = derive_section_boundaries(section_payloads, locked_meter, ticks_per_quarter)
-        sections = [CompositionSection.model_validate(item) for item in derived_sections]
+        sections = [
+            CompositionV2Section.model_validate({**item, "id": f"section-{index}"})
+            for index, item in enumerate(derived_sections, start=1)
+        ]
         duration_ticks = locked_bars * bar_ticks
 
-        tracks: list[CompositionTrack] = []
+        tracks: list[CompositionV2Track] = []
         used_track_ids: set[str] = set()
         for index, draft in enumerate(drafts, start=1):
             try:
@@ -636,10 +641,10 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
                 )
 
         harmony_items = [
-            LLMMusicHarmonyItem(bar=event.bar, chord=event.chord) for event in harmony.events
+            CompositionV2HarmonyItem(bar=event.bar, chord=event.chord) for event in harmony.events
         ]
-        composition = Composition(
-            schema_version=COMPOSITION_SCHEMA_VERSION,
+        composition = CompositionV2(
+            schema_version=COMPOSITION_SCHEMA_VERSION_V2,
             tempo=locked_tempo,
             key=locked_key,
             time_signature=locked_meter,
@@ -649,6 +654,10 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
             sections=sections,
             tracks=tracks,
             harmony=harmony_items,
+            tempo_changes=[],
+            time_signature_changes=[],
+            key_changes=[],
+            markers=[],
         )
     except (ValidationError, ValueError) as exc:
         failed_stage = _infer_assemble_failed_stage(
@@ -681,6 +690,14 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
             "track_count": len(composition.tracks),
             "event_count": sum(len(track.events) for track in composition.tracks),
             "duration_ticks": composition.duration_ticks,
+            "tempo_change_count": len(composition.tempo_changes),
+            "marker_count": len(composition.markers),
+            "articulation_note_count": sum(
+                1
+                for track in composition.tracks
+                for event in track.events
+                if getattr(event, "articulations", None)
+            ),
         },
     )
     logger.debug(
@@ -1581,7 +1598,7 @@ def _draft_to_track(
     *,
     used_ids: set[str] | None = None,
     duration_ticks: int | None = None,
-) -> CompositionTrack:
+) -> CompositionV2Track:
     instrument = draft.instrument
     midi_program = draft.midi_program
     if midi_program is None:
@@ -1592,23 +1609,38 @@ def _draft_to_track(
     preferred = draft.id or None
     if duration_ticks is None:
         events = [
-            NoteEvent(
+            CompositionV2NoteEvent(
                 pitch=event.pitch,
                 start_tick=event.start_tick,
                 duration_ticks=event.duration_ticks,
                 velocity=event.velocity,
                 staff=event.staff,
                 id=event.id,
+                articulations=[],
+                tie=None,
             )
             for event in draft.events
         ]
     else:
-        events = _fit_events_to_duration(
+        fitted = _fit_events_to_duration(
             draft.events,
             duration_ticks,
             track_role=draft.role,
             preferred_track_id=preferred,
         )
+        events = [
+            CompositionV2NoteEvent(
+                pitch=event.pitch,
+                start_tick=event.start_tick,
+                duration_ticks=event.duration_ticks,
+                velocity=event.velocity,
+                staff=event.staff,
+                id=event.id,
+                articulations=[],
+                tie=None,
+            )
+            for event in fitted
+        ]
     if used_ids is None:
         track_id = preferred or _track_id(instrument, index)
     else:
@@ -1624,7 +1656,7 @@ def _draft_to_track(
                     "assemble_index": index,
                 },
             )
-    return CompositionTrack(
+    return CompositionV2Track(
         id=track_id,
         name=draft.name or f"{instrument.title()} {draft.role}",
         instrument=instrument,
@@ -1634,8 +1666,12 @@ def _draft_to_track(
         is_drum=draft.is_drum,
         volume=draft.volume,
         pan=draft.pan,
+        expression=127,
         staff=draft.staff,
         events=events,
+        dynamic_marks=[],
+        sustain_pedals=[],
+        automation=[],
     )
 
 
@@ -1656,7 +1692,7 @@ def _build_form_prompt(state: _GenerationState) -> str:
         else f"- sections must be contiguous from start_bar=1 and sum exactly to bar_count={constraints.duration_bars}"
     )
     return f"""
-You are planning musical form for a composition.v1 generator.
+You are planning musical form for a composition.v2 generator.
 IMMUTABLE HARD CONSTRAINTS (must not violate):
 {json.dumps(hard_block["hard"], ensure_ascii=True)}
 SOFT creative preferences (may guide style only):
@@ -1700,7 +1736,7 @@ def _build_harmony_prompt(state: _GenerationState) -> str:
     hard_block = prompt_parameters_hard_block(constraints)
     locked_key = constraints.key or form.key
     return f"""
-You are writing harmonic progression metadata for composition.v1.
+You are writing harmonic progression metadata for composition.v2.
 IMMUTABLE HARD CONSTRAINTS:
 {json.dumps(hard_block["hard"], ensure_ascii=True)}
 Form plan:
@@ -2214,7 +2250,7 @@ def _parse_and_validate(state: _GenerationState) -> _GenerationState:
     warnings = list(state.get("warnings", []))
     normalization_path = "canonical" if parsed_json.get("schema_version") == music.schema_version else "legacy_migrated"
     if normalization_path == "legacy_migrated":
-        warnings.append("LLM returned legacy music JSON; normalized to composition.v1.")
+        warnings.append("LLM returned legacy music JSON; normalized to composition.v2.")
     return {**state, "parsed_json": parsed_json, "music": music, "warnings": warnings}
 
 

@@ -3,6 +3,7 @@ import styled from 'styled-components';
 import { editCompositionRegion } from '../api/musicApi.js';
 import { useMusicStore } from '../store/musicStore.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
+import { countV2FeatureSummary } from '../utils/pianoRollEvents.js';
 import { defaultTargetTrackIds } from '../utils/pianoRollSelection.js';
 
 const Panel = styled.section`
@@ -101,15 +102,25 @@ const AiRegionEditPanel = () => {
     if (Array.isArray(aiEditTrackIds) && aiEditTrackIds.length) {
       return aiEditTrackIds;
     }
-    return defaultTargetTrackIds(editedMusicJson, {
+    const defaults = defaultTargetTrackIds(editedMusicJson, {
       mode: aiEditTrackMode,
       currentTrackId: pianoRollTrackId,
     });
+    console.debug('[FIX:ai-region-track-defaults] Defaulted AI edit track targets', {
+      mode: aiEditTrackMode,
+      trackCount: defaults.length,
+      hasCurrentTrack: Boolean(pianoRollTrackId),
+    });
+    return defaults;
   }, [aiEditTrackIds, editedMusicJson, aiEditTrackMode, pianoRollTrackId]);
+  const featureCounts = useMemo(
+    () => countV2FeatureSummary(editedMusicJson),
+    [editedMusicJson],
+  );
 
   const disabledReason = useMemo(() => {
     if (!editedMusicJson || !canonical || !validation.valid) {
-      return 'Canonical composition.v1 is required';
+      return 'Canonical composition is required';
     }
     if (!aiEditStartBar || !aiEditEndBar) {
       return 'Select a bar range in the piano roll (Shift+drag or start/end controls)';
@@ -218,6 +229,10 @@ const AiRegionEditPanel = () => {
         </span>
         <span>
           Provider/model: {selectedProvider || '—'} / {selectedModel || '—'}
+        </span>
+        <span>
+          V2 expression preserved: tempo {featureCounts.tempoChanges}, dynamics {featureCounts.dynamicMarks},
+          ties {featureCounts.tiedNotes}
         </span>
       </Meta>
       <TextArea

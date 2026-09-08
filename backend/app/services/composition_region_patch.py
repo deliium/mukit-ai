@@ -1,4 +1,4 @@
-"""Deterministic region selection and replace_region patch application for Composition V1."""
+"""Deterministic region selection and replace_region patch application."""
 
 from __future__ import annotations
 
@@ -10,19 +10,24 @@ from typing import Any, Iterable
 
 from pydantic import ValidationError
 
+from ..composition_schemas import CompositionV1, CompositionV2
 from ..schemas import (
     Composition,
     CompositionEditSelection,
     CompositionRegionReplacementPatch,
     CompositionTrack,
+    CompositionV2NoteEvent,
     LLMMusicHarmonyItem,
     NoteEvent,
 )
 from .composition_timing import bar_duration_ticks, bar_to_start_tick
+from .composition_timeline import compile_timeline
 from .composition_validator import CompositionValidationResult, validate_composition_integrity
 
 
 logger = logging.getLogger(__name__)
+
+CompositionLike = CompositionV1 | CompositionV2
 
 
 class CompositionRegionPatchError(ValueError):
@@ -55,7 +60,7 @@ class RegionSelectionSummary:
 
 @dataclass
 class RegionPatchApplicationResult:
-    composition: Composition
+    composition: CompositionLike
     patch: CompositionRegionReplacementPatch
     summary: RegionSelectionSummary
     replaced_event_count: int
@@ -65,7 +70,7 @@ class RegionPatchApplicationResult:
 
 
 def selection_tick_bounds(
-    composition: Composition,
+    composition: CompositionLike,
     selection: CompositionEditSelection | CompositionRegionReplacementPatch,
 ) -> RegionTickBounds:
     """Convert an inclusive bar selection into exclusive-end tick boundaries."""
@@ -108,9 +113,15 @@ def selection_tick_bounds(
             },
         )
 
-    bar_ticks = bar_duration_ticks(composition.time_signature, composition.ticks_per_quarter)
-    start_tick = bar_to_start_tick(selection.start_bar, composition.time_signature, composition.ticks_per_quarter)
-    end_tick = bar_to_start_tick(selection.end_bar + 1, composition.time_signature, composition.ticks_per_quarter)
+    try:
+        timeline = compile_timeline(composition)
+        start_tick, end_tick = timeline.bar_range_ticks(selection.start_bar, selection.end_bar)
+        bar_ticks = timeline.bar_end_tick(selection.start_bar) - timeline.bar_start_tick(selection.start_bar)
+    except Exception:
+        # Constant-meter fallback for V1-shaped documents without change arrays.
+        bar_ticks = bar_duration_ticks(composition.time_signature, composition.ticks_per_quarter)
+        start_tick = bar_to_start_tick(selection.start_bar, composition.time_signature, composition.ticks_per_quarter)
+        end_tick = bar_to_start_tick(selection.end_bar + 1, composition.time_signature, composition.ticks_per_quarter)
     if end_tick > composition.duration_ticks:
         end_tick = composition.duration_ticks
 
@@ -135,7 +146,7 @@ def selection_tick_bounds(
 
 
 def resolve_target_track_ids(
-    composition: Composition,
+    composition: CompositionLike,
     track_ids: list[str] | None,
 ) -> list[str]:
     known = [track.id for track in composition.tracks]
@@ -158,7 +169,7 @@ def resolve_target_track_ids(
     return list(track_ids)
 
 
-def event_in_region(event: NoteEvent | dict[str, Any], bounds: RegionTickBounds) -> bool:
+def event_in_region(event: NoteEvent | CompositionV2NoteEvent | dict[str, Any], bounds: RegionTickBounds) -> bool:
     start_tick = int(event["start_tick"] if isinstance(event, dict) else event.start_tick)
     duration_ticks = int(event["duration_ticks"] if isinstance(event, dict) else event.duration_ticks)
     end_tick = start_tick + duration_ticks
@@ -166,15 +177,85 @@ def event_in_region(event: NoteEvent | dict[str, Any], bounds: RegionTickBounds)
     return start_tick < bounds.end_tick and end_tick > bounds.start_tick
 
 
-def event_fully_within_region(event: NoteEvent | dict[str, Any], bounds: RegionTickBounds) -> bool:
+def event_fully_within_region(
+    event: NoteEvent | CompositionV2NoteEvent | dict[str, Any],
+    bounds: RegionTickBounds,
+) -> bool:
     start_tick = int(event["start_tick"] if isinstance(event, dict) else event.start_tick)
     duration_ticks = int(event["duration_ticks"] if isinstance(event, dict) else event.duration_ticks)
     end_tick = start_tick + duration_ticks
     return start_tick >= bounds.start_tick and end_tick <= bounds.end_tick
 
 
+def reject_boundary_crossing_content(
+    composition: CompositionLike,
+    bounds: RegionTickBounds,
+    target_track_ids: Iterable[str],
+) -> None:
+    """Reject edits that would silently truncate crossing notes or split tie chains."""
+    target_set = set(target_track_ids)
+    for track in composition.tracks:
+        if track.id not in target_set:
+            continue
+        for event in track.events:
+            if event_in_region(event, bounds) and not event_fully_within_region(event, bounds):
+                logger.warning(
+                    "Rejected boundary-crossing note in region selection",
+                    extra={
+                        "track_id": track.id,
+                        "start_tick": event.start_tick,
+                        "duration_ticks": event.duration_ticks,
+                        "region_start_tick": bounds.start_tick,
+                        "region_end_tick": bounds.end_tick,
+                        "code": "boundary_crossing_note",
+                    },
+                )
+                raise CompositionRegionPatchError(
+                    "Selected region overlaps a note that continues outside the selection; "
+                    "narrow the selection or edit the full note span",
+                    code="boundary_crossing_note",
+                    context={
+                        "track_id": track.id,
+                        "start_tick": event.start_tick,
+                        "duration_ticks": event.duration_ticks,
+                        "region_start_tick": bounds.start_tick,
+                        "region_end_tick": bounds.end_tick,
+                    },
+                )
+
+        groups: dict[str, list[Any]] = {}
+        for event in track.events:
+            tie = getattr(event, "tie", None)
+            if tie is None:
+                continue
+            groups.setdefault(tie.group_id, []).append(event)
+        for group_id, members in groups.items():
+            any_in = any(event_in_region(event, bounds) for event in members)
+            any_out = any(not event_in_region(event, bounds) for event in members)
+            if any_in and any_out:
+                logger.warning(
+                    "Rejected boundary-crossing tie chain in region selection",
+                    extra={
+                        "track_id": track.id,
+                        "group_id": group_id,
+                        "member_count": len(members),
+                        "code": "boundary_crossing_tie_chain",
+                    },
+                )
+                raise CompositionRegionPatchError(
+                    "Selected region intersects a tie chain that continues outside the selection; "
+                    "include the full tie chain or clear ties before editing",
+                    code="boundary_crossing_tie_chain",
+                    context={
+                        "track_id": track.id,
+                        "group_id": group_id,
+                        "member_count": len(members),
+                    },
+                )
+
+
 def summarize_region_selection(
-    composition: Composition,
+    composition: CompositionLike,
     selection: CompositionEditSelection,
 ) -> RegionSelectionSummary:
     bounds = selection_tick_bounds(composition, selection)
@@ -220,13 +301,18 @@ def summarize_region_selection(
     return summary
 
 
-def _event_dict(event: NoteEvent | dict[str, Any]) -> dict[str, Any]:
-    if isinstance(event, NoteEvent):
-        return event.model_dump(mode="json")
-    return copy.deepcopy(event)
+def _event_dict(event: NoteEvent | CompositionV2NoteEvent | dict[str, Any]) -> dict[str, Any]:
+    if hasattr(event, "model_dump"):
+        data = event.model_dump(mode="json")
+    else:
+        data = copy.deepcopy(event)
+    # Patch replacement notes may still be V1-shaped; fill V2 defaults when absent.
+    data.setdefault("articulations", [])
+    data.setdefault("tie", None)
+    return data
 
 
-def _event_semantic_tuple(event: NoteEvent | dict[str, Any]) -> tuple[Any, ...]:
+def _event_semantic_tuple(event: NoteEvent | CompositionV2NoteEvent | dict[str, Any]) -> tuple[Any, ...]:
     data = _event_dict(event)
     return (
         data.get("type", "note"),
@@ -237,6 +323,12 @@ def _event_semantic_tuple(event: NoteEvent | dict[str, Any]) -> tuple[Any, ...]:
         data.get("id"),
         data.get("staff"),
         data.get("voice"),
+        tuple(data.get("articulations") or ()),
+        (
+            (data["tie"].get("group_id"), data["tie"].get("type"))
+            if isinstance(data.get("tie"), dict)
+            else None
+        ),
     )
 
 
@@ -245,7 +337,7 @@ def canonical_json_dumps(value: Any) -> str:
 
 
 def preserved_region_events(
-    composition: Composition,
+    composition: CompositionLike,
     bounds: RegionTickBounds,
     target_track_ids: Iterable[str],
 ) -> dict[str, list[dict[str, Any]]]:
@@ -262,8 +354,8 @@ def preserved_region_events(
 
 
 def compare_preserved_regions(
-    original: Composition,
-    updated: Composition,
+    original: CompositionLike,
+    updated: CompositionLike,
     bounds: RegionTickBounds,
     target_track_ids: Iterable[str],
 ) -> dict[str, Any]:
@@ -302,24 +394,66 @@ def compare_preserved_regions(
         "ticks_per_quarter",
         "duration_ticks",
         "bar_count",
+        "schema_version",
     )
     metadata_mismatches = [
         field_name
         for field_name in metadata_fields
         if getattr(original, field_name) != getattr(updated, field_name)
     ]
+    for field_name in (
+        "tempo_changes",
+        "time_signature_changes",
+        "key_changes",
+        "markers",
+    ):
+        if hasattr(original, field_name) or hasattr(updated, field_name):
+            left = getattr(original, field_name, [])
+            right = getattr(updated, field_name, [])
+            left_dump = [
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else item for item in left
+            ]
+            right_dump = [
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else item for item in right
+            ]
+            if canonical_json_dumps(left_dump) != canonical_json_dumps(right_dump):
+                metadata_mismatches.append(field_name)
+
     sections_equal = canonical_json_dumps(
         [section.model_dump(mode="json") for section in original.sections]
     ) == canonical_json_dumps([section.model_dump(mode="json") for section in updated.sections])
 
+    # Track-level expression metadata outside replaced event lists must be preserved.
+    track_metadata_mismatches: list[str] = []
+    original_by_id = {track.id: track for track in original.tracks}
+    updated_by_id = {track.id: track for track in updated.tracks}
+    for track_id in original_track_ids:
+        left_track = original_by_id.get(track_id)
+        right_track = updated_by_id.get(track_id)
+        if left_track is None or right_track is None:
+            continue
+        left_meta = left_track.model_dump(mode="json")
+        right_meta = right_track.model_dump(mode="json")
+        left_meta.pop("events", None)
+        right_meta.pop("events", None)
+        if canonical_json_dumps(left_meta) != canonical_json_dumps(right_meta):
+            track_metadata_mismatches.append(track_id)
+
     result = {
-        "ok": not mismatched_tracks and not removed_track_ids and not metadata_mismatches and sections_equal,
+        "ok": (
+            not mismatched_tracks
+            and not removed_track_ids
+            and not metadata_mismatches
+            and not track_metadata_mismatches
+            and sections_equal
+        ),
         "mismatched_tracks": mismatched_tracks,
         "byte_equal_tracks": byte_equal_tracks,
         "semantic_equal_tracks": semantic_equal_tracks,
         "added_track_ids": added_track_ids,
         "removed_track_ids": removed_track_ids,
         "metadata_mismatches": metadata_mismatches,
+        "track_metadata_mismatches": track_metadata_mismatches,
         "sections_equal": sections_equal,
     }
     logger.debug(
@@ -339,7 +473,7 @@ def compare_preserved_regions(
 
 
 def _validate_patch_boundaries(
-    composition: Composition,
+    composition: CompositionLike,
     patch: CompositionRegionReplacementPatch,
     selection: CompositionEditSelection | None,
 ) -> RegionTickBounds:
@@ -435,7 +569,7 @@ def _validate_replacement_events(
 
 
 def _validate_added_tracks(
-    composition: Composition,
+    composition: CompositionLike,
     added_tracks: list[CompositionTrack],
     *,
     allow_added_tracks: bool,
@@ -523,7 +657,7 @@ def _apply_harmony_patch(
 
 
 def apply_region_replacement_patch(
-    composition: Composition,
+    composition: CompositionLike,
     patch: CompositionRegionReplacementPatch,
     *,
     selection: CompositionEditSelection | None = None,
@@ -551,6 +685,7 @@ def apply_region_replacement_patch(
         else patch.target_track_ids
     )
     target_track_ids = resolve_target_track_ids(composition, requested_targets)
+    reject_boundary_crossing_content(composition, bounds, target_track_ids)
     replaced_event_count = _validate_replacement_events(patch.replace_tracks, bounds, target_track_ids)
     _validate_added_tracks(composition, patch.added_tracks, allow_added_tracks=allow_added_tracks)
 
@@ -593,14 +728,33 @@ def apply_region_replacement_patch(
     )
 
     try:
-        updated_composition = Composition.model_validate(updated_data)
+        if (
+            isinstance(composition, CompositionV2)
+            or original_data.get("schema_version") == "composition.v2"
+        ):
+            for track in updated_tracks:
+                track.setdefault("expression", 127)
+                track.setdefault("dynamic_marks", [])
+                track.setdefault("sustain_pedals", [])
+                track.setdefault("automation", [])
+            updated_data.setdefault("tempo_changes", [])
+            updated_data.setdefault("time_signature_changes", [])
+            updated_data.setdefault("key_changes", [])
+            updated_data.setdefault("markers", [])
+            updated_composition: CompositionLike = CompositionV2.model_validate(updated_data)
+        else:
+            updated_composition = Composition.model_validate(updated_data)
     except ValidationError as exc:
         logger.warning(
-            "Rejected patch that produced invalid Composition V1",
-            extra={"error_count": exc.error_count(), "code": "invalid_resulting_composition"},
+            "Rejected patch that produced invalid composition",
+            extra={
+                "error_count": exc.error_count(),
+                "code": "invalid_resulting_composition",
+                "schema_version": original_data.get("schema_version"),
+            },
         )
         raise CompositionRegionPatchError(
-            "Applied patch produced an invalid Composition V1 document",
+            "Applied patch produced an invalid composition document",
             code="invalid_resulting_composition",
             context={"error_count": exc.error_count()},
         ) from exc

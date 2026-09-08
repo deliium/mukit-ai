@@ -88,8 +88,18 @@ def _melody_patch_payload(
 
 def _outside_melody_events(composition: Composition) -> list[dict]:
     melody = next(track for track in composition.tracks if track.id == "melody-1")
+    v1_note_keys = (
+        "type",
+        "pitch",
+        "start_tick",
+        "duration_ticks",
+        "velocity",
+        "id",
+        "staff",
+        "voice",
+    )
     return [
-        event.model_dump(mode="json")
+        {key: event.model_dump(mode="json").get(key) for key in v1_note_keys}
         for event in melody.events
         if event.start_tick < 8 * BAR_TICKS_4_4 or event.start_tick >= 12 * BAR_TICKS_4_4
     ]
@@ -109,6 +119,7 @@ def test_edit_composition_region_dramatic_melody_preserves_outside_and_harmony(m
         composition, patch, warnings, provider = asyncio.run(edit_composition_region(request, _settings()))
 
     assert provider.provider == "openai"
+    assert composition.schema_version == "composition.v2"
     assert patch.operation == "replace_region"
     assert patch.start_bar == 9 and patch.end_bar == 12
     assert composition.tempo == original.tempo
@@ -116,6 +127,8 @@ def test_edit_composition_region_dramatic_melody_preserves_outside_and_harmony(m
     assert composition.time_signature == original.time_signature
     assert composition.bar_count == original.bar_count
     assert composition.duration_ticks == original.duration_ticks
+    assert composition.tempo_changes == []
+    assert composition.markers == []
     assert canonical_json_dumps([item.model_dump(mode="json") for item in composition.harmony]) == (
         canonical_json_dumps([item.model_dump(mode="json") for item in original.harmony])
     )
@@ -124,6 +137,50 @@ def test_edit_composition_region_dramatic_melody_preserves_outside_and_harmony(m
     )
     assert "LLM composition region edit started" in caplog.text
     assert "LLM composition region edit completed" in caplog.text
+
+
+def test_edit_composition_region_accepts_expressive_v2_patch(monkeypatch):
+    request = _edit_request()
+    starts = [8 * BAR_TICKS_4_4, 9 * BAR_TICKS_4_4, 10 * BAR_TICKS_4_4, 11 * BAR_TICKS_4_4]
+    patch_payload = {
+        "schema_version": "composition.v2",
+        "operation": "replace_region",
+        "start_bar": 9,
+        "end_bar": 12,
+        "target_track_ids": ["melody-1"],
+        "replace_tracks": [
+            {
+                "track_id": "melody-1",
+                "events": [
+                    {
+                        "type": "note",
+                        "pitch": pitch,
+                        "start_tick": start,
+                        "duration_ticks": 480,
+                        "velocity": 100,
+                        "articulations": ["accent"] if index == 0 else [],
+                        "tie": None,
+                    }
+                    for index, (pitch, start) in enumerate(
+                        zip(["D5", "E5", "F5", "G5"], starts, strict=True)
+                    )
+                ],
+            }
+        ],
+        "added_tracks": [],
+        "harmony_patch": None,
+        "warnings": [],
+    }
+
+    async def fake_chat(_state, _prompt):
+        return json.dumps(patch_payload)
+
+    monkeypatch.setattr(llm_composition_editor, "_invoke_edit_chat", fake_chat)
+    composition, patch, _warnings, _provider = asyncio.run(edit_composition_region(request, _settings()))
+    assert composition.schema_version == "composition.v2"
+    assert patch.schema_version == "composition.v2"
+    melody = next(track for track in composition.tracks if track.id == "melody-1")
+    assert any(event.articulations == ["accent"] for event in melody.events)
 
 
 @pytest.mark.parametrize(

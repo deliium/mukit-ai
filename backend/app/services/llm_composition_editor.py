@@ -1,4 +1,4 @@
-"""LangGraph-backed partial Composition V1 region editing."""
+"""LangGraph-backed partial Composition region editing (V1 input → V2 output)."""
 
 from __future__ import annotations
 
@@ -10,10 +10,11 @@ from pydantic import ValidationError
 
 from ..llm_settings import LLMProviderSettings, LLMSettings, load_llm_settings
 from ..schemas import (
-    Composition,
+    CompositionV2,
     CompositionRegionReplacementPatch,
     LLMCompositionEditRequest,
 )
+from .composition_normalizer import normalize_composition_json
 from .composition_region_patch import (
     CompositionRegionPatchError,
     RegionSelectionSummary,
@@ -50,7 +51,7 @@ class _EditState(TypedDict, total=False):
     raw_output: str
     parsed_json: dict[str, Any]
     patch: CompositionRegionReplacementPatch
-    composition: Composition
+    composition: CompositionV2
     warnings: list[str]
     diagnostics: list[dict[str, Any]]
     validation_ok: bool
@@ -65,7 +66,8 @@ def _selected_edit_model(request: LLMCompositionEditRequest, provider: LLMProvid
 
 
 def _sanitized_instruction(instruction: str) -> str:
-    return instruction.strip()[:200]
+    # Length-only for logs; never log the instruction text itself.
+    return f"len={len(instruction.strip())}"
 
 
 def _scope_log_extra(summary: RegionSelectionSummary | None) -> dict[str, Any]:
@@ -83,14 +85,17 @@ def _scope_log_extra(summary: RegionSelectionSummary | None) -> dict[str, Any]:
 async def edit_composition_region(
     request: LLMCompositionEditRequest,
     settings: LLMSettings | None = None,
-) -> tuple[Composition, CompositionRegionReplacementPatch, list[str], LLMProviderSettings]:
-    """Edit only the selected Composition V1 region via a replace_region patch graph."""
+) -> tuple[CompositionV2, CompositionRegionReplacementPatch, list[str], LLMProviderSettings]:
+    """Edit only the selected region via a replace_region patch graph; returns CompositionV2."""
     active_settings = settings or load_llm_settings()
     # Reuse provider selection from the full-generation service; request shape shares selection fields.
     provider = _select_provider(request, active_settings)  # type: ignore[arg-type]
     model_name = _selected_edit_model(request, provider)
 
     from .fake_llm import FakeLLMError, edit_fake_composition_region, is_fake_provider
+
+    normalized_composition = normalize_composition_json(request.composition)
+    request = request.model_copy(update={"composition": normalized_composition})
 
     if is_fake_provider(provider):
         logger.info(
@@ -106,6 +111,21 @@ async def edit_composition_region(
             return await edit_fake_composition_region(request, provider)
         except FakeLLMError as exc:
             raise InvalidLLMOutputError(str(exc)) from exc
+        except CompositionRegionPatchError as exc:
+            # Map deterministic fake-patch rejections to 502-class InvalidLLMOutputError
+            # instead of an unhandled 500 from the route handler.
+            logger.warning(
+                "[FIX:fake-region-edit] Fake region patch rejected",
+                extra={
+                    "code": exc.code,
+                    "start_bar": request.edit.selection.start_bar,
+                    "end_bar": request.edit.selection.end_bar,
+                    "error_codes": (exc.context or {}).get("error_codes"),
+                },
+            )
+            raise InvalidLLMOutputError(
+                f"Fake region edit rejected: {exc.code}"
+            ) from exc
 
     logger.info(
         "LLM composition region edit started",
@@ -118,6 +138,7 @@ async def edit_composition_region(
             "allow_harmony_changes": request.edit.allow_harmony_changes,
             "allow_added_tracks": request.edit.allow_added_tracks,
             "instruction_length": len(request.edit.instruction),
+            "schema_version": request.composition.schema_version,
         },
     )
     logger.debug(
@@ -126,7 +147,7 @@ async def edit_composition_region(
             "schema_version": request.composition.schema_version,
             "bar_count": request.composition.bar_count,
             "track_count": len(request.composition.tracks),
-            "instruction_preview": _sanitized_instruction(request.edit.instruction),
+            "instruction_meta": _sanitized_instruction(request.edit.instruction),
             "track_ids": request.edit.selection.track_ids,
             "section_type": request.edit.selection.section_type,
         },
@@ -164,7 +185,7 @@ async def edit_composition_region(
         detail = diagnostics[0].get("message") if diagnostics else "Region edit patch validation failed"
         raise InvalidLLMOutputError(str(detail)[:500])
 
-    composition = final_state["composition"]
+    composition = normalize_composition_json(final_state["composition"])
     patch = final_state["patch"]
     warnings = list(final_state.get("warnings") or [])
     event_count = sum(len(track.events) for track in composition.tracks)
@@ -181,6 +202,7 @@ async def edit_composition_region(
             "warning_count": len(warnings),
             "final_event_count": event_count,
             "repair_count": final_state.get("repair_count", 0),
+            "schema_version": composition.schema_version,
         },
     )
     return composition, patch, warnings, provider
@@ -493,12 +515,27 @@ def _build_draft_prompt(
     ]
 
     contract = {
-        "schema_version": "composition.v1",
+        "schema_version": "composition.v2",
         "operation": "replace_region",
         "start_bar": selection.start_bar,
         "end_bar": selection.end_bar,
         "target_track_ids": target_ids,
-        "replace_tracks": [{"track_id": "<id>", "events": []}],
+        "replace_tracks": [
+            {
+                "track_id": "<id>",
+                "events": [
+                    {
+                        "type": "note",
+                        "pitch": "C4",
+                        "start_tick": summary.bounds.start_tick,
+                        "duration_ticks": 480,
+                        "velocity": 90,
+                        "articulations": ["accent"],
+                        "tie": None,
+                    }
+                ],
+            }
+        ],
         "added_tracks": [],
         "harmony_patch": None,
         "warnings": [],
@@ -509,8 +546,13 @@ def _build_draft_prompt(
         "Do not return a full composition.",
         "Replace only notes inside the selected inclusive bar range for target tracks.",
         "All replacement event start/end ticks must stay within the selected region tick bounds.",
-        "Preserve tempo, key, time_signature, ticks_per_quarter, duration_ticks, bar_count, and sections.",
+        "Replacement notes may include articulations and tie metadata; keep them musically valid.",
+        "Preserve tempo, key, time_signature, ticks_per_quarter, duration_ticks, bar_count, sections, "
+        "tempo_changes, time_signature_changes, key_changes, markers, and track expression/"
+        "dynamic_marks/sustain_pedals/automation.",
         "Do not change notes outside the selected bars.",
+        "Do not silently truncate boundary-crossing notes or split tie chains; leave them unchanged "
+        "or request a wider selection.",
     ]
     if not request.edit.allow_harmony_changes:
         rules.append("Keep harmony unchanged; set harmony_patch to null.")
@@ -528,17 +570,20 @@ def _build_draft_prompt(
         "change bass line",
         "add counter-melody",
         "increase tension in the selected section",
+        "add articulations or ties inside the selection",
     ]
 
     prompt = (
-        "You are editing a canonical Composition V1 document using a replace_region patch.\n"
+        "You are editing a canonical Composition V2 document using a replace_region patch.\n"
+        "Compatibility note: V1 input documents are migrated to V2 before editing.\n"
         f"Instruction: {request.edit.instruction.strip()}\n"
         f"Selection: bars {selection.start_bar}-{selection.end_bar} (inclusive), "
         f"ticks [{summary.bounds.start_tick}, {summary.bounds.end_tick}).\n"
         f"Target tracks: {target_ids}\n"
         f"Composition metadata: tempo={composition.tempo}, key={composition.key}, "
         f"time_signature={composition.time_signature}, ticks_per_quarter={composition.ticks_per_quarter}, "
-        f"bar_count={composition.bar_count}, duration_ticks={composition.duration_ticks}.\n"
+        f"bar_count={composition.bar_count}, duration_ticks={composition.duration_ticks}, "
+        f"schema_version={composition.schema_version}.\n"
         f"Supported edit scenarios: {', '.join(supported)}.\n"
         f"Rules:\n- " + "\n- ".join(rules) + "\n"
         f"Patch contract example shape:\n{json.dumps(contract, ensure_ascii=True)}\n"

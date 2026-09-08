@@ -1,6 +1,90 @@
 import axios from 'axios';
+import { prepareCompositionForStore, CompositionVersionError } from '../utils/compositionVersion.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { downloadBlob, filenameFromContentDisposition } from '../utils/downloadFile.js';
+
+export const PROJECTION_HEADER_NAMES = {
+  status: 'x-mukit-projection-status',
+  issues: 'x-mukit-projection-issues',
+  exactCount: 'x-mukit-projection-exact-count',
+  approximatedCount: 'x-mukit-projection-approximated-count',
+  omittedCount: 'x-mukit-projection-omitted-count',
+  failedCount: 'x-mukit-projection-failed-count',
+};
+
+export function parseProjectionHeaders(headers = {}) {
+  const normalized = Object.fromEntries(
+    Object.entries(headers || {}).map(([key, value]) => [String(key).toLowerCase(), value]),
+  );
+  const rawIssues = normalized[PROJECTION_HEADER_NAMES.issues];
+  const issues = typeof rawIssues === 'string' && rawIssues.trim()
+    ? rawIssues.split(',').map((code) => code.trim()).filter(Boolean)
+    : [];
+  const parseCount = (name) => {
+    const raw = normalized[name];
+    if (raw === undefined || raw === null || raw === '') {
+      return 0;
+    }
+    const parsed = Number.parseInt(String(raw), 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  };
+  const status = typeof normalized[PROJECTION_HEADER_NAMES.status] === 'string'
+    ? normalized[PROJECTION_HEADER_NAMES.status]
+    : 'exact';
+  return {
+    status,
+    issues,
+    exactCount: parseCount(PROJECTION_HEADER_NAMES.exactCount),
+    approximatedCount: parseCount(PROJECTION_HEADER_NAMES.approximatedCount),
+    omittedCount: parseCount(PROJECTION_HEADER_NAMES.omittedCount),
+    failedCount: parseCount(PROJECTION_HEADER_NAMES.failedCount),
+    hasIssues: issues.length > 0 || status !== 'exact',
+  };
+}
+
+export function projectionWarningsFromHeaders(headers = {}) {
+  const projection = parseProjectionHeaders(headers);
+  if (!projection.hasIssues) {
+    return [];
+  }
+  if (projection.issues.length > 0) {
+    return projection.issues.map((code) => `Projection ${code}`);
+  }
+  return [`Projection status: ${projection.status}`];
+}
+
+function normalizeApiComposition(raw, { context = 'response' } = {}) {
+  try {
+    const composition = prepareCompositionForStore(raw);
+    console.debug('[musicApi] Composition version normalized', {
+      context,
+      sourceSchemaVersion: raw?.schema_version ?? null,
+      targetSchemaVersion: composition.schema_version,
+    });
+    return composition;
+  } catch (error) {
+    if (error instanceof CompositionVersionError) {
+      console.warn('[musicApi] Composition normalization failed', {
+        context,
+        code: error.code,
+        schemaVersion: error.schemaVersion,
+        message: error.message,
+      });
+      throw error;
+    }
+    throw error;
+  }
+}
+
+function validateCanonicalForApi(composition, { action = 'request' } = {}) {
+  const validation = validateMusicJson(composition);
+  if (!validation.valid || !isCanonicalComposition(composition)) {
+    const message = validation.message || `Canonical composition JSON is required for ${action}`;
+    console.error('[musicApi] Canonical composition validation failed', { action, message });
+    throw new Error(message);
+  }
+  return validation;
+}
 
 export async function getHealth() {
   return request('get', '/health');
@@ -12,11 +96,12 @@ export async function getLlmModels() {
 
 export async function generateLlmMusicJson(payload) {
   const response = await request('post', '/llm/generate-music-json', payload);
-  const validation = validateMusicJson(response.music);
+  const composition = normalizeApiComposition(response.music, { context: 'generate-response' });
+  const validation = validateMusicJson(composition);
   console.debug('[musicApi] LLM music response validation completed', {
     valid: validation.valid,
-    schemaVersion: response.music?.schema_version || 'legacy',
-    canonical: isCanonicalComposition(response.music),
+    schemaVersion: composition.schema_version,
+    canonical: isCanonicalComposition(composition),
     warningCount: response.warnings?.length || 0,
     generationValidationStatus: response.validation?.status || null,
     generationValidationErrorCount: response.validation?.errors?.length || 0,
@@ -26,7 +111,7 @@ export async function generateLlmMusicJson(payload) {
     console.error('[musicApi] LLM music response failed validation', { message: validation.message });
     throw new Error(validation.message);
   }
-  return response;
+  return { ...response, music: composition };
 }
 
 export async function editCompositionRegion(payload) {
@@ -41,17 +126,16 @@ export async function editCompositionRegion(payload) {
     schemaVersion: payload?.composition?.schema_version || 'legacy',
   });
 
-  const inboundValidation = validateMusicJson(payload?.composition);
-  if (!inboundValidation.valid || !isCanonicalComposition(payload?.composition)) {
-    console.error('[musicApi] Composition region edit rejected invalid inbound composition', {
-      message: inboundValidation.message || 'Edit requires composition.v1 JSON',
-    });
-    throw new Error(inboundValidation.message || 'Edit requires canonical composition.v1 JSON');
-  }
+  const inboundComposition = normalizeApiComposition(payload.composition, { context: 'edit-request' });
+  validateCanonicalForApi(inboundComposition, { action: 'region edit' });
 
   try {
-    const response = await request('post', '/llm/edit-composition-region', payload);
-    const validation = validateMusicJson(response.composition);
+    const response = await request('post', '/llm/edit-composition-region', {
+      ...payload,
+      composition: inboundComposition,
+    });
+    const composition = normalizeApiComposition(response.composition, { context: 'edit-response' });
+    const validation = validateMusicJson(composition);
     const hasPatch = Boolean(response.patch && response.patch.operation === 'replace_region');
     console.debug('[musicApi] Composition region edit response validation completed', {
       provider: response.provider || null,
@@ -60,7 +144,7 @@ export async function editCompositionRegion(payload) {
       endBar: selection.end_bar,
       trackScopeCount,
       valid: validation.valid,
-      schemaVersion: response.composition?.schema_version || 'legacy',
+      schemaVersion: composition.schema_version,
       warningCount: response.warnings?.length || 0,
       hasPatch,
     });
@@ -76,7 +160,7 @@ export async function editCompositionRegion(payload) {
       });
       throw new Error('Edit response is missing a replace_region patch');
     }
-    return response;
+    return { ...response, composition };
   } catch (error) {
     console.error('[musicApi] Composition region edit request failed', {
       status: error.response?.status || null,
@@ -96,35 +180,32 @@ export async function exportMusicXml(composition) {
 }
 
 export async function renderMusicXmlPreview(composition) {
-  const validation = validateMusicJson(composition);
-  const eventCount = Array.isArray(composition?.tracks)
-    ? composition.tracks.reduce((total, track) => total + (track.events?.length || 0), 0)
+  const normalized = normalizeApiComposition(composition, { context: 'preview-request' });
+  validateCanonicalForApi(normalized, { action: 'MusicXML preview' });
+  const eventCount = Array.isArray(normalized.tracks)
+    ? normalized.tracks.reduce((total, track) => total + (track.events?.length || 0), 0)
     : 0;
   console.debug('[musicApi] MusicXML preview request started', {
-    schemaVersion: composition?.schema_version || 'legacy',
-    trackCount: composition?.tracks?.length || 0,
+    schemaVersion: normalized.schema_version,
+    trackCount: normalized.tracks?.length || 0,
     eventCount,
-    valid: validation.valid,
   });
-  if (!validation.valid || !isCanonicalComposition(composition)) {
-    console.warn('[musicApi] MusicXML preview rejected invalid composition', {
-      message: validation.message || 'Preview requires composition.v1 JSON',
-    });
-    throw new Error(validation.message || 'Preview requires canonical composition.v1 JSON');
-  }
 
   try {
-    const response = await axios.post('/export/musicxml/preview', composition, {
+    const response = await axios.post('/export/musicxml/preview', normalized, {
       responseType: 'text',
       headers: { Accept: 'application/vnd.recordare.musicxml+xml, application/xml, text/xml, text/plain' },
     });
     const musicxml = typeof response.data === 'string' ? response.data : String(response.data || '');
+    const projection = parseProjectionHeaders(response.headers);
     console.debug('[musicApi] MusicXML preview request completed', {
-      schemaVersion: composition.schema_version,
+      schemaVersion: normalized.schema_version,
       eventCount,
       musicXmlLength: musicxml.length,
+      projectionStatus: projection.status,
+      projectionIssueCount: projection.issues.length,
     });
-    return musicxml;
+    return { musicxml, projection, warnings: projectionWarningsFromHeaders(response.headers) };
   } catch (error) {
     const detail = error.response?.data?.detail || error.message || 'Unknown MusicXML preview failure';
     const message = typeof detail === 'string' ? detail : JSON.stringify(detail);
@@ -155,44 +236,41 @@ export async function exportWav(composition) {
 }
 
 async function exportComposition(composition, { endpoint, format, fallbackFilename, expectedType }) {
-  const validation = validateMusicJson(composition);
-  const eventCount = Array.isArray(composition?.tracks)
-    ? composition.tracks.reduce((total, track) => total + (track.events?.length || 0), 0)
+  const normalized = normalizeApiComposition(composition, { context: `${format}-export` });
+  validateCanonicalForApi(normalized, { action: `${format} export` });
+  const eventCount = Array.isArray(normalized.tracks)
+    ? normalized.tracks.reduce((total, track) => total + (track.events?.length || 0), 0)
     : 0;
   console.debug('[musicApi] Export request started', {
     format,
-    schemaVersion: composition?.schema_version || 'legacy',
-    trackCount: composition?.tracks?.length || 0,
+    schemaVersion: normalized.schema_version,
+    trackCount: normalized.tracks?.length || 0,
     eventCount,
-    valid: validation.valid,
   });
-  if (!validation.valid || !isCanonicalComposition(composition)) {
-    console.error('[musicApi] Export rejected invalid composition', {
-      format,
-      message: validation.message || 'Export requires composition.v1 JSON',
-    });
-    throw new Error(validation.message || 'Export requires canonical composition.v1 JSON');
-  }
 
   try {
-    const response = await axios.post(endpoint, composition, { responseType: 'blob' });
+    const response = await axios.post(endpoint, normalized, { responseType: 'blob' });
     const blob = response.data;
     const contentType = response.headers?.['content-type'] || blob.type || expectedType;
     const filename = filenameFromContentDisposition(
       response.headers?.['content-disposition'],
       fallbackFilename,
     );
+    const projection = parseProjectionHeaders(response.headers);
+    const warnings = projectionWarningsFromHeaders(response.headers);
     console.debug('[musicApi] Export request completed', {
       format,
-      schemaVersion: composition.schema_version,
-      trackCount: composition.tracks.length,
+      schemaVersion: normalized.schema_version,
+      trackCount: normalized.tracks.length,
       eventCount,
       blobSize: blob.size,
       contentType,
       filename,
+      projectionStatus: projection.status,
+      projectionIssueCount: projection.issues.length,
     });
     downloadBlob(blob, filename);
-    return { blob, filename, contentType };
+    return { blob, filename, contentType, projection, warnings };
   } catch (error) {
     const detail = await extractBlobErrorDetail(error);
     console.error('[musicApi] Export request failed', {

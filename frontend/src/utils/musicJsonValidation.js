@@ -1,7 +1,12 @@
+import { classifyCompositionVersion, SCHEMA_VERSION_V2 } from './compositionVersion.js';
+
 const KEY_PATTERN = /^[A-G](?:#|b)?\s+(?:major|minor)$/;
 const TIME_SIGNATURE_PATTERN = /^\d{1,2}\/\d{1,2}$/;
 const PITCH_PATTERN = /^([A-G])([#b]?)(-?\d+)$/;
 const SUPPORTED_DENOMINATORS = new Set([1, 2, 4, 8, 16, 32]);
+const ARTICULATION_VALUES = new Set(['staccato', 'staccatissimo', 'tenuto', 'accent', 'marcato']);
+const GATE_SHORTENING_ARTICULATIONS = new Set(['staccato', 'staccatissimo', 'marcato']);
+const ATTACK_ARTICULATIONS = new Set(['accent', 'marcato']);
 const NOTE_TO_SEMITONE = {
   C: 0,
   'C#': 1,
@@ -27,18 +32,25 @@ export function validateMusicJson(value) {
     return invalid('Music JSON must be an object.');
   }
 
-  if (value.schema_version === 'composition.v1') {
-    return validateCanonicalComposition(value);
+  const category = classifyCompositionVersion(value);
+  if (category === 'unsupported') {
+    const version = value.schema_version ?? 'missing';
+    return invalid(`Unsupported schema_version: ${version}`);
   }
-
-  return validateLegacyMusicJson(value);
+  if (category === 'legacy') {
+    return validateLegacyMusicJson(value);
+  }
+  if (category === 'v1') {
+    return validateCanonicalComposition(value, 'v1');
+  }
+  return validateCanonicalComposition(value, 'v2');
 }
 
 export function isCanonicalComposition(value) {
-  return Boolean(value && typeof value === 'object' && value.schema_version === 'composition.v1');
+  return Boolean(value && typeof value === 'object' && value.schema_version === SCHEMA_VERSION_V2);
 }
 
-function validateCanonicalComposition(value) {
+function validateCanonicalComposition(value, variant) {
   const base = validateCommonFields(value);
   if (!base.valid) {
     return base;
@@ -65,14 +77,25 @@ function validateCanonicalComposition(value) {
     return invalid('duration_ticks must match bar_count and time_signature.');
   }
 
-  const sectionsResult = validateCanonicalSections(value.sections, barTicks, barCount, durationTicks);
+  const sectionsResult = validateCanonicalSections(value.sections, barTicks, barCount, durationTicks, variant);
   if (!sectionsResult.valid) {
     return sectionsResult;
   }
 
-  const tracksResult = validateCanonicalTracks(value.tracks, durationTicks);
+  const tracksResult = validateCanonicalTracks(value.tracks, durationTicks, variant);
   if (!tracksResult.valid) {
     return tracksResult;
+  }
+
+  if (variant === 'v2') {
+    const timelineResult = validateV2TimelineChanges(value, barTicks, durationTicks);
+    if (!timelineResult.valid) {
+      return timelineResult;
+    }
+    const markersResult = validateV2Markers(value.markers, durationTicks);
+    if (!markersResult.valid) {
+      return markersResult;
+    }
   }
 
   console.debug('[musicJsonValidation] Canonical composition validation completed', {
@@ -82,7 +105,8 @@ function validateCanonicalComposition(value) {
     eventCount: value.tracks.reduce((count, track) => count + (Array.isArray(track.events) ? track.events.length : 0), 0),
     durationTicks,
   });
-  return valid('Canonical composition.v1 JSON is valid for preview and playback.');
+  const label = value.schema_version === SCHEMA_VERSION_V2 ? 'composition.v2' : 'composition.v1';
+  return valid(`Canonical ${label} JSON is valid for preview and playback.`);
 }
 
 function validateLegacyMusicJson(value) {
@@ -127,7 +151,7 @@ function validateCommonFields(value) {
   return valid('Common music JSON fields are valid.');
 }
 
-function validateCanonicalSections(sections, barTicks, barCount, durationTicks) {
+function validateCanonicalSections(sections, barTicks, barCount, durationTicks, variant) {
   let expectedStartBar = 1;
   let expectedStartTick = 0;
   for (const section of sections) {
@@ -137,6 +161,9 @@ function validateCanonicalSections(sections, barTicks, barCount, durationTicks) 
     const sectionDurationTicks = Number(section.duration_ticks);
     if (!section.type || typeof section.type !== 'string') {
       return invalid('Every section requires a type.');
+    }
+    if (variant === 'v2' && section.id != null && typeof section.id !== 'string') {
+      return invalid('Section id must be a string when provided.');
     }
     if (!Number.isInteger(sectionBarCount) || sectionBarCount <= 0) {
       return invalid('Every section requires a positive integer bar_count.');
@@ -156,7 +183,7 @@ function validateCanonicalSections(sections, barTicks, barCount, durationTicks) 
   return valid('Canonical sections are valid.');
 }
 
-function validateCanonicalTracks(tracks, durationTicks) {
+function validateCanonicalTracks(tracks, durationTicks, variant) {
   const ids = new Set();
   for (const track of tracks) {
     if (!track.id || typeof track.id !== 'string' || ids.has(track.id)) {
@@ -172,20 +199,36 @@ function validateCanonicalTracks(tracks, durationTicks) {
     if (!Number.isInteger(Number(track.channel)) || Number(track.channel) < 1 || Number(track.channel) > 16) {
       return invalid('Track channel must be an integer from 1 to 16.');
     }
+    if (variant === 'v2') {
+      const expression = Number(track.expression);
+      if (!Number.isInteger(expression) || expression < 0 || expression > 127) {
+        return invalid('Track expression must be an integer from 0 to 127.');
+      }
+      const pedalsResult = validateSustainPedals(track.sustain_pedals, durationTicks, track.id);
+      if (!pedalsResult.valid) {
+        return pedalsResult;
+      }
+    }
     if (!Array.isArray(track.events)) {
       return invalid('Track events must be an array.');
     }
     for (const event of track.events) {
-      const eventResult = validateCanonicalEvent(event, durationTicks);
+      const eventResult = validateCanonicalEvent(event, durationTicks, variant);
       if (!eventResult.valid) {
         return eventResult;
+      }
+    }
+    if (variant === 'v2') {
+      const tieResult = validateTieChains(track);
+      if (!tieResult.valid) {
+        return tieResult;
       }
     }
   }
   return valid('Canonical tracks are valid.');
 }
 
-function validateCanonicalEvent(event, durationTicks) {
+function validateCanonicalEvent(event, durationTicks, variant) {
   const startTick = Number(event.start_tick);
   const eventDurationTicks = Number(event.duration_ticks);
   const velocity = Number(event.velocity);
@@ -207,7 +250,205 @@ function validateCanonicalEvent(event, durationTicks) {
   if (!Number.isInteger(velocity) || velocity < 1 || velocity > 127) {
     return invalid('Event velocity must be an integer from 1 to 127.');
   }
+  if (variant === 'v2') {
+    const articulations = Array.isArray(event.articulations) ? event.articulations : [];
+    const articulationResult = validateArticulations(articulations, event.tie);
+    if (!articulationResult.valid) {
+      return articulationResult;
+    }
+    if (event.tie != null) {
+      if (typeof event.tie !== 'object' || !event.tie.group_id || !event.tie.type) {
+        return invalid('Event tie must include group_id and type.');
+      }
+      if (event.tie.type !== 'start' && event.tie.type !== 'continue' && event.tie.type !== 'stop') {
+        return invalid('Event tie type must be start, continue, or stop.');
+      }
+    }
+  }
   return valid('Canonical event is valid.');
+}
+
+function validateArticulations(articulations, tie) {
+  const names = articulations;
+  const unique = new Set(names);
+  if (unique.size !== names.length) {
+    return invalid('Duplicate articulations on a note are not allowed.');
+  }
+  for (const name of names) {
+    if (!ARTICULATION_VALUES.has(name)) {
+      return invalid(`Unsupported articulation: ${name}`);
+    }
+  }
+  if (names.includes('staccato') && names.includes('staccatissimo')) {
+    return invalid('staccato and staccatissimo cannot combine.');
+  }
+  if ((names.includes('staccato') || names.includes('staccatissimo')) && names.includes('tenuto')) {
+    return invalid('Short articulations cannot combine with tenuto.');
+  }
+  if (names.includes('accent') && names.includes('marcato')) {
+    return invalid('accent and marcato cannot combine.');
+  }
+  if (tie != null) {
+    if (names.some((name) => GATE_SHORTENING_ARTICULATIONS.has(name))) {
+      return invalid('Gate-shortening articulations are not allowed in a tie chain.');
+    }
+    if (names.some((name) => ATTACK_ARTICULATIONS.has(name)) && tie.type !== 'start') {
+      return invalid('Attack articulations are only allowed on the tie chain head.');
+    }
+  }
+  return valid('Articulations are valid.');
+}
+
+function validateTieChains(track) {
+  const groups = new Map();
+  for (const event of track.events) {
+    if (!event.tie) {
+      continue;
+    }
+    const groupId = event.tie.group_id;
+    if (!groups.has(groupId)) {
+      groups.set(groupId, []);
+    }
+    groups.get(groupId).push(event);
+  }
+  for (const [groupId, members] of groups) {
+    const ordered = [...members].sort((a, b) => a.start_tick - b.start_tick || a.duration_ticks - b.duration_ticks);
+    const types = ordered.map((event) => event.tie.type);
+    if (types.filter((type) => type === 'start').length !== 1
+      || types.filter((type) => type === 'stop').length !== 1
+      || types[0] !== 'start'
+      || types[types.length - 1] !== 'stop') {
+      return invalid(`Tie group ${groupId} on track ${track.id} is musically invalid.`);
+    }
+    if (types.some((type, index) => type === 'continue' && (index === 0 || index === types.length - 1))) {
+      return invalid(`Tie group ${groupId} continue placement is invalid.`);
+    }
+    if (types.some((type) => type !== 'start' && type !== 'continue' && type !== 'stop')) {
+      return invalid(`Tie group ${groupId} has invalid tie types.`);
+    }
+    const head = ordered[0];
+    for (const event of ordered) {
+      if (event.pitch !== head.pitch || event.staff !== head.staff || event.voice !== head.voice) {
+        return invalid(`Tie group ${groupId} members must share pitch/staff/voice.`);
+      }
+    }
+    for (let index = 1; index < ordered.length; index += 1) {
+      const previous = ordered[index - 1];
+      const current = ordered[index];
+      const previousEnd = previous.start_tick + previous.duration_ticks;
+      if (current.start_tick !== previousEnd) {
+        return invalid(`Tie group ${groupId} members must be contiguous.`);
+      }
+    }
+  }
+  return valid('Tie chains are valid.');
+}
+
+function validateSustainPedals(pedals, durationTicks, trackId) {
+  if (!Array.isArray(pedals)) {
+    return invalid(`Track ${trackId} sustain_pedals must be an array.`);
+  }
+  let previousEnd = -1;
+  for (const pedal of pedals) {
+    const startTick = Number(pedal.start_tick);
+    const pedalDuration = Number(pedal.duration_ticks);
+    if (!Number.isInteger(startTick) || startTick < 0) {
+      return invalid('Sustain pedal start_tick must be a non-negative integer.');
+    }
+    if (!Number.isInteger(pedalDuration) || pedalDuration <= 0) {
+      return invalid('Sustain pedal duration_ticks must be a positive integer.');
+    }
+    if (startTick + pedalDuration > durationTicks) {
+      return invalid('Sustain pedals must fit within composition duration.');
+    }
+    if (startTick < previousEnd) {
+      return invalid('Sustain pedals must be non-overlapping.');
+    }
+    if (startTick === previousEnd && previousEnd >= 0) {
+      return invalid('Adjacent sustain pedal spans are not allowed.');
+    }
+    previousEnd = startTick + pedalDuration;
+  }
+  return valid('Sustain pedals are valid.');
+}
+
+function validateV2TimelineChanges(value, barTicks, durationTicks) {
+  const tempoChanges = Array.isArray(value.tempo_changes) ? value.tempo_changes : [];
+  const meterChanges = Array.isArray(value.time_signature_changes) ? value.time_signature_changes : [];
+  const keyChanges = Array.isArray(value.key_changes) ? value.key_changes : [];
+
+  let previousTempoTick = -1;
+  for (const change of tempoChanges) {
+    const tick = Number(change.tick);
+    const tempo = Number(change.bpm ?? change.tempo);
+    if (!Number.isInteger(tick) || tick <= 0 || tick >= durationTicks) {
+      return invalid('tempo_changes ticks must be in (0, duration_ticks).');
+    }
+    if (tick <= previousTempoTick) {
+      return invalid('tempo_changes must be in ascending tick order with unique ticks.');
+    }
+    if (!Number.isFinite(tempo) || tempo < 40 || tempo > 240) {
+      return invalid('tempo_changes tempo must be between 40 and 240.');
+    }
+    previousTempoTick = tick;
+  }
+
+  let previousMeterTick = -1;
+  for (const change of meterChanges) {
+    const tick = Number(change.tick);
+    if (!Number.isInteger(tick) || tick <= 0 || tick >= durationTicks) {
+      return invalid('time_signature_changes ticks must be in (0, duration_ticks).');
+    }
+    if (tick <= previousMeterTick) {
+      return invalid('time_signature_changes must be in ascending tick order.');
+    }
+    if (!isValidTimeSignature(change.time_signature)) {
+      return invalid('time_signature_changes must use supported meters.');
+    }
+    if (tick % barTicks !== 0) {
+      return invalid('time_signature_changes must occur on bar boundaries.');
+    }
+    previousMeterTick = tick;
+  }
+
+  let previousKeyTick = -1;
+  for (const change of keyChanges) {
+    const tick = Number(change.tick);
+    if (!Number.isInteger(tick) || tick <= 0 || tick >= durationTicks) {
+      return invalid('key_changes ticks must be in (0, duration_ticks).');
+    }
+    if (tick <= previousKeyTick) {
+      return invalid('key_changes must be in ascending tick order with unique ticks.');
+    }
+    if (!change.key || typeof change.key !== 'string' || !KEY_PATTERN.test(change.key.trim())) {
+      return invalid('key_changes key must use format like C minor or F# major.');
+    }
+    if (tick % barTicks !== 0) {
+      return invalid('key_changes must occur on bar boundaries.');
+    }
+    previousKeyTick = tick;
+  }
+
+  return valid('V2 timeline changes are valid.');
+}
+
+function validateV2Markers(markers, durationTicks) {
+  if (!Array.isArray(markers)) {
+    return invalid('markers must be an array.');
+  }
+  const fingerprints = new Set();
+  for (const marker of markers) {
+    const tick = Number(marker.tick);
+    if (!Number.isInteger(tick) || tick < 0 || tick > durationTicks) {
+      return invalid('Marker tick must be within composition duration.');
+    }
+    const fingerprint = `${tick}:${marker.kind}:${marker.label}`;
+    if (fingerprints.has(fingerprint)) {
+      return invalid('Exact duplicate markers are not allowed.');
+    }
+    fingerprints.add(fingerprint);
+  }
+  return valid('Markers are valid.');
 }
 
 function isValidTimeSignature(value) {

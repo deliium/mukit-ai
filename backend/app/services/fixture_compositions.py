@@ -1,7 +1,10 @@
-"""Load and validate packaged Composition V1 JSON fixtures.
+"""Load and validate packaged Composition JSON fixtures.
 
 Used by the deterministic fake LLM provider and by tests. Fixtures live under
 ``app/fixtures/`` (runtime) with mirrors under ``tests/fixtures/``.
+
+V1 fixtures are loaded through the normalizer (migrate → CompositionV2).
+Native V2 fixtures validate as CompositionV2 directly.
 """
 
 from __future__ import annotations
@@ -13,7 +16,8 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from ..schemas import Composition
+from ..composition_schemas import CompositionV2
+from .composition_normalizer import CompositionNormalizationError, normalize_composition_json
 
 
 logger = logging.getLogger(__name__)
@@ -22,12 +26,14 @@ FIXTURE_16BAR_MULTITRACK = "composition_v1_16bar_multitrack.json"
 FIXTURE_EXPORT_FIDELITY = "composition_v1_export_fidelity.json"
 FIXTURE_UNSUPPORTED_INSTRUMENT = "composition_v1_unsupported_instrument.json"
 FIXTURE_MINIMAL = "composition_v1_minimal.json"
+FIXTURE_V2_EXPRESSIVE = "composition_v2_expressive.json"
 
 KNOWN_FIXTURES = (
     FIXTURE_16BAR_MULTITRACK,
     FIXTURE_EXPORT_FIDELITY,
     FIXTURE_UNSUPPORTED_INSTRUMENT,
     FIXTURE_MINIMAL,
+    FIXTURE_V2_EXPRESSIVE,
 )
 
 
@@ -72,8 +78,8 @@ def resolve_fixture_path(name: str) -> Path:
     raise FixtureCompositionError(f"Composition fixture not found: {normalized}")
 
 
-def load_composition_fixture(name: str) -> Composition:
-    """Load a fixture JSON file and validate it as Composition V1."""
+def load_composition_fixture(name: str) -> CompositionV2:
+    """Load a fixture JSON file and normalize it to CompositionV2."""
     path = resolve_fixture_path(name)
     logger.debug(
         "Loading composition fixture",
@@ -89,32 +95,38 @@ def load_composition_fixture(name: str) -> Composition:
         raise FixtureCompositionError(f"Failed to read fixture {path.name}: {exc}") from exc
 
     try:
-        composition = Composition.model_validate(raw)
-    except ValidationError as exc:
+        composition = normalize_composition_json(raw)
+    except (CompositionNormalizationError, ValidationError, ValueError) as exc:
         logger.error(
             "Composition fixture failed schema validation",
-            extra={"fixture_name": path.name, "error_count": exc.error_count()},
+            extra={"fixture_name": path.name, "error_type": type(exc).__name__},
         )
-        raise FixtureCompositionError(f"Fixture {path.name} is not valid Composition V1") from exc
+        raise FixtureCompositionError(f"Fixture {path.name} is not a valid composition") from exc
 
     event_count = sum(len(track.events) for track in composition.tracks)
+    articulation_note_count = sum(
+        1 for track in composition.tracks for event in track.events if event.articulations
+    )
     logger.debug(
         "Loaded composition fixture",
         extra={
             "fixture_name": path.name,
             "path": str(path),
+            "schema_version": composition.schema_version,
             "bar_count": composition.bar_count,
             "track_count": len(composition.tracks),
             "event_count": event_count,
             "tempo": composition.tempo,
             "time_signature": composition.time_signature,
+            "tempo_change_count": len(composition.tempo_changes),
+            "articulation_note_count": articulation_note_count,
         },
     )
     return composition
 
 
 @lru_cache(maxsize=16)
-def load_composition_fixture_cached(name: str) -> Composition:
+def load_composition_fixture_cached(name: str) -> CompositionV2:
     """Cached fixture load for hot paths (fake LLM generate/edit)."""
     logger.debug("Cached composition fixture load", extra={"fixture_name": name})
     return load_composition_fixture(name)

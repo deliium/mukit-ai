@@ -112,7 +112,7 @@ const ComposerWorkspace = () => {
           <>
             <SectionTitle>Advanced — canonical JSON</SectionTitle>
             <p style={{ margin: '0 0 12px', color: '#64748b', fontSize: '0.9rem' }}>
-              Edit composition.v1 JSON directly. Harmony is metadata only; playable notes live in tracks[].events[].
+              Edit canonical composition JSON directly. Harmony is metadata only; playable notes live in tracks[].events[].
             </p>
             <PromptJsonEditor />
           </>

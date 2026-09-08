@@ -246,6 +246,20 @@ def test_fingerprint_ignores_event_ids_preserves_staff_voice_multiplicity():
     assert classify_content_relationship(left, different_staff) == "distinct"
 
 
+def test_fingerprint_includes_articulations_and_tie_when_present():
+    from app.services.instrument_identity import event_content_fingerprint
+
+    plain = {"pitch": "C4", "start_tick": 0, "duration_ticks": 480, "velocity": 80}
+    empty_expr = {**plain, "articulations": [], "tie": None}
+    accented = {**plain, "articulations": ["accent"]}
+    tied = {**plain, "tie": {"group_id": "t1", "type": "start"}}
+    assert event_content_fingerprint(plain) == event_content_fingerprint(empty_expr)
+    assert event_content_fingerprint(plain) != event_content_fingerprint(accented)
+    assert event_content_fingerprint(plain) != event_content_fingerprint(tied)
+    assert classify_content_relationship([accented], [accented]) == "exact"
+    assert classify_content_relationship([plain], [accented]) == "distinct"
+
+
 def test_unexpected_identities_when_extras_disallowed():
     analysis = analyze_instrumentation(
         ["piano", "bass"],

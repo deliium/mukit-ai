@@ -1,11 +1,13 @@
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import uvicorn
 
+from .composition_schemas import CompositionV2, UnsupportedSchemaVersionError
 from .db import ensure_database
 from .llm_settings import load_llm_settings
 from .ready import build_readiness_report, configure_logging, parse_cors_allow_origins
@@ -19,8 +21,10 @@ from .schemas import (
     LLMModelsResponse,
     LLMProviderModel,
 )
-from .services.composition_midi import CompositionMidiError, render_midi
-from .services.composition_wav import CompositionWavError, load_wav_renderer_config, render_wav
+from .services.composition_migration import CompositionMigrationError
+from .services.composition_midi import CompositionMidiError, render_midi_with_report
+from .services.composition_normalizer import CompositionNormalizationError, normalize_composition_json
+from .services.composition_wav import CompositionWavError, load_wav_renderer_config, render_wav_with_report
 from .services.composition_planner import OversizedLLMGenerationRequestError
 from .services.llm_composition_editor import edit_composition_region
 from .services.llm_music_generator import (
@@ -30,6 +34,11 @@ from .services.llm_music_generator import (
     NoLLMProviderConfiguredError,
     UnsupportedLLMProviderError,
     generate_music_json,
+)
+from .services.composition_projection import (
+    PROJECTION_EXPOSE_HEADERS,
+    projection_issues_as_warnings,
+    projection_response_headers,
 )
 from .services.music_json_renderer import MusicJsonRenderError, render_musicxml
 
@@ -73,12 +82,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=list(PROJECTION_EXPOSE_HEADERS),
 )
 
 app.include_router(projects_router)
 
 
-def _composition_export_summary(composition: Composition) -> dict:
+def _composition_export_summary(composition: CompositionV2) -> dict:
     return {
         "schema_version": composition.schema_version,
         "track_count": len(composition.tracks),
@@ -89,12 +99,31 @@ def _composition_export_summary(composition: Composition) -> dict:
     }
 
 
-def _safe_export_filename(composition: Composition, extension: str) -> str:
+def _safe_export_filename(composition: CompositionV2, extension: str) -> str:
     raw = f"composition-{composition.key}-{composition.tempo}bpm".lower()
     safe = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in raw)
     while "--" in safe:
         safe = safe.replace("--", "-")
     return f"{safe.strip('-') or 'composition'}.{extension}"
+
+
+def _normalize_export_composition(payload: dict[str, Any]) -> CompositionV2:
+    try:
+        return normalize_composition_json(payload)
+    except (
+        CompositionNormalizationError,
+        CompositionMigrationError,
+        UnsupportedSchemaVersionError,
+        ValueError,
+    ) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)[:500]) from exc
+
+
+def _export_response_headers(*extra: dict[str, str]) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for item in extra:
+        headers.update(item)
+    return headers
 
 
 @app.get("/")
@@ -178,8 +207,8 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
     try:
         settings = load_llm_settings()
         music, warnings, provider, validation = await generate_music_json(request, settings)
-        musicxml, render_warnings = render_musicxml(music)
-        all_warnings = [*warnings, *render_warnings]
+        musicxml, render_report = render_musicxml(music)
+        all_warnings = [*warnings, *projection_issues_as_warnings(render_report)]
         logger.info(
             "LLM music JSON request completed",
             extra={
@@ -297,8 +326,8 @@ async def edit_llm_composition_region(request: LLMCompositionEditRequest):
     try:
         settings = load_llm_settings()
         composition, patch, warnings, provider = await edit_composition_region(request, settings)
-        musicxml, render_warnings = render_musicxml(composition)
-        all_warnings = [*warnings, *render_warnings, *patch.warnings]
+        musicxml, render_report = render_musicxml(composition)
+        all_warnings = [*warnings, *projection_issues_as_warnings(render_report), *patch.warnings]
         logger.info(
             "LLM composition region edit request completed",
             extra={
@@ -364,30 +393,34 @@ async def edit_llm_composition_region(request: LLMCompositionEditRequest):
 
 
 @app.post("/export/musicxml")
-async def export_musicxml(composition: Composition):
-    """Render canonical Composition V1 JSON to a downloadable MusicXML file."""
+async def export_musicxml(payload: dict[str, Any]):
+    """Render canonical Composition JSON (v1 or v2) to a downloadable MusicXML file."""
+    composition = _normalize_export_composition(payload)
     summary = _composition_export_summary(composition)
     logger.info("MusicXML export request started", extra={"format": "musicxml", **summary})
     try:
-        musicxml, warnings = render_musicxml(composition)
+        musicxml, report = render_musicxml(composition)
         filename = _safe_export_filename(composition, "musicxml")
-        if warnings:
+        if report.issues:
             logger.warning(
-                "MusicXML export completed with notation warnings",
-                extra={"format": "musicxml", "warning_count": len(warnings), **summary},
+                "MusicXML export completed with projection issues",
+                extra={"format": "musicxml", **report.summary_extra(), **summary},
             )
         logger.info(
             "MusicXML export request completed",
-            extra={"format": "musicxml", "byte_length": len(musicxml.encode("utf-8")), **summary},
+            extra={"format": "musicxml", "byte_length": len(musicxml.encode("utf-8")), **summary, **report.summary_extra()},
         )
         logger.debug(
             "MusicXML export response metadata",
-            extra={"filename": filename, "musicxml_length": len(musicxml), "warning_count": len(warnings)},
+            extra={"filename": filename, "musicxml_length": len(musicxml), **report.summary_extra()},
         )
         return Response(
             content=musicxml,
             media_type="application/vnd.recordare.musicxml+xml",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers=_export_response_headers(
+                {"Content-Disposition": f'attachment; filename="{filename}"'},
+                projection_response_headers(report),
+            ),
         )
     except MusicJsonRenderError as exc:
         logger.error(
@@ -398,29 +431,31 @@ async def export_musicxml(composition: Composition):
 
 
 @app.post("/export/musicxml/preview")
-async def export_musicxml_preview(composition: Composition):
-    """Render canonical Composition V1 JSON to MusicXML text without download headers."""
+async def export_musicxml_preview(payload: dict[str, Any]):
+    """Render canonical Composition JSON (v1 or v2) to MusicXML text without download headers."""
+    composition = _normalize_export_composition(payload)
     summary = _composition_export_summary(composition)
     logger.info("MusicXML preview render started", extra={"format": "musicxml_preview", **summary})
     try:
-        musicxml, warnings = render_musicxml(composition)
-        if warnings:
+        musicxml, report = render_musicxml(composition)
+        if report.issues:
             logger.warning(
-                "MusicXML preview completed with notation warnings",
-                extra={"format": "musicxml_preview", "warning_count": len(warnings), **summary},
+                "MusicXML preview completed with projection issues",
+                extra={"format": "musicxml_preview", **report.summary_extra(), **summary},
             )
         logger.info(
             "MusicXML preview render completed",
             extra={
                 "format": "musicxml_preview",
                 "musicxml_length": len(musicxml),
-                "warning_count": len(warnings),
                 **summary,
+                **report.summary_extra(),
             },
         )
         return Response(
             content=musicxml,
             media_type="application/vnd.recordare.musicxml+xml",
+            headers=projection_response_headers(report),
         )
     except MusicJsonRenderError as exc:
         logger.error(
@@ -431,37 +466,49 @@ async def export_musicxml_preview(composition: Composition):
 
 
 @app.post("/export/midi")
-async def export_midi(composition: Composition):
-    """Render canonical Composition V1 JSON to a downloadable Standard MIDI File."""
+async def export_midi(payload: dict[str, Any]):
+    """Render canonical Composition JSON (v1 or v2) to a downloadable Standard MIDI File."""
+    composition = _normalize_export_composition(payload)
     summary = _composition_export_summary(composition)
     logger.info("MIDI export request started", extra={"format": "midi", **summary})
     try:
-        midi_bytes = render_midi(composition)
+        result = render_midi_with_report(composition)
+        midi_bytes = result.midi_bytes
+        report = result.report
         filename = _safe_export_filename(composition, "mid")
+        if report.issues:
+            logger.warning(
+                "MIDI export completed with projection issues",
+                extra={"format": "midi", **report.summary_extra(), **summary},
+            )
         logger.info(
             "MIDI export request completed",
-            extra={"format": "midi", "byte_length": len(midi_bytes), **summary},
+            extra={"format": "midi", "byte_length": len(midi_bytes), **summary, **report.summary_extra()},
         )
         logger.debug(
             "MIDI export response metadata",
-            extra={"filename": filename, "byte_length": len(midi_bytes)},
+            extra={"filename": filename, "byte_length": len(midi_bytes), **report.summary_extra()},
         )
         return Response(
             content=midi_bytes,
             media_type="audio/midi",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers=_export_response_headers(
+                {"Content-Disposition": f'attachment; filename="{filename}"'},
+                projection_response_headers(report),
+            ),
         )
     except CompositionMidiError as exc:
         logger.error(
             "MIDI export failed",
-            extra={"format": "midi", "error_type": type(exc).__name__, **summary},
+            extra={"format": "midi", "error_type": type(exc).__name__, "detail": str(exc)[:200], **summary},
         )
         raise HTTPException(status_code=500, detail="Composition could not be rendered as MIDI") from exc
 
 
 @app.post("/export/wav")
-async def export_wav(composition: Composition):
-    """Render canonical Composition V1 JSON to a downloadable WAV file via FluidSynth."""
+async def export_wav(payload: dict[str, Any]):
+    """Render canonical Composition JSON (v1 or v2) to a downloadable WAV file via FluidSynth."""
+    composition = _normalize_export_composition(payload)
     summary = _composition_export_summary(composition)
     logger.info("WAV export request started", extra={"format": "wav", **summary})
     config = load_wav_renderer_config()
@@ -479,20 +526,30 @@ async def export_wav(composition: Composition):
         },
     )
     try:
-        wav_bytes = render_wav(composition)
+        result = render_wav_with_report(composition)
+        wav_bytes = result.wav_bytes
+        report = result.report
         filename = _safe_export_filename(composition, "wav")
+        if report.issues:
+            logger.warning(
+                "WAV export completed with projection issues",
+                extra={"format": "wav", **report.summary_extra(), **summary},
+            )
         logger.info(
             "WAV export request completed",
-            extra={"format": "wav", "byte_length": len(wav_bytes), **summary},
+            extra={"format": "wav", "byte_length": len(wav_bytes), **summary, **report.summary_extra()},
         )
         logger.debug(
             "WAV export response metadata",
-            extra={"filename": filename, "byte_length": len(wav_bytes)},
+            extra={"filename": filename, "byte_length": len(wav_bytes), **report.summary_extra()},
         )
         return Response(
             content=wav_bytes,
             media_type="audio/wav",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers=_export_response_headers(
+                {"Content-Disposition": f'attachment; filename="{filename}"'},
+                projection_response_headers(report),
+            ),
         )
     except CompositionWavError as exc:
         if exc.unavailable:
@@ -506,6 +563,7 @@ async def export_wav(composition: Composition):
             extra={"format": "wav", "error_type": type(exc).__name__, "detail": str(exc)[:200], **summary},
         )
         raise HTTPException(status_code=500, detail=str(exc)[:300]) from exc
+
 
 
 if __name__ == "__main__":

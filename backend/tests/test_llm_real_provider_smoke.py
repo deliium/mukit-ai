@@ -95,7 +95,7 @@ def test_real_provider_staged_smoke():
             "warning_count": len(warnings),
         },
     )
-    assert music.schema_version == "composition.v1"
+    assert music.schema_version == "composition.v2"
     assert music.bar_count <= 32
     assert sum(len(track.events) for track in music.tracks) > 0
     assert result.ok

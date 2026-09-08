@@ -110,7 +110,7 @@ test('open project hydrates composition and generation metadata without keys', a
   assert.equal(state.activeView, 'composer');
   assert.equal(state.currentProjectId, 'p1');
   assert.equal(state.currentProjectName, 'Opened');
-  assert.equal(state.editedMusicJson.schema_version, 'composition.v1');
+  assert.equal(state.editedMusicJson.schema_version, 'composition.v2');
   assert.equal(state.generationMeta.provider, 'openai');
   assert.equal(state.generationMeta.model, 'gpt-4o-mini');
   assert.equal(state.generationMeta.prompt.genre, 'ambient');

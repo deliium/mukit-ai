@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
-from ..schemas import Composition, _midi_pitch_number
+from ..schemas import Composition, CompositionV2, _midi_pitch_number
 from .composition_timing import bar_duration_ticks, parse_time_signature
 
 
@@ -199,7 +199,7 @@ def parse_chord_symbol(symbol: str) -> ParsedChord:
 
 
 def analyze_composition_tonality(
-    composition: Composition,
+    composition: Composition | CompositionV2,
     requested_key: str,
     *,
     section_boundary_bars: Iterable[int] | None = None,

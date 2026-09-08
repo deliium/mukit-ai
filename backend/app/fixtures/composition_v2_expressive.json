@@ -1,0 +1,270 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 100,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "duration_ticks": 7680,
+  "bar_count": 4,
+  "sections": [
+    {
+      "id": "section-1",
+      "type": "intro",
+      "label": "Opening",
+      "start_bar": 1,
+      "bar_count": 2,
+      "start_tick": 0,
+      "duration_ticks": 3840
+    },
+    {
+      "id": "section-2",
+      "type": "outro",
+      "label": "Close",
+      "start_bar": 3,
+      "bar_count": 2,
+      "start_tick": 3840,
+      "duration_ticks": 3840
+    }
+  ],
+  "tracks": [
+    {
+      "id": "melody-1",
+      "name": "Melody",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "is_drum": false,
+      "volume": 100,
+      "pan": 0,
+      "expression": 127,
+      "staff": "treble",
+      "events": [
+        {
+          "type": "note",
+          "pitch": "C4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 90,
+          "id": "m1",
+          "staff": null,
+          "voice": null,
+          "articulations": ["accent"],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "E4",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 88,
+          "id": "m2",
+          "staff": null,
+          "voice": null,
+          "articulations": ["staccato"],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "G4",
+          "start_tick": 960,
+          "duration_ticks": 480,
+          "velocity": 86,
+          "id": "m3",
+          "staff": null,
+          "voice": null,
+          "articulations": [],
+          "tie": {"group_id": "tie-g4", "type": "start"}
+        },
+        {
+          "type": "note",
+          "pitch": "G4",
+          "start_tick": 1440,
+          "duration_ticks": 480,
+          "velocity": 84,
+          "id": "m4",
+          "staff": null,
+          "voice": null,
+          "articulations": [],
+          "tie": {"group_id": "tie-g4", "type": "stop"}
+        },
+        {
+          "type": "note",
+          "pitch": "C5",
+          "start_tick": 3840,
+          "duration_ticks": 960,
+          "velocity": 92,
+          "id": "m5",
+          "staff": null,
+          "voice": null,
+          "articulations": ["tenuto"],
+          "tie": null
+        }
+      ],
+      "dynamic_marks": [
+        {"tick": 0, "level": "mf"},
+        {"tick": 3840, "level": "f"}
+      ],
+      "sustain_pedals": [
+        {"start_tick": 0, "duration_ticks": 1920}
+      ],
+      "automation": [
+        {
+          "parameter": "expression",
+          "interpolation": "linear",
+          "points": [
+            {"tick": 1920, "value": 100},
+            {"tick": 5760, "value": 80}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bass-1",
+      "name": "Bass",
+      "instrument": "bass",
+      "role": "bass",
+      "midi_program": 32,
+      "channel": 2,
+      "is_drum": false,
+      "volume": 90,
+      "pan": 0,
+      "expression": 127,
+      "staff": "bass",
+      "events": [
+        {
+          "type": "note",
+          "pitch": "C2",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 80,
+          "id": "b1",
+          "staff": null,
+          "voice": null,
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "G2",
+          "start_tick": 1920,
+          "duration_ticks": 1920,
+          "velocity": 78,
+          "id": "b2",
+          "staff": null,
+          "voice": null,
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "C2",
+          "start_tick": 3840,
+          "duration_ticks": 1920,
+          "velocity": 82,
+          "id": "b3",
+          "staff": null,
+          "voice": null,
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "G2",
+          "start_tick": 5760,
+          "duration_ticks": 1920,
+          "velocity": 80,
+          "id": "b4",
+          "staff": null,
+          "voice": null,
+          "articulations": [],
+          "tie": null
+        }
+      ],
+      "dynamic_marks": [],
+      "sustain_pedals": [],
+      "automation": []
+    },
+    {
+      "id": "harmony-1",
+      "name": "Harmony",
+      "instrument": "piano",
+      "role": "harmony",
+      "midi_program": 0,
+      "channel": 3,
+      "is_drum": false,
+      "volume": 80,
+      "pan": 0,
+      "expression": 127,
+      "staff": "treble",
+      "events": [
+        {
+          "type": "note",
+          "pitch": "E4",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 70,
+          "id": "h1",
+          "staff": null,
+          "voice": null,
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "D4",
+          "start_tick": 1920,
+          "duration_ticks": 1920,
+          "velocity": 68,
+          "id": "h2",
+          "staff": null,
+          "voice": null,
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "E4",
+          "start_tick": 3840,
+          "duration_ticks": 1920,
+          "velocity": 72,
+          "id": "h3",
+          "staff": null,
+          "voice": null,
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "D4",
+          "start_tick": 5760,
+          "duration_ticks": 1920,
+          "velocity": 70,
+          "id": "h4",
+          "staff": null,
+          "voice": null,
+          "articulations": [],
+          "tie": null
+        }
+      ],
+      "dynamic_marks": [],
+      "sustain_pedals": [],
+      "automation": []
+    }
+  ],
+  "harmony": [
+    {"bar": 1, "chord": "C"},
+    {"bar": 2, "chord": "G"},
+    {"bar": 3, "chord": "C"},
+    {"bar": 4, "chord": "G"}
+  ],
+  "tempo_changes": [
+    {"tick": 3840, "bpm": 80}
+  ],
+  "time_signature_changes": [],
+  "key_changes": [],
+  "markers": [
+    {"id": "rehearsal-a", "tick": 0, "kind": "rehearsal", "label": "A"},
+    {"id": "text-1", "tick": 3840, "kind": "text", "label": "rit."}
+  ]
+}

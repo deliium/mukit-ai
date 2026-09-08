@@ -66,13 +66,15 @@ def test_edit_llm_composition_region_success(monkeypatch):
     )
 
     async def fake_edit(_request, _settings):
-        composition = _sixteen_bar_composition()
+        from app.services.composition_normalizer import normalize_composition_json
+
+        composition = normalize_composition_json(_sixteen_bar_composition())
         region_patch = CompositionRegionReplacementPatch.model_validate(_melody_patch_payload())
         provider = LLMProviderSettings(provider="openai", model="test-model", api_key="secret", is_default=True)
         return composition, region_patch, [], provider
 
     monkeypatch.setattr("app.main.edit_composition_region", fake_edit)
-    monkeypatch.setattr("app.main.render_musicxml", lambda _composition: ("<score/>", []))
+    monkeypatch.setattr("app.main.render_musicxml", lambda _composition: ("<score/>", __import__("app.services.composition_projection", fromlist=["empty_projection_report"]).empty_projection_report()))
     monkeypatch.setattr(
         "app.main.load_llm_settings",
         lambda: LLMSettings(
@@ -88,7 +90,7 @@ def test_edit_llm_composition_region_success(monkeypatch):
     assert response.model == "test-model"
     assert response.patch.operation == "replace_region"
     assert response.musicxml == "<score/>"
-    assert response.composition.schema_version == "composition.v1"
+    assert response.composition.schema_version == "composition.v2"
 
 
 def test_edit_llm_composition_region_invalid_patch_maps_to_502(monkeypatch):

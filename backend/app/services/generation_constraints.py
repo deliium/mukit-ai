@@ -8,6 +8,7 @@ from typing import Any, Iterable, Sequence
 
 from ..schemas import (
     Composition,
+    CompositionV2,
     GenerationRepairAction,
     GenerationValidationIssue,
     GenerationValidationReport,
@@ -444,7 +445,7 @@ def summarize_prompt_for_constraints(prompt: LLMPromptParameters) -> dict[str, A
 
 
 def validate_generation_constraints(
-    composition: Composition,
+    composition: Composition | CompositionV2,
     constraints: GenerationConstraints,
     *,
     repair_attempts: int = 0,

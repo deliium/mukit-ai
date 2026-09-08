@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import axios from 'axios';
+import { migrateV1ToV2 } from '../utils/compositionVersion.js';
 import { useMusicStore } from '../store/musicStore.js';
 
-const BASE = {
+const BASE = migrateV1ToV2({
   schema_version: 'composition.v1',
   tempo: 100,
   key: 'C major',
@@ -46,7 +48,7 @@ const BASE = {
     },
   ],
   harmony: [{ bar: 1, chord: 'C' }],
-};
+});
 
 function resetStore(composition = structuredClone(BASE)) {
   useMusicStore.setState({
@@ -57,6 +59,7 @@ function resetStore(composition = structuredClone(BASE)) {
     trackControls: {},
     pianoRollTrackId: 'melody-1',
     pianoRollNoteId: null,
+    pianoRollNoteIds: [],
     pianoRollSnap: '1/8',
     pianoRollZoom: 0.05,
     pianoRollEditStatus: 'idle',
@@ -188,4 +191,129 @@ test('AI edit success pushes one undo snapshot and supports undo/redo', () => {
   assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events[0].pitch, 'C4');
   assert.equal(store.redoNoteEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events[0].pitch, 'G4');
+});
+
+test('setEditedMusicJson migrates v1 payloads to v2 in store state', () => {
+  resetStore();
+  const v1 = {
+    schema_version: 'composition.v1',
+    tempo: 100,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    bar_count: 2,
+    duration_ticks: 3840,
+    sections: [
+      { type: 'intro', start_bar: 1, bar_count: 2, start_tick: 0, duration_ticks: 3840 },
+    ],
+    tracks: BASE.tracks.map((track) => ({
+      ...track,
+      expression: undefined,
+      dynamic_marks: undefined,
+      sustain_pedals: undefined,
+      automation: undefined,
+      events: track.events.map((event) => ({
+        type: 'note',
+        id: event.id,
+        pitch: event.pitch,
+        start_tick: event.start_tick,
+        duration_ticks: event.duration_ticks,
+        velocity: event.velocity,
+      })),
+    })),
+    harmony: [{ bar: 1, chord: 'C' }],
+  };
+  useMusicStore.getState().setEditedMusicJson(v1);
+  assert.equal(useMusicStore.getState().editedMusicJson.schema_version, 'composition.v2');
+});
+
+test('composition edits clear stale musicXml when notation revision changes', () => {
+  resetStore();
+  useMusicStore.setState({ musicXml: '<score/>' });
+  const current = structuredClone(useMusicStore.getState().editedMusicJson);
+  useMusicStore.getState().setEditedMusicJson({ ...current, tempo: 110 });
+  assert.equal(useMusicStore.getState().musicXml, '');
+});
+
+test('refreshMusicXmlFromEditedComposition discards stale preview responses', async (t) => {
+  resetStore();
+  let resolvePreview;
+  const previousAdapter = axios.defaults.adapter;
+  axios.defaults.adapter = async () => new Promise((resolve) => {
+    resolvePreview = () => resolve({
+      data: '<score/>',
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config: {},
+    });
+  });
+  t.after(() => {
+    axios.defaults.adapter = previousAdapter;
+  });
+
+  const refreshPromise = useMusicStore.getState().refreshMusicXmlFromEditedComposition();
+  const requestedRevision = useMusicStore.getState().notationRevision;
+  const current = structuredClone(useMusicStore.getState().editedMusicJson);
+  useMusicStore.getState().setEditedMusicJson({ ...current, tempo: 115 });
+  resolvePreview();
+  const result = await refreshPromise;
+  assert.equal(result, null);
+  assert.notEqual(useMusicStore.getState().notationRevision, requestedRevision);
+  assert.equal(useMusicStore.getState().musicXml, '');
+});
+
+test('store tie and articulation edits preserve V2 metadata and undo/redo', () => {
+  resetStore();
+  const expressive = structuredClone(BASE);
+  expressive.tempo_changes = [{ tick: 1920, bpm: 90 }];
+  expressive.tracks[0].dynamic_marks = [{ tick: 480, level: 'mf' }];
+  expressive.tracks[0].events = [
+    { type: 'note', id: 'n1', pitch: 'C4', start_tick: 0, duration_ticks: 480, velocity: 90, articulations: [], tie: null },
+    { type: 'note', id: 'n2', pitch: 'C4', start_tick: 480, duration_ticks: 480, velocity: 90, articulations: [], tie: null },
+    { type: 'note', id: 'n3', pitch: 'E4', start_tick: 0, duration_ticks: 480, velocity: 88, articulations: [], tie: null },
+  ];
+  useMusicStore.setState({ editedMusicJson: expressive, generatedMusicJson: expressive });
+
+  const store = useMusicStore.getState();
+  store.selectPianoRollNote('n1');
+  store.selectPianoRollNote('n2', { extend: true });
+  assert.equal(useMusicStore.getState().applyTieChain('melody-1', ['n1', 'n2']), true);
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events[0].tie.type, 'start');
+  assert.equal(useMusicStore.getState().editedMusicJson.tempo_changes.length, 1);
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].dynamic_marks.length, 1);
+
+  store.toggleNoteArticulation('melody-1', 'n1', 'tenuto');
+  assert.deepEqual(
+    useMusicStore.getState().editedMusicJson.tracks[0].events[0].articulations,
+    ['tenuto'],
+  );
+
+  assert.equal(store.undoNoteEdit(), true);
+  assert.deepEqual(
+    useMusicStore.getState().editedMusicJson.tracks[0].events[0].articulations,
+    [],
+  );
+  assert.equal(store.redoNoteEdit(), true);
+  assert.deepEqual(
+    useMusicStore.getState().editedMusicJson.tracks[0].events[0].articulations,
+    ['tenuto'],
+  );
+});
+
+test('invalid edited JSON remains visibly unsaved and blocks save', async () => {
+  resetStore();
+  useMusicStore.setState({
+    currentProjectId: 'project-1',
+    lastSavedPersistRevision: 'saved',
+    saveStatus: 'saved',
+  });
+  const invalid = structuredClone(BASE);
+  invalid.tracks[0].events[0].velocity = 200;
+  useMusicStore.getState().setEditedMusicJson(invalid);
+  assert.equal(useMusicStore.getState().saveStatus, 'unsaved');
+  const saved = await useMusicStore.getState().saveCurrentProject({ reason: 'manual' });
+  assert.equal(saved, null);
+  assert.equal(useMusicStore.getState().saveStatus, 'unsaved');
+  assert.match(useMusicStore.getState().saveError, /velocity/i);
 });

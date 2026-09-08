@@ -321,7 +321,12 @@ def collect_instrument_families(instruments: Iterable[str]) -> tuple[str, ...]:
 
 
 def event_content_fingerprint(event: Any) -> tuple[Any, ...]:
-    """Stable event fingerprint ignoring display names and event IDs."""
+    """Stable event fingerprint ignoring display names and event IDs.
+
+    Includes articulations and tie metadata when present so V2 expression
+    participates in content identity. Empty articulations and absent ties
+    omit those fields so migrated empty-expression notes still match V1.
+    """
     if isinstance(event, Mapping):
         pitch = event.get("pitch")
         start_tick = event.get("start_tick")
@@ -330,6 +335,8 @@ def event_content_fingerprint(event: Any) -> tuple[Any, ...]:
         staff = event.get("staff")
         voice = event.get("voice")
         event_type = event.get("type", "note")
+        articulations = event.get("articulations") or ()
+        tie = event.get("tie")
     else:
         pitch = getattr(event, "pitch", None)
         start_tick = getattr(event, "start_tick", None)
@@ -338,7 +345,21 @@ def event_content_fingerprint(event: Any) -> tuple[Any, ...]:
         staff = getattr(event, "staff", None)
         voice = getattr(event, "voice", None)
         event_type = getattr(event, "type", "note")
-    return (event_type, pitch, start_tick, duration_ticks, velocity, staff, voice)
+        articulations = getattr(event, "articulations", None) or ()
+        tie = getattr(event, "tie", None)
+
+    base = (event_type, pitch, start_tick, duration_ticks, velocity, staff, voice)
+    articulation_tuple = tuple(articulations) if articulations else ()
+    if not articulation_tuple and tie is None:
+        return base
+
+    if isinstance(tie, Mapping):
+        tie_fp = (tie.get("group_id"), tie.get("type"))
+    elif tie is not None:
+        tie_fp = (getattr(tie, "group_id", None), getattr(tie, "type", None))
+    else:
+        tie_fp = None
+    return (*base, articulation_tuple, tie_fp)
 
 
 def _fingerprint_counter(events: Sequence[Any]) -> Counter[tuple[Any, ...]]:

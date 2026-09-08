@@ -1,4 +1,4 @@
-"""Deterministic musical integrity checks for Composition V1."""
+"""Deterministic musical integrity checks for Composition V1/V2."""
 
 from __future__ import annotations
 
@@ -8,12 +8,23 @@ from typing import Any, Iterable
 
 from pydantic import ValidationError
 
-from ..schemas import Composition, NoteEvent, _midi_pitch_number
+from ..composition_schemas import (
+    ATTACK_ARTICULATIONS,
+    CompositionV1,
+    CompositionV2,
+    CompositionV1NoteEvent,
+    CompositionV2NoteEvent,
+    GATE_SHORTENING_ARTICULATIONS,
+    _midi_pitch_number,
+)
 from .composition_planner import ValidationDiagnostic
 from .composition_timing import bar_duration_ticks
 
 
 logger = logging.getLogger(__name__)
+
+CompositionLike = CompositionV1 | CompositionV2
+NoteEventLike = CompositionV1NoteEvent | CompositionV2NoteEvent
 
 DEFAULT_TICKS_PER_QUARTER = 480
 
@@ -57,7 +68,7 @@ class CompositionValidationResult:
 
 
 def validate_composition_integrity(
-    music: Composition | dict[str, Any],
+    music: CompositionLike | dict[str, Any],
     *,
     requested_instruments: Iterable[str] | None = None,
     complexity: str = "moderate",
@@ -92,7 +103,12 @@ def validate_composition_integrity(
     warnings: list[ValidationDiagnostic] = []
 
     try:
-        composition = music if isinstance(music, Composition) else Composition.model_validate(music)
+        if isinstance(music, (CompositionV1, CompositionV2)):
+            composition: CompositionLike = music
+        elif isinstance(music, dict) and music.get("schema_version") == "composition.v2":
+            composition = CompositionV2.model_validate(music)
+        else:
+            composition = CompositionV1.model_validate(music)
     except ValidationError as exc:
         diagnostic = ValidationDiagnostic(
             code="schema_invalid",
@@ -113,26 +129,32 @@ def validate_composition_integrity(
     _check_bar_overflow(composition, errors, warnings)
     _check_timing_grid(composition, errors, warnings)
     _check_harmony_usefulness(composition, errors, warnings)
+    if isinstance(composition, CompositionV2):
+        _check_v2_expression(composition, errors, warnings)
 
     result = CompositionValidationResult(ok=not errors, errors=errors, warnings=warnings)
     if result.ok:
         logger.info(
             "Composition integrity validation passed",
             extra={
+                "schema_version": composition.schema_version,
                 "bar_count": composition.bar_count,
                 "track_count": len(composition.tracks),
                 "event_count": sum(len(track.events) for track in composition.tracks),
                 "warning_codes": [item.code for item in warnings],
+                **_expressive_feature_counts(composition),
             },
         )
     else:
         logger.warning(
             "Composition integrity validation failed",
             extra={
+                "schema_version": composition.schema_version,
                 "error_codes": result.error_codes(),
                 "warning_codes": [item.code for item in warnings],
                 "bar_count": composition.bar_count,
                 "track_count": len(composition.tracks),
+                **_expressive_feature_counts(composition),
             },
         )
     logger.debug(
@@ -147,7 +169,7 @@ def validate_composition_integrity(
 
 
 def _check_boundaries(
-    composition: Composition,
+    composition: CompositionLike,
     errors: list[ValidationDiagnostic],
     warnings: list[ValidationDiagnostic],
 ) -> None:
@@ -182,7 +204,7 @@ def _check_boundaries(
 
 
 def _check_tracks_and_density(
-    composition: Composition,
+    composition: CompositionLike,
     complexity: str,
     errors: list[ValidationDiagnostic],
     warnings: list[ValidationDiagnostic],
@@ -257,7 +279,7 @@ def _check_tracks_and_density(
 
 
 def _check_pitch_ranges(
-    composition: Composition,
+    composition: CompositionLike,
     errors: list[ValidationDiagnostic],
     warnings: list[ValidationDiagnostic],
 ) -> None:
@@ -309,7 +331,7 @@ def _check_pitch_ranges(
 
 
 def _check_bar_overflow(
-    composition: Composition,
+    composition: CompositionLike,
     errors: list[ValidationDiagnostic],
     warnings: list[ValidationDiagnostic],
 ) -> None:
@@ -359,7 +381,7 @@ def _check_bar_overflow(
 
 
 def _check_timing_grid(
-    composition: Composition,
+    composition: CompositionLike,
     errors: list[ValidationDiagnostic],
     warnings: list[ValidationDiagnostic],
 ) -> None:
@@ -385,7 +407,7 @@ def _check_timing_grid(
 
 
 def _check_harmony_usefulness(
-    composition: Composition,
+    composition: CompositionLike,
     errors: list[ValidationDiagnostic],
     warnings: list[ValidationDiagnostic],
 ) -> None:
@@ -436,3 +458,158 @@ def _min_events_for_track(bar_count: int, complexity: str, role: str) -> int:
     if role in REQUIRED_BASS_ROLES:
         return max(1, min(base, int(bar_count * 0.5)))
     return base
+
+
+def _expressive_feature_counts(composition: CompositionLike) -> dict[str, int]:
+    if not isinstance(composition, CompositionV2):
+        return {
+            "tempo_change_count": 0,
+            "meter_change_count": 0,
+            "key_change_count": 0,
+            "marker_count": 0,
+            "articulation_note_count": 0,
+            "tied_note_count": 0,
+        }
+    return {
+        "tempo_change_count": len(composition.tempo_changes),
+        "meter_change_count": len(composition.time_signature_changes),
+        "key_change_count": len(composition.key_changes),
+        "marker_count": len(composition.markers),
+        "articulation_note_count": sum(
+            1 for track in composition.tracks for event in track.events if event.articulations
+        ),
+        "tied_note_count": sum(
+            1 for track in composition.tracks for event in track.events if event.tie is not None
+        ),
+    }
+
+
+def _check_v2_expression(
+    composition: CompositionV2,
+    errors: list[ValidationDiagnostic],
+    warnings: list[ValidationDiagnostic],
+) -> None:
+    """Emit structured diagnostics for V2 tie/articulation musical validity.
+
+    Schema validation already rejects most invalid shapes; these checks provide
+    stable integrity codes when expressive metadata is present.
+    """
+    del warnings  # reserved for future non-blocking expression advice
+    for track in composition.tracks:
+        for event in track.events:
+            articulations = list(event.articulations or [])
+            names = set(articulations)
+            if len(articulations) != len(names):
+                errors.append(
+                    ValidationDiagnostic(
+                        code="contradictory_articulation",
+                        message=f"Duplicate articulations on track {track.id}",
+                        context={"track_id": track.id, "articulations": articulations},
+                    )
+                )
+            if "staccato" in names and "staccatissimo" in names:
+                errors.append(
+                    ValidationDiagnostic(
+                        code="contradictory_articulation",
+                        message="staccato and staccatissimo cannot combine",
+                        context={"track_id": track.id, "articulations": articulations},
+                    )
+                )
+            if ("staccato" in names or "staccatissimo" in names) and "tenuto" in names:
+                errors.append(
+                    ValidationDiagnostic(
+                        code="contradictory_articulation",
+                        message="short articulations cannot combine with tenuto",
+                        context={"track_id": track.id, "articulations": articulations},
+                    )
+                )
+            if "accent" in names and "marcato" in names:
+                errors.append(
+                    ValidationDiagnostic(
+                        code="contradictory_articulation",
+                        message="accent and marcato cannot combine",
+                        context={"track_id": track.id, "articulations": articulations},
+                    )
+                )
+
+        groups: dict[str, list[CompositionV2NoteEvent]] = {}
+        for event in track.events:
+            if event.tie is None:
+                continue
+            groups.setdefault(event.tie.group_id, []).append(event)
+
+        for group_id, members in groups.items():
+            ordered = sorted(members, key=lambda item: (item.start_tick, item.duration_ticks))
+            types = [event.tie.type for event in ordered if event.tie is not None]
+            if (
+                types.count("start") != 1
+                or types.count("stop") != 1
+                or types[0] != "start"
+                or types[-1] != "stop"
+            ):
+                errors.append(
+                    ValidationDiagnostic(
+                        code="invalid_tie_chain",
+                        message=f"Tie group {group_id} on track {track.id} is musically invalid",
+                        context={"track_id": track.id, "group_id": group_id, "types": types},
+                    )
+                )
+                continue
+
+            head = ordered[0]
+            for event in ordered:
+                if event.pitch != head.pitch or event.staff != head.staff or event.voice != head.voice:
+                    errors.append(
+                        ValidationDiagnostic(
+                            code="invalid_tie_chain",
+                            message=f"Tie group {group_id} members must share pitch/staff/voice",
+                            context={"track_id": track.id, "group_id": group_id},
+                        )
+                    )
+                    break
+                if event is not head and event.articulations:
+                    if any(name in GATE_SHORTENING_ARTICULATIONS for name in event.articulations):
+                        errors.append(
+                            ValidationDiagnostic(
+                                code="contradictory_articulation",
+                                message="Gate-shortening articulations are not allowed on non-head tied notes",
+                                context={"track_id": track.id, "group_id": group_id},
+                            )
+                        )
+                    if any(name in ATTACK_ARTICULATIONS for name in event.articulations):
+                        errors.append(
+                            ValidationDiagnostic(
+                                code="contradictory_articulation",
+                                message="Attack articulations are only allowed on the tie chain head",
+                                context={"track_id": track.id, "group_id": group_id},
+                            )
+                        )
+                if event is head and any(
+                    name in GATE_SHORTENING_ARTICULATIONS for name in event.articulations
+                ):
+                    errors.append(
+                        ValidationDiagnostic(
+                            code="contradictory_articulation",
+                            message="Gate-shortening articulations are not allowed in a tie chain",
+                            context={"track_id": track.id, "group_id": group_id},
+                        )
+                    )
+
+            for index in range(1, len(ordered)):
+                previous = ordered[index - 1]
+                current = ordered[index]
+                previous_end = previous.start_tick + previous.duration_ticks
+                if current.start_tick != previous_end:
+                    errors.append(
+                        ValidationDiagnostic(
+                            code="invalid_tie_chain",
+                            message=f"Tie group {group_id} members must be contiguous",
+                            context={
+                                "track_id": track.id,
+                                "group_id": group_id,
+                                "previous_end": previous_end,
+                                "current_start": current.start_tick,
+                            },
+                        )
+                    )
+                    break
