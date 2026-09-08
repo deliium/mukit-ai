@@ -16,8 +16,11 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.schemas import Composition
-from app.services.composition_midi import CompositionMidiError, render_midi
+from app.composition_schemas import CompositionV1, CompositionV2
+from app.services.composition_migration import migrate_v1_to_v2
+from app.services.composition_midi import CompositionMidiError, MidiRenderResult, render_midi_with_report
+from app.services.composition_projection import ProjectionReport, empty_projection_report
+from app.services.composition_timeline import compile_timeline
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,12 @@ class CompositionWavError(Exception):
     def __init__(self, message: str, *, unavailable: bool = False) -> None:
         super().__init__(message)
         self.unavailable = unavailable
+
+
+@dataclass(frozen=True)
+class WavRenderResult:
+    wav_bytes: bytes
+    report: ProjectionReport
 
 
 @dataclass(frozen=True)
@@ -113,25 +122,34 @@ def load_wav_renderer_config() -> WavRendererConfig:
     return config
 
 
-def expected_duration_seconds(composition: Composition) -> float:
-    """Canonical composition duration in seconds from ticks and tempo."""
-    if composition.tempo <= 0 or composition.ticks_per_quarter <= 0:
-        raise CompositionWavError("Composition tempo/ticks_per_quarter must be positive")
-    seconds = (composition.duration_ticks / composition.ticks_per_quarter) * (60.0 / composition.tempo)
+def expected_duration_seconds(composition: CompositionV1 | CompositionV2) -> float:
+    """Canonical composition duration in seconds from the compiled tempo map."""
+    if isinstance(composition, CompositionV1):
+        composition = migrate_v1_to_v2(composition).composition
+    timeline = compile_timeline(composition)
+    seconds = timeline.total_duration_seconds()
     logger.debug(
         "Computed expected WAV duration",
         extra={
             "duration_ticks": composition.duration_ticks,
             "ticks_per_quarter": composition.ticks_per_quarter,
             "tempo": composition.tempo,
+            "tempo_segment_count": len(composition.tempo_changes) + 1,
             "expected_seconds": round(seconds, 6),
         },
     )
     return seconds
 
 
-def render_wav(composition: Composition) -> bytes:
-    """Render canonical Composition V1 to WAV bytes via MIDI + FluidSynth."""
+def render_wav(composition: CompositionV1 | CompositionV2) -> bytes:
+    """Render canonical Composition to WAV bytes via MIDI + FluidSynth."""
+    return render_wav_with_report(composition).wav_bytes
+
+
+def render_wav_with_report(composition: CompositionV1 | CompositionV2) -> WavRenderResult:
+    """Render WAV bytes plus the shared MIDI projection report."""
+    if isinstance(composition, CompositionV1):
+        composition = migrate_v1_to_v2(composition).composition
     event_count = sum(len(track.events) for track in composition.tracks)
     config = load_wav_renderer_config()
     expected_seconds = expected_duration_seconds(composition)
@@ -168,12 +186,14 @@ def render_wav(composition: Composition) -> bytes:
                 "expected_seconds": round(expected_seconds, 6),
             },
         )
-        return wav_bytes
+        return WavRenderResult(wav_bytes=wav_bytes, report=empty_projection_report())
 
     _ensure_renderer_available(config)
 
     try:
-        midi_bytes = render_midi(composition)
+        midi_result: MidiRenderResult = render_midi_with_report(composition)
+        midi_bytes = midi_result.midi_bytes
+        projection_report = midi_result.report
     except CompositionMidiError as exc:
         logger.error(
             "WAV render failed during MIDI stage",
@@ -191,6 +211,7 @@ def render_wav(composition: Composition) -> bytes:
             "sample_rate": config.sample_rate,
             "gain": config.gain,
             "timeout_seconds": config.timeout_seconds,
+            **projection_report.summary_extra(),
         },
     )
 
@@ -205,9 +226,10 @@ def render_wav(composition: Composition) -> bytes:
             "byte_length": len(wav_bytes),
             "event_count": event_count,
             "expected_seconds": round(expected_seconds, 6),
+            **projection_report.summary_extra(),
         },
     )
-    return wav_bytes
+    return WavRenderResult(wav_bytes=wav_bytes, report=projection_report)
 
 
 def _ensure_renderer_available(config: WavRendererConfig) -> None:

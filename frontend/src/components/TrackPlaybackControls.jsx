@@ -70,12 +70,14 @@ const TrackPlaybackControls = ({
   onVolumeChange,
 }) => {
   if (!tracks.length) {
-    return <Hint>Track controls appear for composition.v1 payloads.</Hint>;
+    return <Hint>Track controls appear for canonical composition payloads.</Hint>;
   }
 
   return (
     <TrackList aria-label="Track mixer">
-      <Hint style={{ marginTop: 0 }}>Tracks / mixer</Hint>
+      <Hint style={{ marginTop: 0 }}>
+        Tracks / mixer (canonical composition.v2; mute/solo are UI-only)
+      </Hint>
       {tracks.map((track) => {
         const trackId = String(track.id);
         const control = trackControls[trackId] || {
@@ -87,7 +89,10 @@ const TrackPlaybackControls = ({
           <TrackRow key={trackId}>
             <TrackLabel>
               <strong>{track.name || trackId}</strong>
-              <span>{track.instrument || 'unknown'} · ch {track.channel ?? '-'} · prog {track.midi_program ?? '-'}</span>
+              <span>
+                {track.instrument || 'unknown'} · ch {track.channel ?? '-'} · prog {track.midi_program ?? '-'}
+                {Number.isInteger(Number(track.expression)) ? ` · expr ${track.expression}` : ''}
+              </span>
             </TrackLabel>
             <ToggleButton
               type="button"

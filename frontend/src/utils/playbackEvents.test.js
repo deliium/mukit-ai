@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { buildCanonicalPlaybackEvents } from './playbackEvents.js';
+import {
+  articulationGateTicks,
+  articulationVelocity,
+  automationSampleInterval,
+  buildCanonicalPlaybackEvents,
+  compilePlaybackSchedule,
+  combinedExpression,
+} from './playbackEvents.js';
+import { tickToSeconds, compileTimeline } from './compositionTimeline.js';
 
 const FIDELITY_FIXTURE = {
   schema_version: 'composition.v1',
@@ -81,11 +90,19 @@ const FIDELITY_FIXTURE = {
   ],
 };
 
+const expressiveFixturePath = new URL('./fixtures/composition_v2_expressive.json', import.meta.url);
+const EXPRESSIVE_FIXTURE = JSON.parse(readFileSync(expressiveFixturePath, 'utf8'));
+
 test('builds playback events from canonical ticks preserving polyphony and velocity', () => {
   const events = buildCanonicalPlaybackEvents({
-    schema_version: 'composition.v1',
+    schema_version: 'composition.v2',
     tempo: 120,
+    key: 'C major',
+    time_signature: '4/4',
     ticks_per_quarter: 480,
+    bar_count: 1,
+    duration_ticks: 1920,
+    sections: [{ type: 'intro', start_bar: 1, bar_count: 1, start_tick: 0, duration_ticks: 1920 }],
     tracks: [
       {
         id: 'piano-1',
@@ -103,6 +120,7 @@ test('builds playback events from canonical ticks preserving polyphony and veloc
         ],
       },
     ],
+    harmony: [],
   });
 
   assert.equal(events.length, 3);
@@ -119,10 +137,16 @@ test('builds playback events from canonical ticks preserving polyphony and veloc
 
 test('skips invalid canonical playback events', () => {
   const events = buildCanonicalPlaybackEvents({
-    schema_version: 'composition.v1',
+    schema_version: 'composition.v2',
     tempo: 120,
+    key: 'C major',
+    time_signature: '4/4',
     ticks_per_quarter: 480,
+    bar_count: 1,
+    duration_ticks: 1920,
+    sections: [{ type: 'intro', start_bar: 1, bar_count: 1, start_tick: 0, duration_ticks: 1920 }],
     tracks: [{ id: 'piano-1', instrument: 'piano', events: [{ pitch: '', start_tick: 0, duration_ticks: 480, velocity: 64 }] }],
+    harmony: [],
   });
 
   assert.deepEqual(events, []);
@@ -146,10 +170,10 @@ test('fidelity fixture preserves multi-track parity fields and ignores harmony',
   assert.equal(melody.trackVolume, 110);
   assert.equal(melody.pan, -10);
 
-  const secondsPerTick = 60 / 96 / 480;
-  assert.equal(melody.position, 240 * secondsPerTick);
-  assert.equal(melody.duration, 240 * secondsPerTick);
-  assert.equal(melody.stopPosition, melody.position + melody.duration);
+  const timeline = compileTimeline(FIDELITY_FIXTURE);
+  assert.equal(melody.position, tickToSeconds(timeline, 240));
+  assert.equal(melody.duration, tickToSeconds(timeline, 480) - tickToSeconds(timeline, 240));
+  assert.equal(melody.stopPosition, tickToSeconds(timeline, 480));
 
   assert.ok(events.every((event) => !Object.hasOwn(event, 'chord')));
   assert.equal(events.some((event) => event.trackId === 'pad-4'), false);
@@ -170,4 +194,86 @@ test('does not invent events from harmony-only canonical tracks', () => {
     tracks: FIDELITY_FIXTURE.tracks.map((track) => ({ ...track, events: [] })),
   });
   assert.deepEqual(events, []);
+});
+
+test('articulation helpers mirror backend transforms', () => {
+  assert.equal(articulationGateTicks(480, ['staccato']), 240);
+  assert.equal(articulationGateTicks(480, ['staccatissimo']), 120);
+  assert.equal(articulationGateTicks(480, ['marcato']), 360);
+  assert.equal(articulationGateTicks(480, ['tenuto']), 480);
+  assert.equal(articulationGateTicks(1, ['staccato']), 1);
+  assert.equal(articulationVelocity(80, ['accent']), 92);
+  assert.equal(articulationVelocity(80, ['marcato']), 100);
+  assert.equal(combinedExpression(127, 96), 96);
+  assert.equal(automationSampleInterval(480), 30);
+});
+
+test('collapses tie chains and applies staccato gate in expressive fixture', () => {
+  const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
+  assert.ok(schedule);
+  const melody = schedule.logicalNotes.filter((note) => note.trackId === 'melody-1');
+
+  const staccato = melody.find((note) => note.pitch === 'E4');
+  assert.equal(staccato.durationTicks, 240);
+  assert.equal(staccato.startTick, 480);
+
+  const tied = melody.find((note) => note.pitch === 'G4');
+  assert.equal(tied.startTick, 960);
+  assert.equal(tied.durationTicks, 960);
+  assert.equal(tied.velocityMidi, 86);
+});
+
+test('defers release for notes attacked during sustain pedal span', () => {
+  const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
+  const bass = schedule.logicalNotes.find((note) => note.trackId === 'melody-1' && note.pitch === 'C4');
+  assert.equal(bass.startTick, 0);
+  assert.equal(bass.durationTicks, 480);
+  assert.equal(bass.releaseTick, 1920);
+  assert.ok(bass.stopPosition > tickToSeconds(schedule.timeline, 480));
+});
+
+test('uses piecewise tempo for timing at tempo boundary', () => {
+  const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
+  const timeline = schedule.timeline;
+  const noteAfterTempoChange = schedule.logicalNotes.find((note) => note.pitch === 'C5');
+  assert.equal(noteAfterTempoChange.startTick, 3840);
+  assert.equal(tickToSeconds(timeline, 3840), 4.8);
+  assert.equal(schedule.totalDurationSeconds, 10.8);
+});
+
+test('schedule includes controller automation items', () => {
+  const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
+  const controllers = schedule.items.filter((item) => item.kind === 'controller');
+  assert.ok(controllers.some((item) => item.parameter === 'expression'));
+  assert.ok(controllers.some((item) => item.parameter === 'volume'));
+});
+
+test('same-tick ordering places releases before attacks', () => {
+  const schedule = compilePlaybackSchedule({
+    schema_version: 'composition.v2',
+    tempo: 120,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    bar_count: 1,
+    duration_ticks: 1920,
+    sections: [{ type: 'intro', start_bar: 1, bar_count: 1, start_tick: 0, duration_ticks: 1920 }],
+    tracks: [{
+      id: 't1',
+      instrument: 'piano',
+      role: 'harmony',
+      midi_program: 0,
+      channel: 1,
+      volume: 100,
+      events: [
+        { pitch: 'C4', start_tick: 0, duration_ticks: 480, velocity: 80 },
+        { pitch: 'D4', start_tick: 480, duration_ticks: 480, velocity: 80 },
+      ],
+    }],
+    harmony: [],
+  });
+
+  const atBoundary = schedule.items.filter((item) => item.tick === 480 && item.kind !== 'controller');
+  assert.equal(atBoundary[0].kind, 'release');
+  assert.equal(atBoundary[1].kind, 'attack');
 });

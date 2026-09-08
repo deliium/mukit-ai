@@ -1,9 +1,10 @@
 /**
- * Pure Composition V1 piano-roll geometry and immutable event helpers.
+ * Pure Composition V2 piano-roll geometry and immutable event helpers.
  * Logging is caller-owned; helpers return metadata for WARN/DEBUG summaries.
  */
 
 import { barDurationTicks as sharedBarDurationTicks } from './playbackPosition.js';
+import { compileTimeline } from './compositionTimeline.js';
 
 const NOTE_NAMES_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const NOTE_TO_SEMITONE = {
@@ -26,7 +27,10 @@ const NOTE_TO_SEMITONE = {
   B: 11,
 };
 const PITCH_PATTERN = /^([A-G])([#b]?)(-?\d+)$/;
+export const ARTICULATION_VALUES = Object.freeze(['staccato', 'staccatissimo', 'tenuto', 'accent', 'marcato']);
 export const SNAP_VALUES = Object.freeze(['1/4', '1/8', '1/16']);
+const GATE_SHORTENING_ARTICULATIONS = new Set(['staccato', 'staccatissimo', 'marcato']);
+const ATTACK_ARTICULATIONS = new Set(['accent', 'marcato']);
 export const DEFAULT_NOTE_VELOCITY = 90;
 export const MIN_NOTE_DURATION_TICKS = 1;
 export const DEFAULT_PITCH_MIDI_MIN = 36; // C2
@@ -367,7 +371,12 @@ export function createTrackNote(composition, trackId, noteDraft) {
     trackId,
     index: composition.tracks[trackIndex].events?.length || 0,
   });
-  const note = { ...draft, id };
+  const note = {
+    ...draft,
+    id,
+    articulations: Array.isArray(noteDraft?.articulations) ? [...noteDraft.articulations] : [],
+    tie: noteDraft?.tie ?? null,
+  };
 
   const tracks = composition.tracks.map((track, index) => {
     if (index !== trackIndex) {
@@ -484,6 +493,7 @@ export function deleteTrackNote(composition, trackId, noteId) {
   }
 
   let deleted = null;
+  let tieGroupId = null;
   const tracks = composition.tracks.map((track, index) => {
     if (index !== trackIndex) {
       return track;
@@ -493,11 +503,19 @@ export function deleteTrackNote(composition, trackId, noteId) {
     events.forEach((event) => {
       if (String(event.id) === String(noteId) && !deleted) {
         deleted = event;
+        tieGroupId = event.tie?.group_id ?? null;
         return;
       }
       nextEvents.push(event);
     });
-    return { ...track, events: nextEvents };
+    const clearedEvents = tieGroupId
+      ? nextEvents.map((event) => (
+        event.tie?.group_id === tieGroupId
+          ? { ...event, tie: null }
+          : event
+      ))
+      : nextEvents;
+    return { ...track, events: clearedEvents };
   });
 
   if (!deleted) {
@@ -530,10 +548,13 @@ export function buildGridMetrics(composition, {
   const ppt = Number(pixelsPerTick) > 0 ? Number(pixelsPerTick) : 0.05;
   const height = Number(rowHeight) > 0 ? Number(rowHeight) : 14;
   const warning = barResult.warning || snapResult.warning;
+  const timeline = compileTimeline(composition);
+  const barBoundaries = timeline?.barBoundaries || null;
 
   return {
     ticksPerQuarter: tpq,
     barTicks: barResult.barTicks || tpq * 4,
+    barBoundaries,
     snapTicks: snapResult.snapTicks || Math.floor(tpq / 2),
     durationTicks,
     barCount,
@@ -587,5 +608,324 @@ export function sanitizeNoteSummary(note) {
     start_tick: note.start_tick,
     duration_ticks: note.duration_ticks,
     velocity: note.velocity,
+    articulationCount: Array.isArray(note.articulations) ? note.articulations.length : 0,
+    tied: Boolean(note.tie),
+  };
+}
+
+/**
+ * Count V2 expressive features for DEBUG logging (no payload dumps).
+ */
+export function countV2FeatureSummary(composition) {
+  if (!composition || typeof composition !== 'object') {
+    return {
+      tempoChanges: 0,
+      meterChanges: 0,
+      keyChanges: 0,
+      markers: 0,
+      sectionLabels: 0,
+      tiedNotes: 0,
+      articulatedNotes: 0,
+      dynamicMarks: 0,
+      sustainPedals: 0,
+      automationLanes: 0,
+    };
+  }
+  let tiedNotes = 0;
+  let articulatedNotes = 0;
+  let dynamicMarks = 0;
+  let sustainPedals = 0;
+  let automationLanes = 0;
+  (composition.tracks || []).forEach((track) => {
+    dynamicMarks += Array.isArray(track.dynamic_marks) ? track.dynamic_marks.length : 0;
+    sustainPedals += Array.isArray(track.sustain_pedals) ? track.sustain_pedals.length : 0;
+    automationLanes += Array.isArray(track.automation) ? track.automation.length : 0;
+    (track.events || []).forEach((event) => {
+      if (event.tie) {
+        tiedNotes += 1;
+      }
+      if (Array.isArray(event.articulations) && event.articulations.length) {
+        articulatedNotes += 1;
+      }
+    });
+  });
+  const sections = Array.isArray(composition.sections) ? composition.sections : [];
+  return {
+    tempoChanges: Array.isArray(composition.tempo_changes) ? composition.tempo_changes.length : 0,
+    meterChanges: Array.isArray(composition.time_signature_changes) ? composition.time_signature_changes.length : 0,
+    keyChanges: Array.isArray(composition.key_changes) ? composition.key_changes.length : 0,
+    markers: Array.isArray(composition.markers) ? composition.markers.length : 0,
+    sectionLabels: sections.filter((section) => section?.label).length,
+    tiedNotes,
+    articulatedNotes,
+    dynamicMarks,
+    sustainPedals,
+    automationLanes,
+  };
+}
+
+/**
+ * Read-only timeline cues for piano-roll header (tempo/meter/key/sections/markers).
+ */
+export function buildTimelineCues(composition) {
+  const timeline = compileTimeline(composition);
+  if (!timeline) {
+    return [];
+  }
+  const cues = [
+    { tick: 0, kind: 'tempo', label: `${timeline.rootTempo} BPM` },
+    { tick: 0, kind: 'meter', label: timeline.rootTimeSignature },
+    { tick: 0, kind: 'key', label: timeline.rootKey },
+  ];
+  timeline.tempoChanges.forEach((change) => {
+    cues.push({ tick: change.tick, kind: 'tempo', label: `${change.value} BPM` });
+  });
+  timeline.timeSignatureChanges.forEach((change) => {
+    cues.push({ tick: change.tick, kind: 'meter', label: change.value });
+  });
+  timeline.keyChanges.forEach((change) => {
+    cues.push({ tick: change.tick, kind: 'key', label: change.value });
+  });
+  (Array.isArray(composition.sections) ? composition.sections : []).forEach((section) => {
+    if (section?.label && Number.isInteger(Number(section.start_tick))) {
+      cues.push({ tick: section.start_tick, kind: 'section', label: section.label });
+    }
+  });
+  (Array.isArray(composition.markers) ? composition.markers : []).forEach((marker) => {
+    if (Number.isInteger(Number(marker?.tick)) && marker?.label) {
+      cues.push({
+        tick: marker.tick,
+        kind: marker.kind === 'rehearsal' ? 'rehearsal' : 'marker',
+        label: marker.label,
+      });
+    }
+  });
+  return cues.sort((left, right) => left.tick - right.tick || left.kind.localeCompare(right.kind));
+}
+
+function articulationConflict(names) {
+  if (names.includes('staccato') && names.includes('staccatissimo')) {
+    return 'staccato and staccatissimo cannot combine';
+  }
+  if ((names.includes('staccato') || names.includes('staccatissimo')) && names.includes('tenuto')) {
+    return 'short articulations cannot combine with tenuto';
+  }
+  if (names.includes('accent') && names.includes('marcato')) {
+    return 'accent and marcato cannot combine';
+  }
+  return null;
+}
+
+function validateArticulationSet(names, tieType = null) {
+  const unique = [...new Set(names)];
+  const conflict = articulationConflict(unique);
+  if (conflict) {
+    return conflict;
+  }
+  for (const name of unique) {
+    if (!ARTICULATION_VALUES.includes(name)) {
+      return `unsupported articulation: ${name}`;
+    }
+  }
+  if (tieType) {
+    if (unique.some((name) => GATE_SHORTENING_ARTICULATIONS.has(name))) {
+      return 'gate-shortening articulations are not allowed in a tie chain';
+    }
+    if (unique.some((name) => ATTACK_ARTICULATIONS.has(name)) && tieType !== 'start') {
+      return 'attack articulations are only allowed on the tie chain head';
+    }
+  }
+  return null;
+}
+
+/**
+ * Toggle one articulation on a note; returns invalid result instead of partial writes.
+ */
+export function toggleNoteArticulation(composition, trackId, noteId, articulation) {
+  if (!composition || !Array.isArray(composition.tracks)) {
+    return { composition, note: null, warning: 'composition has no tracks' };
+  }
+  if (!ARTICULATION_VALUES.includes(articulation)) {
+    return { composition, note: null, warning: `unsupported articulation: ${articulation}` };
+  }
+  const trackIndex = composition.tracks.findIndex((track) => String(track.id) === String(trackId));
+  if (trackIndex < 0) {
+    return { composition, note: null, warning: `track not found: ${trackId}` };
+  }
+
+  let updatedNote = null;
+  let warning;
+  const tracks = composition.tracks.map((track, index) => {
+    if (index !== trackIndex) {
+      return track;
+    }
+    const events = (Array.isArray(track.events) ? track.events : []).map((event) => {
+      if (String(event.id) !== String(noteId)) {
+        return event;
+      }
+      const current = Array.isArray(event.articulations) ? [...event.articulations] : [];
+      const next = current.includes(articulation)
+        ? current.filter((name) => name !== articulation)
+        : [...current, articulation];
+      const tieType = event.tie?.type ?? null;
+      const validationMessage = validateArticulationSet(next, tieType);
+      if (validationMessage) {
+        warning = validationMessage;
+        return event;
+      }
+      updatedNote = { ...event, articulations: next };
+      return updatedNote;
+    });
+    if (!updatedNote && !warning) {
+      warning = `note not found: ${noteId}`;
+    }
+    return { ...track, events };
+  });
+
+  return {
+    composition: updatedNote ? { ...composition, tracks } : composition,
+    note: updatedNote,
+    warning,
+  };
+}
+
+function notesCompatibleForTie(left, right) {
+  return left.pitch === right.pitch
+    && left.staff === right.staff
+    && left.voice === right.voice;
+}
+
+/**
+ * From note IDs, return contiguous same-pitch/staff/voice notes sorted by start tick.
+ */
+export function selectContiguousCompatibleNotes(events, noteIds) {
+  const ids = new Set((noteIds || []).map(String));
+  const selected = (Array.isArray(events) ? events : [])
+    .filter((event) => ids.has(String(event.id)))
+    .sort((a, b) => a.start_tick - b.start_tick || a.duration_ticks - b.duration_ticks);
+  if (selected.length < 2) {
+    return { notes: [], warning: 'at least two notes are required for a tie chain' };
+  }
+  const head = selected[0];
+  for (let index = 1; index < selected.length; index += 1) {
+    const previous = selected[index - 1];
+    const current = selected[index];
+    if (!notesCompatibleForTie(head, current)) {
+      return { notes: [], warning: 'selected notes must share pitch, staff, and voice' };
+    }
+    const previousEnd = previous.start_tick + previous.duration_ticks;
+    if (current.start_tick !== previousEnd) {
+      return { notes: [], warning: 'selected notes must be contiguous' };
+    }
+  }
+  return { notes: selected };
+}
+
+function nextTieGroupId(trackId) {
+  return `tie-${trackId}-${Date.now().toString(36)}`;
+}
+
+/**
+ * Write a complete validated tie chain in one immutable update.
+ */
+export function applyTieChain(composition, trackId, noteIds) {
+  if (!composition || !Array.isArray(composition.tracks)) {
+    return { composition, notes: [], warning: 'composition has no tracks' };
+  }
+  const trackIndex = composition.tracks.findIndex((track) => String(track.id) === String(trackId));
+  if (trackIndex < 0) {
+    return { composition, notes: [], warning: `track not found: ${trackId}` };
+  }
+  const track = composition.tracks[trackIndex];
+  const { notes, warning: selectionWarning } = selectContiguousCompatibleNotes(track.events, noteIds);
+  if (!notes.length) {
+    return { composition, notes: [], warning: selectionWarning };
+  }
+  for (const note of notes) {
+    if (Array.isArray(note.articulations) && note.articulations.some((name) => GATE_SHORTENING_ARTICULATIONS.has(name))) {
+      return { composition, notes: [], warning: 'gate-shortening articulations are not allowed in a tie chain' };
+    }
+    if (note !== notes[0] && Array.isArray(note.articulations) && note.articulations.some((name) => ATTACK_ARTICULATIONS.has(name))) {
+      return { composition, notes: [], warning: 'attack articulations are only allowed on the tie chain head' };
+    }
+  }
+
+  const groupId = nextTieGroupId(trackId);
+  const tiedById = new Map(
+    notes.map((note, index) => {
+      let type = 'continue';
+      if (index === 0) {
+        type = 'start';
+      } else if (index === notes.length - 1) {
+        type = 'stop';
+      }
+      return [String(note.id), { group_id: groupId, type }];
+    }),
+  );
+
+  let updatedNotes = [];
+  const tracks = composition.tracks.map((item, index) => {
+    if (index !== trackIndex) {
+      return item;
+    }
+    const events = (Array.isArray(item.events) ? item.events : []).map((event) => {
+      const tie = tiedById.get(String(event.id));
+      if (!tie) {
+        return event;
+      }
+      const next = { ...event, tie };
+      updatedNotes.push(next);
+      return next;
+    });
+    return { ...item, events };
+  });
+
+  return {
+    composition: { ...composition, tracks },
+    notes: updatedNotes,
+    groupId,
+  };
+}
+
+/**
+ * Remove tie metadata from every selected note's tie group in one update.
+ */
+export function removeTieChain(composition, trackId, noteIds) {
+  if (!composition || !Array.isArray(composition.tracks)) {
+    return { composition, clearedCount: 0, warning: 'composition has no tracks' };
+  }
+  const trackIndex = composition.tracks.findIndex((track) => String(track.id) === String(trackId));
+  if (trackIndex < 0) {
+    return { composition, clearedCount: 0, warning: `track not found: ${trackId}` };
+  }
+  const track = composition.tracks[trackIndex];
+  const ids = new Set((noteIds || []).map(String));
+  const groupIds = new Set(
+    (track.events || [])
+      .filter((event) => ids.has(String(event.id)) && event.tie?.group_id)
+      .map((event) => event.tie.group_id),
+  );
+  if (!groupIds.size) {
+    return { composition, clearedCount: 0, warning: 'no tie groups found for selection' };
+  }
+
+  let clearedCount = 0;
+  const tracks = composition.tracks.map((item, index) => {
+    if (index !== trackIndex) {
+      return item;
+    }
+    const events = (Array.isArray(item.events) ? item.events : []).map((event) => {
+      if (event.tie?.group_id && groupIds.has(event.tie.group_id)) {
+        clearedCount += 1;
+        return { ...event, tie: null };
+      }
+      return event;
+    });
+    return { ...item, events };
+  });
+
+  return {
+    composition: { ...composition, tracks },
+    clearedCount,
   };
 }

@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createPlaybackEngine } from './tonePlaybackEngine.js';
+import { compilePlaybackSchedule } from './playbackEvents.js';
+import { readFileSync } from 'node:fs';
+
+const expressiveFixturePath = new URL('./fixtures/composition_v2_expressive.json', import.meta.url);
+const EXPRESSIVE_FIXTURE = JSON.parse(readFileSync(expressiveFixturePath, 'utf8'));
 
 function createFakeTone() {
   const scheduled = [];
@@ -10,9 +15,21 @@ function createFakeTone() {
   let state = 'stopped';
   let nextId = 1;
 
+  class FakeParam {
+    constructor(value = 0) {
+      this.value = value;
+      this.ramps = [];
+    }
+
+    linearRampTo(value, duration) {
+      this.ramps.push({ value, duration });
+      this.value = value;
+    }
+  }
+
   class FakeGain {
     constructor(value = 1) {
-      this.gain = { value };
+      this.gain = new FakeParam(value);
       this.disposed = false;
       this.connections = [];
     }
@@ -34,7 +51,7 @@ function createFakeTone() {
   class FakePanner extends FakeGain {
     constructor(value = 0) {
       super();
-      this.pan = { value };
+      this.pan = new FakeParam(value);
       this.value = value;
     }
   }
@@ -44,7 +61,17 @@ function createFakeTone() {
       super();
       this.options = options;
       this.triggers = [];
+      this.attacks = [];
+      this.releases = [];
       this.maxPolyphony = options.maxPolyphony;
+    }
+
+    triggerAttack(note, time, velocity) {
+      this.attacks.push({ note, time, velocity });
+    }
+
+    triggerRelease(note, time) {
+      this.releases.push({ note, time });
     }
 
     triggerAttackRelease(notes, duration, time, velocity) {
@@ -107,7 +134,7 @@ function createFakeTone() {
   };
 }
 
-test('schedules multi-track events and cleans up on stop/seek', async () => {
+test('schedules multi-track attack/release events and cleans up on stop/seek', async () => {
   const Tone = createFakeTone();
   const logs = [];
   const logger = {
@@ -161,9 +188,9 @@ test('schedules multi-track events and cleans up on stop/seek', async () => {
     },
   });
 
-  assert.equal(schedule.scheduledCount, 2);
+  assert.equal(schedule.scheduledCount, 4);
   assert.equal(engine.getTrackNodeCount(), 2);
-  assert.equal(Tone.Transport._scheduled.length, 3);
+  assert.equal(Tone.Transport._scheduled.length, 5);
 
   await engine.start();
   assert.equal(Tone.Transport.state, 'started');
@@ -173,8 +200,9 @@ test('schedules multi-track events and cleans up on stop/seek', async () => {
   engine.resume();
   assert.equal(Tone.Transport.state, 'started');
 
-  engine.seekToStart();
-  assert.equal(Tone.Transport.position, 0);
+  engine.seek(0.25);
+  assert.equal(Tone.Transport.position, 0.25);
+  assert.ok(engine.getScheduledEventCount() > 0);
 
   engine.stop({ seekToStart: true });
   assert.equal(engine.getTrackNodeCount(), 0);
@@ -196,7 +224,7 @@ test('schedules multi-track events and cleans up on stop/seek', async () => {
       velocityMidi: 64,
     }],
   });
-  assert.equal(engine.getScheduledEventCount(), 1);
+  assert.equal(engine.getScheduledEventCount(), 2);
   engine.dispose();
   assert.equal(engine.getTrackNodeCount(), 0);
 });
@@ -218,7 +246,40 @@ test('applies mute/solo overrides without rebuilding composition data', () => {
     b: { solo: false, volumeMidi: 127 },
   });
 
-  // No throw and nodes remain available for continued playback.
   assert.equal(engine.getTrackNodeCount(), 2);
+  engine.dispose();
+});
+
+test('prepares compiled v2 schedule with trailing silence completion', () => {
+  const Tone = createFakeTone();
+  const engine = createPlaybackEngine({ Tone, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+  const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
+  const result = engine.prepare({
+    tracks: EXPRESSIVE_FIXTURE.tracks,
+    schedule,
+    tempo: EXPRESSIVE_FIXTURE.tempo,
+  });
+
+  assert.ok(result.endPosition > 0);
+  assert.equal(result.endPosition, schedule.totalDurationSeconds);
+  assert.ok(Tone.Transport._scheduled.some((item) => item.once && item.when === schedule.totalDurationSeconds));
+  engine.dispose();
+});
+
+test('seek rebuilds schedule from current transport position', () => {
+  const Tone = createFakeTone();
+  const engine = createPlaybackEngine({ Tone, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+  const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
+  engine.prepare({
+    tracks: EXPRESSIVE_FIXTURE.tracks,
+    schedule,
+    tempo: EXPRESSIVE_FIXTURE.tempo,
+  });
+  const before = Tone.Transport._scheduled.length;
+  Tone.Transport.position = 1.5;
+  engine.seek(1.5);
+  assert.equal(Tone.Transport.position, 1.5);
+  assert.ok(Tone.Transport._scheduled.length > 0);
+  assert.notEqual(before, Tone.Transport._scheduled.length);
   engine.dispose();
 });

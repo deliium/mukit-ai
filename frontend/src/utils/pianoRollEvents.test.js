@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  applyTieChain,
   barDurationTicks,
   buildGridMetrics,
+  buildTimelineCues,
   clampNoteTiming,
+  countV2FeatureSummary,
   createTrackNote,
   deleteTrackNote,
   ensureCompositionNoteIds,
@@ -12,14 +15,17 @@ import {
   pitchToMidi,
   pixelToPitchMidi,
   pixelToTick,
+  removeTieChain,
+  selectContiguousCompatibleNotes,
   selectPitchRange,
   snapIntervalTicks,
   snapTick,
+  toggleNoteArticulation,
   updateTrackNote,
 } from './pianoRollEvents.js';
+import { migrateV1ToV2 } from './compositionVersion.js';
 
-const BASE_COMPOSITION = {
-  schema_version: 'composition.v1',
+const BASE_COMPOSITION = migrateV1ToV2({
   tempo: 100,
   key: 'C major',
   time_signature: '4/4',
@@ -47,6 +53,76 @@ const BASE_COMPOSITION = {
     },
   ],
   harmony: [{ bar: 1, chord: 'C' }],
+});
+
+const EXPRESSIVE_COMPOSITION = {
+  ...BASE_COMPOSITION,
+  bar_count: 3,
+  duration_ticks: 4800,
+  tempo_changes: [{ tick: 1920, bpm: 90 }],
+  time_signature_changes: [{ tick: 1920, time_signature: '3/4' }],
+  key_changes: [{ tick: 1920, key: 'G major' }],
+  markers: [{ tick: 960, kind: 'rehearsal', label: 'A' }],
+  sections: [
+    {
+      id: 'sec-a',
+      type: 'intro',
+      label: 'Intro',
+      start_bar: 1,
+      bar_count: 1,
+      start_tick: 0,
+      duration_ticks: 1920,
+    },
+    {
+      id: 'sec-b',
+      type: 'verse',
+      label: 'Verse',
+      start_bar: 2,
+      bar_count: 2,
+      start_tick: 1920,
+      duration_ticks: 2880,
+    },
+  ],
+  tracks: [
+    {
+      ...BASE_COMPOSITION.tracks[0],
+      dynamic_marks: [{ tick: 480, level: 'mf' }],
+      sustain_pedals: [{ start_tick: 0, duration_ticks: 960 }],
+      automation: [{ parameter: 'volume', interpolation: 'step', points: [{ tick: 480, value: 100 }] }],
+      events: [
+        {
+          type: 'note',
+          id: 'n1',
+          pitch: 'C4',
+          start_tick: 0,
+          duration_ticks: 480,
+          velocity: 90,
+          articulations: ['tenuto'],
+          tie: null,
+        },
+        {
+          type: 'note',
+          id: 'n2',
+          pitch: 'C4',
+          start_tick: 480,
+          duration_ticks: 480,
+          velocity: 90,
+          articulations: [],
+          tie: null,
+        },
+        {
+          type: 'note',
+          id: 'n3',
+          pitch: 'E4',
+          start_tick: 0,
+          duration_ticks: 480,
+          velocity: 88,
+          articulations: [],
+          tie: null,
+        },
+      ],
+    },
+  ],
 };
 
 test('pitchToMidi and midiToPitch round-trip common pitches', () => {
@@ -176,4 +252,87 @@ test('ensureCompositionNoteIds assigns missing ids without rewriting existing on
   assert.equal(result.generatedCount, 1);
   assert.ok(result.composition.tracks[0].events[0].id);
   assert.equal(result.composition.tracks[0].events[1].id, 'keep-me');
+});
+
+test('mutations preserve V2 root and track expression fields', () => {
+  const created = createTrackNote(EXPRESSIVE_COMPOSITION, 'melody-1', {
+    pitch: 'G4',
+    start_tick: 960,
+    duration_ticks: 480,
+  });
+  assert.equal(created.composition.tempo_changes.length, 1);
+  assert.equal(created.composition.tracks[0].dynamic_marks.length, 1);
+  assert.equal(created.composition.tracks[0].events[0].articulations[0], 'tenuto');
+
+  const moved = updateTrackNote(created.composition, 'melody-1', created.note.id, { start_tick: 1440 });
+  assert.equal(moved.composition.markers[0].label, 'A');
+  assert.equal(moved.composition.sections[0].label, 'Intro');
+
+  const deleted = deleteTrackNote(moved.composition, 'melody-1', created.note.id);
+  assert.equal(deleted.composition.tracks[0].automation.length, 1);
+  assert.equal(deleted.composition.key_changes[0].key, 'G major');
+});
+
+test('toggleNoteArticulation rejects conflicting articulations without partial writes', () => {
+  const withAccent = toggleNoteArticulation(EXPRESSIVE_COMPOSITION, 'melody-1', 'n1', 'accent');
+  assert.deepEqual(withAccent.note.articulations, ['tenuto', 'accent']);
+
+  const conflict = toggleNoteArticulation(withAccent.composition, 'melody-1', 'n1', 'marcato');
+  assert.equal(conflict.note, null);
+  assert.match(conflict.warning, /marcato/);
+  assert.deepEqual(
+    withAccent.composition.tracks[0].events.find((event) => event.id === 'n1').articulations,
+    ['tenuto', 'accent'],
+  );
+});
+
+test('applyTieChain writes complete validated chain atomically', () => {
+  const tied = applyTieChain(EXPRESSIVE_COMPOSITION, 'melody-1', ['n1', 'n2']);
+  assert.equal(tied.notes.length, 2);
+  assert.equal(tied.notes[0].tie.type, 'start');
+  assert.equal(tied.notes[1].tie.type, 'stop');
+  assert.equal(tied.notes[0].tie.group_id, tied.notes[1].tie.group_id);
+
+  const incompatible = applyTieChain(EXPRESSIVE_COMPOSITION, 'melody-1', ['n1', 'n3']);
+  assert.equal(incompatible.notes.length, 0);
+});
+
+test('removeTieChain clears entire group in one update', () => {
+  const tied = applyTieChain(EXPRESSIVE_COMPOSITION, 'melody-1', ['n1', 'n2']);
+  const cleared = removeTieChain(tied.composition, 'melody-1', ['n1']);
+  assert.equal(cleared.clearedCount, 2);
+  assert.equal(cleared.composition.tracks[0].events.every((event) => !event.tie), true);
+});
+
+test('deleteTrackNote clears tie metadata from remaining group members', () => {
+  const tied = applyTieChain(EXPRESSIVE_COMPOSITION, 'melody-1', ['n1', 'n2']);
+  const deleted = deleteTrackNote(tied.composition, 'melody-1', 'n1');
+  assert.equal(deleted.deleted.id, 'n1');
+  assert.equal(deleted.composition.tracks[0].events.find((event) => event.id === 'n2').tie, null);
+});
+
+test('buildTimelineCues exposes tempo meter key section and marker labels', () => {
+  const cues = buildTimelineCues(EXPRESSIVE_COMPOSITION);
+  assert.ok(cues.some((cue) => cue.kind === 'tempo' && cue.label.includes('90')));
+  assert.ok(cues.some((cue) => cue.kind === 'meter' && cue.label === '3/4'));
+  assert.ok(cues.some((cue) => cue.kind === 'key' && cue.label === 'G major'));
+  assert.ok(cues.some((cue) => cue.kind === 'section' && cue.label === 'Intro'));
+  assert.ok(cues.some((cue) => cue.kind === 'rehearsal' && cue.label === 'A'));
+});
+
+test('countV2FeatureSummary returns aggregate counts without dumping payloads', () => {
+  const tied = applyTieChain(EXPRESSIVE_COMPOSITION, 'melody-1', ['n1', 'n2']);
+  const summary = countV2FeatureSummary(tied.composition);
+  assert.equal(summary.tempoChanges, 1);
+  assert.equal(summary.dynamicMarks, 1);
+  assert.equal(summary.tiedNotes, 2);
+  assert.equal(summary.articulatedNotes, 1);
+});
+
+test('selectContiguousCompatibleNotes requires shared pitch and contiguous boundaries', () => {
+  const events = EXPRESSIVE_COMPOSITION.tracks[0].events;
+  const ok = selectContiguousCompatibleNotes(events, ['n1', 'n2']);
+  assert.equal(ok.notes.length, 2);
+  const bad = selectContiguousCompatibleNotes(events, ['n1', 'n3']);
+  assert.equal(bad.notes.length, 0);
 });

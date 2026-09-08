@@ -75,20 +75,9 @@ export function isTrackAudible(trackState, allTrackStates) {
 }
 
 export function resolveEffectiveTrackGains(trackStates) {
-  const anySolo = trackStates.some((track) => track.solo);
   return trackStates.map((track) => {
     const audible = isTrackAudible(track, trackStates);
     const effectiveGain = audible ? track.gain : 0;
-    console.debug('[playbackTracks] Effective track gain resolved', {
-      trackId: track.trackId,
-      audible,
-      anySolo,
-      muted: track.muted,
-      solo: track.solo,
-      volumeMidi: track.volumeMidi,
-      effectiveGain,
-      strategy: track.strategy?.id,
-    });
     return {
       ...track,
       audible,

@@ -70,3 +70,18 @@ test('mute alone silences a track when nothing is soloed', () => {
   assert.equal(effective[1].audible, true);
   assert.equal(effective[1].effectiveGain, 1);
 });
+
+test('mute/solo effective gain stays independent from persisted track volume field', () => {
+  const states = buildTrackPlaybackStates([
+    { id: 'a', instrument: 'piano', volume: 64 },
+    { id: 'b', instrument: 'bass', volume: 100 },
+  ], {
+    a: { muted: false, volumeMidi: 127 },
+    b: { muted: false, volumeMidi: 127 },
+  });
+
+  const effective = resolveEffectiveTrackGains(states);
+  assert.equal(effective[0].volumeMidi, 127);
+  assert.notEqual(effective[0].volumeMidi, 64);
+  assert.equal(effective[0].effectiveGain, 1);
+});

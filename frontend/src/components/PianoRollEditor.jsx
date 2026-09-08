@@ -4,8 +4,10 @@ import { useMusicStore } from '../store/musicStore.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { secondsToPlaybackPosition } from '../utils/playbackPosition.js';
 import {
+  ARTICULATION_VALUES,
   SNAP_VALUES,
   buildGridMetrics,
+  buildTimelineCues,
   defaultDurationForSnap,
   midiToPitch,
   pitchToMidi,
@@ -165,6 +167,54 @@ const BarLabel = styled.div`
   z-index: 2;
 `;
 
+const TimelineCue = styled.div`
+  position: absolute;
+  top: 18px;
+  left: ${(props) => props.$left}px;
+  max-width: 120px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 0.6rem;
+  line-height: 1.2;
+  color: ${(props) => {
+    if (props.$kind === 'tempo') return '#1d4ed8';
+    if (props.$kind === 'meter') return '#047857';
+    if (props.$kind === 'key') return '#7c3aed';
+    if (props.$kind === 'section') return '#b45309';
+    return '#334155';
+  }};
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  pointer-events: none;
+  z-index: 2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+`;
+
+const ExpressionControls = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+`;
+
+const ChipButton = styled.button`
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid ${(props) => (props.$active ? '#4338ca' : '#c7d2fe')};
+  background: ${(props) => (props.$active ? '#eef2ff' : '#ffffff')};
+  color: #312e81;
+  font-size: 0.75rem;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+`;
+
 const NoteBlock = styled.div`
   position: absolute;
   left: ${(props) => props.$left}px;
@@ -234,6 +284,7 @@ const PianoRollEditor = () => {
   const editedMusicJson = useMusicStore((state) => state.editedMusicJson);
   const pianoRollTrackId = useMusicStore((state) => state.pianoRollTrackId);
   const pianoRollNoteId = useMusicStore((state) => state.pianoRollNoteId);
+  const pianoRollNoteIds = useMusicStore((state) => state.pianoRollNoteIds);
   const pianoRollSnap = useMusicStore((state) => state.pianoRollSnap);
   const pianoRollZoom = useMusicStore((state) => state.pianoRollZoom);
   const pianoRollNotationStatus = useMusicStore((state) => state.pianoRollNotationStatus);
@@ -242,7 +293,7 @@ const PianoRollEditor = () => {
   const noteEditRedoStack = useMusicStore((state) => state.noteEditRedoStack);
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
   const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
-  const compositionRevision = useMusicStore((state) => state.compositionRevision);
+  const notationRevision = useMusicStore((state) => state.notationRevision);
   const selectPianoRollTrack = useMusicStore((state) => state.selectPianoRollTrack);
   const selectPianoRollNote = useMusicStore((state) => state.selectPianoRollNote);
   const setPianoRollSnap = useMusicStore((state) => state.setPianoRollSnap);
@@ -250,6 +301,9 @@ const PianoRollEditor = () => {
   const createNote = useMusicStore((state) => state.createNote);
   const updateNote = useMusicStore((state) => state.updateNote);
   const deleteNote = useMusicStore((state) => state.deleteNote);
+  const toggleNoteArticulation = useMusicStore((state) => state.toggleNoteArticulation);
+  const applyTieChain = useMusicStore((state) => state.applyTieChain);
+  const removeTieChain = useMusicStore((state) => state.removeTieChain);
   const undoNoteEdit = useMusicStore((state) => state.undoNoteEdit);
   const redoNoteEdit = useMusicStore((state) => state.redoNoteEdit);
   const refreshMusicXmlFromEditedComposition = useMusicStore(
@@ -282,6 +336,11 @@ const PianoRollEditor = () => {
   );
   const selectedTrack = tracks.find((track) => String(track.id) === String(pianoRollTrackId)) || null;
   const selectedEvents = Array.isArray(selectedTrack?.events) ? selectedTrack.events : [];
+  const selectedNote = selectedEvents.find((event) => String(event.id) === String(pianoRollNoteId)) || null;
+  const selectedNoteSet = useMemo(
+    () => new Set((pianoRollNoteIds || []).map(String)),
+    [pianoRollNoteIds],
+  );
 
   const metrics = useMemo(() => {
     if (!canonical || !validation.valid) {
@@ -364,12 +423,12 @@ const PianoRollEditor = () => {
       clearTimeout(debounceRef.current);
     }
     console.debug('[PianoRollEditor] Notation debounce scheduled', {
-      compositionRevision: compositionRevision.slice(0, 48),
+      notationRevision: notationRevision.slice(0, 48),
       delayMs: NOTE_NOTATION_DEBOUNCE_MS,
     });
     debounceRef.current = setTimeout(() => {
       console.debug('[PianoRollEditor] Notation debounce completed; refreshing MusicXML', {
-        compositionRevision: compositionRevision.slice(0, 48),
+        notationRevision: notationRevision.slice(0, 48),
       });
       refreshMusicXmlFromEditedComposition();
     }, NOTE_NOTATION_DEBOUNCE_MS);
@@ -379,7 +438,7 @@ const PianoRollEditor = () => {
         console.debug('[PianoRollEditor] Notation debounce cancelled');
       }
     };
-  }, [canonical, validation.valid, compositionRevision, refreshMusicXmlFromEditedComposition]);
+  }, [canonical, validation.valid, notationRevision, refreshMusicXmlFromEditedComposition]);
 
   const contextCounts = useMemo(() => {
     const counts = {};
@@ -406,6 +465,7 @@ const PianoRollEditor = () => {
       tempo: editedMusicJson.tempo,
       ticksPerQuarter: editedMusicJson.ticks_per_quarter,
       timeSignature: editedMusicJson.time_signature,
+      composition: editedMusicJson,
     });
     return position.tick;
   }, [editedMusicJson, playbackStatus, playbackSeconds]);
@@ -446,10 +506,22 @@ const PianoRollEditor = () => {
   }, [metrics]);
 
   const barLabels = useMemo(() => {
-    if (!metrics || !metrics.barTicks) {
+    if (!metrics) {
       return [];
     }
     const labels = [];
+    if (Array.isArray(metrics.barBoundaries) && metrics.barBoundaries.length > 1) {
+      for (let bar = 0; bar < (metrics.barCount || 0); bar += 1) {
+        labels.push({
+          bar: bar + 1,
+          left: metrics.barBoundaries[bar] * metrics.pixelsPerTick + 4,
+        });
+      }
+      return labels;
+    }
+    if (!metrics.barTicks) {
+      return [];
+    }
     for (let bar = 0; bar < (metrics.barCount || 0); bar += 1) {
       labels.push({
         bar: bar + 1,
@@ -458,6 +530,16 @@ const PianoRollEditor = () => {
     }
     return labels;
   }, [metrics]);
+
+  const timelineCues = useMemo(() => {
+    if (!editedMusicJson || !metrics) {
+      return [];
+    }
+    return buildTimelineCues(editedMusicJson).map((cue) => ({
+      ...cue,
+      left: cue.tick * metrics.pixelsPerTick + 2,
+    }));
+  }, [editedMusicJson, metrics]);
 
   const schedulePointerEnd = useCallback(() => {
     const interaction = dragRef.current;
@@ -644,6 +726,7 @@ const PianoRollEditor = () => {
         pixelsPerTick: metrics.pixelsPerTick,
         barTicks: metrics.barTicks,
         barCount: metrics.barCount,
+        barBoundaries: metrics.barBoundaries,
         scrollLeft: 0,
       });
       if (mapped.bar === null) {
@@ -671,6 +754,7 @@ const PianoRollEditor = () => {
           pixelsPerTick: metrics.pixelsPerTick,
           barTicks: metrics.barTicks,
           barCount: metrics.barCount,
+          barBoundaries: metrics.barBoundaries,
         });
         if (nextBar.bar === null) {
           return;
@@ -765,7 +849,7 @@ const PianoRollEditor = () => {
       <Panel aria-label="Piano roll editor">
         <Title>Piano Roll Editor</Title>
         <Status $tone="warn">
-          Piano roll supports canonical composition.v1 only. Legacy JSON remains editable in the JSON editor.
+          Piano roll supports canonical composition only. Legacy JSON remains editable in the JSON editor.
         </Status>
       </Panel>
     );
@@ -804,6 +888,7 @@ const PianoRollEditor = () => {
     ? selectionOverlayRect(aiEditStartBar, aiEditEndBar, {
       pixelsPerTick: metrics.pixelsPerTick,
       barTicks: metrics.barTicks,
+      barBoundaries: metrics.barBoundaries,
       totalHeight: metrics.totalHeight,
     })
     : null;
@@ -934,6 +1019,61 @@ const PianoRollEditor = () => {
         </Controls>
       </HeaderRow>
 
+      {selectedNote && (
+        <ExpressionControls aria-label="Selected note expression controls">
+          <span style={{ fontSize: '0.8rem', color: '#374151' }}>
+            Note {selectedNote.pitch} · selected {pianoRollNoteIds.length}
+          </span>
+          {ARTICULATION_VALUES.map((articulation) => {
+            const active = Array.isArray(selectedNote.articulations)
+              && selectedNote.articulations.includes(articulation);
+            return (
+              <ChipButton
+                key={articulation}
+                type="button"
+                $active={active}
+                data-testid={`articulation-${articulation}`}
+                aria-label={`Toggle ${articulation}`}
+                onClick={() => {
+                  if (!pianoRollTrackId || !pianoRollNoteId) {
+                    return;
+                  }
+                  toggleNoteArticulation(pianoRollTrackId, pianoRollNoteId, articulation);
+                }}
+              >
+                {articulation}
+              </ChipButton>
+            );
+          })}
+          <Button
+            type="button"
+            data-testid="piano-roll-tie"
+            disabled={pianoRollNoteIds.length < 2}
+            onClick={() => {
+              if (!pianoRollTrackId) {
+                return;
+              }
+              applyTieChain(pianoRollTrackId, pianoRollNoteIds);
+            }}
+          >
+            Tie chain
+          </Button>
+          <Button
+            type="button"
+            data-testid="piano-roll-untie"
+            disabled={!pianoRollNoteIds.length}
+            onClick={() => {
+              if (!pianoRollTrackId) {
+                return;
+              }
+              removeTieChain(pianoRollTrackId, pianoRollNoteIds);
+            }}
+          >
+            Remove tie
+          </Button>
+        </ExpressionControls>
+      )}
+
       {!selectedEvents.length && (
         <Status $tone="warn">
           Selected track has no events yet. Click empty grid space to create a snapped note.
@@ -991,6 +1131,16 @@ const PianoRollEditor = () => {
                 Bar {label.bar}
               </BarLabel>
             ))}
+            {timelineCues.map((cue) => (
+              <TimelineCue
+                key={`${cue.kind}:${cue.tick}:${cue.label}`}
+                $left={cue.left}
+                $kind={cue.kind}
+                title={`${cue.kind}: ${cue.label}`}
+              >
+                {cue.label}
+              </TimelineCue>
+            ))}
 
             {tracks.map((track, trackIndex) => {
               const editable = String(track.id) === String(pianoRollTrackId);
@@ -1004,7 +1154,9 @@ const PianoRollEditor = () => {
                 const top = (metrics.maxMidi - midi) * metrics.rowHeight;
                 const left = event.start_tick * metrics.pixelsPerTick;
                 const width = event.duration_ticks * metrics.pixelsPerTick;
-                const selected = editable && String(event.id) === String(pianoRollNoteId);
+                const selected = editable && (
+                  String(event.id) === String(pianoRollNoteId) || selectedNoteSet.has(String(event.id))
+                );
                 return (
                   <NoteBlock
                     key={`${track.id}:${event.id || `${event.pitch}-${event.start_tick}`}`}
@@ -1030,13 +1182,14 @@ const PianoRollEditor = () => {
                         return;
                       }
                       clickEvent.stopPropagation();
-                      selectPianoRollNote(event.id);
+                      selectPianoRollNote(event.id, { extend: clickEvent.shiftKey });
                       console.info('[PianoRollEditor] Note selected', {
                         trackId: track.id,
                         noteId: event.id,
                         pitch: event.pitch,
                         start_tick: event.start_tick,
                         duration_ticks: event.duration_ticks,
+                        extend: clickEvent.shiftKey,
                       });
                     }}
                   >

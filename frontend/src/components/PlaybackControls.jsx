@@ -2,10 +2,11 @@ import React, { useEffect, useRef } from 'react';
 import * as Tone from 'tone';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
-import { buildCanonicalPlaybackEvents } from '../utils/playbackEvents.js';
+import { compilePlaybackSchedule } from '../utils/playbackEvents.js';
 import { buildLegacyPlaybackEvents } from '../utils/legacyPlaybackEvents.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
-import { compositionRevisionKey, secondsToPlaybackPosition } from '../utils/playbackPosition.js';
+import { audibleRevisionKey } from '../utils/compositionCanonical.js';
+import { secondsToPlaybackPosition } from '../utils/playbackPosition.js';
 import { createPlaybackEngine } from '../utils/tonePlaybackEngine.js';
 import TrackPlaybackControls from './TrackPlaybackControls.jsx';
 
@@ -245,7 +246,7 @@ const PlaybackControls = () => {
   const handleSeekToStart = () => {
     console.info('[PlaybackControls] User seek-to-start action');
     if (isCanonicalComposition(editedMusicJson) && engineRef.current) {
-      engineRef.current.seekToStart();
+      engineRef.current.seek(0);
     } else {
       Tone.Transport.position = 0;
     }
@@ -298,7 +299,7 @@ const PlaybackControls = () => {
       </Controls>
       <StatusRow>
         Status: {playbackStatus} · {playbackSeconds.toFixed(2)}s · bar {playbackBar}
-        {canonical ? ' · composition.v1' : editedMusicJson ? ' · legacy' : ''}
+        {canonical ? ' · composition.v2' : editedMusicJson ? ' · legacy' : ''}
       </StatusRow>
       {canonical ? (
         <TrackPlaybackControls
@@ -319,7 +320,7 @@ const PlaybackControls = () => {
           }}
         />
       ) : (
-        <StatusRow>Track mute/solo/volume controls require composition.v1.</StatusRow>
+        <StatusRow>Track mute/solo/volume controls require a canonical composition.</StatusRow>
       )}
       {playbackStatus === 'error' && <ErrorText>Playback is unavailable for the current JSON.</ErrorText>}
     </div>
@@ -336,16 +337,11 @@ async function startCanonicalPlayback({
   setPlaybackPosition,
   setUiError,
 }) {
-  console.info('[PlaybackControls] Using canonical composition.v1 playback path');
-  const events = buildCanonicalPlaybackEvents(editedMusicJson);
-  console.debug('[PlaybackControls] Canonical schedule summary', {
-    trackCount: editedMusicJson.tracks?.length || 0,
-    eventCount: events.length,
-    tempo: editedMusicJson.tempo,
-    ticksPerQuarter: editedMusicJson.ticks_per_quarter,
-  });
+  console.info('[PlaybackControls] Using canonical composition playback path');
+  const schedule = compilePlaybackSchedule(editedMusicJson);
+  console.debug('[PlaybackControls] Canonical schedule summary', schedule?.summary ?? {});
 
-  if (!events.length) {
+  if (!schedule?.logicalNotes?.length) {
     console.warn('[PlaybackControls] Canonical composition has no playable track events');
     setUiError('No playable note events found in the current composition.');
     setPlaybackStatus('error');
@@ -355,7 +351,7 @@ async function startCanonicalPlayback({
   // Never inspect harmony for audible content on the canonical path.
   engineRef.current.prepare({
     tracks: editedMusicJson.tracks,
-    events,
+    schedule,
     tempo: editedMusicJson.tempo,
     trackOverrides: trackControls,
     onComplete: () => {
@@ -370,7 +366,7 @@ async function startCanonicalPlayback({
     },
   });
 
-  scheduledRevisionRef.current = compositionRevisionKey(editedMusicJson);
+  scheduledRevisionRef.current = audibleRevisionKey(editedMusicJson);
   await engineRef.current.start();
   startPositionTimer({
     editedMusicJson,
@@ -433,7 +429,7 @@ async function startLegacyPlayback({
     });
   }, endPosition);
 
-  scheduledRevisionRef.current = compositionRevisionKey(editedMusicJson);
+  scheduledRevisionRef.current = audibleRevisionKey(editedMusicJson);
   Tone.Transport.start();
   startPositionTimer({
     editedMusicJson,
@@ -507,6 +503,7 @@ function startPositionTimer({
       tempo: editedMusicJson?.tempo,
       ticksPerQuarter: editedMusicJson?.ticks_per_quarter,
       timeSignature: editedMusicJson?.time_signature,
+      composition: editedMusicJson,
     });
     setPlaybackPosition({ seconds: position.seconds, bar: position.bar });
     const wholeSecond = Math.floor(position.seconds);

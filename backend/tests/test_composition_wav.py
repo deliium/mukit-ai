@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from app.schemas import Composition
+from app.schemas import CompositionV2
 from app.services import composition_wav as wav_module
+from app.services.composition_midi import MidiRenderResult
+from app.services.composition_projection import empty_projection_report
 from app.services.composition_wav import (
     CompositionWavError,
     expected_duration_seconds,
@@ -19,12 +21,16 @@ from app.services.composition_wav import (
 from tests.test_export_fidelity import build_export_fidelity_composition
 
 
-def _silent_composition() -> Composition:
+def _fake_midi_result(_composition) -> MidiRenderResult:
+    return MidiRenderResult(midi_bytes=b"MThd-fake-midi", report=empty_projection_report())
+
+
+def _silent_composition() -> CompositionV2:
     composition = build_export_fidelity_composition()
     data = composition.model_dump()
     for track in data["tracks"]:
         track["events"] = []
-    return Composition.model_validate(data)
+    return CompositionV2.model_validate(data)
 
 
 def _minimal_wav_bytes(*, duration_seconds: float = 0.5, sample_rate: int = 44100) -> bytes:
@@ -88,7 +94,7 @@ def test_render_wav_invokes_fluidsynth_without_shell(monkeypatch, tmp_path, capl
 
     monkeypatch.setenv("FLUIDSYNTH_BIN", str(fake_bin))
     monkeypatch.setenv("COMPOSITION_WAV_SOUNDFONT", str(soundfont))
-    monkeypatch.setattr(wav_module, "render_midi", lambda _c: b"MThd-fake-midi")
+    monkeypatch.setattr(wav_module, "render_midi_with_report", _fake_midi_result)
 
     calls: list[dict] = []
 
@@ -136,7 +142,7 @@ def test_render_wav_missing_soundfont_is_unavailable(monkeypatch, tmp_path):
 
     monkeypatch.setenv("FLUIDSYNTH_BIN", str(fake_bin))
     monkeypatch.setenv("COMPOSITION_WAV_SOUNDFONT", str(missing_sf))
-    monkeypatch.setattr(wav_module, "render_midi", lambda _c: b"MThd")
+    monkeypatch.setattr(wav_module, "render_midi_with_report", _fake_midi_result)
 
     with pytest.raises(CompositionWavError) as exc_info:
         render_wav(composition)
@@ -156,7 +162,7 @@ def test_render_wav_timeout(monkeypatch, tmp_path, caplog):
     monkeypatch.setenv("FLUIDSYNTH_BIN", str(fake_bin))
     monkeypatch.setenv("COMPOSITION_WAV_SOUNDFONT", str(soundfont))
     monkeypatch.setenv("COMPOSITION_WAV_TIMEOUT_SECONDS", "3")
-    monkeypatch.setattr(wav_module, "render_midi", lambda _c: b"MThd")
+    monkeypatch.setattr(wav_module, "render_midi_with_report", _fake_midi_result)
 
     def boom(*_args, **_kwargs):
         raise wav_module.subprocess.TimeoutExpired(cmd="fluidsynth", timeout=3)
@@ -180,7 +186,7 @@ def test_render_wav_nonzero_exit(monkeypatch, tmp_path, caplog):
 
     monkeypatch.setenv("FLUIDSYNTH_BIN", str(fake_bin))
     monkeypatch.setenv("COMPOSITION_WAV_SOUNDFONT", str(soundfont))
-    monkeypatch.setattr(wav_module, "render_midi", lambda _c: b"MThd")
+    monkeypatch.setattr(wav_module, "render_midi_with_report", _fake_midi_result)
 
     class Result:
         returncode = 7
@@ -206,7 +212,7 @@ def test_render_wav_rejects_invalid_output(monkeypatch, tmp_path, caplog):
 
     monkeypatch.setenv("FLUIDSYNTH_BIN", str(fake_bin))
     monkeypatch.setenv("COMPOSITION_WAV_SOUNDFONT", str(soundfont))
-    monkeypatch.setattr(wav_module, "render_midi", lambda _c: b"MThd")
+    monkeypatch.setattr(wav_module, "render_midi_with_report", _fake_midi_result)
 
     def fake_run(command, **_kwargs):
         wav_path = Path(command[command.index("-F") + 1])
@@ -238,7 +244,7 @@ def test_temp_directory_cleaned_after_render(monkeypatch, tmp_path):
 
     monkeypatch.setenv("FLUIDSYNTH_BIN", str(fake_bin))
     monkeypatch.setenv("COMPOSITION_WAV_SOUNDFONT", str(soundfont))
-    monkeypatch.setattr(wav_module, "render_midi", lambda _c: b"MThd")
+    monkeypatch.setattr(wav_module, "render_midi_with_report", _fake_midi_result)
 
     observed_dirs: list[Path] = []
 
@@ -259,3 +265,15 @@ def test_temp_directory_cleaned_after_render(monkeypatch, tmp_path):
 
     assert observed_dirs
     assert not observed_dirs[0].exists()
+
+
+def test_expected_duration_uses_tempo_map():
+    import json
+    from pathlib import Path
+
+    from app.composition_schemas import CompositionV2
+
+    raw = json.loads((Path(__file__).parent / "fixtures" / "timeline_mixed_meter_tempo.json").read_text())
+    raw.pop("expectations")
+    composition = CompositionV2.model_validate(raw)
+    assert expected_duration_seconds(composition) == pytest.approx(6.0, abs=0.001)
