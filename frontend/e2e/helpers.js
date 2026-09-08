@@ -126,6 +126,7 @@ export async function getStoreSnapshot(page) {
       : 0;
     return {
       projectId: state.currentProjectId,
+      currentProjectId: state.currentProjectId,
       projectName: state.currentProjectName,
       schemaVersion: composition?.schema_version ?? null,
       barCount: composition?.bar_count ?? null,
@@ -137,6 +138,11 @@ export async function getStoreSnapshot(page) {
       selectedModel: state.selectedModel,
       melodyFirstPitch: composition?.tracks?.find((t) => t.id === 'melody-1')?.events?.[0]?.pitch ?? null,
       tempoChangeCount: Array.isArray(composition?.tempo_changes) ? composition.tempo_changes.length : 0,
+      importStatus: state.importStatus,
+      importError: state.importError,
+      importReport: state.importReport,
+      generationMeta: state.generationMeta,
+      editedMusicJson: composition,
     };
   });
 }

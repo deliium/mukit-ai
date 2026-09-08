@@ -161,3 +161,36 @@ log "Post-restart composition sha256=${AFTER_HASH}"
 AFTER_SCHEMA=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["composition"]["schema_version"])' <<<"${AFTER}")
 [[ "${AFTER_SCHEMA}" == "composition.v2" ]] || fail "Persisted composition must remain composition.v2"
 log "PASS: V2 docker acceptance complete"
+
+log "Import MIDI fixture through Nginx multipart proxy"
+MIDI_FIXTURE="${ROOT}/backend/tests/fixtures/import/multitrack.mid"
+IMPORT=$(curl -fsS -X POST "${BACKEND_URL}/imports/midi" \
+  -F "file=@${MIDI_FIXTURE};type=audio/midi")
+IMPORT_SCHEMA=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["composition"]["schema_version"])' <<<"${IMPORT}")
+[[ "${IMPORT_SCHEMA}" == "composition.v2" ]] || fail "MIDI import must return composition.v2"
+IMPORT_HARMONY=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["composition"]["harmony"])' <<<"${IMPORT}")
+[[ "${IMPORT_HARMONY}" == "[]" ]] || fail "Imported composition must have empty harmony"
+IMPORT_NOTES=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(len(t.get("events") or []) for t in d["composition"]["tracks"]))' <<<"${IMPORT}")
+[[ "${IMPORT_NOTES}" -ge 1 ]] || fail "Imported MIDI must include notes"
+
+log "Save imported composition and reopen"
+IMPORT_PROJECT=$(curl -fsS -X POST "${BACKEND_URL}/projects" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Import Docker Accept"}')
+IMPORT_PROJECT_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"${IMPORT_PROJECT}")
+IMPORT_COMP=$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["composition"]))' <<<"${IMPORT}")
+curl -fsS -X PATCH "${BACKEND_URL}/projects/${IMPORT_PROJECT_ID}" \
+  -H "Content-Type: application/json" \
+  -d "{\"composition\": ${IMPORT_COMP}, \"clear_generation\": true}" >/dev/null
+REOPEN=$(curl -fsS "${BACKEND_URL}/projects/${IMPORT_PROJECT_ID}")
+REOPEN_SCHEMA=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["composition"]["schema_version"])' <<<"${REOPEN}")
+[[ "${REOPEN_SCHEMA}" == "composition.v2" ]] || fail "Reopened import must remain composition.v2"
+REOPEN_GEN=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("generation_provider"))' <<<"${REOPEN}")
+[[ "${REOPEN_GEN}" == "None" ]] || fail "Imported project must not fabricate generation metadata"
+
+log "Re-export imported composition as MIDI"
+curl -fsS -o /tmp/mukit-import-reexport.mid -X POST "${BACKEND_URL}/export/midi" \
+  -H "Content-Type: application/json" \
+  -d "${IMPORT_COMP}"
+[[ -s /tmp/mukit-import-reexport.mid ]] || fail "MIDI re-export from import was empty"
+log "PASS: import docker acceptance checks complete"

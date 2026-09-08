@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <work><work-title>Import Fixture</work-title></work>
+  <part-list>
+    <score-part id="P1"><part-name>Piano</part-name></score-part>
+    <score-part id="P2"><part-name>Violin</part-name></score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>1</divisions>
+        <key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+      </attributes>
+      <direction placement="above">
+        <direction-type><dynamics><mf/></dynamics></direction-type>
+        <sound dynamics="90"/>
+      </direction>
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>4</duration>
+        <tie type="start"/>
+        <voice>1</voice>
+        <type>whole</type>
+        <notations>
+          <tied type="start"/>
+          <articulations><accent/></articulations>
+        </notations>
+      </note>
+    </measure>
+    <measure number="2">
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>2</duration>
+        <tie type="stop"/>
+        <voice>1</voice>
+        <type>half</type>
+        <notations><tied type="stop"/></notations>
+      </note>
+      <note>
+        <pitch><step>E</step><octave>4</octave></pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <notations><articulations><staccato/></articulations></notations>
+      </note>
+      <note>
+        <chord/>
+        <pitch><step>G</step><octave>4</octave></pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+      </note>
+      <note>
+        <rest/>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+      </note>
+    </measure>
+  </part>
+  <part id="P2">
+    <measure number="1">
+      <attributes>
+        <divisions>1</divisions>
+        <key><fifths>0</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+      </attributes>
+      <note>
+        <pitch><step>G</step><octave>5</octave></pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <type>whole</type>
+      </note>
+    </measure>
+    <measure number="2">
+      <note>
+        <pitch><step>A</step><octave>5</octave></pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <type>whole</type>
+      </note>
+    </measure>
+  </part>
+</score-partwise>

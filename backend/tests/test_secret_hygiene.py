@@ -72,3 +72,28 @@ def test_env_example_and_compose_have_no_literal_keys():
     # Placeholders / empty assignments are fine; sk- literals are not.
     assert "sk-" not in env_example
     assert "sk-" not in compose
+
+
+def test_import_routes_omit_source_sentinels_from_errors_and_logs(monkeypatch, tmp_path, caplog):
+    from tests.fixtures.build_import_fixtures import SENTINEL_FILENAME
+
+    fixture_dir = Path(__file__).resolve().parent / "fixtures" / "import"
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    client = TestClient(app)
+    with caplog.at_level("DEBUG"):
+        response = client.post(
+            "/imports/midi",
+            files={
+                "file": (
+                    SENTINEL_FILENAME,
+                    (fixture_dir / "truncated.mid").read_bytes(),
+                    "audio/midi",
+                )
+            },
+        )
+    assert response.status_code == 422
+    assert SENTINEL_FILENAME not in response.text
+    assert_no_secret_leakage(response.json(), context="POST /imports/midi error")
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert SENTINEL_FILENAME not in joined
+    assert "MTrk" not in joined

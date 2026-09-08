@@ -141,31 +141,31 @@ Add secure MIDI and MusicXML ingestion that converts uploaded files directly int
 ### Phase 4: Fixtures, Fidelity, Security, And Acceptance
 
 #### Task 9: Add deterministic fixtures and backend fidelity tests
-- [ ] Add small auditable deterministic fixtures under `backend/tests/fixtures/import/`: a normal type-1 multi-track MIDI with tempo/meter/key changes, program/channel metadata, polyphony, velocity, controls, sustain, and percussion; a corresponding multi-part MusicXML with voices/staves/ties/dynamics/articulations; an MXL container; and malformed/truncated/security fixtures. Store expected semantic vectors in JSON rather than asserting re-exported byte identity.
-- [ ] Add fixture builders under `backend/tests/fixtures/` that can regenerate binary fixtures deterministically with pinned `mido`; include a parity/hash assertion so committed bytes and documented builder output cannot drift unnoticed.
-- [ ] Add `backend/tests/test_import_fidelity.py` to import each valid fixture twice, assert identical canonical JSON/IDs/report codes, validate V2/timeline, compare expected note/metadata tuples, re-export to MIDI and MusicXML, parse those exports, and compare playable semantics within each documented approximation.
-- [ ] Exercise existing persistence services/routes by saving and reopening imported V2 with equal event IDs and note fingerprints; exercise fake-provider region editing and verify untouched regions remain identical.
-- [ ] Logging: use `caplog` to assert expected structured success/warning fields and deterministic codes while ensuring fixture sentinel text/bytes never appears. Test DEBUG/INFO/WARNING/ERROR paths without weakening production sanitization.
-- [ ] Files: `backend/tests/fixtures/import/*`, `backend/tests/fixtures/build_import_fixtures.py`, `backend/tests/test_import_fidelity.py`, project persistence acceptance tests, and export/editor tests.
-- [ ] Depends on Tasks 3-6.
+- [x] Add small auditable deterministic fixtures under `backend/tests/fixtures/import/`: a normal type-1 multi-track MIDI with tempo/meter/key changes, program/channel metadata, polyphony, velocity, controls, sustain, and percussion; a corresponding multi-part MusicXML with voices/staves/ties/dynamics/articulations; an MXL container; and malformed/truncated/security fixtures. Store expected semantic vectors in JSON rather than asserting re-exported byte identity.
+- [x] Add fixture builders under `backend/tests/fixtures/` that can regenerate binary fixtures deterministically with pinned `mido`; include a parity/hash assertion so committed bytes and documented builder output cannot drift unnoticed.
+- [x] Add `backend/tests/test_import_fidelity.py` to import each valid fixture twice, assert identical canonical JSON/IDs/report codes, validate V2/timeline, compare expected note/metadata tuples, re-export to MIDI and MusicXML, parse those exports, and compare playable semantics within each documented approximation.
+- [x] Exercise existing persistence services/routes by saving and reopening imported V2 with equal event IDs and note fingerprints; exercise fake-provider region editing and verify untouched regions remain identical.
+- [x] Logging: use `caplog` to assert expected structured success/warning fields and deterministic codes while ensuring fixture sentinel text/bytes never appears. Test DEBUG/INFO/WARNING/ERROR paths without weakening production sanitization.
+- [x] Files: `backend/tests/fixtures/import/*`, `backend/tests/fixtures/build_import_fixtures.py`, `backend/tests/test_import_fidelity.py`, project persistence acceptance tests, and export/editor tests.
+- [x] Depends on Tasks 3-6.
 
 #### Task 10: Add malformed-input, resource-limit, and secret-hygiene gates
-- [ ] Add `backend/tests/test_import_security.py` covering forged MIME/extensions, empty files, bad MIDI headers/truncation/SMPTE division, DTD/entities, malformed XML, unsafe/encrypted/nested MXL entries, zip-slip names, excessive ratio/expanded size/entry count, and every configurable track/event/bar/PPQ/metadata/active-note limit.
-- [ ] Assert exact HTTP status and stable error code, bounded response detail, upload closure, no temporary-file leakage, and no persistence/state mutation. Include direct-backend tests so protection does not depend on Nginx.
-- [ ] Extend `backend/tests/test_secret_hygiene.py` with unique source filename/XML metadata/lyric/byte sentinels and assert none appear in logs or user-facing internal-error details.
-- [ ] Logging: verify accepted files log counts/codes only, rejected files log sanitized type/code and no payload, and verbosity remains governed by `LOG_LEVEL`.
-- [ ] Files: `backend/tests/test_import_security.py`, `backend/tests/test_secret_hygiene.py`, route/service limit tests, and fixtures from Task 9.
-- [ ] Depends on Tasks 4-5 and 9.
+- [x] Add `backend/tests/test_import_security.py` covering forged MIME/extensions, empty files, bad MIDI headers/truncation/SMPTE division, DTD/entities, malformed XML, unsafe/encrypted/nested MXL entries, zip-slip names, excessive ratio/expanded size/entry count, and every configurable track/event/bar/PPQ/metadata/active-note limit.
+- [x] Assert exact HTTP status and stable error code, bounded response detail, upload closure, no temporary-file leakage, and no persistence/state mutation. Include direct-backend tests so protection does not depend on Nginx.
+- [x] Extend `backend/tests/test_secret_hygiene.py` with unique source filename/XML metadata/lyric/byte sentinels and assert none appear in logs or user-facing internal-error details.
+- [x] Logging: verify accepted files log counts/codes only, rejected files log sanitized type/code and no payload, and verbosity remains governed by `LOG_LEVEL`.
+- [x] Files: `backend/tests/test_import_security.py`, `backend/tests/test_secret_hygiene.py`, route/service limit tests, and fixtures from Task 9.
+- [x] Depends on Tasks 4-5 and 9.
 
 #### Task 11: Add frontend, Playwright, and Docker acceptance coverage
-- [ ] Extend frontend API/store tests for FormData requests, status/code preservation, atomic success, failure non-mutation, reset baseline, playback/selection/history reset, warning retention, null generation metadata, save/autosave race handling, new-project creation after parse, and reload of imported V2.
-- [ ] Add `frontend/e2e/import-user-journey.spec.js` using deterministic fixture files and `setInputFiles`, plus one DataTransfer drop path. Cover the acceptance journey: import normal multi-track MIDI, inspect tracks/notes, play, edit a note, render notation, save, reopen, perform fake-provider AI region editing, and download valid MIDI/MusicXML exports.
-- [ ] Add MusicXML/MXL success, no-LLM import availability, current-project replace confirmation, malformed-file failure with unchanged composition fingerprint, and visible grouped warning summary. Use store snapshots and parsed downloads rather than visual timing guesses where possible.
-- [ ] Extend `scripts/v2_docker_acceptance.sh` to exercise multipart imports through production Nginx, canonical save/reopen, and re-export; add or update the pytest Docker acceptance wrapper so this gate is runnable consistently.
-- [ ] Run focused and full gates: `../.venv/bin/python -m pytest` from `backend/`; `npm test`, `npm run lint`, and `npm run build` from `frontend/`; `npm run test:e2e -- e2e/import-user-journey.spec.js`; and `RUN_DOCKER_ACCEPTANCE=1 ./scripts/v2_docker_acceptance.sh` when Docker is available.
-- [ ] Logging: assert browser console and server logs contain format/status/count diagnostics but no payload or local-path sentinels; preserve Playwright traces/screenshots only as existing failure artifacts.
-- [ ] Files: frontend API/store tests, `frontend/e2e/import-user-journey.spec.js`, `frontend/e2e/helpers.js`, `scripts/v2_docker_acceptance.sh`, and `backend/tests/test_docker_persistence_acceptance.py`.
-- [ ] Depends on Tasks 7-10.
+- [x] Extend frontend API/store tests for FormData requests, status/code preservation, atomic success, failure non-mutation, reset baseline, playback/selection/history reset, warning retention, null generation metadata, save/autosave race handling, new-project creation after parse, and reload of imported V2.
+- [x] Add `frontend/e2e/import-user-journey.spec.js` using deterministic fixture files and `setInputFiles`, plus one DataTransfer drop path. Cover the acceptance journey: import normal multi-track MIDI, inspect tracks/notes, play, edit a note, render notation, save, reopen, perform fake-provider AI region editing, and download valid MIDI/MusicXML exports.
+- [x] Add MusicXML/MXL success, no-LLM import availability, current-project replace confirmation, malformed-file failure with unchanged composition fingerprint, and visible grouped warning summary. Use store snapshots and parsed downloads rather than visual timing guesses where possible.
+- [x] Extend `scripts/v2_docker_acceptance.sh` to exercise multipart imports through production Nginx, canonical save/reopen, and re-export; add or update the pytest Docker acceptance wrapper so this gate is runnable consistently.
+- [x] Run focused and full gates: `../.venv/bin/python -m pytest` from `backend/`; `npm test`, `npm run lint`, and `npm run build` from `frontend/`; `npm run test:e2e -- e2e/import-user-journey.spec.js`; and `RUN_DOCKER_ACCEPTANCE=1 ./scripts/v2_docker_acceptance.sh` when Docker is available.
+- [x] Logging: assert browser console and server logs contain format/status/count diagnostics but no payload or local-path sentinels; preserve Playwright traces/screenshots only as existing failure artifacts.
+- [x] Files: frontend API/store tests, `frontend/e2e/import-user-journey.spec.js`, `frontend/e2e/helpers.js`, `scripts/v2_docker_acceptance.sh`, and `backend/tests/test_docker_persistence_acceptance.py`.
+- [x] Depends on Tasks 7-10.
 
 ### Phase 5: Documentation Checkpoint
 

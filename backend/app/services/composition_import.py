@@ -834,6 +834,7 @@ def _canonicalize_tracks(
         channel = min(16, max(1, channel))
 
         events: list[dict[str, Any]] = []
+        tie_group_ids: dict[tuple[str, str], str] = {}
         # Sort notes before ID allocation for stability.
         notes = sorted(
             track.notes,
@@ -900,14 +901,18 @@ def _canonicalize_tracks(
             if note.articulations:
                 event["articulations"] = list(dict.fromkeys(note.articulations))
             if note.tie_type and note.tie_group_key:
-                tie_id, tie_collided = allocate_stable_id(
-                    prefix="tie",
-                    parts=[track_id, note.tie_group_key],
-                    used=used_tie_ids,
-                )
-                if tie_collided:
-                    id_collisions += 1
-                event["tie"] = {"group_id": tie_id, "type": note.tie_type}
+                # Reuse one group_id for every note in the same source tie chain.
+                tie_cache_key = (track_id, note.tie_group_key)
+                if tie_cache_key not in tie_group_ids:
+                    tie_id, tie_collided = allocate_stable_id(
+                        prefix="tie",
+                        parts=[track_id, note.tie_group_key],
+                        used=used_tie_ids,
+                    )
+                    if tie_collided:
+                        id_collisions += 1
+                    tie_group_ids[tie_cache_key] = tie_id
+                event["tie"] = {"group_id": tie_group_ids[tie_cache_key], "type": note.tie_type}
             events.append(event)
             note_count += 1
 

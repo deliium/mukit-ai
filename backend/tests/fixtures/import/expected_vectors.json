@@ -1,0 +1,427 @@
+{
+  "multipart.musicxml": {
+    "issue_codes": [
+      "instrument_defaulted",
+      "repeat_expanded",
+      "role_defaulted",
+      "section_defaulted",
+      "tempo_defaulted"
+    ],
+    "meta": {
+      "bar_count": 2,
+      "duration_ticks": 8,
+      "harmony": [],
+      "key": "C major",
+      "key_changes": [],
+      "schema_version": "composition.v2",
+      "section_types": [
+        "unsectioned"
+      ],
+      "tempo": 120,
+      "tempo_changes": [],
+      "ticks_per_quarter": 1,
+      "time_signature": "4/4",
+      "time_signature_changes": [],
+      "tracks": [
+        {
+          "automation_count": 0,
+          "channel": 1,
+          "dynamic_mark_count": 1,
+          "event_count": 4,
+          "expression": 127,
+          "id": "track-7889bee1",
+          "instrument": "instrument",
+          "is_drum": false,
+          "midi_program": 0,
+          "name": "Piano",
+          "pan": 0,
+          "role": "other",
+          "sustain_count": 0,
+          "volume": 100
+        },
+        {
+          "automation_count": 0,
+          "channel": 2,
+          "dynamic_mark_count": 0,
+          "event_count": 2,
+          "expression": 127,
+          "id": "track-c84053df",
+          "instrument": "instrument",
+          "is_drum": false,
+          "midi_program": 0,
+          "name": "Violin",
+          "pan": 0,
+          "role": "other",
+          "sustain_count": 0,
+          "volume": 100
+        }
+      ]
+    },
+    "notes": [
+      {
+        "articulations": [
+          "accent"
+        ],
+        "duration_ticks": 4,
+        "event_id": "n-a50eae3c",
+        "pitch": "C4",
+        "start_tick": 0,
+        "tie": {
+          "group_id": "tie-f2c881aa",
+          "type": "start"
+        },
+        "track_id": "track-7889bee1",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 2,
+        "event_id": "n-7235c19e",
+        "pitch": "C4",
+        "start_tick": 4,
+        "tie": {
+          "group_id": "tie-f2c881aa",
+          "type": "stop"
+        },
+        "track_id": "track-7889bee1",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 1,
+        "event_id": "n-a69853ba",
+        "pitch": "E4",
+        "start_tick": 6,
+        "tie": null,
+        "track_id": "track-7889bee1",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 1,
+        "event_id": "n-1a8bebc5",
+        "pitch": "G4",
+        "start_tick": 6,
+        "tie": null,
+        "track_id": "track-7889bee1",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 4,
+        "event_id": "n-d3046392",
+        "pitch": "G5",
+        "start_tick": 0,
+        "tie": null,
+        "track_id": "track-c84053df",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 4,
+        "event_id": "n-7b9d97c1",
+        "pitch": "A5",
+        "start_tick": 4,
+        "tie": null,
+        "track_id": "track-c84053df",
+        "velocity": 90
+      }
+    ]
+  },
+  "multipart.mxl": {
+    "issue_codes": [
+      "instrument_defaulted",
+      "repeat_expanded",
+      "role_defaulted",
+      "section_defaulted",
+      "tempo_defaulted"
+    ],
+    "meta": {
+      "bar_count": 2,
+      "duration_ticks": 8,
+      "harmony": [],
+      "key": "C major",
+      "key_changes": [],
+      "schema_version": "composition.v2",
+      "section_types": [
+        "unsectioned"
+      ],
+      "tempo": 120,
+      "tempo_changes": [],
+      "ticks_per_quarter": 1,
+      "time_signature": "4/4",
+      "time_signature_changes": [],
+      "tracks": [
+        {
+          "automation_count": 0,
+          "channel": 1,
+          "dynamic_mark_count": 1,
+          "event_count": 4,
+          "expression": 127,
+          "id": "track-7b994bc0",
+          "instrument": "instrument",
+          "is_drum": false,
+          "midi_program": 0,
+          "name": "Piano",
+          "pan": 0,
+          "role": "other",
+          "sustain_count": 0,
+          "volume": 100
+        },
+        {
+          "automation_count": 0,
+          "channel": 2,
+          "dynamic_mark_count": 0,
+          "event_count": 2,
+          "expression": 127,
+          "id": "track-bcda4293",
+          "instrument": "instrument",
+          "is_drum": false,
+          "midi_program": 0,
+          "name": "Violin",
+          "pan": 0,
+          "role": "other",
+          "sustain_count": 0,
+          "volume": 100
+        }
+      ]
+    },
+    "notes": [
+      {
+        "articulations": [
+          "accent"
+        ],
+        "duration_ticks": 4,
+        "event_id": "n-9445a141",
+        "pitch": "C4",
+        "start_tick": 0,
+        "tie": {
+          "group_id": "tie-c56983d6",
+          "type": "start"
+        },
+        "track_id": "track-7b994bc0",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 2,
+        "event_id": "n-38e8725b",
+        "pitch": "C4",
+        "start_tick": 4,
+        "tie": {
+          "group_id": "tie-c56983d6",
+          "type": "stop"
+        },
+        "track_id": "track-7b994bc0",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 1,
+        "event_id": "n-029ada2d",
+        "pitch": "E4",
+        "start_tick": 6,
+        "tie": null,
+        "track_id": "track-7b994bc0",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 1,
+        "event_id": "n-683893f1",
+        "pitch": "G4",
+        "start_tick": 6,
+        "tie": null,
+        "track_id": "track-7b994bc0",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 4,
+        "event_id": "n-d1b226d0",
+        "pitch": "G5",
+        "start_tick": 0,
+        "tie": null,
+        "track_id": "track-bcda4293",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 4,
+        "event_id": "n-b3af3566",
+        "pitch": "A5",
+        "start_tick": 4,
+        "tie": null,
+        "track_id": "track-bcda4293",
+        "velocity": 90
+      }
+    ]
+  },
+  "multitrack.mid": {
+    "issue_codes": [
+      "partial_measure_padded",
+      "pitch_spelling_inferred",
+      "role_defaulted",
+      "role_inferred",
+      "section_defaulted"
+    ],
+    "meta": {
+      "bar_count": 2,
+      "duration_ticks": 3360,
+      "harmony": [],
+      "key": "C major",
+      "key_changes": [
+        {
+          "key": "G major",
+          "tick": 1920
+        }
+      ],
+      "schema_version": "composition.v2",
+      "section_types": [
+        "unsectioned"
+      ],
+      "tempo": 100,
+      "tempo_changes": [
+        {
+          "bpm": 120,
+          "tick": 1920
+        }
+      ],
+      "ticks_per_quarter": 480,
+      "time_signature": "4/4",
+      "time_signature_changes": [
+        {
+          "tick": 1920,
+          "time_signature": "3/4"
+        }
+      ],
+      "tracks": [
+        {
+          "automation_count": 1,
+          "channel": 1,
+          "dynamic_mark_count": 0,
+          "event_count": 4,
+          "expression": 127,
+          "id": "track-9c079f77",
+          "instrument": "piano",
+          "is_drum": false,
+          "midi_program": 0,
+          "name": "Piano",
+          "pan": 0,
+          "role": "other",
+          "sustain_count": 1,
+          "volume": 100
+        },
+        {
+          "automation_count": 0,
+          "channel": 2,
+          "dynamic_mark_count": 0,
+          "event_count": 1,
+          "expression": 127,
+          "id": "track-098f47bd",
+          "instrument": "bass",
+          "is_drum": false,
+          "midi_program": 32,
+          "name": "Acoustic Bass",
+          "pan": 0,
+          "role": "bass",
+          "sustain_count": 0,
+          "volume": 100
+        },
+        {
+          "automation_count": 0,
+          "channel": 10,
+          "dynamic_mark_count": 0,
+          "event_count": 2,
+          "expression": 127,
+          "id": "track-627d4e05",
+          "instrument": "drums",
+          "is_drum": true,
+          "midi_program": 0,
+          "name": "Drums",
+          "pan": 0,
+          "role": "drums",
+          "sustain_count": 0,
+          "volume": 100
+        }
+      ]
+    },
+    "notes": [
+      {
+        "articulations": [],
+        "duration_ticks": 960,
+        "event_id": "n-4f702619",
+        "pitch": "C2",
+        "start_tick": 0,
+        "tie": null,
+        "track_id": "track-098f47bd",
+        "velocity": 100
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 240,
+        "event_id": "n-df74d2fb",
+        "pitch": "C2",
+        "start_tick": 0,
+        "tie": null,
+        "track_id": "track-627d4e05",
+        "velocity": 110
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 240,
+        "event_id": "n-0413d628",
+        "pitch": "D2",
+        "start_tick": 480,
+        "tie": null,
+        "track_id": "track-627d4e05",
+        "velocity": 100
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 480,
+        "event_id": "n-6d22dafc",
+        "pitch": "C4",
+        "start_tick": 0,
+        "tie": null,
+        "track_id": "track-9c079f77",
+        "velocity": 90
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 480,
+        "event_id": "n-f67c7664",
+        "pitch": "E4",
+        "start_tick": 0,
+        "tie": null,
+        "track_id": "track-9c079f77",
+        "velocity": 80
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 480,
+        "event_id": "n-3ebac5de",
+        "pitch": "G4",
+        "start_tick": 1440,
+        "tie": null,
+        "track_id": "track-9c079f77",
+        "velocity": 95
+      },
+      {
+        "articulations": [],
+        "duration_ticks": 480,
+        "event_id": "n-c354de2b",
+        "pitch": "C5",
+        "start_tick": 2400,
+        "tie": null,
+        "track_id": "track-9c079f77",
+        "velocity": 88
+      }
+    ]
+  },
+  "sentinels": {
+    "filename": "SECRET_IMPORT_FIXTURE_NAME.mid",
+    "lyric": "SECRET_IMPORT_LYRIC_TOKEN",
+    "title": "SECRET_IMPORT_TITLE_TOKEN"
+  }
+}

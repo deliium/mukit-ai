@@ -1,0 +1,12 @@
+{
+  "sha256": {
+    "SECRET_IMPORT_FIXTURE_NAME.mid": "e1d233c52cb252b029382e8bcce08a81a8096c8bfde868377f4ac494b8b4b0c8",
+    "empty.bin": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "entities.musicxml": "46e4b78966456e5d14be69d475c96148af7cf4e7de4257c31a51dddb8aab4168",
+    "multipart.musicxml": "5a780b0322995c64ad77acd3ce53b12b8c208c96776a5d70e45d2b1cf4d81415",
+    "multipart.mxl": "7a043b190a345b54a6ca6f02e1a6c923b3881d0af35bf797286e9341df31eb63",
+    "multitrack.mid": "e1d233c52cb252b029382e8bcce08a81a8096c8bfde868377f4ac494b8b4b0c8",
+    "truncated.mid": "ac546f3f21543b8266d106cf61a07f91c44232e5002773b6c4bb86d605635ed6",
+    "zip_slip.mxl": "5f4d2e85e1ae4b5412de107eab5b9a1db22cb3159bb820c96c46ce6f28d57f7e"
+  }
+}

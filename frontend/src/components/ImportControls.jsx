@@ -326,6 +326,7 @@ const ImportControls = ({
         ref={midiInputRef}
         type="file"
         accept={MIDI_ACCEPT}
+        data-testid="import-midi-input"
         aria-label="Choose MIDI file to import"
         onChange={(event) => {
           onFilesChosen(event.target.files, 'midi');
@@ -337,6 +338,7 @@ const ImportControls = ({
         ref={musicXmlInputRef}
         type="file"
         accept={MUSICXML_ACCEPT}
+        data-testid="import-musicxml-input"
         aria-label="Choose MusicXML or MXL file to import"
         onChange={(event) => {
           onFilesChosen(event.target.files, 'musicxml');
