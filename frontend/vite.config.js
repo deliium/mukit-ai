@@ -27,6 +27,10 @@ export default defineConfig({
         target: 'http://localhost:8888',
         changeOrigin: true
       },
+      '/analysis': {
+        target: 'http://localhost:8888',
+        changeOrigin: true
+      },
       '/ready': {
         target: 'http://localhost:8888',
         changeOrigin: true

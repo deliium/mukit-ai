@@ -1,5 +1,14 @@
 import axios from 'axios';
 import { prepareCompositionForStore, CompositionVersionError } from '../utils/compositionVersion.js';
+import {
+  AnalysisScopeError,
+  buildAnalysisRequestScope,
+  fingerprintLogPrefix,
+  normalizeAnalysisReport,
+  normalizeAnalysisScopeForKey,
+  sanitizeScopeForLog,
+  analysisWarningCodes,
+} from '../utils/compositionAnalysis.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { downloadBlob, filenameFromContentDisposition } from '../utils/downloadFile.js';
 
@@ -243,6 +252,215 @@ export class ImportApiError extends Error {
     this.code = code;
     this.details = details;
   }
+}
+
+export class AnalysisApiError extends Error {
+  constructor(message, { status = null, code = null, details = null } = {}) {
+    super(message);
+    this.name = 'AnalysisApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+/**
+ * POST /analysis/composition — deterministic composition.analysis.v1 sidecar.
+ * Validates complete V2 + scope locally; preserves structured backend 422 errors.
+ */
+export async function analyzeComposition(composition, scope = { kind: 'composition' }) {
+  let normalized;
+  try {
+    normalized = normalizeApiComposition(composition, { context: 'analysis-request' });
+  } catch (error) {
+    if (error instanceof CompositionVersionError) {
+      throw new AnalysisApiError(error.message, {
+        status: null,
+        code: 'analysis_invalid_composition',
+        details: { schemaVersion: error.schemaVersion, reason: error.code },
+      });
+    }
+    throw error;
+  }
+
+  validateCanonicalForApi(normalized, { action: 'composition analysis' });
+  if (normalized.schema_version !== 'composition.v2') {
+    throw new AnalysisApiError('Analysis accepts only composition.v2 documents', {
+      code: 'analysis_invalid_composition',
+      details: { schema_version: normalized.schema_version },
+    });
+  }
+
+  let requestScope;
+  try {
+    requestScope = typeof scope?.kind === 'string' && scope.kind === 'composition' && Object.keys(scope).length === 1
+      ? { kind: 'composition' }
+      : buildAnalysisRequestScopeFromPayload(normalized, scope);
+  } catch (error) {
+    if (error instanceof AnalysisScopeError || error instanceof AnalysisApiError) {
+      throw error instanceof AnalysisApiError
+        ? error
+        : new AnalysisApiError(error.message, {
+          code: error.code || 'analysis_invalid_scope',
+          details: error.details || null,
+        });
+    }
+    throw error;
+  }
+
+  const eventCount = Array.isArray(normalized.tracks)
+    ? normalized.tracks.reduce((total, track) => total + (track.events?.length || 0), 0)
+    : 0;
+  console.debug('[musicApi] Composition analysis request started', {
+    scope: sanitizeScopeForLog(requestScope),
+    schemaVersion: normalized.schema_version,
+    trackCount: normalized.tracks?.length || 0,
+    sectionCount: normalized.sections?.length || 0,
+    eventCount,
+    barCount: normalized.bar_count || 0,
+  });
+
+  try {
+    const response = await axios.post('/analysis/composition', {
+      composition: normalized,
+      scope: requestScope,
+    });
+    const report = normalizeAnalysisReport(response.data);
+    const warningCodes = analysisWarningCodes(report.warnings);
+    console.info('[musicApi] Composition analysis response accepted', {
+      status: report.status,
+      algorithmVersion: report.algorithm_version,
+      scopeKind: report.resolved_scope?.kind || null,
+      warningCount: report.warnings.length,
+      warningCodes: warningCodes.slice(0, 32),
+      fingerprintPrefix: fingerprintLogPrefix(report.source_fingerprint),
+    });
+    if (warningCodes.length) {
+      console.warn('[musicApi] Composition analysis returned warning codes', {
+        warningCodes: warningCodes.slice(0, 32),
+      });
+    }
+    return report;
+  } catch (error) {
+    if (error instanceof AnalysisApiError) {
+      throw error;
+    }
+    if (!axios.isAxiosError(error) && error instanceof Error) {
+      const message = error.message || 'Analysis response failed validation';
+      console.error('[musicApi] Composition analysis response contract failed', {
+        message,
+      });
+      throw new AnalysisApiError(message, {
+        code: 'analysis_invalid_response',
+      });
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseAnalysisErrorDetail(error.response?.data?.detail);
+    console.warn('[musicApi] Composition analysis request failed', {
+      status,
+      code: parsed.code,
+      message: parsed.message,
+      scope: sanitizeScopeForLog(requestScope),
+    });
+    throw new AnalysisApiError(parsed.message, {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
+}
+
+function buildAnalysisRequestScopeFromPayload(composition, scope) {
+  if (!scope || typeof scope !== 'object') {
+    return { kind: 'composition' };
+  }
+  const kind = scope.kind;
+  if (kind === 'composition') {
+    return { kind: 'composition' };
+  }
+  if (kind === 'track') {
+    return buildAnalysisRequestScope({
+      analysisScope: 'track',
+      composition,
+      trackId: scope.track_id,
+    });
+  }
+  if (kind === 'section') {
+    // Prefer explicit backend-shaped scope when section_index is already supplied.
+    if (Number.isInteger(scope.section_index) && scope.section_index >= 0) {
+      const sections = Array.isArray(composition.sections) ? composition.sections : [];
+      if (scope.section_index >= sections.length) {
+        throw new AnalysisApiError('section_index is out of range', {
+          code: 'analysis_invalid_scope',
+          details: {
+            section_index: scope.section_index,
+            section_count: sections.length,
+          },
+        });
+      }
+      const section = sections[scope.section_index];
+      const mismatches = [];
+      if (scope.section_id != null && section.id !== scope.section_id) {
+        mismatches.push('section_id');
+      }
+      if (scope.expected_start_bar != null && section.start_bar !== scope.expected_start_bar) {
+        mismatches.push('start_bar');
+      }
+      if (scope.expected_bar_count != null && section.bar_count !== scope.expected_bar_count) {
+        mismatches.push('bar_count');
+      }
+      if (scope.expected_start_tick != null && section.start_tick !== scope.expected_start_tick) {
+        mismatches.push('start_tick');
+      }
+      if (scope.expected_duration_ticks != null && section.duration_ticks !== scope.expected_duration_ticks) {
+        mismatches.push('duration_ticks');
+      }
+      if (mismatches.length) {
+        throw new AnalysisApiError(
+          'section selectors do not match the canonical section at section_index',
+          {
+            code: 'analysis_invalid_scope',
+            details: { section_index: scope.section_index, mismatch_fields: mismatches },
+          },
+        );
+      }
+      return normalizeAnalysisScopeForKey({
+        kind: 'section',
+        section_index: scope.section_index,
+        section_id: scope.section_id ?? (typeof section.id === 'string' ? section.id : undefined),
+        expected_start_bar: scope.expected_start_bar ?? section.start_bar,
+        expected_bar_count: scope.expected_bar_count ?? section.bar_count,
+        expected_start_tick: scope.expected_start_tick ?? section.start_tick,
+        expected_duration_ticks: scope.expected_duration_ticks ?? section.duration_ticks,
+      });
+    }
+    throw new AnalysisApiError('section scope requires section_index', {
+      code: 'analysis_invalid_scope',
+      details: { reason: 'missing_section_index' },
+    });
+  }
+  throw new AnalysisApiError('Unknown analysis scope kind', {
+    code: 'analysis_invalid_scope',
+    details: { reason: 'unknown_kind' },
+  });
+}
+
+function parseAnalysisErrorDetail(detail) {
+  if (!detail) {
+    return { code: null, message: 'Unknown analysis failure', details: null };
+  }
+  if (typeof detail === 'string') {
+    return { code: null, message: detail, details: null };
+  }
+  if (typeof detail === 'object') {
+    const code = typeof detail.code === 'string' ? detail.code : null;
+    const message = typeof detail.message === 'string'
+      ? detail.message
+      : (typeof detail.detail === 'string' ? detail.detail : JSON.stringify(detail));
+    const details = detail.details && typeof detail.details === 'object' ? detail.details : null;
+    return { code, message, details };
+  }
+  return { code: null, message: String(detail), details: null };
 }
 
 export async function importMidi(file) {

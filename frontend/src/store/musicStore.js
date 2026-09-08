@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { importMidi, importMusicXml, renderMusicXmlPreview } from '../api/musicApi.js';
+import { analyzeComposition, AnalysisApiError, importMidi, importMusicXml, renderMusicXmlPreview } from '../api/musicApi.js';
 import {
   createProject as createProjectRequest,
   deleteProject as deleteProjectRequest,
@@ -8,6 +8,20 @@ import {
   listProjects as listProjectsRequest,
   patchProject as patchProjectRequest,
 } from '../api/projectApi.js';
+import {
+  ANALYSIS_DEBOUNCE_MS,
+  AnalysisScopeError,
+  analysisRequestKeysEqual,
+  analysisWarningCodes,
+  buildAnalysisRequestKey,
+  buildAnalysisRequestScope,
+  deriveAnalysisFreshness,
+  fingerprintLogPrefix,
+  normalizeAnalysisScopeKind,
+  recoverAnalysisSectionKey,
+  revisionLogPrefix,
+  sanitizeScopeForLog,
+} from '../utils/compositionAnalysis.js';
 import { prepareCompositionForStore, tryPrepareCompositionForStore } from '../utils/compositionVersion.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { compositionRevisionKey, notationRevisionKey } from '../utils/playbackPosition.js';
@@ -32,6 +46,7 @@ import {
 import { projectPersistRevisionKey } from '../utils/projectPersistRevision.js';
 
 export const AUTOSAVE_DEBOUNCE_MS = 900;
+export { ANALYSIS_DEBOUNCE_MS };
 
 function isManualSaveReason(reason) {
   return reason === 'manual' || reason === 'manual-force';
@@ -39,6 +54,10 @@ function isManualSaveReason(reason) {
 
 let autosaveTimer = null;
 let autosaveRequestSeq = 0;
+
+let analysisRequestSeq = 0;
+let analysisDebounceTimer = null;
+let analysisInFlightKey = null;
 
 const initialPrompt = {
   genre: 'ambient',
@@ -111,6 +130,16 @@ export const useMusicStore = create((set, get) => ({
   importError: '',
   importReport: null,
   notationReport: null,
+
+  analysisScope: 'composition',
+  analysisSelectedSectionKey: null,
+  analysisResult: null,
+  analysisResultKey: null,
+  analysisAttemptKey: null,
+  analysisStatus: 'idle',
+  analysisError: '',
+  analysisWarnings: [],
+  analysisTabVisible: false,
 
   setApiStatus: (apiStatus) => {
     console.debug('[musicStore] API status changed', { apiStatus });
@@ -190,6 +219,7 @@ export const useMusicStore = create((set, get) => ({
     if (!validation.valid) {
       console.error('[musicStore] Generated music JSON failed validation', { message: validation.message });
     }
+    cancelAnalysisLifecycle();
     set({
       generatedMusicJson: composition,
       editedMusicJson: composition,
@@ -212,6 +242,7 @@ export const useMusicStore = create((set, get) => ({
       noteEditUndoStack: [],
       noteEditRedoStack: [],
       generationMeta,
+      ...clearedAnalysisState(),
     });
     markProjectDirty(set, get);
   },
@@ -280,6 +311,7 @@ export const useMusicStore = create((set, get) => ({
       hasNotationReport: Boolean(notationReport),
     });
 
+    cancelAnalysisLifecycle();
     set({
       generatedMusicJson: nextComposition,
       editedMusicJson: nextComposition,
@@ -314,6 +346,7 @@ export const useMusicStore = create((set, get) => ({
       importError: '',
       importReport: importReport || null,
       notationReport: notationReport || null,
+      ...clearedAnalysisState(),
     });
     markProjectDirty(set, get);
     return true;
@@ -385,6 +418,85 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
+  setAnalysisScope: (scopeKind) => {
+    const next = normalizeAnalysisScopeKind(scopeKind);
+    const state = get();
+    if (state.analysisScope === next) {
+      return;
+    }
+    console.debug('[musicStore] Analysis scope changed', {
+      previous: state.analysisScope,
+      next,
+    });
+    const patch = { analysisScope: next };
+    if (next === 'section' && !state.analysisSelectedSectionKey) {
+      patch.analysisSelectedSectionKey = recoverAnalysisSectionKey(state.editedMusicJson, null);
+    }
+    set(patch);
+    scheduleAnalysisRequest(get, { reason: 'scope-change' });
+  },
+
+  selectAnalysisSection: (sectionKey) => {
+    const recovered = recoverAnalysisSectionKey(get().editedMusicJson, sectionKey);
+    console.debug('[musicStore] Analysis section selected', {
+      requested: sectionKey || null,
+      recovered,
+    });
+    set({
+      analysisSelectedSectionKey: recovered,
+      analysisScope: 'section',
+    });
+    scheduleAnalysisRequest(get, { reason: 'section-change' });
+  },
+
+  setAnalysisTabVisible: (visible) => {
+    const next = Boolean(visible);
+    const previous = get().analysisTabVisible;
+    if (previous === next) {
+      return;
+    }
+    console.debug('[musicStore] Analysis tab visibility changed', { visible: next });
+    set({ analysisTabVisible: next });
+    if (next) {
+      scheduleAnalysisRequest(get, { reason: 'tab-visible' });
+    } else {
+      cancelAnalysisDebounce();
+    }
+  },
+
+  getAnalysisFreshness: () => {
+    const state = get();
+    const desired = buildDesiredAnalysisRequestKey(state);
+    return deriveAnalysisFreshness({
+      analysisResult: state.analysisResult,
+      analysisResultKey: state.analysisResultKey,
+      desiredRequestKey: desired,
+      analysisStatus: state.analysisStatus,
+    });
+  },
+
+  requestAnalysis: async ({ force = false, reason = 'request' } = {}) => {
+    return runAnalysisRequest(set, get, { force, reason });
+  },
+
+  refreshAnalysis: async () => {
+    console.info('[musicStore] Analysis refresh requested');
+    cancelAnalysisDebounce();
+    return runAnalysisRequest(set, get, { force: true, reason: 'refresh' });
+  },
+
+  retryAnalysis: async () => {
+    console.info('[musicStore] Analysis retry requested');
+    cancelAnalysisDebounce();
+    return runAnalysisRequest(set, get, { force: true, reason: 'retry' });
+  },
+
+  resetAnalysis: () => {
+    console.debug('[musicStore] Analysis state reset');
+    cancelAnalysisLifecycle();
+    set(clearedAnalysisState({ preserveScope: true }));
+  },
+
   setEditedMusicJson: (editedMusicJson) => {
     const normalized = editedMusicJson
       ? coerceEditableComposition(editedMusicJson)
@@ -429,8 +541,10 @@ export const useMusicStore = create((set, get) => ({
       pianoRollNoteIds: filterExistingNoteIds(normalized, nextTrackId, get().pianoRollNoteIds),
       noteEditUndoStack: [],
       noteEditRedoStack: [],
+      analysisSelectedSectionKey: recoverAnalysisSectionKey(normalized, get().analysisSelectedSectionKey),
     });
     markProjectDirty(set, get);
+    scheduleAnalysisRequest(get, { reason: 'edited-json' });
   },
 
   resetEditedMusicJson: () => {
@@ -452,9 +566,11 @@ export const useMusicStore = create((set, get) => ({
         pianoRollEditStatus: 'idle',
         noteEditUndoStack: [],
         noteEditRedoStack: [],
+        analysisSelectedSectionKey: recoverAnalysisSectionKey(music, state.analysisSelectedSectionKey),
       };
     });
     markProjectDirty(set, get);
+    scheduleAnalysisRequest(get, { reason: 'reset-edited' });
   },
 
   selectPianoRollTrack: (trackId) => {
@@ -474,6 +590,9 @@ export const useMusicStore = create((set, get) => ({
       });
     }
     set(patch);
+    if (get().analysisScope === 'track' && previous !== next) {
+      scheduleAnalysisRequest(get, { reason: 'track-change' });
+    }
   },
 
   selectPianoRollNote: (noteId, options = {}) => {
@@ -836,8 +955,13 @@ export const useMusicStore = create((set, get) => ({
       noteEditUndoStack: nextUndo,
       noteEditRedoStack: nextRedo,
       pianoRollEditStatus: 'idle',
+      analysisSelectedSectionKey: recoverAnalysisSectionKey(
+        previous.editedMusicJson,
+        state.analysisSelectedSectionKey,
+      ),
     });
     markProjectDirty(set, get);
+    scheduleAnalysisRequest(get, { reason: 'undo' });
     return true;
   },
 
@@ -872,8 +996,13 @@ export const useMusicStore = create((set, get) => ({
       noteEditUndoStack: nextUndo,
       noteEditRedoStack: nextRedo,
       pianoRollEditStatus: 'idle',
+      analysisSelectedSectionKey: recoverAnalysisSectionKey(
+        next.editedMusicJson,
+        state.analysisSelectedSectionKey,
+      ),
     });
     markProjectDirty(set, get);
+    scheduleAnalysisRequest(get, { reason: 'redo' });
     return true;
   },
 
@@ -1052,12 +1181,14 @@ export const useMusicStore = create((set, get) => ({
       aiEditError: '',
       aiEditWarnings: Array.isArray(warnings) ? warnings : [],
       pianoRollEditStatus: 'idle',
+      analysisSelectedSectionKey: recoverAnalysisSectionKey(prepared, state.analysisSelectedSectionKey),
     });
     console.info('[musicStore] Project autosave-dirty transition after AI edit', {
       projectId: state.currentProjectId,
       revision: revision.slice(0, 48),
     });
     markProjectDirty(set, get);
+    scheduleAnalysisRequest(get, { reason: 'ai-edit' });
     return true;
   },
 
@@ -1322,6 +1453,7 @@ export const useMusicStore = create((set, get) => ({
       await deleteProjectRequest(projectId);
       if (get().currentProjectId === projectId) {
         cancelAutosaveTimer();
+        cancelAnalysisLifecycle();
         console.info('[musicStore] Cleared active project after delete', { projectId });
         set({
           currentProjectId: null,
@@ -1342,6 +1474,7 @@ export const useMusicStore = create((set, get) => ({
           notationReport: null,
           noteEditUndoStack: [],
           noteEditRedoStack: [],
+          ...clearedAnalysisState(),
         });
       }
       await get().loadProjectList();
@@ -1669,8 +1802,13 @@ function applyNoteEdit(set, get, {
     pianoRollEditStatus: 'idle',
     noteEditUndoStack,
     noteEditRedoStack,
+    analysisSelectedSectionKey: recoverAnalysisSectionKey(
+      nextComposition,
+      state.analysisSelectedSectionKey,
+    ),
   });
   markProjectDirty(set, get);
+  scheduleAnalysisRequest(get, { reason: 'note-edit' });
 }
 
 function findNote(composition, trackId, noteId) {
@@ -1798,6 +1936,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
   });
 
   cancelAutosaveTimer();
+  cancelAnalysisLifecycle();
   set({
     currentProjectId: project.id,
     currentProjectName: project.name,
@@ -1825,6 +1964,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     noteEditUndoStack: [],
     noteEditRedoStack: [],
     uiError: '',
+    ...clearedAnalysisState(),
   });
 }
 
@@ -1940,4 +2080,268 @@ function notationStalePatch(previousNotationRevision, nextNotationRevision) {
     pianoRollNotationStatus: 'idle',
     pianoRollNotationError: '',
   };
+}
+
+function clearedAnalysisState({ preserveScope = false } = {}) {
+  const base = {
+    analysisResult: null,
+    analysisResultKey: null,
+    analysisAttemptKey: null,
+    analysisStatus: 'idle',
+    analysisError: '',
+    analysisWarnings: [],
+  };
+  if (preserveScope) {
+    return base;
+  }
+  return {
+    ...base,
+    analysisScope: 'composition',
+    analysisSelectedSectionKey: null,
+    analysisTabVisible: false,
+  };
+}
+
+function cancelAnalysisDebounce() {
+  if (analysisDebounceTimer) {
+    clearTimeout(analysisDebounceTimer);
+    analysisDebounceTimer = null;
+  }
+}
+
+function cancelAnalysisLifecycle() {
+  cancelAnalysisDebounce();
+  analysisRequestSeq += 1;
+  analysisInFlightKey = null;
+}
+
+function buildDesiredAnalysisRequestKey(state) {
+  try {
+    const scope = buildAnalysisRequestScope({
+      analysisScope: state.analysisScope,
+      composition: state.editedMusicJson,
+      sectionKey: state.analysisSelectedSectionKey,
+      trackId: state.pianoRollTrackId,
+    });
+    return buildAnalysisRequestKey({
+      compositionRevision: state.compositionRevision,
+      scope,
+    });
+  } catch (error) {
+    console.debug('[musicStore] Analysis request key unavailable', {
+      code: error.code || null,
+      message: error.message,
+      scopeKind: state.analysisScope,
+    });
+    return null;
+  }
+}
+
+function scheduleAnalysisRequest(get, { reason = 'schedule', force = false } = {}) {
+  const state = get();
+  if (!force && !state.analysisTabVisible) {
+    return;
+  }
+  cancelAnalysisDebounce();
+  console.debug('[musicStore] Analysis debounce scheduled', {
+    reason,
+    force,
+    scopeKind: state.analysisScope,
+    revisionPrefix: revisionLogPrefix(state.compositionRevision),
+  });
+  analysisDebounceTimer = setTimeout(() => {
+    analysisDebounceTimer = null;
+    const store = useMusicStore.getState();
+    store.requestAnalysis({ force, reason: `${reason}:debounced` }).catch(() => {
+      // error already recorded on analysisStatus
+    });
+  }, ANALYSIS_DEBOUNCE_MS);
+}
+
+async function runAnalysisRequest(set, get, { force = false, reason = 'request' } = {}) {
+  const state = get();
+  if (!force && !state.analysisTabVisible) {
+    console.debug('[musicStore] Analysis request skipped; tab not visible', { reason });
+    return null;
+  }
+
+  const composition = state.editedMusicJson;
+  if (!composition || !isCanonicalComposition(composition)) {
+    const message = 'Canonical composition.v2 is required for analysis';
+    console.warn('[musicStore] Analysis request blocked', { reason, message });
+    set({
+      analysisStatus: 'error',
+      analysisError: message,
+      analysisAttemptKey: null,
+    });
+    return null;
+  }
+
+  let scope;
+  try {
+    scope = buildAnalysisRequestScope({
+      analysisScope: state.analysisScope,
+      composition,
+      sectionKey: state.analysisSelectedSectionKey,
+      trackId: state.pianoRollTrackId,
+    });
+  } catch (error) {
+    const message = error.message || 'Invalid analysis scope';
+    console.warn('[musicStore] Analysis scope rejected locally', {
+      reason,
+      code: error.code || null,
+      message,
+    });
+    set({
+      analysisStatus: 'error',
+      analysisError: message,
+      analysisAttemptKey: null,
+    });
+    return null;
+  }
+
+  const requestKey = buildAnalysisRequestKey({
+    compositionRevision: state.compositionRevision,
+    scope,
+  });
+
+  if (
+    !force
+    && state.analysisStatus === 'success'
+    && analysisRequestKeysEqual(state.analysisResultKey, requestKey)
+    && state.analysisResult
+  ) {
+    console.debug('[musicStore] Analysis reused current result', {
+      reason,
+      scope: sanitizeScopeForLog(scope),
+      revisionPrefix: revisionLogPrefix(state.compositionRevision),
+    });
+    return state.analysisResult;
+  }
+
+  if (!force && analysisInFlightKey && analysisRequestKeysEqual(analysisInFlightKey, requestKey)) {
+    console.debug('[musicStore] Analysis deduped identical in-flight request', {
+      reason,
+      scope: sanitizeScopeForLog(scope),
+      revisionPrefix: revisionLogPrefix(state.compositionRevision),
+    });
+    return null;
+  }
+
+  const sequence = ++analysisRequestSeq;
+  analysisInFlightKey = requestKey;
+  const eventCount = countEvents(composition);
+  console.debug('[musicStore] Analysis request started', {
+    reason,
+    sequence,
+    force,
+    scope: sanitizeScopeForLog(scope),
+    revisionPrefix: revisionLogPrefix(state.compositionRevision),
+    trackCount: composition.tracks?.length || 0,
+    sectionCount: composition.sections?.length || 0,
+    eventCount,
+  });
+
+  set({
+    analysisStatus: 'loading',
+    analysisError: '',
+    analysisAttemptKey: requestKey,
+    // Retain stale result/warnings during refresh.
+  });
+
+  try {
+    const report = await analyzeComposition(composition, scope);
+    const latest = get();
+    if (sequence !== analysisRequestSeq) {
+      console.debug('[musicStore] Analysis response discarded (stale sequence)', {
+        sequence,
+        currentSequence: analysisRequestSeq,
+        scope: sanitizeScopeForLog(scope),
+      });
+      return null;
+    }
+    let desiredKey = null;
+    try {
+      desiredKey = buildAnalysisRequestKey({
+        compositionRevision: latest.compositionRevision,
+        scope: buildAnalysisRequestScope({
+          analysisScope: latest.analysisScope,
+          composition: latest.editedMusicJson,
+          sectionKey: latest.analysisSelectedSectionKey,
+          trackId: latest.pianoRollTrackId,
+        }),
+      });
+    } catch {
+      desiredKey = null;
+    }
+    if (!desiredKey || !analysisRequestKeysEqual(requestKey, desiredKey)) {
+      console.debug('[musicStore] Analysis response discarded (request key mismatch)', {
+        sequence,
+        scope: sanitizeScopeForLog(scope),
+        revisionPrefix: revisionLogPrefix(latest.compositionRevision),
+      });
+      if (analysisInFlightKey === requestKey) {
+        analysisInFlightKey = null;
+      }
+      return null;
+    }
+
+    const warningCodes = analysisWarningCodes(report.warnings);
+    console.info('[musicStore] Analysis result accepted', {
+      sequence,
+      status: report.status,
+      algorithmVersion: report.algorithm_version,
+      scopeKind: report.resolved_scope?.kind || null,
+      warningCount: report.warnings.length,
+      fingerprintPrefix: fingerprintLogPrefix(report.source_fingerprint),
+      revisionPrefix: revisionLogPrefix(latest.compositionRevision),
+    });
+    if (warningCodes.length) {
+      console.warn('[musicStore] Analysis warning codes', {
+        warningCodes: warningCodes.slice(0, 32),
+      });
+    }
+
+    if (analysisInFlightKey === requestKey) {
+      analysisInFlightKey = null;
+    }
+    set({
+      analysisResult: report,
+      analysisResultKey: requestKey,
+      analysisAttemptKey: requestKey,
+      analysisStatus: 'success',
+      analysisError: '',
+      analysisWarnings: report.warnings,
+    });
+    return report;
+  } catch (error) {
+    if (sequence !== analysisRequestSeq) {
+      console.debug('[musicStore] Analysis error discarded (stale sequence)', {
+        sequence,
+        currentSequence: analysisRequestSeq,
+      });
+      return null;
+    }
+    if (analysisInFlightKey === requestKey) {
+      analysisInFlightKey = null;
+    }
+    const code = error instanceof AnalysisApiError || error instanceof AnalysisScopeError
+      ? error.code
+      : null;
+    const message = error.message || 'Composition analysis failed';
+    console.warn('[musicStore] Analysis request failed', {
+      sequence,
+      code,
+      message,
+      status: error.status || null,
+      scope: sanitizeScopeForLog(scope),
+    });
+    set({
+      analysisStatus: 'error',
+      analysisError: message,
+      analysisAttemptKey: requestKey,
+      // Retain previous successful result for stale display.
+    });
+    return null;
+  }
 }

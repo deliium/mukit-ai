@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import styled from 'styled-components';
 import NotationViewer from './NotationViewer.jsx';
 import PlaybackControls from './PlaybackControls.jsx';
@@ -6,12 +6,16 @@ import PromptJsonEditor from './PromptJsonEditor.jsx';
 import ExportControls from './ExportControls.jsx';
 import PianoRollEditor from './PianoRollEditor.jsx';
 import AiRegionEditPanel from './AiRegionEditPanel.jsx';
+import CompositionAnalysisPanel from './CompositionAnalysisPanel.jsx';
+import { useMusicStore } from '../store/musicStore.js';
 
 const Workspace = styled.div`
   display: flex;
   flex-direction: column;
   gap: 12px;
   margin-top: 16px;
+  min-width: 0;
+  max-width: 100%;
 `;
 
 const StickyTransport = styled.div`
@@ -39,6 +43,7 @@ const TabRow = styled.div`
 `;
 
 const TabButton = styled.button`
+  min-height: 44px;
   padding: 8px 14px;
   border: 1px solid ${(props) => (props.$active ? '#4f46e5' : '#cbd5e1')};
   border-radius: 8px;
@@ -46,6 +51,7 @@ const TabButton = styled.button`
   color: ${(props) => (props.$active ? '#312e81' : '#334155')};
   font-weight: 600;
   cursor: pointer;
+  touch-action: manipulation;
 `;
 
 const Panel = styled.section`
@@ -53,11 +59,16 @@ const Panel = styled.section`
   background: #f8f9ff;
   border: 1px solid #e0e7ff;
   border-radius: 12px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
 `;
 
 const SideActions = styled.div`
   display: grid;
   gap: 12px;
+  min-width: 0;
 
   @media (min-width: 1100px) {
     grid-template-columns: 1fr 1fr;
@@ -68,18 +79,76 @@ const TABS = [
   { id: 'piano', label: 'Piano roll' },
   { id: 'notation', label: 'Notation' },
   { id: 'advanced', label: 'Advanced JSON' },
+  { id: 'analysis', label: 'Analysis' },
 ];
 
 /**
  * Laptop-oriented composer shell: sticky transport, primary piano roll,
- * tabbed notation / advanced JSON, AI edit + export alongside.
+ * tabbed notation / advanced JSON / analysis, AI edit + export alongside.
  */
 const ComposerWorkspace = () => {
   const [activeTab, setActiveTab] = useState('piano');
+  const setAnalysisTabVisible = useMusicStore((state) => state.setAnalysisTabVisible);
+  const tablistRef = useRef(null);
+  const reactId = useId();
+  const tabId = (id) => `composer-tab-${id}-${reactId}`;
+  const panelId = (id) => `composer-panel-${id}-${reactId}`;
 
-  const onTabChange = (tabId) => {
-    console.debug('[ComposerWorkspace] View tab changed', { activeTab: tabId });
-    setActiveTab(tabId);
+  useEffect(() => {
+    const visible = activeTab === 'analysis';
+    console.debug('[ComposerWorkspace] Analysis tab visibility sync', {
+      activeTab,
+      visible,
+    });
+    setAnalysisTabVisible(visible);
+    return () => {
+      if (visible) {
+        setAnalysisTabVisible(false);
+      }
+    };
+  }, [activeTab, setAnalysisTabVisible]);
+
+  const onTabChange = (tabIdValue) => {
+    console.debug('[ComposerWorkspace] View tab changed', {
+      activeTab: tabIdValue,
+      tabCount: TABS.length,
+    });
+    setActiveTab(tabIdValue);
+  };
+
+  const focusTabByIndex = (index) => {
+    const next = ((index % TABS.length) + TABS.length) % TABS.length;
+    const nextId = TABS[next].id;
+    onTabChange(nextId);
+    const button = tablistRef.current?.querySelector(`[data-tab-id="${nextId}"]`);
+    if (button && typeof button.focus === 'function') {
+      button.focus();
+    }
+  };
+
+  const onTabKeyDown = (event, tabIndex) => {
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        event.preventDefault();
+        focusTabByIndex(tabIndex + 1);
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        event.preventDefault();
+        focusTabByIndex(tabIndex - 1);
+        break;
+      case 'Home':
+        event.preventDefault();
+        focusTabByIndex(0);
+        break;
+      case 'End':
+        event.preventDefault();
+        focusTabByIndex(TABS.length - 1);
+        break;
+      default:
+        break;
+    }
   };
 
   return (
@@ -89,35 +158,60 @@ const ComposerWorkspace = () => {
         <PlaybackControls />
       </StickyTransport>
 
-      <TabRow role="tablist" aria-label="Composer views">
-        {TABS.map((tab) => (
-          <TabButton
-            key={tab.id}
-            type="button"
-            role="tab"
-            data-testid={`composer-tab-${tab.id}`}
-            aria-selected={activeTab === tab.id}
-            $active={activeTab === tab.id}
-            onClick={() => onTabChange(tab.id)}
-          >
-            {tab.label}
-          </TabButton>
-        ))}
+      <TabRow
+        ref={tablistRef}
+        role="tablist"
+        aria-label="Composer views"
+      >
+        {TABS.map((tab, index) => {
+          const selected = activeTab === tab.id;
+          return (
+            <TabButton
+              key={tab.id}
+              type="button"
+              role="tab"
+              id={tabId(tab.id)}
+              data-tab-id={tab.id}
+              data-testid={`composer-tab-${tab.id}`}
+              aria-selected={selected}
+              aria-controls={panelId(tab.id)}
+              tabIndex={selected ? 0 : -1}
+              $active={selected}
+              onClick={() => onTabChange(tab.id)}
+              onKeyDown={(event) => onTabKeyDown(event, index)}
+            >
+              {tab.label}
+            </TabButton>
+          );
+        })}
       </TabRow>
 
-      <Panel role="tabpanel">
-        {activeTab === 'piano' && <PianoRollEditor />}
-        {activeTab === 'notation' && <NotationViewer />}
-        {activeTab === 'advanced' && (
-          <>
-            <SectionTitle>Advanced — canonical JSON</SectionTitle>
-            <p style={{ margin: '0 0 12px', color: '#64748b', fontSize: '0.9rem' }}>
-              Edit canonical composition JSON directly. Harmony is metadata only; playable notes live in tracks[].events[].
-            </p>
-            <PromptJsonEditor />
-          </>
-        )}
-      </Panel>
+      {TABS.map((tab) => {
+        const selected = activeTab === tab.id;
+        return (
+          <Panel
+            key={tab.id}
+            role="tabpanel"
+            id={panelId(tab.id)}
+            aria-labelledby={tabId(tab.id)}
+            hidden={!selected}
+            data-testid={`composer-panel-${tab.id}`}
+          >
+            {tab.id === 'piano' && selected ? <PianoRollEditor /> : null}
+            {tab.id === 'notation' && selected ? <NotationViewer /> : null}
+            {tab.id === 'advanced' && selected ? (
+              <>
+                <SectionTitle>Advanced — canonical JSON</SectionTitle>
+                <p style={{ margin: '0 0 12px', color: '#64748b', fontSize: '0.9rem' }}>
+                  Edit canonical composition JSON directly. Harmony is metadata only; playable notes live in tracks[].events[].
+                </p>
+                <PromptJsonEditor />
+              </>
+            ) : null}
+            {tab.id === 'analysis' && selected ? <CompositionAnalysisPanel /> : null}
+          </Panel>
+        );
+      })}
 
       <SideActions>
         <AiRegionEditPanel />

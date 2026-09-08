@@ -161,25 +161,25 @@ Add a versioned, deterministic analysis layer over canonical `composition.v2` so
 ### Phase 4: Frontend State And Analysis Panel
 
 #### Task 9: Add the frontend API adapter, scope helpers, and race-safe derived cache
-- [ ] Add `analyzeComposition(composition, scope)` to `frontend/src/api/musicApi.js`. Normalize/validate complete V2 input, validate track/section targets locally, POST to `/analysis/composition`, validate the top-level report contract, normalize optional arrays/warnings, and preserve structured safe backend errors.
-- [ ] Create pure scope/freshness helpers in `frontend/src/utils/compositionAnalysis.js` for ID-less section keys, section recovery, request scope construction, and a request key composed from `composition.analysis.v1`, the full `compositionRevision`, and only the active normalized scope fields.
-- [ ] Extend `frontend/src/store/musicStore.js` with `analysisScope`, explicit selected section key, latest result/result key, attempt key, status/error/warnings, and actions for scope/section selection, request, refresh/retry, and reset. Reuse `pianoRollTrackId` for track scope and retain only one result.
-- [ ] Use a module-level request sequence plus request-key equality to discard stale A-to-B-to-A races. Derive stale/current state rather than manually invalidating every note mutation; retain stale results during loading/error and clear analysis state on generation/import/project hydration/replacement/deletion.
-- [ ] Add a debounced request trigger usable only while the Analysis tab is visible. Reuse a current successful result, deduplicate an identical in-flight request, and force refresh/retry when requested.
-- [ ] Add `/analysis` proxy routes to `frontend/vite.config.js` and `frontend/nginx.conf` so development and production-local deployments reach the backend rather than SPA fallback.
-- [ ] Logging: API/store DEBUG scope, request sequence, revision prefix, counts, freshness/truncation, and stale-response discard; INFO accepted result; WARNING safe warning/error codes; no full composition, report, freeform finding text, or full revision string.
-- [ ] Files: `frontend/src/api/musicApi.js`, `frontend/src/utils/compositionAnalysis.js`, `frontend/src/store/musicStore.js`, `frontend/vite.config.js`, and `frontend/nginx.conf`.
-- [ ] Depends on Task 8.
+- [x] Add `analyzeComposition(composition, scope)` to `frontend/src/api/musicApi.js`. Normalize/validate complete V2 input, validate track/section targets locally, POST to `/analysis/composition`, validate the top-level report contract, normalize optional arrays/warnings, and preserve structured safe backend errors.
+- [x] Create pure scope/freshness helpers in `frontend/src/utils/compositionAnalysis.js` for ID-less section keys, section recovery, request scope construction, and a request key composed from `composition.analysis.v1`, the full `compositionRevision`, and only the active normalized scope fields.
+- [x] Extend `frontend/src/store/musicStore.js` with `analysisScope`, explicit selected section key, latest result/result key, attempt key, status/error/warnings, and actions for scope/section selection, request, refresh/retry, and reset. Reuse `pianoRollTrackId` for track scope and retain only one result.
+- [x] Use a module-level request sequence plus request-key equality to discard stale A-to-B-to-A races. Derive stale/current state rather than manually invalidating every note mutation; retain stale results during loading/error and clear analysis state on generation/import/project hydration/replacement/deletion.
+- [x] Add a debounced request trigger usable only while the Analysis tab is visible. Reuse a current successful result, deduplicate an identical in-flight request, and force refresh/retry when requested.
+- [x] Add `/analysis` proxy routes to `frontend/vite.config.js` and `frontend/nginx.conf` so development and production-local deployments reach the backend rather than SPA fallback.
+- [x] Logging: API/store DEBUG scope, request sequence, revision prefix, counts, freshness/truncation, and stale-response discard; INFO accepted result; WARNING safe warning/error codes; no full composition, report, freeform finding text, or full revision string.
+- [x] Files: `frontend/src/api/musicApi.js`, `frontend/src/utils/compositionAnalysis.js`, `frontend/src/store/musicStore.js`, `frontend/vite.config.js`, and `frontend/nginx.conf`.
+- [x] Depends on Task 8.
 
 #### Task 10: Build the accessible responsive Analysis tab and scoped results UI
-- [ ] Create `frontend/src/components/CompositionAnalysisPanel.jsx` and add an `Analysis` tab in `ComposerWorkspace.jsx`. Complete tab IDs, `aria-controls`/`aria-labelledby`, selected state, and keyboard behavior while preserving current workspace styling.
-- [ ] Provide whole-composition, selected-section, and selected-track controls; disambiguate repeated section labels with type/bar range; reuse the shared current track selection; and show the resolved scope clearly.
-- [ ] Render concise tonal context/local modulation, inferred chord/harmonic-rhythm summaries, phrase/cadence information, note/rhythmic/harmonic density, range/contour, role and repetition observations, tension components, and a semantic warning list. Present confidence/ambiguity and declared-versus-inferred values without asserting heuristic results as facts.
-- [ ] Implement current/updating/out-of-date/failed states: initial accessible loader, retained stale cards during refresh, `aria-busy`, live status, alert on failure, refresh/retry, and a clear invalid-composition state. Do not reuse global generation errors.
-- [ ] Use responsive auto-fit metric grids, stacked controls near 700px, `min-width: 0`, wrapping long warning text, touch-sized controls, and no page-level horizontal overflow at mobile width.
-- [ ] Logging: DEBUG tab/scope/refresh interactions and status transitions using IDs/counts only; INFO manual refresh/retry; WARNING render-contract fallback codes; never log report objects or user composition data.
-- [ ] Files: `frontend/src/components/CompositionAnalysisPanel.jsx` and `frontend/src/components/ComposerWorkspace.jsx`.
-- [ ] Depends on Task 9.
+- [x] Create `frontend/src/components/CompositionAnalysisPanel.jsx` and add an `Analysis` tab in `ComposerWorkspace.jsx`. Complete tab IDs, `aria-controls`/`aria-labelledby`, selected state, and keyboard behavior while preserving current workspace styling.
+- [x] Provide whole-composition, selected-section, and selected-track controls; disambiguate repeated section labels with type/bar range; reuse the shared current track selection; and show the resolved scope clearly.
+- [x] Render concise tonal context/local modulation, inferred chord/harmonic-rhythm summaries, phrase/cadence information, note/rhythmic/harmonic density, range/contour, role and repetition observations, tension components, and a semantic warning list. Present confidence/ambiguity and declared-versus-inferred values without asserting heuristic results as facts.
+- [x] Implement current/updating/out-of-date/failed states: initial accessible loader, retained stale cards during refresh, `aria-busy`, live status, alert on failure, refresh/retry, and a clear invalid-composition state. Do not reuse global generation errors.
+- [x] Use responsive auto-fit metric grids, stacked controls near 700px, `min-width: 0`, wrapping long warning text, touch-sized controls, and no page-level horizontal overflow at mobile width.
+- [x] Logging: DEBUG tab/scope/refresh interactions and status transitions using IDs/counts only; INFO manual refresh/retry; WARNING render-contract fallback codes; never log report objects or user composition data.
+- [x] Files: `frontend/src/components/CompositionAnalysisPanel.jsx` and `frontend/src/components/ComposerWorkspace.jsx`.
+- [x] Depends on Task 9.
 
 ### Phase 5: Determinism, Performance, And Acceptance Tests
 
