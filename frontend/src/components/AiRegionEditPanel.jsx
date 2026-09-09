@@ -92,6 +92,7 @@ const AiRegionEditPanel = () => {
   const refreshMusicXmlFromEditedComposition = useMusicStore(
     (state) => state.refreshMusicXmlFromEditedComposition,
   );
+  const openDevelopWithAiSelection = useMusicStore((state) => state.openDevelopWithAiSelection);
 
   const validation = useMemo(
     () => (editedMusicJson ? validateMusicJson(editedMusicJson) : { valid: false, message: 'No composition' }),
@@ -251,6 +252,16 @@ const AiRegionEditPanel = () => {
           aria-label="Regenerate selection with AI edit"
         >
           {aiEditStatus === 'loading' ? 'Editing selection…' : 'Regenerate Selection / AI Edit'}
+        </Button>
+        <Button
+          type="button"
+          data-testid="ai-edit-open-develop"
+          onClick={() => openDevelopWithAiSelection()}
+          disabled={!aiEditStartBar || !aiEditEndBar}
+          aria-label="Open Develop tab with current selection"
+          style={{ background: '#475569' }}
+        >
+          Develop selection…
         </Button>
       </ButtonRow>
       {disabledReason && aiEditStatus !== 'loading' && (

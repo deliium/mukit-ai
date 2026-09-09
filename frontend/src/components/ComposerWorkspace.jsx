@@ -9,6 +9,7 @@ import AiRegionEditPanel from './AiRegionEditPanel.jsx';
 import CompositionAnalysisPanel from './CompositionAnalysisPanel.jsx';
 import HarmonyTimelinePanel from './HarmonyTimelinePanel.jsx';
 import MotifPanel from './MotifPanel.jsx';
+import CompositionDevelopmentPanel from './CompositionDevelopmentPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const Workspace = styled.div`
@@ -80,6 +81,7 @@ const SideActions = styled.div`
 const TABS = [
   { id: 'piano', label: 'Piano roll' },
   { id: 'notation', label: 'Notation' },
+  { id: 'develop', label: 'Develop' },
   { id: 'motifs', label: 'Motifs' },
   { id: 'harmony', label: 'Harmony' },
   { id: 'advanced', label: 'Advanced JSON' },
@@ -93,10 +95,21 @@ const TABS = [
 const ComposerWorkspace = () => {
   const [activeTab, setActiveTab] = useState('piano');
   const setAnalysisTabVisible = useMusicStore((state) => state.setAnalysisTabVisible);
+  const composerTabRequest = useMusicStore((state) => state.composerTabRequest);
+  const composerTabRequestSeq = useMusicStore((state) => state.composerTabRequestSeq);
   const tablistRef = useRef(null);
   const reactId = useId();
   const tabId = (id) => `composer-tab-${id}-${reactId}`;
   const panelId = (id) => `composer-panel-${id}-${reactId}`;
+
+  useEffect(() => {
+    if (!composerTabRequest) {
+      return;
+    }
+    if (TABS.some((tab) => tab.id === composerTabRequest)) {
+      setActiveTab(composerTabRequest);
+    }
+  }, [composerTabRequest, composerTabRequestSeq]);
 
   useEffect(() => {
     const visible = activeTab === 'analysis';
@@ -213,6 +226,7 @@ const ComposerWorkspace = () => {
               </>
             ) : null}
             {tab.id === 'analysis' && selected ? <CompositionAnalysisPanel /> : null}
+            {tab.id === 'develop' && selected ? <CompositionDevelopmentPanel /> : null}
             {tab.id === 'motifs' && selected ? (
               <MotifPanel onOpenPianoTab={() => onTabChange('piano')} />
             ) : null}

@@ -11,6 +11,11 @@ import {
 } from '../utils/compositionAnalysis.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { downloadBlob, filenameFromContentDisposition } from '../utils/downloadFile.js';
+import {
+  editFingerprintLogPrefix,
+  normalizeDevelopmentPreviewResponse,
+  normalizeDevelopmentRequest,
+} from '../utils/compositionCandidates.js';
 
 export const PROJECTION_HEADER_NAMES = {
   status: 'x-mukit-projection-status',
@@ -284,6 +289,16 @@ export class ReharmonizeApiError extends Error {
   }
 }
 
+export class DevelopmentApiError extends Error {
+  constructor(message, { status = null, code = null, details = null } = {}) {
+    super(message);
+    this.name = 'DevelopmentApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
 export const REHARMONIZE_OPERATIONS = Object.freeze([
   'suggest_progression',
   'reharmonize',
@@ -545,6 +560,86 @@ export async function previewReharmonization(payload) {
       operation,
     });
     throw new ReharmonizeApiError(parsed.message, {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
+}
+
+/**
+ * POST /composition/development/preview — multi-candidate continuation/variation.
+ * Stateless: never persists projects; returns 1-4 ephemeral candidates.
+ */
+export async function previewCompositionDevelopment(payload) {
+  const normalized = normalizeDevelopmentRequest(payload);
+  if (!normalized.ok) {
+    throw new DevelopmentApiError(normalized.message, { code: normalized.code });
+  }
+
+  const requestBody = normalized.request;
+  console.info('[musicApi] Composition development preview request started', {
+    operation: requestBody.operation,
+    intent: requestBody.development_intent,
+    strength: requestBody.variation_strength,
+    candidateCount: requestBody.candidate_count,
+    outputBars: requestBody.output_bars,
+    provider: requestBody.selection?.provider || null,
+    model: requestBody.selection?.model || null,
+    instructionLen: typeof requestBody.instruction === 'string' ? requestBody.instruction.length : 0,
+  });
+
+  const inboundComposition = normalizeApiComposition(requestBody.composition, {
+    context: 'development-preview-request',
+  });
+  validateCanonicalForApi(inboundComposition, { action: 'composition development preview' });
+  if (!isCanonicalComposition(inboundComposition)) {
+    throw new DevelopmentApiError('Development accepts only composition.v2 documents', {
+      code: 'development_invalid_request',
+    });
+  }
+
+  try {
+    const axiosResponse = await axios.post('/composition/development/preview', {
+      ...requestBody,
+      composition: inboundComposition,
+    });
+    const response = axiosResponse.data || {};
+    const contract = normalizeDevelopmentPreviewResponse(response);
+    if (!contract.ok) {
+      throw new DevelopmentApiError(contract.message, { code: contract.code });
+    }
+    const candidates = contract.response.candidates.map((candidate) => {
+      const composition = normalizeApiComposition(candidate.composition, {
+        context: 'development-preview-candidate',
+      });
+      const validation = validateMusicJson(composition);
+      if (!validation.valid) {
+        throw new DevelopmentApiError(validation.message, { code: 'development_invalid_response' });
+      }
+      return { ...candidate, composition };
+    });
+    console.debug('[musicApi] Composition development preview response validated', {
+      operation: contract.response.operation,
+      returnedCandidateCount: candidates.length,
+      warningCodeCount: contract.response.warning_codes.length,
+      editSourcePrefix: editFingerprintLogPrefix(contract.response.edit_source_fingerprint),
+      provider: contract.response.provider || null,
+    });
+    return { ...contract.response, candidates };
+  } catch (error) {
+    if (error instanceof DevelopmentApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseMotifErrorDetail(error.response?.data?.detail ?? error.message);
+    console.error('[musicApi] Composition development preview failed', {
+      status,
+      code: parsed.code,
+      message: parsed.message,
+      operation: requestBody.operation,
+    });
+    throw new DevelopmentApiError(parsed.message, {
       status,
       code: parsed.code,
       details: parsed.details,

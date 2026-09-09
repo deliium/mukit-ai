@@ -3,9 +3,11 @@ import {
   analyzeComposition,
   AnalysisApiError,
   applyMotif,
+  DevelopmentApiError,
   importMidi,
   importMusicXml,
   MotifApiError,
+  previewCompositionDevelopment,
   previewReharmonization,
   ReharmonizeApiError,
   REHARMONIZE_CONTENT_POLICIES,
@@ -53,6 +55,16 @@ import {
   applyHarmonyResize,
   verifyReharmonizationCandidate,
 } from '../utils/compositionHarmony.js';
+import {
+  DEVELOPMENT_INTENTS,
+  DEVELOPMENT_OPERATIONS,
+  DEVELOPMENT_SECTION_TYPES,
+  VARIATION_STRENGTHS,
+  editFingerprintLogPrefix,
+  findDevelopmentCandidateById,
+  resolveDevelopmentDefaults,
+  verifyDevelopmentCandidate,
+} from '../utils/compositionCandidates.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { compositionRevisionKey, notationRevisionKey } from '../utils/playbackPosition.js';
 import {
@@ -144,6 +156,40 @@ const initialReharmonizePreviewState = {
   reharmonizeTargetChord: '',
 };
 
+export const DEFAULT_DEVELOPMENT_OPERATION = 'continue';
+export const DEFAULT_DEVELOPMENT_INTENT = 'continue';
+export const DEFAULT_VARIATION_STRENGTH = 'balanced';
+
+const initialDevelopmentControlsState = {
+  developmentOperation: DEFAULT_DEVELOPMENT_OPERATION,
+  developmentIntent: DEFAULT_DEVELOPMENT_INTENT,
+  developmentStrength: DEFAULT_VARIATION_STRENGTH,
+  developmentOutputBars: 8,
+  developmentCandidateCount: 1,
+  developmentInstruction: '',
+  developmentTargetSectionType: 'verse',
+  developmentTargetSectionLabel: '',
+  developmentAllowModulation: false,
+  developmentSourceStartBar: null,
+  developmentSourceEndBar: null,
+  developmentSourceSectionKey: null,
+};
+
+const initialDevelopmentPreviewState = {
+  ...initialDevelopmentControlsState,
+  developmentStatus: 'idle',
+  developmentError: '',
+  developmentWarnings: [],
+  developmentRequestId: 0,
+  developmentBaseRevision: null,
+  developmentEditSourceFingerprint: null,
+  developmentCandidates: [],
+  developmentSelectedCandidateId: null,
+  developmentAuditionActive: false,
+  developmentProvider: null,
+  developmentModel: null,
+};
+
 function isManualSaveReason(reason) {
   return reason === 'manual' || reason === 'manual-force';
 }
@@ -155,6 +201,7 @@ let analysisRequestSeq = 0;
 let analysisDebounceTimer = null;
 let analysisInFlightKey = null;
 let reharmonizeRequestSeq = 0;
+let developmentRequestSeq = 0;
 
 const initialPrompt = {
   genre: 'ambient',
@@ -240,6 +287,9 @@ export const useMusicStore = create((set, get) => ({
 
   ...initialHarmonyUiState,
   ...initialReharmonizePreviewState,
+  ...initialDevelopmentPreviewState,
+  composerTabRequest: null,
+  composerTabRequestSeq: 0,
   ...initialMotifUiState,
 
   setApiStatus: (apiStatus) => {
@@ -346,6 +396,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedAnalysisState(),
       ...clearedMotifUiState(),
       ...clearedReharmonizePreviewState(),
+      ...clearedDevelopmentPreviewState(),
       ...initialHarmonyUiState,
     });
     markProjectDirty(set, get);
@@ -453,6 +504,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedAnalysisState(),
       ...clearedMotifUiState(),
       ...clearedReharmonizePreviewState(),
+      ...clearedDevelopmentPreviewState(),
       ...initialHarmonyUiState,
     });
     markProjectDirty(set, get);
@@ -651,6 +703,7 @@ export const useMusicStore = create((set, get) => ({
       analysisSelectedSectionKey: recoverAnalysisSectionKey(normalized, get().analysisSelectedSectionKey),
       ...clearedMotifUiState(),
       ...clearedReharmonizePreviewState(),
+      ...clearedDevelopmentPreviewState(),
       ...initialHarmonyUiState,
     });
     markProjectDirty(set, get);
@@ -679,6 +732,7 @@ export const useMusicStore = create((set, get) => ({
         analysisSelectedSectionKey: recoverAnalysisSectionKey(music, state.analysisSelectedSectionKey),
         ...clearedMotifUiState(),
         ...clearedReharmonizePreviewState(),
+      ...clearedDevelopmentPreviewState(),
         ...initialHarmonyUiState,
       };
     });
@@ -1081,6 +1135,7 @@ export const useMusicStore = create((set, get) => ({
       ),
       ...reconcileMotifUiAfterCompositionChange(state, previous.editedMusicJson),
       ...clearedReharmonizePreviewState({ preserveControls: true }),
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'undo' });
@@ -1127,6 +1182,7 @@ export const useMusicStore = create((set, get) => ({
       ),
       ...reconcileMotifUiAfterCompositionChange(state, next.editedMusicJson),
       ...clearedReharmonizePreviewState({ preserveControls: true }),
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'redo' });
@@ -1311,6 +1367,7 @@ export const useMusicStore = create((set, get) => ({
       analysisSelectedSectionKey: recoverAnalysisSectionKey(prepared, state.analysisSelectedSectionKey),
       ...clearedMotifUiState(),
       ...clearedReharmonizePreviewState(),
+      ...clearedDevelopmentPreviewState(),
     });
     console.info('[musicStore] Project autosave-dirty transition after AI edit', {
       projectId: state.currentProjectId,
@@ -1606,6 +1663,7 @@ export const useMusicStore = create((set, get) => ({
           ...clearedAnalysisState(),
           ...clearedMotifUiState(),
           ...clearedReharmonizePreviewState(),
+      ...clearedDevelopmentPreviewState(),
           ...initialHarmonyUiState,
         });
       }
@@ -2245,6 +2303,7 @@ export const useMusicStore = create((set, get) => ({
         : state.motifHighlightedUsageKey,
       analysisSelectedSectionKey: recoverAnalysisSectionKey(prepared, state.analysisSelectedSectionKey),
       ...clearedReharmonizePreviewState({ preserveControls: true }),
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'motif-apply' });
@@ -2286,6 +2345,7 @@ export const useMusicStore = create((set, get) => ({
       harmonySelectionStartBar: start,
       harmonySelectionEndBar: end,
       ...clearedReharmonizePreviewState({ preserveControls: true }),
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
     });
     return true;
   },
@@ -2337,6 +2397,7 @@ export const useMusicStore = create((set, get) => ({
     set({
       ...next,
       ...clearedReharmonizePreviewState({ preserveControls: true }),
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
     });
     return true;
   },
@@ -2359,6 +2420,7 @@ export const useMusicStore = create((set, get) => ({
       skipHistory,
       statePatch: {
         ...clearedReharmonizePreviewState({ preserveControls: true }),
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
       },
     });
     return true;
@@ -2441,7 +2503,389 @@ export const useMusicStore = create((set, get) => ({
 
   discardReharmonizePreview: () => {
     console.info('[musicStore] Reharmonize preview discarded');
-    set(clearedReharmonizePreviewState({ preserveControls: true }));
+    set({
+      ...clearedReharmonizePreviewState({ preserveControls: true }),
+    });
+  },
+
+  requestComposerTab: (tabId) => {
+    if (typeof tabId !== 'string' || !tabId.trim()) {
+      return;
+    }
+    set((state) => ({
+      composerTabRequest: tabId.trim(),
+      composerTabRequestSeq: (state.composerTabRequestSeq || 0) + 1,
+    }));
+  },
+
+  syncDevelopmentDefaultsFromComposition: () => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    if (!isCanonicalComposition(composition)) {
+      return;
+    }
+    const defaults = resolveDevelopmentDefaults(composition, {
+      operation: state.developmentOperation,
+      aiEditStartBar: state.aiEditStartBar,
+      aiEditEndBar: state.aiEditEndBar,
+    });
+    set({
+      developmentSourceStartBar: defaults.sourceStartBar,
+      developmentSourceEndBar: defaults.sourceEndBar,
+      developmentSourceSectionKey: defaults.sourceSectionKey,
+      developmentOutputBars: defaults.outputBars ?? state.developmentOutputBars,
+      developmentTargetSectionType: defaults.targetSectionType ?? state.developmentTargetSectionType,
+    });
+  },
+
+  setDevelopmentControls: (patch = {}) => {
+    const next = {};
+    if (patch.operation != null) {
+      if (!DEVELOPMENT_OPERATIONS.includes(patch.operation)) {
+        return false;
+      }
+      next.developmentOperation = patch.operation;
+    }
+    if (patch.intent != null) {
+      if (!DEVELOPMENT_INTENTS.includes(patch.intent)) {
+        return false;
+      }
+      next.developmentIntent = patch.intent;
+    }
+    if (patch.strength != null) {
+      if (!VARIATION_STRENGTHS.includes(patch.strength)) {
+        return false;
+      }
+      next.developmentStrength = patch.strength;
+    }
+    if (patch.outputBars != null) {
+      const bars = Number(patch.outputBars);
+      if (!Number.isInteger(bars) || bars < 1 || bars > 64) {
+        return false;
+      }
+      next.developmentOutputBars = bars;
+    }
+    if (patch.candidateCount != null) {
+      const count = Number(patch.candidateCount);
+      if (!Number.isInteger(count) || count < 1 || count > 4) {
+        return false;
+      }
+      next.developmentCandidateCount = count;
+    }
+    if (patch.instruction != null) {
+      next.developmentInstruction = String(patch.instruction).slice(0, 500);
+    }
+    if (patch.targetSectionType != null) {
+      if (patch.targetSectionType !== '' && !DEVELOPMENT_SECTION_TYPES.includes(patch.targetSectionType)) {
+        return false;
+      }
+      next.developmentTargetSectionType = patch.targetSectionType || null;
+    }
+    if (patch.targetSectionLabel != null) {
+      next.developmentTargetSectionLabel = String(patch.targetSectionLabel).slice(0, 80);
+    }
+    if (patch.allowModulation != null) {
+      next.developmentAllowModulation = Boolean(patch.allowModulation);
+    }
+    if (patch.sourceStartBar != null || patch.sourceEndBar != null) {
+      const start = Number(patch.sourceStartBar ?? get().developmentSourceStartBar);
+      const end = Number(patch.sourceEndBar ?? get().developmentSourceEndBar);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) {
+        return false;
+      }
+      next.developmentSourceStartBar = start;
+      next.developmentSourceEndBar = end;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'sourceSectionKey')) {
+      next.developmentSourceSectionKey = patch.sourceSectionKey || null;
+    }
+    set({
+      ...next,
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
+    });
+    return true;
+  },
+
+  openDevelopWithAiSelection: () => {
+    const state = get();
+    const defaults = resolveDevelopmentDefaults(state.editedMusicJson, {
+      operation: 'vary_section',
+      aiEditStartBar: state.aiEditStartBar,
+      aiEditEndBar: state.aiEditEndBar,
+    });
+    set({
+      developmentOperation: 'vary_section',
+      developmentSourceStartBar: defaults.sourceStartBar,
+      developmentSourceEndBar: defaults.sourceEndBar,
+      developmentSourceSectionKey: defaults.sourceSectionKey,
+      developmentOutputBars: null,
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      composerTabRequest: 'develop',
+      composerTabRequestSeq: (state.composerTabRequestSeq || 0) + 1,
+    });
+    console.info('[musicStore] Opened Develop tab with AI selection', {
+      startBar: defaults.sourceStartBar,
+      endBar: defaults.sourceEndBar,
+    });
+  },
+
+  selectDevelopmentCandidate: (candidateId) => {
+    const state = get();
+    const candidate = findDevelopmentCandidateById(state.developmentCandidates, candidateId);
+    if (!candidate) {
+      console.warn('[musicStore] Development candidate selection ignored', {
+        candidateIdSuffix: String(candidateId || '').slice(-8),
+      });
+      return false;
+    }
+    console.info('[musicStore] Development candidate selected', {
+      candidateIdSuffix: candidateId.slice(-8),
+      barCount: candidate.composition?.bar_count,
+    });
+    set({
+      developmentSelectedCandidateId: candidateId,
+      developmentAuditionActive: false,
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  setDevelopmentAuditionActive: (active) => {
+    const enabled = Boolean(active);
+    const state = get();
+    if (enabled && !findDevelopmentCandidateById(state.developmentCandidates, state.developmentSelectedCandidateId)) {
+      return false;
+    }
+    console.info('[musicStore] Development audition toggled', {
+      active: enabled,
+      candidateIdSuffix: String(state.developmentSelectedCandidateId || '').slice(-8),
+    });
+    set({
+      developmentAuditionActive: enabled,
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  discardDevelopmentCandidates: () => {
+    console.info('[musicStore] Development candidates discarded');
+    set(clearedDevelopmentPreviewState({ preserveControls: true }));
+  },
+
+  startDevelopmentPreview: async () => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    if (!isCanonicalComposition(composition)) {
+      set({
+        developmentStatus: 'error',
+        developmentError: 'Canonical composition.v2 required for development',
+      });
+      return false;
+    }
+
+    developmentRequestSeq += 1;
+    const requestId = developmentRequestSeq;
+    const baseRevision = state.compositionRevision;
+    const operation = state.developmentOperation;
+    const hasBars = Number.isInteger(state.developmentSourceStartBar)
+      && Number.isInteger(state.developmentSourceEndBar)
+      && state.developmentSourceStartBar >= 1
+      && state.developmentSourceEndBar >= state.developmentSourceStartBar;
+    if (operation === 'vary_section' && !hasBars) {
+      set({
+        developmentStatus: 'error',
+        developmentError: 'Select a bar range before varying a section',
+      });
+      return false;
+    }
+    const source = hasBars
+      ? {
+          start_bar: state.developmentSourceStartBar,
+          end_bar: state.developmentSourceEndBar,
+        }
+      : null;
+
+    console.info('[musicStore] Development preview started', {
+      requestId,
+      operation,
+      intent: state.developmentIntent,
+      strength: state.developmentStrength,
+      candidateCount: state.developmentCandidateCount,
+      outputBars: state.developmentOutputBars,
+      sourceStartBar: state.developmentSourceStartBar,
+      sourceEndBar: state.developmentSourceEndBar,
+    });
+
+    set({
+      developmentStatus: 'loading',
+      developmentError: '',
+      developmentWarnings: [],
+      developmentRequestId: requestId,
+      developmentBaseRevision: baseRevision,
+      developmentCandidates: [],
+      developmentSelectedCandidateId: null,
+      developmentAuditionActive: false,
+      developmentEditSourceFingerprint: null,
+    });
+
+    try {
+      const response = await previewCompositionDevelopment({
+        composition,
+        operation,
+        source,
+        output_bars: operation === 'vary_section' ? null : state.developmentOutputBars,
+        target_section_type: operation === 'add_section' ? state.developmentTargetSectionType : null,
+        target_section_label: operation === 'add_section'
+          ? (state.developmentTargetSectionLabel || null)
+          : null,
+        development_intent: state.developmentIntent,
+        variation_strength: state.developmentStrength,
+        candidate_count: state.developmentCandidateCount,
+        allow_modulation: state.developmentAllowModulation,
+        instruction: state.developmentInstruction || null,
+        selection: {
+          provider: state.selectedProvider || null,
+          model: state.selectedModel || null,
+        },
+      });
+
+      const latest = get();
+      if (requestId !== latest.developmentRequestId) {
+        console.warn('[musicStore] Ignoring stale development preview response', { requestId });
+        return false;
+      }
+      if (latest.compositionRevision !== baseRevision) {
+        set({
+          developmentStatus: 'stale',
+          developmentError: 'Composition changed while preview was loading',
+          developmentCandidates: [],
+          developmentSelectedCandidateId: null,
+          developmentAuditionActive: false,
+        });
+        return false;
+      }
+
+      const selectedId = response.candidates[0]?.candidate_id || null;
+      set({
+        developmentStatus: 'ready',
+        developmentError: '',
+        developmentWarnings: response.warning_codes || [],
+        developmentEditSourceFingerprint: response.edit_source_fingerprint,
+        developmentCandidates: response.candidates,
+        developmentSelectedCandidateId: selectedId,
+        developmentAuditionActive: false,
+        developmentProvider: response.provider || null,
+        developmentModel: response.model || null,
+      });
+      console.info('[musicStore] Development preview ready', {
+        requestId,
+        returnedCandidateCount: response.candidates.length,
+        editSourcePrefix: editFingerprintLogPrefix(response.edit_source_fingerprint),
+        warningCodeCount: (response.warning_codes || []).length,
+      });
+      return true;
+    } catch (error) {
+      if (requestId !== get().developmentRequestId) {
+        return false;
+      }
+      const message = error instanceof DevelopmentApiError
+        ? error.message
+        : (error.message || 'Development preview failed');
+      console.error('[musicStore] Development preview failed', {
+        requestId,
+        code: error.code || null,
+        status: error.status || null,
+      });
+      set({
+        developmentStatus: 'error',
+        developmentError: message,
+        developmentCandidates: [],
+        developmentSelectedCandidateId: null,
+        developmentAuditionActive: false,
+      });
+      return false;
+    }
+  },
+
+  applySelectedDevelopmentCandidate: async () => {
+    const state = get();
+    if (state.developmentStatus !== 'ready') {
+      return false;
+    }
+    const candidate = findDevelopmentCandidateById(
+      state.developmentCandidates,
+      state.developmentSelectedCandidateId,
+    );
+    if (!candidate) {
+      set({
+        developmentStatus: 'error',
+        developmentError: 'Select a candidate before applying',
+      });
+      return false;
+    }
+    if (state.compositionRevision !== state.developmentBaseRevision) {
+      set({
+        developmentStatus: 'stale',
+        developmentError: 'Base composition changed; request a new preview',
+        developmentCandidates: [],
+        developmentSelectedCandidateId: null,
+        developmentAuditionActive: false,
+      });
+      return false;
+    }
+
+    const verification = await verifyDevelopmentCandidate({
+      baseComposition: state.editedMusicJson,
+      candidate,
+      operation: state.developmentOperation,
+      responseSourceFingerprint: state.developmentEditSourceFingerprint,
+    });
+    if (!verification.ok) {
+      console.warn('[musicStore] Development apply blocked by verification', {
+        failureCodes: verification.failures.map((item) => item.code).slice(0, 8),
+        candidateIdSuffix: candidate.candidate_id.slice(-8),
+      });
+      set({
+        developmentStatus: 'error',
+        developmentError: 'Candidate failed fingerprint or preservation checks',
+      });
+      return false;
+    }
+
+    const prepared = prepareCompositionForStore(candidate.composition);
+    const validation = validateMusicJson(prepared);
+    if (!validation.valid || !isCanonicalComposition(prepared)) {
+      set({
+        developmentStatus: 'error',
+        developmentError: validation.message || 'Candidate composition invalid',
+      });
+      return false;
+    }
+
+    console.info('[musicStore] Development candidate apply', {
+      operation: state.developmentOperation,
+      candidateIdSuffix: candidate.candidate_id.slice(-8),
+      editSourcePrefix: editFingerprintLogPrefix(verification.localSourceFingerprint),
+      barCount: prepared.bar_count,
+    });
+
+    applyCompositionEdit(set, get, {
+      nextComposition: prepared,
+      selectedTrackId: state.pianoRollTrackId,
+      selectedNoteId: state.pianoRollNoteId,
+      selectedNoteIds: state.pianoRollNoteIds,
+      action: 'development-apply',
+      noteSummary: null,
+      statePatch: {
+        ...clearedDevelopmentPreviewState({ preserveControls: true }),
+        developmentAuditionActive: false,
+      },
+    });
+    return true;
   },
 
   startReharmonizePreview: async () => {
@@ -2642,6 +3086,7 @@ export const useMusicStore = create((set, get) => ({
       noteSummary: null,
       statePatch: {
         ...clearedReharmonizePreviewState({ preserveControls: true }),
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
         reharmonizeStatus: 'idle',
       },
     });
@@ -2806,10 +3251,11 @@ function applyNoteEdit(set, get, {
       state.analysisSelectedSectionKey,
     ),
     ...(keepReharmonizePreview ? {} : clearedReharmonizePreviewState({ preserveControls: true })),
+    ...(keepReharmonizePreview ? {} : clearedDevelopmentPreviewState({ preserveControls: true })),
     ...statePatch,
   });
   markProjectDirty(set, get);
-  scheduleAnalysisRequest(get, { reason: action?.startsWith('harmony') || action === 'reharmonize-apply' ? action : 'note-edit' });
+  scheduleAnalysisRequest(get, { reason: action?.startsWith('harmony') || action === 'reharmonize-apply' || action === 'development-apply' ? action : 'note-edit' });
 }
 
 function findNote(composition, trackId, noteId) {
@@ -2968,6 +3414,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     ...clearedAnalysisState(),
     ...clearedMotifUiState(),
     ...clearedReharmonizePreviewState(),
+      ...clearedDevelopmentPreviewState(),
     ...initialHarmonyUiState,
   });
 }
@@ -3113,6 +3560,25 @@ function clearedReharmonizePreviewState({ preserveControls = false } = {}) {
     reharmonizeEndTick: null,
     reharmonizeActiveKey: null,
     reharmonizeRecommendedTargetTrackIds: [],
+  };
+}
+
+function clearedDevelopmentPreviewState({ preserveControls = false } = {}) {
+  if (!preserveControls) {
+    return { ...initialDevelopmentPreviewState };
+  }
+  return {
+    developmentStatus: 'idle',
+    developmentError: '',
+    developmentWarnings: [],
+    developmentRequestId: 0,
+    developmentBaseRevision: null,
+    developmentEditSourceFingerprint: null,
+    developmentCandidates: [],
+    developmentSelectedCandidateId: null,
+    developmentAuditionActive: false,
+    developmentProvider: null,
+    developmentModel: null,
   };
 }
 

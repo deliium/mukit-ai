@@ -141,7 +141,7 @@ Each candidate response includes:
 
 ### Phase 3: Frontend Candidate Lifecycle and UX
 
-- [ ] Task 7: Add frontend API contracts and pure candidate verification/selection helpers.
+- [x] Task 7: Add frontend API contracts and pure candidate verification/selection helpers.
   - Files: update `frontend/src/api/musicApi.js` and `frontend/src/api/musicApi.test.js`; create `frontend/src/utils/compositionCandidates.js` and `frontend/src/utils/compositionCandidates.test.js`; extract generic section-key helpers from `frontend/src/utils/compositionAnalysis.js` into `frontend/src/utils/compositionSections.js` only if this avoids duplicating stable ID-less section handling.
   - Deliverable: add `previewCompositionDevelopment`, a typed API error, strict request normalization, candidate-array bounds/uniqueness checks, canonical validation of each composition, metadata/assertion validation, and non-mutating request behavior.
   - Deliverable: implement operation-specific defaults, source/section resolution, candidate lookup by ID, local full edit fingerprinting compatible with the backend profile, and independent apply verification for source fingerprint, candidate fingerprint, exact append prefix or variation outside-range preservation, track topology, and required assertions.
@@ -150,7 +150,7 @@ Each candidate response includes:
   - Logging requirements: API/util diagnostics may log operation, status, candidate count, stable code, and fingerprint prefixes only. Never `console` full request/response data, instructions, compositions, or events.
   - Dependencies: Tasks 1 and 5.
 
-- [ ] Task 8: Implement ephemeral Zustand candidate state, request races, selection, audition source, and atomic Apply.
+- [x] Task 8: Implement ephemeral Zustand candidate state, request races, selection, audition source, and atomic Apply.
   - Files: update `frontend/src/store/musicStore.js`; update `frontend/src/store/musicStore.test.js` or create `frontend/src/store/musicStore.development.test.js`; update playback-source helpers under `frontend/src/utils/` only as needed.
   - Deliverable: add controls for operation, source section/range, output bars, target section, intent, strength, candidate count, and instruction; add request status/error/warnings, request sequence, base revision/fingerprint, candidates, selected candidate ID, and preview playback source.
   - Deliverable: request candidates without modifying authoritative state; ignore out-of-order responses; reject responses if `compositionRevision` changed while loading; clear stale candidates on generation/import/project hydration/JSON edits/AI edits/motif/harmony edits/undo/redo/project changes; preserve controls when appropriate.
@@ -160,7 +160,7 @@ Each candidate response includes:
   - Logging requirements: INFO for request/apply/discard/audition transitions with operation, candidate count/ID suffix or fingerprint prefix, source/output ranges, revision, and status code; DEBUG for race/stale reasons and bounded assertion codes. Never log candidates, events, prompts, or instructions.
   - Dependencies: Task 7.
 
-- [ ] Task 9: Build a responsive Composition Development tab for controls, candidate comparison, audition, and explicit commit.
+- [x] Task 9: Build a responsive Composition Development tab for controls, candidate comparison, audition, and explicit commit.
   - Files: create `frontend/src/components/CompositionDevelopmentPanel.jsx`; update `frontend/src/components/ComposerWorkspace.jsx`, `frontend/src/components/PianoRollEditor.jsx`, `frontend/src/components/AiRegionEditPanel.jsx`, and `frontend/src/components/PlaybackControls.jsx` only where needed for tab handoff/selection/audition; add reusable styles/components locally unless already shared.
   - Deliverable: add a full-width `Develop` tab. Present Continue, Add section, and Vary section modes; stable section/range controls; append length; target section type; Continue/Develop/Contrast intent; Conservative/Balanced/Experimental strength; candidate count; provider/model context; and optional instruction.
   - Deliverable: default continuation to the trailing section/bars and variation to the current piano-roll AI selection. Allow the existing region panel to open the Develop tab with that selection instead of duplicating candidate logic.

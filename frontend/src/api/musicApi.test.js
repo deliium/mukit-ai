@@ -7,6 +7,7 @@ import {
   AnalysisApiError,
   analyzeComposition,
   applyMotif,
+  DevelopmentApiError,
   editCompositionRegion,
   generateLlmMusicJson,
   importMidi,
@@ -14,6 +15,7 @@ import {
   ImportApiError,
   MotifApiError,
   parseProjectionHeaders,
+  previewCompositionDevelopment,
   previewReharmonization,
   projectionWarningsFromHeaders,
   ReharmonizeApiError,
@@ -850,6 +852,198 @@ test('previewReharmonization preserves structured backend errors', async (t) => 
       assert.ok(error instanceof ReharmonizeApiError);
       assert.equal(error.status, 422);
       assert.equal(error.code, 'reharmonize_no_realizable_targets');
+      return true;
+    },
+  );
+});
+
+function sampleDevelopmentPreviewResponse(composition, overrides = {}) {
+  const candidateComposition = structuredClone(composition);
+  const baseBars = composition.bar_count || 2;
+  const barTicks = Math.floor((composition.duration_ticks || 3840) / baseBars);
+  candidateComposition.bar_count = baseBars + 8;
+  candidateComposition.duration_ticks = candidateComposition.bar_count * barTicks;
+  const lastSection = (candidateComposition.sections || [])[0] || {
+    type: 'intro',
+    start_bar: 1,
+    bar_count: baseBars,
+    start_tick: 0,
+    duration_ticks: baseBars * barTicks,
+  };
+  candidateComposition.sections = [
+    { ...lastSection },
+    {
+      id: 'dev-cont',
+      type: 'verse',
+      start_bar: baseBars + 1,
+      bar_count: 8,
+      start_tick: baseBars * barTicks,
+      duration_ticks: 8 * barTicks,
+    },
+  ];
+  for (const track of candidateComposition.tracks || []) {
+    for (let bar = baseBars; bar < baseBars + 8; bar += 1) {
+      track.events = [...(track.events || []), {
+        id: `${track.id}-dev-${bar}`,
+        pitch: 'G4',
+        start_tick: bar * barTicks,
+        duration_ticks: Math.min(480, barTicks),
+        velocity: 70,
+      }];
+    }
+  }
+  return {
+    edit_source_fingerprint: 'a'.repeat(64),
+    algorithm_version: 'composition.development.v1',
+    operation: 'continue',
+    development_intent: 'continue',
+    variation_strength: 'balanced',
+    requested_candidate_count: 2,
+    candidates: [
+      {
+        candidate_id: 'dev-cand-1',
+        candidate_fingerprint: 'b'.repeat(64),
+        edit_source_fingerprint: 'a'.repeat(64),
+        algorithm_version: 'composition.development.v1',
+        operation: 'continue',
+        development_intent: 'continue',
+        variation_strength: 'balanced',
+        composition: candidateComposition,
+        source_range: { start_bar: 1, end_bar: baseBars, start_tick: 0, end_tick: baseBars * barTicks },
+        output_range: {
+          start_bar: baseBars + 1,
+          end_bar: baseBars + 8,
+          start_tick: baseBars * barTicks,
+          end_tick: (baseBars + 8) * barTicks,
+        },
+        section_changes: [],
+        harmony_changes: [],
+        motif_changes: [],
+        track_changes: [],
+        preservation: [{ code: 'immutable_prefix', required: true, passed: true }],
+        identity_diagnostics: [],
+        provider: 'fake',
+        model: 'fake-deterministic',
+        warning_codes: [],
+      },
+      {
+        candidate_id: 'dev-cand-2',
+        candidate_fingerprint: 'c'.repeat(64),
+        edit_source_fingerprint: 'a'.repeat(64),
+        algorithm_version: 'composition.development.v1',
+        operation: 'continue',
+        development_intent: 'continue',
+        variation_strength: 'balanced',
+        composition: structuredClone(candidateComposition),
+        source_range: { start_bar: 1, end_bar: baseBars, start_tick: 0, end_tick: baseBars * barTicks },
+        output_range: {
+          start_bar: baseBars + 1,
+          end_bar: baseBars + 8,
+          start_tick: baseBars * barTicks,
+          end_tick: (baseBars + 8) * barTicks,
+        },
+        section_changes: [],
+        harmony_changes: [],
+        motif_changes: [],
+        track_changes: [],
+        preservation: [{ code: 'immutable_prefix', required: true, passed: true }],
+        identity_diagnostics: [],
+        provider: 'fake',
+        model: 'fake-deterministic',
+        warning_codes: [],
+      },
+    ],
+    warning_codes: [],
+    provider: 'fake',
+    model: 'fake-deterministic',
+    ...overrides,
+  };
+}
+
+test('previewCompositionDevelopment posts continue payload and validates candidates', async (t) => {
+  const composition = canonicalV2Composition();
+  const immutable = structuredClone(composition);
+  let posted = null;
+  const restore = installAxiosStub(async (config) => {
+    assert.equal(String(config.method || 'get').toLowerCase(), 'post');
+    assert.equal(config.url, '/composition/development/preview');
+    posted = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+    return {
+      data: sampleDevelopmentPreviewResponse(composition),
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  const response = await previewCompositionDevelopment({
+    composition,
+    operation: 'continue',
+    output_bars: 8,
+    variation_strength: 'balanced',
+    development_intent: 'continue',
+    candidate_count: 2,
+    instruction: 'extend the A section',
+    selection: { provider: 'fake', model: 'fake-deterministic' },
+  });
+
+  assert.deepEqual(composition, immutable);
+  assert.equal(posted.operation, 'continue');
+  assert.equal(posted.output_bars, 8);
+  assert.equal(posted.candidate_count, 2);
+  assert.equal(posted.composition.schema_version, 'composition.v2');
+  assert.equal(response.candidates.length, 2);
+  assert.equal(response.candidates[0].candidate_id, 'dev-cand-1');
+  assert.equal(response.candidates[1].candidate_id, 'dev-cand-2');
+});
+
+test('previewCompositionDevelopment rejects vary without source locally', async () => {
+  await assert.rejects(
+    () => previewCompositionDevelopment({
+      composition: canonicalV2Composition(),
+      operation: 'vary_section',
+      variation_strength: 'balanced',
+    }),
+    (error) => {
+      assert.ok(error instanceof DevelopmentApiError);
+      assert.equal(error.code, 'development_source_required');
+      return true;
+    },
+  );
+});
+
+test('previewCompositionDevelopment preserves structured backend errors', async (t) => {
+  const restore = installAxiosStub(async () => {
+    const error = new Error('Request failed');
+    error.isAxiosError = true;
+    error.response = {
+      status: 502,
+      data: {
+        detail: {
+          code: 'development_candidate_exhausted',
+          message: 'No valid development candidate survived generation and repair.',
+          details: { returned_candidate_count: 0 },
+        },
+      },
+    };
+    throw error;
+  });
+  t.after(restore);
+
+  await assert.rejects(
+    () => previewCompositionDevelopment({
+      composition: canonicalV2Composition(),
+      operation: 'continue',
+      output_bars: 8,
+      variation_strength: 'balanced',
+      candidate_count: 1,
+    }),
+    (error) => {
+      assert.ok(error instanceof DevelopmentApiError);
+      assert.equal(error.status, 502);
+      assert.equal(error.code, 'development_candidate_exhausted');
       return true;
     },
   );
