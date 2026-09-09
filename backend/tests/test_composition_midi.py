@@ -306,3 +306,27 @@ def test_tempo_quantization_reported_for_non_roundtrip_bpm():
 def test_automation_sample_interval_matches_policy():
     assert automation_sample_interval(480) == 30
     assert automation_sample_interval(16) == 1
+
+
+def test_midi_projection_reports_motif_metadata_omitted():
+    from tests.test_composition_v2_schema import _motif_definition, _motif_track, minimal_v2
+
+    composition = CompositionV2.model_validate(
+        minimal_v2(tracks=[_motif_track()], motifs=[_motif_definition()])
+    )
+    result = render_midi_with_report(composition)
+    assert result.midi_bytes[:4] == b"MThd"
+    assert "motif_metadata_omitted" in result.report.compact_codes()
+    issue = next(item for item in result.report.issues if item.code == "motif_metadata_omitted")
+    assert issue.status == "omitted"
+    assert issue.path == "motifs"
+    assert issue.details["motif_count"] == 1
+    assert issue.details["occurrence_count"] == 1
+
+
+def test_midi_projection_skips_motif_omission_without_motifs():
+    from tests.test_composition_v2_schema import _motif_track, minimal_v2
+
+    composition = CompositionV2.model_validate(minimal_v2(tracks=[_motif_track()]))
+    result = render_midi_with_report(composition)
+    assert "motif_metadata_omitted" not in result.report.compact_codes()

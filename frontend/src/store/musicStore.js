@@ -1982,36 +1982,44 @@ export const useMusicStore = create((set, get) => ({
     return true;
   },
 
-  configureMotifDestination: ({
-    sectionId = null,
-    trackId = null,
-    startBar = null,
-    startTick = null,
-  } = {}) => {
+  configureMotifDestination: (updates = {}) => {
     const patch = {};
-    if (sectionId !== undefined) {
+    if (Object.prototype.hasOwnProperty.call(updates, 'sectionId')) {
+      const sectionId = updates.sectionId;
       patch.motifDestinationSectionId = typeof sectionId === 'string' && sectionId.trim()
         ? sectionId.trim()
         : null;
     }
-    if (trackId !== undefined) {
+    if (Object.prototype.hasOwnProperty.call(updates, 'trackId')) {
+      const trackId = updates.trackId;
       patch.motifDestinationTrackId = typeof trackId === 'string' && trackId.trim()
         ? trackId.trim()
         : null;
     }
-    if (startBar !== undefined) {
-      const bar = Number(startBar);
+    if (Object.prototype.hasOwnProperty.call(updates, 'startBar')) {
+      const bar = Number(updates.startBar);
       patch.motifDestinationStartBar = Number.isInteger(bar) && bar >= 1 ? bar : null;
+      // Bar-only updates must not leave a stale absolute tick (Number(null) === 0).
+      if (!Object.prototype.hasOwnProperty.call(updates, 'startTick')) {
+        patch.motifDestinationStartTick = null;
+      }
     }
-    if (startTick !== undefined) {
-      const tick = Number(startTick);
-      patch.motifDestinationStartTick = Number.isInteger(tick) && tick >= 0 ? tick : null;
+    if (Object.prototype.hasOwnProperty.call(updates, 'startTick')) {
+      const tick = updates.startTick;
+      if (tick == null || tick === '') {
+        patch.motifDestinationStartTick = null;
+      } else {
+        const numeric = Number(tick);
+        patch.motifDestinationStartTick = Number.isInteger(numeric) && numeric >= 0 ? numeric : null;
+      }
     }
     console.debug('[musicStore] Motif destination configured', {
       sectionId: patch.motifDestinationSectionId ?? get().motifDestinationSectionId,
       trackId: patch.motifDestinationTrackId ?? get().motifDestinationTrackId,
       startBar: patch.motifDestinationStartBar ?? get().motifDestinationStartBar,
-      startTick: patch.motifDestinationStartTick ?? get().motifDestinationStartTick,
+      startTick: Object.prototype.hasOwnProperty.call(patch, 'motifDestinationStartTick')
+        ? patch.motifDestinationStartTick
+        : get().motifDestinationStartTick,
     });
     set(patch);
   },

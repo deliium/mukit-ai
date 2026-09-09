@@ -31,6 +31,8 @@ export default [
         setInterval: 'readonly',
         clearInterval: 'readonly',
         structuredClone: 'readonly',
+        crypto: 'readonly',
+        TextEncoder: 'readonly',
       },
     },
     plugins: {

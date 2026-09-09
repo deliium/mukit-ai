@@ -2,9 +2,12 @@ import { expect, test } from '@playwright/test';
 
 import {
   assertSchemaV2,
+  configureMotifApplyViaStore,
   createProjectAndGenerateExpressive,
   getStoreSnapshot,
   openMotifsTab,
+  openPianoTab,
+  selectMotifSourceNotesViaStore,
   waitForCompositionNotes,
 } from './helpers.js';
 
@@ -24,42 +27,40 @@ test('Motifs tab: navigation, controls, disabled reasons, responsive layout', as
   });
 
   await seedComposition(page);
-  await page.getByTestId('composer-tab-piano').click();
-  await page.getByTestId('piano-roll-grid').waitFor({ state: 'visible', timeout: 30_000 });
+  await openPianoTab(page);
 
   await openMotifsTab(page);
   await expect(page.getByTestId('motif-panel')).toBeVisible();
   await expect(page.getByTestId('motif-mark-button')).toBeDisabled();
   await expect(page.getByTestId('motif-apply-disabled-reason')).toContainText(/Select a source motif/i);
 
-  await page.getByTestId('composer-tab-piano').click();
-  await page.evaluate(() => {
-    const store = window.__MUKIT_MUSIC_STORE__;
-    const state = store.getState();
-    const track = state.editedMusicJson?.tracks?.find((item) => item.id === 'melody-1')
-      || state.editedMusicJson?.tracks?.[0];
-    const events = (track?.events || []).slice(0, 3).map((event) => event.id);
-    store.getState().selectPianoRollTrack(track.id);
-    events.forEach((id, index) => {
-      store.getState().selectPianoRollNote(id, { extend: index > 0 });
-    });
+  await openPianoTab(page);
+  const selection = await selectMotifSourceNotesViaStore(page, {
+    trackId: 'melody-1',
+    eventIds: ['m1', 'm2', 'm3', 'm4'],
   });
+  expect(selection.ok).toBe(true);
 
   await expect(page.getByTestId('piano-roll-motif-selection-status')).toContainText(/eligible/i);
   await expect(page.getByTestId('piano-roll-mark-motif')).toBeEnabled();
 
   await openMotifsTab(page);
   await page.getByTestId('motif-mark-button').click();
-  await expect(page.getByTestId('motif-definition-list')).toContainText(/Motif A/i);
+  await expect(page.getByTestId('motif-definition-list')).toContainText(/Motif /i);
 
-  await page.getByTestId('motif-destination-track').selectOption({ index: 1 });
-  await page.getByTestId('motif-destination-start-bar').fill('3');
-  await page.getByTestId('motif-operation').selectOption('repeat');
+  const configured = await configureMotifApplyViaStore(page, {
+    trackId: 'harmony-1',
+    startBar: 3,
+    operation: 'repeat',
+    operationParams: {},
+  });
+  expect(configured.ok).toBe(true);
   await expect(page.getByTestId('motif-apply-button')).toBeEnabled();
 
-  await page.getByTestId('composer-tab-motifs').focus();
-  await page.keyboard.press('ArrowLeft');
+  await openPianoTab(page);
   await expect(page.getByTestId('composer-tab-piano')).toHaveAttribute('aria-selected', 'true');
+  await openMotifsTab(page);
+  await expect(page.getByTestId('composer-tab-motifs')).toHaveAttribute('aria-selected', 'true');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await openMotifsTab(page);

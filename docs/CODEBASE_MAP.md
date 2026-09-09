@@ -56,13 +56,17 @@ backend/                     FastAPI backend, LLM generation, import, MusicXML r
     import_schemas.py        Import report/issue DTOs and error codes
     import_settings.py       IMPORT_* limits
     analysis_schemas.py      composition.analysis.v1 DTOs / warning codes
+    motif_schemas.py         Motif apply request/response DTOs
     llm_settings.py          Environment-driven OpenAI/DeepSeek config
     routers/
       projects.py            Project CRUD
       imports.py             MIDI / MusicXML multipart import
       analysis.py            POST /analysis/composition
+      motifs.py              POST /motifs/apply
     services/
-      llm_music_generator.py Prompt construction, LangGraph workflow, LLM JSON validation
+      llm_music_generator.py Prompt construction, LangGraph workflow (incl. plan_themes/realize_themes), LLM JSON validation
+      composition_theme.py   Theme plan validation and mechanical recurrence realization
+      composition_motif_editor.py / composition_motif_transform.py / llm_motif_editor.py
       composition_import.py  Shared source → V2 canonicalization
       composition_midi_import.py
       composition_musicxml_import.py
@@ -74,14 +78,16 @@ backend/                     FastAPI backend, LLM generation, import, MusicXML r
   requirements.txt           Python dependencies
 frontend/                    React/Vite client app
   src/
-    api/musicApi.js          Axios backend client (incl. import + analyzeComposition)
-    store/musicStore.js      Zustand global state (incl. completeImport + analysis cache)
-    components/              Header, import, analysis, generation, JSON editor, notation, playback
+    api/musicApi.js          Axios backend client (incl. import + analyzeComposition + applyMotif)
+    store/musicStore.js      Zustand global state (incl. completeImport + analysis cache + motif authoring)
+    components/              Header, import, analysis, motifs, generation, JSON editor, notation, playback
     utils/compositionAnalysis.js  Scope/freshness helpers
+    utils/compositionMotifs.js    Canonical motif reference helpers
     App.jsx                  App shell and startup API status/model discovery
     main.jsx                 Active Vite entry point
+  e2e/                       Playwright journeys (incl. motif-panel / motif-workflow)
   package.json               Active frontend package/scripts
-  vite.config.js             Vite server/proxy config (incl. /imports, /analysis)
+  vite.config.js             Vite server/proxy config (incl. /imports, /analysis, /motifs)
   Dockerfile                 Frontend dev container image
 docs/
   composition-v2.md          Canonical V2 contract
@@ -351,6 +357,8 @@ flowchart TD
 **To change MIDI/MusicXML import**: Start in `backend/app/routers/imports.py` and `services/composition_*_import.py` / `composition_import.py`; update `docs/import.md`, fixtures under `backend/tests/fixtures/import/`, and `test_import_*.py`.
 
 **To change composition analysis**: Start in `backend/app/routers/analysis.py`, `analysis_schemas.py`, and `services/composition_analysis*.py` / related analyzers; update `docs/composition-analysis.md`, fixtures under `backend/tests/fixtures/analysis/`, and frontend `CompositionAnalysisPanel` / `musicStore` analysis slice.
+
+**To change motif authoring/apply**: Start in `backend/app/routers/motifs.py`, `motif_schemas.py`, and `services/composition_motif_*.py` / `llm_motif_editor.py`; keep frontend `MotifPanel`, `compositionMotifs.js`, and `musicStore` motif actions in sync. Canonical motifs live on V2; derived families stay in analysis only.
 
 **To change LLM provider configuration**: Start in `backend/app/llm_settings.py`; if adding a provider, also update provider literals in `backend/app/schemas.py` and provider call logic in `backend/app/services/llm_music_generator.py`.
 

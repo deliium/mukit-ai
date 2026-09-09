@@ -21,10 +21,11 @@ mukit-ai/
 │   ├── app/
 │   │   ├── main.py          # Composition / LLM / export routes
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
-│   │   ├── routers/         # Projects + imports + analysis HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. import, analysis, fake_llm, constraints)
-│   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts
+│   │   ├── routers/         # Projects + imports + analysis + motifs HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. import, analysis, motifs, theme, fake_llm)
+│   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
+│   │   ├── motif_schemas.py        # Motif apply DTOs
 │   │   ├── import_schemas.py       # Import DTOs, issue/error codes
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── fixtures/        # Canonical composition JSON (V1 + V2 expressive for fake LLM / tests)
@@ -32,12 +33,12 @@ mukit-ai/
 │   │   └── schemas.py       # LLM models + composition re-exports
 │   └── tests/
 ├── frontend/                # React + Vite SPA
-│   ├── e2e/                 # Playwright V1/V2/import/analysis acceptance journeys
+│   ├── e2e/                 # Playwright V1/V2/import/analysis/motif acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # Workspace, generator, import, analysis, piano roll, playback, …
+│       ├── components/      # Workspace, generator, import, analysis, motifs, piano roll, playback, …
 │       ├── store/           # Zustand musicStore
-│       └── utils/           # validation, playback, piano-roll, analysis helpers
+│       └── utils/           # validation, playback, piano-roll, analysis, motif helpers
 ├── scripts/                 # e.g. v1/v2_docker_acceptance.sh
 ├── docs/                    # composition.v2/v1, analysis, import, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
@@ -54,8 +55,12 @@ mukit-ai/
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
 | `backend/app/composition_schemas.py` | Strict V1/V2 document models and timeline helpers |
 | `backend/app/analysis_schemas.py` | `composition.analysis.v1` DTOs, scopes, warning codes |
+| `backend/app/motif_schemas.py` | Motif apply request/response DTOs |
 | `backend/app/routers/analysis.py` | `POST /analysis/composition` |
+| `backend/app/routers/motifs.py` | `POST /motifs/apply` |
 | `backend/app/services/composition_analysis.py` | Analysis orchestrator + bounded LLM advisory projection |
+| `backend/app/services/composition_motif_editor.py` | Canonical motif apply + destination replacement |
+| `backend/app/services/composition_theme.py` | Structured theme plan + generation recurrence |
 | `backend/app/routers/imports.py` | `POST /imports/midi` and `/imports/musicxml` |
 | `backend/app/services/composition_import.py` | Shared source → V2 canonicalization |
 | `backend/app/services/composition_midi_import.py` | Deterministic MIDI parse |
@@ -70,6 +75,7 @@ mukit-ai/
 | `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import + analysis transitions) |
 | `frontend/src/components/ImportControls.jsx` | Import / replace UX |
 | `frontend/src/components/CompositionAnalysisPanel.jsx` | Analysis tab UI |
+| `frontend/src/components/MotifPanel.jsx` | Motifs tab authoring / apply UI |
 | `docker-compose.yml` | Production-local backend + nginx frontend |
 | `compose.dev.yml` | Optional hot-reload override |
 | `.env.example` | Env template for LLM/import settings |

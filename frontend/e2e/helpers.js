@@ -474,10 +474,212 @@ export async function openAnalysisTab(page) {
   console.info('[e2e-analysis] Opened Analysis tab');
 }
 
+export async function openComposerTab(page, tabId) {
+  const tab = page.getByTestId(`composer-tab-${tabId}`);
+  await tab.scrollIntoViewIfNeeded();
+  await tab.evaluate((node) => {
+    node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+  });
+  await page.waitForFunction((id) => {
+    const node = document.querySelector(`[data-testid="composer-tab-${id}"]`);
+    return node?.getAttribute('aria-selected') === 'true';
+  }, tabId, { timeout: 10_000 });
+}
+
 export async function openMotifsTab(page) {
-  await page.getByTestId('composer-tab-motifs').click();
+  await openComposerTab(page, 'motifs');
   await page.getByTestId('motif-panel').waitFor({ state: 'visible', timeout: 30_000 });
   console.info('[e2e-motifs] Opened Motifs tab');
+}
+
+export async function openPianoTab(page) {
+  await openComposerTab(page, 'piano');
+  await page.getByTestId('piano-roll-grid').waitFor({ state: 'visible', timeout: 30_000 });
+}
+
+/**
+ * Select ordered melody note IDs for motif authoring via store actions.
+ * Defaults to the first four expressive-fixture notes (complete tie chain in bar 1).
+ */
+export async function selectMotifSourceNotesViaStore(page, {
+  trackId = 'melody-1',
+  eventIds = null,
+  count = 4,
+} = {}) {
+  return page.evaluate(({ preferredTrackId, explicitIds, take }) => {
+    const api = window.__MUKIT_MUSIC_STORE__;
+    if (!api) {
+      return { ok: false, reason: 'store missing' };
+    }
+    const state = api.getState();
+    const track = (state.editedMusicJson?.tracks || []).find((item) => item.id === preferredTrackId)
+      || (state.editedMusicJson?.tracks || [])[0];
+    if (!track?.events?.length) {
+      return { ok: false, reason: 'no events' };
+    }
+    const ids = Array.isArray(explicitIds) && explicitIds.length
+      ? explicitIds
+      : track.events.slice(0, take).map((event) => event.id).filter(Boolean);
+    if (!ids.length) {
+      return { ok: false, reason: 'too_few_ids', ids };
+    }
+    state.selectPianoRollTrack(track.id);
+    // Clear prior multi-select, then apply requested IDs.
+    if (typeof state.clearPianoRollSelection === 'function') {
+      state.clearPianoRollSelection();
+    }
+    ids.forEach((id, index) => {
+      api.getState().selectPianoRollNote(id, { extend: index > 0 });
+    });
+    const after = api.getState();
+    return {
+      ok: true,
+      trackId: track.id,
+      eventIds: ids,
+      selectedCount: after.pianoRollNoteIds?.length || 0,
+    };
+  }, { preferredTrackId: trackId, explicitIds: eventIds, take: count });
+}
+
+/** Configure motif apply destination/operation via store (avoids brittle controlled-input races). */
+export async function configureMotifApplyViaStore(page, {
+  trackId = 'bass-1',
+  startBar = 3,
+  sectionId = null,
+  operation = 'transpose',
+  operationParams = { transpose_semitones: 5 },
+  variationStrength = 0.5,
+} = {}) {
+  return page.evaluate((config) => {
+    const api = window.__MUKIT_MUSIC_STORE__;
+    if (!api) {
+      return { ok: false, reason: 'store missing' };
+    }
+    const state = api.getState();
+    const motifs = state.editedMusicJson?.motifs || [];
+    const motif = (config.motifLabel
+      ? motifs.find((item) => item.label === config.motifLabel)
+      : null)
+      || motifs[motifs.length - 1]
+      || motifs.find((item) => item.label === 'Motif A')
+      || motifs[0];
+    const occurrence = motif?.occurrences?.find((item) => item.relationship === 'original')
+      || motif?.occurrences?.[0];
+    if (!motif || !occurrence) {
+      return { ok: false, reason: 'motif_missing', motifCount: motifs.length };
+    }
+    const destinationPatch = {
+      trackId: config.trackId,
+      startBar: config.startBar,
+      startTick: null,
+    };
+    if (config.sectionId != null) {
+      destinationPatch.sectionId = config.sectionId;
+    }
+    state.selectMotif(motif.id);
+    state.configureMotifDestination(destinationPatch);
+    state.configureMotifTransformation({
+      operation: config.operation,
+      operationParams: config.operationParams,
+      variationStrength: config.variationStrength,
+    });
+    const after = api.getState();
+    return {
+      ok: true,
+      motifId: after.motifSelectedMotifId,
+      occurrenceId: after.motifSelectedOccurrenceId,
+      destinationTrackId: after.motifDestinationTrackId,
+      destinationStartBar: after.motifDestinationStartBar,
+      destinationStartTick: after.motifDestinationStartTick,
+      operation: after.motifOperation,
+      params: after.motifOperationParams,
+    };
+  }, {
+    trackId,
+    startBar,
+    sectionId,
+    operation,
+    operationParams,
+    variationStrength,
+  });
+}
+export async function mockMotifApplyRoute(page, {
+  body = null,
+  status = 200,
+  once = false,
+  capture = null,
+} = {}) {
+  const handler = async (route) => {
+    const request = route.request();
+    if (capture && typeof capture === 'object') {
+      try {
+        capture.payload = request.postDataJSON();
+      } catch {
+        capture.raw = request.postData();
+      }
+    }
+    if (status >= 400) {
+      await route.fulfill({
+        status,
+        contentType: 'application/json',
+        body: JSON.stringify(body || {
+          detail: {
+            code: 'motif_source_unresolved',
+            message: 'Mocked motif apply failure',
+            details: { reason: 'e2e_mock' },
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(body),
+    });
+  };
+  if (once) {
+    await page.route('**/motifs/apply', async (route) => {
+      await handler(route);
+      await page.unroute('**/motifs/apply');
+    });
+  } else {
+    await page.route('**/motifs/apply', handler);
+  }
+}
+
+/** Bounded motif snapshot for assertions (IDs/counts only — never full event arrays). */
+export async function getMotifSnapshot(page) {
+  return page.evaluate(() => {
+    const composition = window.__MUKIT_MUSIC_STORE__?.getState()?.editedMusicJson;
+    const motifs = Array.isArray(composition?.motifs) ? composition.motifs : [];
+    const eventIds = new Set();
+    for (const track of composition?.tracks || []) {
+      for (const event of track.events || []) {
+        if (event?.id) {
+          eventIds.add(event.id);
+        }
+      }
+    }
+    return {
+      motifCount: motifs.length,
+      labels: motifs.map((motif) => motif.label || null),
+      motifs: motifs.map((motif) => ({
+        id: motif.id,
+        label: motif.label,
+        occurrenceCount: (motif.occurrences || []).length,
+        relationships: (motif.occurrences || []).map((occ) => occ.relationship),
+        occurrenceIds: (motif.occurrences || []).map((occ) => occ.id),
+        eventRefsResolvable: (motif.occurrences || []).every(
+          (occ) => Array.isArray(occ.event_ids) && occ.event_ids.every((id) => eventIds.has(id)),
+        ),
+      })),
+      eventCount: eventIds.size,
+      notationRevision: window.__MUKIT_MUSIC_STORE__?.getState()?.notationRevision ?? null,
+      motifApplyStatus: window.__MUKIT_MUSIC_STORE__?.getState()?.motifApplyStatus || 'idle',
+      motifApplyError: window.__MUKIT_MUSIC_STORE__?.getState()?.motifApplyError || '',
+    };
+  });
 }
 
 /** Intercept POST /analysis/composition with a deterministic JSON body or status. */

@@ -6,6 +6,7 @@ from io import BytesIO
 from fastapi.testclient import TestClient
 from music21 import converter
 
+from app.composition_schemas import CompositionV2
 from app.main import app, export_midi, export_musicxml, export_musicxml_preview, export_wav
 from app.services.composition_projection import empty_projection_report
 from app.services.composition_wav import CompositionWavError, WavRenderResult
@@ -273,6 +274,24 @@ def test_export_midi_direct_handler_logs_completion(caplog):
     assert response.media_type == "audio/midi"
     assert "MIDI export request completed" in caplog.text
     assert response.headers.get("X-Mukit-Projection-Status") in {"exact", "approximated", "omitted"}
+
+
+def test_export_motif_bearing_composition_reports_motif_metadata_omitted():
+    from tests.test_composition_v2_schema import _motif_definition, _motif_track, minimal_v2
+
+    composition = CompositionV2.model_validate(
+        minimal_v2(tracks=[_motif_track()], motifs=[_motif_definition()])
+    )
+
+    midi = client.post("/export/midi", json=composition.model_dump(mode="json"))
+    musicxml = client.post("/export/musicxml", json=composition.model_dump(mode="json"))
+
+    assert midi.status_code == 200
+    assert musicxml.status_code == 200
+    assert "motif_metadata_omitted" in midi.headers.get("X-Mukit-Projection-Issues", "")
+    assert "motif_metadata_omitted" in musicxml.headers.get("X-Mukit-Projection-Issues", "")
+    assert int(midi.headers.get("X-Mukit-Projection-Omitted-Count", "0")) >= 1
+    assert int(musicxml.headers.get("X-Mukit-Projection-Omitted-Count", "0")) >= 1
 
 
 def test_export_wav_direct_handler_logs_completion(monkeypatch, caplog):

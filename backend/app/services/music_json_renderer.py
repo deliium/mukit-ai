@@ -8,7 +8,7 @@ from typing import Any
 
 from ..composition_schemas import CompositionV1, CompositionV2, CompositionV1Track, CompositionV2Track, CompositionV1NoteEvent, CompositionV2NoteEvent
 from ..schemas import LLMMusicJson, LLMMusicNoteItem, LLMMusicTrack
-from .composition_projection import ProjectionReport, empty_projection_report
+from .composition_projection import ProjectionReport, empty_projection_report, record_motif_metadata_omission
 from .composition_timeline import CompiledTimeline, compile_timeline
 
 
@@ -297,6 +297,7 @@ def _build_notation_context(composition: CompositionLike) -> _NotationContext:
                     path=f"tracks/{track.id}/sustain_pedals",
                     details={"span_count": len(pedals)},
                 )
+        record_motif_metadata_omission(composition, report)
 
     logger.debug(
         "MusicXML notation context compiled",

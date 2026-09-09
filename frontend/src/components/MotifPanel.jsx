@@ -238,6 +238,9 @@ const MotifPanel = ({ onOpenPianoTab = null }) => {
   const canonical = isCanonicalComposition(composition);
 
   const usages = useMemo(() => {
+    // Recompute when composition/analysis revisions change even if object identity is reused.
+    void compositionRevision;
+    void analysisResultKey;
     if (!composition || !canonical || !validation.valid) {
       return [];
     }

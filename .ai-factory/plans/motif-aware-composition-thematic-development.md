@@ -209,7 +209,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
 
 ### Phase 5: Fidelity, Acceptance, and Documentation
 
-- [ ] **Task 13: Integrate motif metadata with persistence, export projection, and full regression gates.** (depends on Tasks 1–12)
+- [x] **Task 13: Integrate motif metadata with persistence, export projection, and full regression gates.** (depends on Tasks 1–12)
   - Confirm project create/update/duplicate/reopen persists canonical motif definitions automatically inside `composition_json`; no SQL migration or separate analysis persistence is expected.
   - Add a stable `motif_metadata_omitted` projection issue in `backend/app/services/composition_projection.py` for MIDI/MusicXML/WAV exports when canonical motif metadata is not representable. Notes must export identically with and without motif metadata.
   - Confirm playback, notation, imports, analysis, JSON editing, and V1 migration ignore motif metadata for sound generation while preserving/validating it as canonical semantic data.
@@ -218,7 +218,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
   - Logging: DEBUG persistence/projection counts and codes; INFO save/reopen/export status; WARN omission code; ERROR sanitized persistence/export type. Never log stored composition JSON, event arrays, or binary/text export payloads.
   - Files: projection/export services, persistence tests, frontend project tests, and any fixture expectations affected by the optional default field.
 
-- [ ] **Task 14: Add end-to-end acceptance coverage and complete mandatory documentation.** (depends on Task 13)
+- [x] **Task 14: Add end-to-end acceptance coverage and complete mandatory documentation.** (depends on Task 13)
   - Add `frontend/e2e/motif-workflow.spec.js` using fake/mocked AI: select a one- or two-bar melody, mark `Motif A`, inspect source usage, choose another section/track, request a varied version, and assert a clearly derived canonical destination occurrence.
   - Assert source and unrelated events remain unchanged, destination event IDs are new/unique, no symbolic placeholders exist, notation/playback revisions update, usage analysis refreshes, undo/redo works, and save/reopen preserves `Motif A`.
   - Cover invalid >2-bar/empty/percussion selections, stale/deleted sources, destination overlap confirmation, backend 422/502/503 behavior, failed-operation atomicity, analysis truncation, accessible keyboard navigation, and 390px responsive layout.

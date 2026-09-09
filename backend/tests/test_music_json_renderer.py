@@ -448,3 +448,25 @@ def test_render_musicxml_v2_fixture_file_roundtrip():
     assert len(musicxml) > 500
     assert "score-partwise" in musicxml or "score-timewise" in musicxml
     assert "automation_omitted_from_notation" in report.compact_codes()
+
+
+def test_render_musicxml_reports_motif_metadata_omitted():
+    from tests.test_composition_v2_schema import _motif_definition, _motif_track, minimal_v2
+
+    composition = CompositionV2.model_validate(
+        minimal_v2(tracks=[_motif_track()], motifs=[_motif_definition()])
+    )
+    musicxml, report = render_musicxml(composition)
+    assert "score-partwise" in musicxml or "score-timewise" in musicxml
+    assert "motif_metadata_omitted" in report.compact_codes()
+    issue = next(item for item in report.issues if item.code == "motif_metadata_omitted")
+    assert issue.status == "omitted"
+    assert issue.details["motif_count"] == 1
+
+
+def test_render_musicxml_skips_motif_omission_for_old_v2_without_motifs():
+    from tests.test_composition_v2_schema import _motif_track, minimal_v2
+
+    composition = CompositionV2.model_validate(minimal_v2(tracks=[_motif_track()]))
+    _musicxml, report = render_musicxml(composition)
+    assert "motif_metadata_omitted" not in report.compact_codes()

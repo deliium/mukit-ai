@@ -26,6 +26,7 @@ PROJECTION_ISSUE_CODES: dict[str, str] = {
     "midi_channel_control_conflict": "Track-local CC streams conflict on a shared MIDI channel.",
     "expression_combined": "Dynamic marks were combined into expression/CC11 values.",
     "sustain_projected": "Sustain spans were projected to CC64 or pedal directions.",
+    "motif_metadata_omitted": "Canonical motif metadata is not representable in this export format; note events are preserved.",
 }
 
 
@@ -137,6 +138,36 @@ class ProjectionReport(BaseModel):
             "failed_count": self.failed_count,
             "issue_codes": self.compact_codes(),
         }
+
+
+def record_motif_metadata_omission(composition: Any, report: ProjectionReport) -> None:
+    """Record that canonical motif metadata cannot round-trip through an export format.
+
+    Notes remain authoritative in tracks[].events[]; motif definitions are omitted from
+    MIDI/MusicXML/WAV interchange without changing playable event fidelity.
+    """
+    if getattr(composition, "schema_version", None) != "composition.v2":
+        return
+    motifs = getattr(composition, "motifs", None) or ()
+    if not motifs:
+        return
+    motif_count = len(motifs)
+    occurrence_count = sum(len(motif.occurrences) for motif in motifs)
+    report.add_issue(
+        code="motif_metadata_omitted",
+        severity="info",
+        status="omitted",
+        path="motifs",
+        details={"motif_count": motif_count, "occurrence_count": occurrence_count},
+    )
+    logger.warning(
+        "Export omitted canonical motif metadata",
+        extra={
+            "code": "motif_metadata_omitted",
+            "motif_count": motif_count,
+            "occurrence_count": occurrence_count,
+        },
+    )
 
 
 def empty_projection_report() -> ProjectionReport:

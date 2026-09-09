@@ -19,7 +19,7 @@ from pathlib import Path
 from app.composition_schemas import CompositionV1, CompositionV2
 from app.services.composition_migration import migrate_v1_to_v2
 from app.services.composition_midi import CompositionMidiError, MidiRenderResult, render_midi_with_report
-from app.services.composition_projection import ProjectionReport, empty_projection_report
+from app.services.composition_projection import ProjectionReport, empty_projection_report, record_motif_metadata_omission
 from app.services.composition_timeline import compile_timeline
 
 logger = logging.getLogger(__name__)
@@ -176,6 +176,8 @@ def render_wav_with_report(composition: CompositionV1 | CompositionV2) -> WavRen
             extra={"reason": "zero_note_events", "expected_seconds": round(expected_seconds, 6)},
         )
         wav_bytes = _build_silent_wav(expected_seconds, config.sample_rate)
+        silence_report = empty_projection_report()
+        record_motif_metadata_omission(composition, silence_report)
         logger.info(
             "WAV render completed",
             extra={
@@ -186,7 +188,7 @@ def render_wav_with_report(composition: CompositionV1 | CompositionV2) -> WavRen
                 "expected_seconds": round(expected_seconds, 6),
             },
         )
-        return WavRenderResult(wav_bytes=wav_bytes, report=empty_projection_report())
+        return WavRenderResult(wav_bytes=wav_bytes, report=silence_report)
 
     _ensure_renderer_available(config)
 

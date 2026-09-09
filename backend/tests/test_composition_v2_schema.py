@@ -345,6 +345,7 @@ def test_projection_report_tracks_counts_and_registry():
     assert report.approximated_count == 1
     assert report.omitted_count == 1
     assert "automation_sampled" in PROJECTION_ISSUE_CODES
+    assert "motif_metadata_omitted" in PROJECTION_ISSUE_CODES
     assert "automation_sampled" in report.compact_codes()
 
     failed = ProjectionReport()

@@ -11,8 +11,9 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
 - **Piano-Roll Editor**: Create, select, drag/transpose, resize, and delete notes on `tracks[].events[]` with snap/zoom, track focus, context tracks, and note-edit undo/redo; shares the same `editedMusicJson` as the JSON editor
 - **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start, piano-roll playback cursor)
-- **Composition Analysis**: Deterministic `composition.analysis.v1` sidecar for tonal context, inferred harmony, phrases/density, and stable warnings over current V2 (Analysis tab; optional bounded advisory context for LLM edit/repair — not persisted, not required for import/playback)
-- **Deterministic Export**: Download MusicXML, MIDI, and server-rendered WAV from the same canonical `tracks[].events[]`; export responses include projection status headers when approximations apply
+- **Composition Analysis**: Deterministic `composition.analysis.v1` sidecar for tonal context, inferred harmony, phrases/density, derived motif families, and stable warnings over current V2 (Analysis tab; optional bounded advisory context for LLM edit/repair — not persisted, not required for import/playback)
+- **Motif Authoring**: Mark a 1–2 bar pitched selection as a named motif, inspect usages, and apply mechanical or creative transforms via `POST /motifs/apply`; results are ordinary `tracks[].events[]` plus reference metadata (Motifs tab)
+- **Deterministic Export**: Download MusicXML, MIDI, and server-rendered WAV from the same canonical `tracks[].events[]`; export responses include projection status headers when approximations apply (motif metadata is intentionally omitted)
 
 ## 🏗️ Architecture
 
@@ -48,10 +49,11 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 3. Generate 16–32 bar multi-track composition (or work from the imported V2)
 4. Play (Tone.js), view notation (OSMD), edit notes on the piano roll
 5. Open the **Analysis** tab for deterministic tonality/harmony/density/warnings on the current V2 (no LLM required)
-6. AI region edit (select bars → instruction → Regenerate Selection)
-7. Undo note edits if needed → Save
-7. Export MusicXML / MIDI / WAV
-8. `docker compose restart` → reopen the same project (named volume keeps SQLite)
+6. Open the **Motifs** tab to mark a short melody as Motif A and apply a transform to another section/track
+7. AI region edit (select bars → instruction → Regenerate Selection)
+8. Undo note edits if needed → Save
+9. Export MusicXML / MIDI / WAV
+10. `docker compose restart` → reopen the same project (named volume keeps SQLite)
 
 - Named volume `mukit_project_data` persists SQLite at `/data/projects.db`. Prefer `docker compose restart` or `down` without `-v`.
 - Both services use `restart: unless-stopped` and healthchecks (`GET /health` on backend; HTTP on frontend).

@@ -617,3 +617,71 @@ def test_wav_silence_and_multi_track_duration_anchored_to_midi(monkeypatch):
     assert measured == pytest.approx(expected, abs=0.05), (
         "trailing-silence / multi-track WAV duration must match composition duration"
     )
+
+
+def _motif_bearing_composition() -> CompositionV2:
+    from tests.test_composition_v2_schema import _motif_definition, _motif_track, minimal_v2
+
+    return CompositionV2.model_validate(minimal_v2(tracks=[_motif_track()], motifs=[_motif_definition()]))
+
+
+def test_export_note_fidelity_unchanged_by_motif_metadata():
+    from app.services.composition_midi import render_midi_with_report
+    from app.services.music_json_renderer import render_musicxml
+    from tests.test_composition_v2_schema import _motif_track, minimal_v2
+
+    without_motifs = CompositionV2.model_validate(minimal_v2(tracks=[_motif_track()]))
+    with_motifs = _motif_bearing_composition()
+
+    midi_without = render_midi_with_report(without_motifs)
+    midi_with = render_midi_with_report(with_motifs)
+    assert midi_without.midi_bytes == midi_with.midi_bytes
+    assert "motif_metadata_omitted" not in midi_without.report.compact_codes()
+    assert "motif_metadata_omitted" in midi_with.report.compact_codes()
+
+    musicxml_without, report_without = render_musicxml(without_motifs)
+    musicxml_with, report_with = render_musicxml(with_motifs)
+    expected_notes = note_tuples_without_velocity(canonical_note_tuples(without_motifs))
+    assert musicxml_note_tuples(musicxml_without, without_motifs, include_velocity=False) == expected_notes
+    assert musicxml_note_tuples(musicxml_with, with_motifs, include_velocity=False) == expected_notes
+    assert "motif_metadata_omitted" not in report_without.compact_codes()
+    assert "motif_metadata_omitted" in report_with.compact_codes()
+
+
+def test_wav_projection_includes_motif_metadata_omission(monkeypatch, tmp_path):
+    from app.services import composition_wav as wav_module
+    from app.services.composition_wav import render_wav_with_report
+
+    composition = _motif_bearing_composition()
+    fake_bin = tmp_path / "fluidsynth"
+    fake_bin.write_text("#!/bin/sh\n")
+    fake_bin.chmod(0o755)
+    soundfont = tmp_path / "FluidR3_GM.sf2"
+    soundfont.write_bytes(b"SF2")
+    monkeypatch.setenv("FLUIDSYNTH_BIN", str(fake_bin))
+    monkeypatch.setenv("COMPOSITION_WAV_SOUNDFONT", str(soundfont))
+
+    def fake_run(command, **_kwargs):
+        from pathlib import Path
+        import io
+        import wave
+
+        wav_path = Path(command[command.index("-F") + 1])
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(44100)
+            wf.writeframes(b"\x00" * 44100)
+        wav_path.write_bytes(buf.getvalue())
+
+        class Result:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+
+        return Result()
+
+    monkeypatch.setattr(wav_module.subprocess, "run", fake_run)
+    result = render_wav_with_report(composition)
+    assert "motif_metadata_omitted" in result.report.compact_codes()

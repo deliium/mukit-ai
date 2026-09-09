@@ -61,7 +61,7 @@ Logs use a short fingerprint prefix (12 characters), not the full hash.
 | `melody` | Range, tessitura, contour, phrases, cadences; skyline reduction when polyphonic |
 | `density` | Attacks, IOI, union occupancy vs note load, simultaneity, section-relative density |
 | `roles` | Declared / inferred / effective track roles (does not mutate import roles) |
-| `repetition` | Bounded exact / transposed / rhythm-only motifs; section fingerprints |
+| `repetition` | Bounded exact / transposed / rhythm-only flat `motifs` **plus** grouped `motif_families` (fingerprint-bound note refs); section fingerprints |
 | `tension` | Duration-weighted interval-class dissonance plus optional tonal components |
 | `section_summaries` | Bounded per-section rollups |
 | `warnings` | Stable non-blocking codes (see below) |
@@ -128,7 +128,7 @@ Warning `details` are bounded scalars/counts/thresholds and locators — not raw
 | Melody | Declared melody/lead first, else high-confidence inferred role; monophonic direct; polyphonic → deterministic skyline (highest MIDI at attack) |
 | Density | Union occupancy vs polyphonic note load (only note load may exceed `1.0`) |
 | Roles | Instrument identity + register/monophony/attack features; abstain on weak margins; never mutate declared roles |
-| Repetition | Exact / transposed / rhythm tokens; motif length 3–12 notes; max 64 motifs; rolling hash + exact verify |
+| Repetition | Exact / transposed / rhythm / inversion / rational 2:1–1:2 scaling tokens; motif length 3–12 notes; max 64 flat motifs + family grouping; SHA-256-derived family IDs; rolling hash + exact verify |
 | Tension | Versioned interval-class table; tonal add-ons only when key/chord evidence exists |
 | Dense overlap warn | Note load ≥ `8.0` or max simultaneity ≥ `12` |
 | Timing grid warn | ≥ 4 off-grid attacks and ≥ 35% of attacks off a 16th-note grid |
@@ -170,6 +170,8 @@ Raw MIDI/MusicXML import still sets `harmony: []` and does **not** run analysis 
 - Section IDs are optional; selection uses index + optional verification fields
 - Scale degrees are summary-level by default (not per-event lists)
 - Motif search is bounded and may emit `motif_search_truncated`
+- Derived `motif_families` group reference + matched occurrences with fingerprint-bound note refs (event IDs when present, else indexes tied to `source_fingerprint`); flat `motifs` remains for older consumers — **families** are authoritative for grouping
+- Derived families are not canonical `composition.v2` motifs and cannot be submitted as edit authority without resolving against the exact fingerprint
 - No persisted server-side analysis cache
 - Approximation/limitation warnings carry codes, counts, and thresholds — not raw music payloads
 

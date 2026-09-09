@@ -11,6 +11,7 @@ from app.db import initialize_database, reset_database_initialization_cache
 from app.services import project_store as store
 from app.services.project_composition import normalize_project_composition
 from tests.test_composition_schema import valid_composition
+from tests.test_composition_v2_schema import _motif_definition, _motif_track, minimal_v2
 
 
 @pytest.fixture
@@ -140,3 +141,42 @@ def test_persistence_round_trips_multi_role_same_instrument_tracks(project_db):
         ("bass-1", "bass", "bass"),
     ]
     assert len(loaded["tracks"]) == 3
+
+
+def test_create_save_reopen_preserves_motif_metadata(project_db):
+    created = store.create_project("Motif Song", db_path=project_db)
+    payload = minimal_v2(tracks=[_motif_track()], motifs=[_motif_definition()])
+    normalized = normalize_project_composition(payload, project_id=created.id)
+    canonical = normalized.composition.model_dump(mode="json")
+
+    store.update_project(
+        created.id,
+        composition=json.dumps(canonical, separators=(",", ":")),
+        db_path=project_db,
+    )
+
+    reset_database_initialization_cache()
+    reopened = store.get_project(created.id, db_path=project_db)
+    loaded = json.loads(reopened.composition_json)
+
+    assert loaded == canonical
+    assert loaded["motifs"][0]["id"] == "motif-a"
+    assert loaded["motifs"][0]["occurrences"][0]["event_ids"] == ["n1", "n2", "n3"]
+    assert "events" not in loaded["motifs"][0]["occurrences"][0]
+
+
+def test_duplicate_project_preserves_motif_metadata(project_db):
+    created = store.create_project("Motif Duplicate", db_path=project_db)
+    payload = minimal_v2(tracks=[_motif_track()], motifs=[_motif_definition()])
+    normalized = normalize_project_composition(payload, project_id=created.id)
+    canonical = normalized.composition.model_dump(mode="json")
+    store.update_project(
+        created.id,
+        composition=json.dumps(canonical, separators=(",", ":")),
+        db_path=project_db,
+    )
+
+    duplicated = store.duplicate_project(created.id, db_path=project_db)
+    loaded = json.loads(duplicated.composition_json)
+    assert loaded["motifs"] == canonical["motifs"]
+    assert loaded["tracks"][0]["events"] == canonical["tracks"][0]["events"]

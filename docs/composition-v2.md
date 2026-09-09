@@ -25,6 +25,7 @@ V2 persisted nested models use `extra="forbid"`. V1 keeps ignored-extra compatib
 |----------|--------|------|
 | Musical content | note pitch/start/notated duration, ties, articulations, meter/key timelines | Authored notes and score structure |
 | Semantic / navigation | sections (type, boundaries, optional `id`/`label`), harmony, rehearsal/text `markers` | UI, notation, LLM context — never audible notes |
+| Thematic identity | optional `motifs[]` (definitions + occurrence event-ID references) | Authored identity/provenance only — never playable payloads or export placeholders |
 | Playback / performance | note velocity, tempo timeline, track volume/pan/expression, dynamic marks, sustain spans, automation | Deterministic projections — never replaces note content |
 | Not in V2 | `composition.analysis.v1` reports | Derived sidecar only; never a canonical or persisted field |
 
@@ -43,6 +44,7 @@ V1 root fields are preserved. **Initial** conductor state is at tick `0`:
 | `sections` | Contiguous boundaries; optional stable `id` and free-text `label`. Import may use a single `unsectioned` section when form markers are absent |
 | `tracks` | Ordered track list with events and track-local expression. Import may use `role: "other"` when role metadata is insufficient |
 | `harmony` | Chord-symbol metadata only. Raw imports always set `harmony: []` (no analysis) |
+| `motifs` | Optional authored motif definitions (default `[]`). Each definition stores `id`/`label` plus occurrences that reference existing `tracks[].events[].id` values — never copied pitches/onsets. Exactly one `original` occurrence per motif. Consumers derive spans from referenced events. |
 
 **Timeline change arrays** contain transitions **after** tick `0` only (no duplicate tick-`0` entries):
 
@@ -168,6 +170,7 @@ Ignored V1 extra fields are collected in the migration report (sanitized paths) 
 | Meter changes | Bar/cursor/grid map | Conductor time-signature events | Time-signature attributes per part |
 | Key changes | Display/navigation only | Key-signature events where supported | Key-signature attributes per part |
 | Section labels, markers | Display/navigation | Marker/text meta events | Section labels, rehearsal/text expressions |
+| Canonical `motifs` metadata | Display/navigation only | Omitted (`motif_metadata_omitted`) | Omitted (`motif_metadata_omitted`) |
 | Harmony | Ignored (no invented notes) | Ignored | Chord-symbol projection only |
 
 WAV is FluidSynth output of the **exact MIDI bytes** for that request. SoundFont identity across versions is not guaranteed.
@@ -200,8 +203,20 @@ Stable issue codes:
 | `midi_channel_control_conflict` | Conflicting CC streams on a shared MIDI channel — **export error** |
 | `expression_combined` | Dynamic marks merged into expression/CC11 |
 | `sustain_projected` | Sustain spans projected to CC64 or pedal directions |
+| `motif_metadata_omitted` | Canonical motif definitions/occurrences are not representable in MIDI/MusicXML/WAV; note events still export |
 
 The frontend parses headers in `musicApi.js` and surfaces warnings on export actions without embedding raw reports in binary payloads.
+
+## Motifs (canonical references)
+
+Optional `motifs` store thematic **identity and provenance**, not sound:
+
+- Occurrence `event_ids` must resolve to existing pitched-track events (complete tie chains, chronological, 3–32 refs).
+- Mechanical transforms (`repeat`, `transpose`, `inversion`, `augmentation`, `diminution`, `sequence`) and creative variants are applied via `POST /motifs/apply`; results materialize ordinary note events plus a new occurrence reference.
+- Staged generation may assemble motif definitions after theme realization (`plan_themes` → … → `realize_themes`) using the same reference rules.
+- Direct JSON that leaves dangling motif refs is a validation error; piano-roll/AI region edits may reconcile and emit prune warnings.
+
+See Motifs tab UI, `docs/composition-analysis.md` for **derived** `motif_families`, and `docs/testing.md` for motif E2E commands.
 
 ## Operator notes
 

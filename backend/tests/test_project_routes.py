@@ -7,6 +7,7 @@ from app.db import reset_database_initialization_cache
 from app.main import app
 from tests.test_composition_normalizer import legacy_music_json
 from tests.test_composition_schema import valid_composition
+from tests.test_composition_v2_schema import _motif_definition, _motif_track, minimal_v2
 
 
 @pytest.fixture
@@ -139,6 +140,22 @@ def test_open_migrates_v1_composition_and_preserves_notes(client, caplog):
     reopen = client.get(f"/projects/{created['id']}")
     assert reopen.json()["composition_migrated"] is False
     assert reopen.json()["migration_path"] == "canonical"
+
+
+def test_project_routes_persist_motif_metadata(client):
+    payload = minimal_v2(tracks=[_motif_track()], motifs=[_motif_definition()])
+    created = client.post("/projects", json={"name": "Motif Project"}).json()
+    patched = client.patch(f"/projects/{created['id']}", json={"composition": payload})
+    assert patched.status_code == 200
+    assert patched.json()["composition"]["motifs"][0]["id"] == "motif-a"
+
+    opened = client.get(f"/projects/{created['id']}")
+    assert opened.status_code == 200
+    assert opened.json()["composition"]["motifs"] == patched.json()["composition"]["motifs"]
+
+    duplicated = client.post(f"/projects/{created['id']}/duplicate")
+    assert duplicated.status_code == 201
+    assert duplicated.json()["composition"]["motifs"] == patched.json()["composition"]["motifs"]
 
 
 def test_failed_migration_does_not_rewrite_stored_json(client, monkeypatch):

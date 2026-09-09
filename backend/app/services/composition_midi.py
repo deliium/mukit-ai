@@ -21,7 +21,11 @@ from app.composition_schemas import (
     round_half_away_from_zero,
 )
 from app.services.composition_migration import migrate_v1_to_v2
-from app.services.composition_projection import ProjectionReport, empty_projection_report
+from app.services.composition_projection import (
+    ProjectionReport,
+    empty_projection_report,
+    record_motif_metadata_omission,
+)
 from app.services.composition_timeline import CompiledTimeline, compile_timeline
 
 
@@ -213,6 +217,7 @@ def render_midi_with_report(composition: CompositionV1 | CompositionV2) -> MidiR
 
     try:
         _record_inherent_losses(composition, report)
+        record_motif_metadata_omission(composition, report)
         track_notes = _project_all_tracks(composition, report)
         cc_streams = [_build_track_cc_stream(track, composition, timeline, report) for track in composition.tracks]
         _assert_no_channel_control_conflicts(composition.tracks, cc_streams, report)
