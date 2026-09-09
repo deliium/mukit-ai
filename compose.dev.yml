@@ -9,8 +9,11 @@ services:
     volumes:
       - ./backend:/app
       - mukit_project_data:/data
+      # Optional read-only catalog override (pair with ARRANGEMENT_INSTRUMENT_CATALOG_PATH):
+      # - ./path/to/arrangement_instruments.v1.json:/data/arrangement_instruments.v1.json:ro
     command: uvicorn app.main:app --host 0.0.0.0 --port 8888 --reload
     # Dev image still uses the production Dockerfile CMD override above.
+    # ARRANGEMENT_INSTRUMENT_CATALOG_PATH is inherited from docker-compose.yml.
 
   frontend:
     build:

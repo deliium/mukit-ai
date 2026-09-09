@@ -74,6 +74,17 @@ def test_aliases_normalize_to_canonical_identities():
     assert normalize_instrument_identity("trumpet") != normalize_instrument_identity("trombone")
 
 
+def test_bassoon_and_english_horn_not_stolen_by_substring_aliases():
+    assert normalize_instrument_identity("bassoon") == "bassoon"
+    assert normalize_instrument_family("bassoon") == "woodwind"
+    assert normalize_instrument_identity("english horn") == "english_horn"
+    assert normalize_instrument_identity("englishhorn") == "english_horn"
+    assert normalize_instrument_family("english horn") == "woodwind"
+    assert normalize_instrument_identity("french horn") == "horn"
+    assert normalize_instrument_identity("horn") == "horn"
+    assert normalize_instrument_family("horn") == "brass"
+
+
 def test_name_independent_matching_uses_instrument_only():
     analysis = analyze_instrumentation(
         ["piano"],
