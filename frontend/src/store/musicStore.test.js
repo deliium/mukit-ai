@@ -317,3 +317,183 @@ test('invalid edited JSON remains visibly unsaved and blocks save', async () => 
   assert.equal(useMusicStore.getState().saveStatus, 'unsaved');
   assert.match(useMusicStore.getState().saveError, /velocity/i);
 });
+
+const BAR = 1920;
+
+function sixteenBarComposition() {
+  const melody = [];
+  const bass = [];
+  const accompaniment = [];
+  for (let bar = 0; bar < 16; bar += 1) {
+    const start = bar * BAR;
+    melody.push({
+      type: 'note', pitch: ['C4', 'D4', 'E4', 'G4'][bar % 4],
+      start_tick: start, duration_ticks: 960, velocity: 80,
+    });
+    bass.push({
+      type: 'note', pitch: 'C2',
+      start_tick: start, duration_ticks: BAR, velocity: 70,
+    });
+    accompaniment.push({
+      type: 'note', pitch: 'E3',
+      start_tick: start, duration_ticks: BAR, velocity: 55,
+    });
+  }
+  return migrateV1ToV2({
+    schema_version: 'composition.v1',
+    tempo: 100,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    bar_count: 16,
+    duration_ticks: 16 * BAR,
+    sections: [{ type: 'verse', start_bar: 1, bar_count: 16, start_tick: 0, duration_ticks: 16 * BAR }],
+    tracks: [
+      {
+        id: 'melody', name: 'Melody', instrument: 'piano', role: 'melody',
+        midi_program: 0, channel: 1, events: melody,
+      },
+      {
+        id: 'bass', name: 'Bass', instrument: 'bass', role: 'bass',
+        midi_program: 32, channel: 2, events: bass,
+      },
+      {
+        id: 'accompaniment', name: 'Pad', instrument: 'strings', role: 'harmony',
+        midi_program: 48, channel: 3, events: accompaniment,
+      },
+    ],
+    harmony: Array.from({ length: 16 }, (_, bar) => ({
+      bar: bar + 1,
+      chord: ['C', 'G', 'Am', 'F'][bar % 4],
+    })),
+  });
+}
+
+test('reharmonize preview does not dirty composition; apply preserves melody and undo restores', async (t) => {
+  const composition = sixteenBarComposition();
+  const melodyBefore = structuredClone(composition.tracks.find((track) => track.id === 'melody').events);
+  const revision = 'rev-base-16';
+  resetStore(composition);
+  useMusicStore.setState({
+    compositionRevision: revision,
+    currentProjectId: 'project-harmony',
+    lastSavedPersistRevision: 'persist-clean',
+    saveStatus: 'saved',
+    harmonySelectionStartBar: 9,
+    harmonySelectionEndBar: 12,
+    reharmonizeOperation: 'increase_tension',
+    reharmonizeContentPolicy: 'preserve_melody_adapt_harmony',
+    reharmonizeEngine: 'deterministic',
+    reharmonizeTargetTrackIds: ['bass', 'accompaniment'],
+    reharmonizeCandidate: null,
+    reharmonizeStatus: 'idle',
+  });
+
+  const { compositionSourceFingerprint } = await import('../utils/compositionAnalysis.js');
+  const { compositionRevisionKey } = await import('../utils/playbackPosition.js');
+  const baseFingerprint = await compositionSourceFingerprint(composition);
+
+  const candidate = structuredClone(composition);
+  for (let bar = 8; bar < 12; bar += 1) {
+    candidate.harmony[bar] = {
+      start_tick: bar * BAR,
+      duration_ticks: BAR,
+      chord: 'E7(b9)',
+    };
+    const bassEvent = candidate.tracks.find((track) => track.id === 'bass').events[bar];
+    bassEvent.pitch = 'E2';
+  }
+
+  const previousAdapter = axios.defaults.adapter;
+  axios.defaults.adapter = async () => ({
+    data: {
+      base_fingerprint: baseFingerprint,
+      proposal_fingerprint: 'd'.repeat(64),
+      composition: candidate,
+      harmony_changes: [{ kind: 'replaced', start_tick: 8 * BAR, duration_ticks: 4 * BAR, chord: 'E7(b9)' }],
+      track_changes: [
+        { track_id: 'bass', events_changed: 4, events_added: 0, events_removed: 0 },
+        { track_id: 'accompaniment', events_changed: 0, events_added: 0, events_removed: 0 },
+      ],
+      preservation: [{ assertion: 'melody_events_exact', status: 'ok' }],
+      compatibility: { status: 'compatible', findings: [] },
+      provider: 'deterministic',
+      model: null,
+      warnings: [],
+      start_tick: 8 * BAR,
+      end_tick: 12 * BAR,
+      active_key: 'C major',
+      recommended_target_track_ids: ['bass', 'accompaniment'],
+    },
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config: {},
+  });
+  t.after(() => {
+    axios.defaults.adapter = previousAdapter;
+  });
+
+  const previewOk = await useMusicStore.getState().startReharmonizePreview();
+  assert.equal(previewOk, true);
+  assert.equal(useMusicStore.getState().reharmonizeStatus, 'ready');
+  assert.equal(useMusicStore.getState().saveStatus, 'saved');
+  assert.deepEqual(
+    useMusicStore.getState().editedMusicJson.tracks.find((track) => track.id === 'melody').events,
+    melodyBefore,
+  );
+  assert.equal(useMusicStore.getState().compositionRevision, revision);
+
+  const applyOk = await useMusicStore.getState().applyReharmonizePreview();
+  assert.equal(applyOk, true);
+  const after = useMusicStore.getState();
+  assert.equal(after.reharmonizeStatus, 'idle');
+  assert.equal(after.saveStatus, 'unsaved');
+  assert.deepEqual(
+    after.editedMusicJson.tracks.find((track) => track.id === 'melody').events,
+    melodyBefore,
+  );
+  assert.equal(after.editedMusicJson.harmony[8].chord, 'E7(b9)');
+  assert.equal(
+    after.editedMusicJson.tracks.find((track) => track.id === 'bass').events[8].pitch,
+    'E2',
+  );
+  assert.notEqual(after.compositionRevision, revision);
+  assert.equal(after.compositionRevision, compositionRevisionKey(after.editedMusicJson));
+
+  assert.equal(useMusicStore.getState().undoNoteEdit(), true);
+  assert.deepEqual(useMusicStore.getState().editedMusicJson, composition);
+});
+
+test('harmony timeline edits create one undo entry and preserve note events', () => {
+  const composition = sixteenBarComposition();
+  const eventsBefore = structuredClone(composition.tracks.map((track) => track.events));
+  resetStore(composition);
+  useMusicStore.setState({ compositionRevision: 'rev-h' });
+
+  assert.equal(
+    useMusicStore.getState().addHarmonySpan({
+      start_tick: 16 * BAR,
+      duration_ticks: BAR,
+      chord: 'Dm',
+    }),
+    false,
+  );
+
+  const ok = useMusicStore.getState().replaceHarmonyRange({
+    start_tick: 8 * BAR,
+    duration_ticks: 4 * BAR,
+    spans: [
+      { start_tick: 8 * BAR, duration_ticks: 2 * BAR, chord: 'E7(b9)' },
+      { start_tick: 10 * BAR, duration_ticks: 2 * BAR, chord: 'A7' },
+    ],
+  });
+  assert.equal(ok, true);
+  const mid = useMusicStore.getState().editedMusicJson;
+  assert.equal(mid.harmony.some((span) => span.chord === 'E7(b9)'), true);
+  assert.deepEqual(mid.tracks.map((track) => track.events), eventsBefore);
+  assert.equal(useMusicStore.getState().noteEditUndoStack.length, 1);
+
+  assert.equal(useMusicStore.getState().undoNoteEdit(), true);
+  assert.deepEqual(useMusicStore.getState().editedMusicJson.harmony, composition.harmony);
+});

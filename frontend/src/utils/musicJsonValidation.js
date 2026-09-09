@@ -151,6 +151,10 @@ function validateCanonicalComposition(value, variant) {
     if (!markersResult.valid) {
       return markersResult;
     }
+    const harmonyResult = validateV2HarmonySpans(value.harmony, durationTicks);
+    if (!harmonyResult.valid) {
+      return harmonyResult;
+    }
     const motifsResult = validateMotifDefinitions(value);
     if (!motifsResult.valid) {
       return motifsResult;
@@ -534,6 +538,49 @@ function validateV2Markers(markers, durationTicks) {
     fingerprints.add(fingerprint);
   }
   return valid('Markers are valid.');
+}
+
+function validateV2HarmonySpans(harmony, durationTicks) {
+  if (harmony == null) {
+    return valid('Harmony omitted.');
+  }
+  if (!Array.isArray(harmony)) {
+    return invalid('Harmony must be an array of explicit tick spans.');
+  }
+  let previousStart = -1;
+  let previousEnd = 0;
+  for (const item of harmony) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return invalid('Harmony items must be objects with start_tick, duration_ticks, and chord.');
+    }
+    if (Object.prototype.hasOwnProperty.call(item, 'bar')) {
+      return invalid('Canonical composition.v2 harmony must use tick spans, not bar points.');
+    }
+    const startTick = Number(item.start_tick);
+    const duration = Number(item.duration_ticks);
+    const chord = typeof item.chord === 'string' ? item.chord.trim() : '';
+    if (!Number.isInteger(startTick) || startTick < 0) {
+      return invalid('Harmony start_tick must be a non-negative integer.');
+    }
+    if (!Number.isInteger(duration) || duration <= 0) {
+      return invalid('Harmony duration_ticks must be a positive integer.');
+    }
+    if (startTick + duration > durationTicks) {
+      return invalid('Harmony spans must fit within composition duration_ticks.');
+    }
+    if (!chord || chord.length > 32) {
+      return invalid('Harmony chord must be a non-empty string up to 32 characters.');
+    }
+    if (startTick <= previousStart) {
+      return invalid('Harmony spans must be sorted by unique start_tick.');
+    }
+    if (startTick < previousEnd) {
+      return invalid('Harmony spans must not overlap.');
+    }
+    previousStart = startTick;
+    previousEnd = startTick + duration;
+  }
+  return valid('Harmony spans are valid.');
 }
 
 function isValidTimeSignature(value) {

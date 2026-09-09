@@ -14,7 +14,9 @@ import {
   ImportApiError,
   MotifApiError,
   parseProjectionHeaders,
+  previewReharmonization,
   projectionWarningsFromHeaders,
+  ReharmonizeApiError,
 } from './musicApi.js';
 
 function canonicalV1Composition() {
@@ -691,6 +693,163 @@ test('analyzeComposition preserves structured backend analysis errors', async (t
       assert.equal(error.code, 'analysis_invalid_composition');
       assert.match(error.message, /structural validation/);
       assert.equal(error.details?.reason, 'broken_meter_map');
+      return true;
+    },
+  );
+});
+
+function sampleReharmonizePreviewResponse(composition, overrides = {}) {
+  return {
+    base_fingerprint: 'b'.repeat(64),
+    proposal_fingerprint: 'c'.repeat(64),
+    composition,
+    harmony_changes: [{ kind: 'replaced', start_tick: 15360, duration_ticks: 7680, chord: 'E7(b9)' }],
+    track_changes: [{ track_id: 'bass-1', events_changed: 4, events_added: 0, events_removed: 0 }],
+    preservation: [{ assertion: 'melody_events_exact', status: 'ok' }],
+    compatibility: { status: 'compatible_with_warnings', findings: [{ code: 'melody_nct', severity: 'info' }] },
+    provider: 'deterministic',
+    model: null,
+    warnings: [],
+    start_tick: 15360,
+    end_tick: 23040,
+    active_key: 'C major',
+    recommended_target_track_ids: ['bass-1', 'harmony-1'],
+    ...overrides,
+  };
+}
+
+test('previewReharmonization posts bars 9-12 payload and validates response', async (t) => {
+  const composition = canonicalV2Composition();
+  const immutable = structuredClone(composition);
+  let posted = null;
+  const restore = installAxiosStub(async (config) => {
+    assert.equal(String(config.method || 'get').toLowerCase(), 'post');
+    assert.equal(config.url, '/harmony/reharmonize/preview');
+    posted = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+    const candidate = structuredClone(composition);
+    candidate.harmony = [
+      { start_tick: 0, duration_ticks: 1920, chord: 'E7(b9)' },
+    ];
+    return {
+      data: sampleReharmonizePreviewResponse(candidate, {
+        start_tick: 0,
+        end_tick: 3840,
+        harmony_changes: [{ kind: 'replaced', start_tick: 0, duration_ticks: 1920, chord: 'E7(b9)' }],
+      }),
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  const response = await previewReharmonization({
+    composition,
+    selection: { start_bar: 9, end_bar: 12 },
+    operation: 'increase_tension',
+    content_policy: 'preserve_melody_adapt_harmony',
+    target_track_ids: ['bass-1', 'harmony-1'],
+    engine: 'deterministic',
+    instruction: 'make the harmony more tense while keeping the melody',
+    tonal_context: { allow_modulation: false, target_key: null, target_chord: null },
+    selection_options: { provider: null, model: null },
+  });
+
+  assert.deepEqual(composition, immutable);
+  assert.equal(posted.selection.start_bar, 9);
+  assert.equal(posted.selection.end_bar, 12);
+  assert.equal(posted.operation, 'increase_tension');
+  assert.equal(posted.content_policy, 'preserve_melody_adapt_harmony');
+  assert.deepEqual(posted.target_track_ids, ['bass-1', 'harmony-1']);
+  assert.equal(posted.engine, 'deterministic');
+  assert.equal(response.provider, 'deterministic');
+  assert.equal(response.compatibility.status, 'compatible_with_warnings');
+  assert.equal(response.start_tick, 0);
+  assert.equal(response.end_tick, 3840);
+  assert.equal(response.composition.schema_version, 'composition.v2');
+});
+
+test('previewReharmonization rejects invalid enums and malformed responses', async (t) => {
+  const composition = canonicalV2Composition();
+  await assert.rejects(
+    () => previewReharmonization({
+      composition,
+      selection: { start_bar: 9, end_bar: 12 },
+      operation: 'not_a_real_op',
+      content_policy: 'preserve_melody_adapt_harmony',
+      target_track_ids: ['bass-1'],
+      engine: 'deterministic',
+    }),
+    (error) => error instanceof ReharmonizeApiError && error.code === 'reharmonize_invalid_request',
+  );
+
+  await assert.rejects(
+    () => previewReharmonization({
+      composition,
+      selection: { start_bar: 9, end_bar: 12 },
+      operation: 'increase_tension',
+      content_policy: 'preserve_melody_adapt_harmony',
+      target_track_ids: [],
+      engine: 'deterministic',
+    }),
+    (error) => error instanceof ReharmonizeApiError && error.code === 'reharmonize_invalid_targets',
+  );
+
+  const restore = installAxiosStub(async () => ({
+    data: sampleReharmonizePreviewResponse(composition, { base_fingerprint: 'short' }),
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config: {},
+  }));
+  t.after(restore);
+
+  await assert.rejects(
+    () => previewReharmonization({
+      composition,
+      selection: { start_bar: 9, end_bar: 12 },
+      operation: 'increase_tension',
+      content_policy: 'preserve_melody_adapt_harmony',
+      target_track_ids: ['bass-1'],
+      engine: 'deterministic',
+    }),
+    (error) => error instanceof ReharmonizeApiError && error.code === 'reharmonize_invalid_response',
+  );
+});
+
+test('previewReharmonization preserves structured backend errors', async (t) => {
+  const composition = canonicalV2Composition();
+  const restore = installAxiosStub(async () => {
+    const error = new Error('Request failed');
+    error.isAxiosError = true;
+    error.response = {
+      status: 422,
+      data: {
+        detail: {
+          code: 'reharmonize_no_realizable_targets',
+          message: 'No authorized harmonic-support tracks can realize the proposal',
+          details: { target_count: 0 },
+        },
+      },
+    };
+    throw error;
+  });
+  t.after(restore);
+
+  await assert.rejects(
+    () => previewReharmonization({
+      composition,
+      selection: { start_bar: 9, end_bar: 12 },
+      operation: 'increase_tension',
+      content_policy: 'preserve_melody_adapt_harmony',
+      target_track_ids: ['bass-1'],
+      engine: 'deterministic',
+    }),
+    (error) => {
+      assert.ok(error instanceof ReharmonizeApiError);
+      assert.equal(error.status, 422);
+      assert.equal(error.code, 'reharmonize_no_realizable_targets');
       return true;
     },
   );

@@ -274,6 +274,36 @@ export class MotifApiError extends Error {
   }
 }
 
+export class ReharmonizeApiError extends Error {
+  constructor(message, { status = null, code = null, details = null } = {}) {
+    super(message);
+    this.name = 'ReharmonizeApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export const REHARMONIZE_OPERATIONS = Object.freeze([
+  'suggest_progression',
+  'reharmonize',
+  'increase_tension',
+  'decrease_tension',
+  'strengthen_cadence',
+  'tonicize_target',
+  'use_secondary_dominants',
+  'use_modal_interchange',
+  'simplify_harmony',
+]);
+
+export const REHARMONIZE_CONTENT_POLICIES = Object.freeze([
+  'preserve_melody_adapt_harmony',
+  'preserve_harmony_adapt_melody',
+  'adapt_accompaniment_only',
+]);
+
+export const REHARMONIZE_ENGINES = Object.freeze(['deterministic', 'ai']);
+
 /**
  * POST /analysis/composition — deterministic composition.analysis.v1 sidecar.
  * Validates complete V2 + scope locally; preserves structured backend 422 errors.
@@ -412,6 +442,144 @@ export async function applyMotif(payload) {
       details: parsed.details,
     });
   }
+}
+
+/**
+ * POST /harmony/reharmonize/preview — stateless candidate; never mutates a project.
+ */
+export async function previewReharmonization(payload) {
+  const selection = payload?.selection || {};
+  const operation = payload?.operation;
+  const contentPolicy = payload?.content_policy;
+  const engine = payload?.engine || 'deterministic';
+  const targetTrackIds = Array.isArray(payload?.target_track_ids)
+    ? payload.target_track_ids.filter((id) => typeof id === 'string' && id.trim())
+    : [];
+
+  if (!REHARMONIZE_OPERATIONS.includes(operation)) {
+    throw new ReharmonizeApiError('Unsupported reharmonization operation', {
+      code: 'reharmonize_invalid_request',
+    });
+  }
+  if (!REHARMONIZE_CONTENT_POLICIES.includes(contentPolicy)) {
+    throw new ReharmonizeApiError('Unsupported reharmonization content policy', {
+      code: 'reharmonize_invalid_request',
+    });
+  }
+  if (!REHARMONIZE_ENGINES.includes(engine)) {
+    throw new ReharmonizeApiError('Unsupported reharmonization engine', {
+      code: 'reharmonize_invalid_request',
+    });
+  }
+  if (!Number.isInteger(selection.start_bar) || !Number.isInteger(selection.end_bar)
+    || selection.start_bar < 1 || selection.end_bar < selection.start_bar) {
+    throw new ReharmonizeApiError('Invalid bar selection for reharmonization', {
+      code: 'reharmonize_invalid_selection',
+    });
+  }
+  if (!targetTrackIds.length) {
+    throw new ReharmonizeApiError('target_track_ids must be explicit', {
+      code: 'reharmonize_invalid_targets',
+    });
+  }
+
+  console.info('[musicApi] Reharmonize preview request started', {
+    operation,
+    contentPolicy,
+    engine,
+    startBar: selection.start_bar,
+    endBar: selection.end_bar,
+    targetCount: targetTrackIds.length,
+    provider: payload?.selection_options?.provider || null,
+    model: payload?.selection_options?.model || null,
+    instructionLen: typeof payload?.instruction === 'string' ? payload.instruction.length : 0,
+  });
+
+  const inboundComposition = normalizeApiComposition(payload.composition, {
+    context: 'reharmonize-preview-request',
+  });
+  validateCanonicalForApi(inboundComposition, { action: 'reharmonize preview' });
+
+  try {
+    const axiosResponse = await axios.post('/harmony/reharmonize/preview', {
+      ...payload,
+      composition: inboundComposition,
+      target_track_ids: targetTrackIds,
+      engine,
+    });
+    const response = axiosResponse.data || {};
+    const composition = normalizeApiComposition(response.composition, {
+      context: 'reharmonize-preview-response',
+    });
+    const validation = validateMusicJson(composition);
+    const contractError = validateReharmonizePreviewResponse(response, composition);
+    console.debug('[musicApi] Reharmonize preview response validation completed', {
+      operation,
+      provider: response.provider || null,
+      changedSpanCount: Array.isArray(response.harmony_changes) ? response.harmony_changes.length : 0,
+      changedTrackCount: Array.isArray(response.track_changes)
+        ? response.track_changes.filter((item) => item?.events_changed > 0).length
+        : 0,
+      compatibilityStatus: response.compatibility?.status || null,
+      baseFingerprintPrefix: fingerprintLogPrefix(response.base_fingerprint),
+      proposalFingerprintPrefix: fingerprintLogPrefix(response.proposal_fingerprint),
+      valid: validation.valid && !contractError,
+    });
+    if (!validation.valid) {
+      throw new ReharmonizeApiError(validation.message, { code: 'reharmonize_invalid_response' });
+    }
+    if (contractError) {
+      throw new ReharmonizeApiError(contractError, { code: 'reharmonize_invalid_response' });
+    }
+    return { ...response, composition };
+  } catch (error) {
+    if (error instanceof ReharmonizeApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseMotifErrorDetail(error.response?.data?.detail ?? error.message);
+    console.error('[musicApi] Reharmonize preview request failed', {
+      status,
+      code: parsed.code,
+      message: parsed.message,
+      operation,
+    });
+    throw new ReharmonizeApiError(parsed.message, {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
+}
+
+function validateReharmonizePreviewResponse(response, composition) {
+  if (typeof response.base_fingerprint !== 'string' || response.base_fingerprint.length < 16) {
+    return 'Reharmonize preview missing base_fingerprint';
+  }
+  if (typeof response.proposal_fingerprint !== 'string' || response.proposal_fingerprint.length < 16) {
+    return 'Reharmonize preview missing proposal_fingerprint';
+  }
+  if (!composition || !isCanonicalComposition(composition)) {
+    return 'Reharmonize preview missing canonical composition';
+  }
+  if (!response.compatibility || typeof response.compatibility !== 'object') {
+    return 'Reharmonize preview missing compatibility report';
+  }
+  if (!['compatible', 'compatible_with_warnings', 'incompatible'].includes(response.compatibility.status)) {
+    return 'Reharmonize preview has invalid compatibility status';
+  }
+  if (!Array.isArray(response.harmony_changes) || !Array.isArray(response.track_changes)
+    || !Array.isArray(response.preservation)) {
+    return 'Reharmonize preview missing change summaries';
+  }
+  if (typeof response.provider !== 'string' || !response.provider.trim()) {
+    return 'Reharmonize preview missing provider';
+  }
+  if (!Number.isInteger(response.start_tick) || !Number.isInteger(response.end_tick)
+    || response.end_tick <= response.start_tick) {
+    return 'Reharmonize preview missing selection ticks';
+  }
+  return null;
 }
 
 export async function analyzeComposition(composition, scope = { kind: 'composition' }) {

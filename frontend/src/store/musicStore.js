@@ -6,6 +6,11 @@ import {
   importMidi,
   importMusicXml,
   MotifApiError,
+  previewReharmonization,
+  ReharmonizeApiError,
+  REHARMONIZE_CONTENT_POLICIES,
+  REHARMONIZE_ENGINES,
+  REHARMONIZE_OPERATIONS,
   renderMusicXmlPreview,
 } from '../api/musicApi.js';
 import {
@@ -23,6 +28,7 @@ import {
   analysisWarningCodes,
   buildAnalysisRequestKey,
   buildAnalysisRequestScope,
+  compositionSourceFingerprint,
   deriveAnalysisFreshness,
   fingerprintLogPrefix,
   normalizeAnalysisScopeKind,
@@ -39,6 +45,14 @@ import {
   validateMotifDefinitions,
 } from '../utils/compositionMotifs.js';
 import { prepareCompositionForStore, tryPrepareCompositionForStore } from '../utils/compositionVersion.js';
+import {
+  applyHarmonyAdd,
+  applyHarmonyMove,
+  applyHarmonyRemove,
+  applyHarmonyReplace,
+  applyHarmonyResize,
+  verifyReharmonizationCandidate,
+} from '../utils/compositionHarmony.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { compositionRevisionKey, notationRevisionKey } from '../utils/playbackPosition.js';
 import {
@@ -91,6 +105,45 @@ const initialMotifUiState = {
   motifReconcileWarnings: [],
 };
 
+export const DEFAULT_REHARMONIZE_OPERATION = 'increase_tension';
+export const DEFAULT_REHARMONIZE_CONTENT_POLICY = 'preserve_melody_adapt_harmony';
+export const DEFAULT_REHARMONIZE_ENGINE = 'deterministic';
+
+const initialHarmonyUiState = {
+  harmonySelectionStartBar: null,
+  harmonySelectionEndBar: null,
+  harmonySelectedSpanStartTick: null,
+};
+
+const initialReharmonizePreviewState = {
+  reharmonizeStatus: 'idle',
+  reharmonizeError: '',
+  reharmonizeWarnings: [],
+  reharmonizeRequestId: 0,
+  reharmonizeBaseFingerprint: null,
+  reharmonizeBaseRevision: null,
+  reharmonizeProposalFingerprint: null,
+  reharmonizeCandidate: null,
+  reharmonizeHarmonyChanges: [],
+  reharmonizeTrackChanges: [],
+  reharmonizePreservation: [],
+  reharmonizeCompatibility: null,
+  reharmonizeProvider: null,
+  reharmonizeModel: null,
+  reharmonizeStartTick: null,
+  reharmonizeEndTick: null,
+  reharmonizeActiveKey: null,
+  reharmonizeRecommendedTargetTrackIds: [],
+  reharmonizeOperation: DEFAULT_REHARMONIZE_OPERATION,
+  reharmonizeContentPolicy: DEFAULT_REHARMONIZE_CONTENT_POLICY,
+  reharmonizeEngine: DEFAULT_REHARMONIZE_ENGINE,
+  reharmonizeInstruction: '',
+  reharmonizeTargetTrackIds: [],
+  reharmonizeAllowModulation: false,
+  reharmonizeTargetKey: '',
+  reharmonizeTargetChord: '',
+};
+
 function isManualSaveReason(reason) {
   return reason === 'manual' || reason === 'manual-force';
 }
@@ -101,6 +154,7 @@ let autosaveRequestSeq = 0;
 let analysisRequestSeq = 0;
 let analysisDebounceTimer = null;
 let analysisInFlightKey = null;
+let reharmonizeRequestSeq = 0;
 
 const initialPrompt = {
   genre: 'ambient',
@@ -184,6 +238,8 @@ export const useMusicStore = create((set, get) => ({
   analysisWarnings: [],
   analysisTabVisible: false,
 
+  ...initialHarmonyUiState,
+  ...initialReharmonizePreviewState,
   ...initialMotifUiState,
 
   setApiStatus: (apiStatus) => {
@@ -289,6 +345,8 @@ export const useMusicStore = create((set, get) => ({
       generationMeta,
       ...clearedAnalysisState(),
       ...clearedMotifUiState(),
+      ...clearedReharmonizePreviewState(),
+      ...initialHarmonyUiState,
     });
     markProjectDirty(set, get);
   },
@@ -394,6 +452,8 @@ export const useMusicStore = create((set, get) => ({
       notationReport: notationReport || null,
       ...clearedAnalysisState(),
       ...clearedMotifUiState(),
+      ...clearedReharmonizePreviewState(),
+      ...initialHarmonyUiState,
     });
     markProjectDirty(set, get);
     return true;
@@ -590,6 +650,8 @@ export const useMusicStore = create((set, get) => ({
       noteEditRedoStack: [],
       analysisSelectedSectionKey: recoverAnalysisSectionKey(normalized, get().analysisSelectedSectionKey),
       ...clearedMotifUiState(),
+      ...clearedReharmonizePreviewState(),
+      ...initialHarmonyUiState,
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'edited-json' });
@@ -616,6 +678,8 @@ export const useMusicStore = create((set, get) => ({
         noteEditRedoStack: [],
         analysisSelectedSectionKey: recoverAnalysisSectionKey(music, state.analysisSelectedSectionKey),
         ...clearedMotifUiState(),
+        ...clearedReharmonizePreviewState(),
+        ...initialHarmonyUiState,
       };
     });
     markProjectDirty(set, get);
@@ -1005,6 +1069,9 @@ export const useMusicStore = create((set, get) => ({
       pianoRollTrackId: previous.pianoRollTrackId,
       pianoRollNoteId: previous.pianoRollNoteId,
       pianoRollNoteIds: previous.pianoRollNoteIds || [],
+      harmonySelectionStartBar: previous.harmonySelectionStartBar ?? state.harmonySelectionStartBar,
+      harmonySelectionEndBar: previous.harmonySelectionEndBar ?? state.harmonySelectionEndBar,
+      harmonySelectedSpanStartTick: previous.harmonySelectedSpanStartTick ?? null,
       noteEditUndoStack: nextUndo,
       noteEditRedoStack: nextRedo,
       pianoRollEditStatus: 'idle',
@@ -1013,6 +1080,7 @@ export const useMusicStore = create((set, get) => ({
         state.analysisSelectedSectionKey,
       ),
       ...reconcileMotifUiAfterCompositionChange(state, previous.editedMusicJson),
+      ...clearedReharmonizePreviewState({ preserveControls: true }),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'undo' });
@@ -1047,6 +1115,9 @@ export const useMusicStore = create((set, get) => ({
       pianoRollTrackId: next.pianoRollTrackId,
       pianoRollNoteId: next.pianoRollNoteId,
       pianoRollNoteIds: next.pianoRollNoteIds || [],
+      harmonySelectionStartBar: next.harmonySelectionStartBar ?? state.harmonySelectionStartBar,
+      harmonySelectionEndBar: next.harmonySelectionEndBar ?? state.harmonySelectionEndBar,
+      harmonySelectedSpanStartTick: next.harmonySelectedSpanStartTick ?? null,
       noteEditUndoStack: nextUndo,
       noteEditRedoStack: nextRedo,
       pianoRollEditStatus: 'idle',
@@ -1055,6 +1126,7 @@ export const useMusicStore = create((set, get) => ({
         state.analysisSelectedSectionKey,
       ),
       ...reconcileMotifUiAfterCompositionChange(state, next.editedMusicJson),
+      ...clearedReharmonizePreviewState({ preserveControls: true }),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'redo' });
@@ -1238,6 +1310,7 @@ export const useMusicStore = create((set, get) => ({
       pianoRollEditStatus: 'idle',
       analysisSelectedSectionKey: recoverAnalysisSectionKey(prepared, state.analysisSelectedSectionKey),
       ...clearedMotifUiState(),
+      ...clearedReharmonizePreviewState(),
     });
     console.info('[musicStore] Project autosave-dirty transition after AI edit', {
       projectId: state.currentProjectId,
@@ -1532,6 +1605,8 @@ export const useMusicStore = create((set, get) => ({
           noteEditRedoStack: [],
           ...clearedAnalysisState(),
           ...clearedMotifUiState(),
+          ...clearedReharmonizePreviewState(),
+          ...initialHarmonyUiState,
         });
       }
       await get().loadProjectList();
@@ -2169,6 +2244,7 @@ export const useMusicStore = create((set, get) => ({
         ? `canonical:${result.motif_id}:${newOccurrenceId}`
         : state.motifHighlightedUsageKey,
       analysisSelectedSectionKey: recoverAnalysisSectionKey(prepared, state.analysisSelectedSectionKey),
+      ...clearedReharmonizePreviewState({ preserveControls: true }),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'motif-apply' });
@@ -2196,6 +2272,380 @@ export const useMusicStore = create((set, get) => ({
       get().failMotifApply(message, { code: error.code || null });
       return false;
     }
+  },
+
+  setHarmonySelection: (startBar, endBar) => {
+    const start = Number(startBar);
+    const end = Number(endBar);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) {
+      console.warn('[musicStore] setHarmonySelection rejected invalid bars', { startBar, endBar });
+      return false;
+    }
+    console.debug('[musicStore] Harmony selection set', { startBar: start, endBar: end });
+    set({
+      harmonySelectionStartBar: start,
+      harmonySelectionEndBar: end,
+      ...clearedReharmonizePreviewState({ preserveControls: true }),
+    });
+    return true;
+  },
+
+  setHarmonySelectedSpan: (startTick) => {
+    const tick = startTick == null ? null : Number(startTick);
+    set({
+      harmonySelectedSpanStartTick: Number.isInteger(tick) ? tick : null,
+    });
+  },
+
+  setReharmonizeControls: (patch = {}) => {
+    const next = {};
+    if (patch.operation != null) {
+      if (!REHARMONIZE_OPERATIONS.includes(patch.operation)) {
+        return false;
+      }
+      next.reharmonizeOperation = patch.operation;
+    }
+    if (patch.contentPolicy != null) {
+      if (!REHARMONIZE_CONTENT_POLICIES.includes(patch.contentPolicy)) {
+        return false;
+      }
+      next.reharmonizeContentPolicy = patch.contentPolicy;
+    }
+    if (patch.engine != null) {
+      if (!REHARMONIZE_ENGINES.includes(patch.engine)) {
+        return false;
+      }
+      next.reharmonizeEngine = patch.engine;
+    }
+    if (patch.instruction != null) {
+      next.reharmonizeInstruction = String(patch.instruction).slice(0, 500);
+    }
+    if (Array.isArray(patch.targetTrackIds)) {
+      next.reharmonizeTargetTrackIds = patch.targetTrackIds
+        .map((id) => String(id).trim())
+        .filter(Boolean);
+    }
+    if (patch.allowModulation != null) {
+      next.reharmonizeAllowModulation = Boolean(patch.allowModulation);
+    }
+    if (patch.targetKey != null) {
+      next.reharmonizeTargetKey = String(patch.targetKey);
+    }
+    if (patch.targetChord != null) {
+      next.reharmonizeTargetChord = String(patch.targetChord);
+    }
+    set({
+      ...next,
+      ...clearedReharmonizePreviewState({ preserveControls: true }),
+    });
+    return true;
+  },
+
+  commitHarmonyComposition: (nextComposition, { action = 'harmony-edit', skipHistory = false } = {}) => {
+    const state = get();
+    const prepared = prepareCompositionForStore(nextComposition);
+    const validation = validateMusicJson(prepared);
+    if (!validation.valid || !isCanonicalComposition(prepared)) {
+      console.warn('[musicStore] Harmony edit rejected validation', { action, message: validation.message });
+      return false;
+    }
+    applyCompositionEdit(set, get, {
+      nextComposition: prepared,
+      selectedTrackId: state.pianoRollTrackId,
+      selectedNoteId: state.pianoRollNoteId,
+      selectedNoteIds: state.pianoRollNoteIds,
+      action,
+      noteSummary: null,
+      skipHistory,
+      statePatch: {
+        ...clearedReharmonizePreviewState({ preserveControls: true }),
+      },
+    });
+    return true;
+  },
+
+  addHarmonySpan: (span) => {
+    const current = get().editedMusicJson;
+    if (!isCanonicalComposition(current)) {
+      return false;
+    }
+    try {
+      return get().commitHarmonyComposition(applyHarmonyAdd(current, span), { action: 'harmony-add' });
+    } catch (error) {
+      console.warn('[musicStore] harmony-add failed', { code: error.code, message: error.message });
+      return false;
+    }
+  },
+
+  replaceHarmonyRange: (payload) => {
+    const current = get().editedMusicJson;
+    if (!isCanonicalComposition(current)) {
+      return false;
+    }
+    try {
+      return get().commitHarmonyComposition(applyHarmonyReplace(current, payload), {
+        action: 'harmony-replace',
+      });
+    } catch (error) {
+      console.warn('[musicStore] harmony-replace failed', { code: error.code, message: error.message });
+      return false;
+    }
+  },
+
+  removeHarmonyRange: (payload) => {
+    const current = get().editedMusicJson;
+    if (!isCanonicalComposition(current)) {
+      return false;
+    }
+    try {
+      return get().commitHarmonyComposition(applyHarmonyRemove(current, payload), {
+        action: 'harmony-remove',
+      });
+    } catch (error) {
+      console.warn('[musicStore] harmony-remove failed', { code: error.code, message: error.message });
+      return false;
+    }
+  },
+
+  moveHarmonySpan: (payload, { skipHistory = false } = {}) => {
+    const current = get().editedMusicJson;
+    if (!isCanonicalComposition(current)) {
+      return false;
+    }
+    try {
+      return get().commitHarmonyComposition(applyHarmonyMove(current, payload), {
+        action: 'harmony-move',
+        skipHistory,
+      });
+    } catch (error) {
+      console.warn('[musicStore] harmony-move failed', { code: error.code, message: error.message });
+      return false;
+    }
+  },
+
+  resizeHarmonySpan: (payload, { skipHistory = false } = {}) => {
+    const current = get().editedMusicJson;
+    if (!isCanonicalComposition(current)) {
+      return false;
+    }
+    try {
+      return get().commitHarmonyComposition(applyHarmonyResize(current, payload), {
+        action: 'harmony-resize',
+        skipHistory,
+      });
+    } catch (error) {
+      console.warn('[musicStore] harmony-resize failed', { code: error.code, message: error.message });
+      return false;
+    }
+  },
+
+  discardReharmonizePreview: () => {
+    console.info('[musicStore] Reharmonize preview discarded');
+    set(clearedReharmonizePreviewState({ preserveControls: true }));
+  },
+
+  startReharmonizePreview: async () => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    if (!isCanonicalComposition(composition)) {
+      set({
+        reharmonizeStatus: 'error',
+        reharmonizeError: 'Canonical composition.v2 required for reharmonization',
+      });
+      return false;
+    }
+    if (!state.harmonySelectionStartBar || !state.harmonySelectionEndBar) {
+      set({
+        reharmonizeStatus: 'error',
+        reharmonizeError: 'Select a bar range before requesting a preview',
+      });
+      return false;
+    }
+    if (!state.reharmonizeTargetTrackIds.length) {
+      set({
+        reharmonizeStatus: 'error',
+        reharmonizeError: 'Select explicit target tracks before requesting a preview',
+      });
+      return false;
+    }
+
+    reharmonizeRequestSeq += 1;
+    const requestId = reharmonizeRequestSeq;
+    const baseRevision = state.compositionRevision;
+    console.info('[musicStore] Reharmonize preview started', {
+      requestId,
+      operation: state.reharmonizeOperation,
+      contentPolicy: state.reharmonizeContentPolicy,
+      engine: state.reharmonizeEngine,
+      startBar: state.harmonySelectionStartBar,
+      endBar: state.harmonySelectionEndBar,
+      targetCount: state.reharmonizeTargetTrackIds.length,
+    });
+    set({
+      reharmonizeStatus: 'loading',
+      reharmonizeError: '',
+      reharmonizeWarnings: [],
+      reharmonizeRequestId: requestId,
+      reharmonizeBaseRevision: baseRevision,
+      reharmonizeCandidate: null,
+      reharmonizeHarmonyChanges: [],
+      reharmonizeTrackChanges: [],
+      reharmonizePreservation: [],
+      reharmonizeCompatibility: null,
+    });
+
+    try {
+      const response = await previewReharmonization({
+        composition,
+        selection: {
+          start_bar: state.harmonySelectionStartBar,
+          end_bar: state.harmonySelectionEndBar,
+        },
+        operation: state.reharmonizeOperation,
+        content_policy: state.reharmonizeContentPolicy,
+        target_track_ids: state.reharmonizeTargetTrackIds,
+        engine: state.reharmonizeEngine,
+        instruction: state.reharmonizeInstruction || null,
+        tonal_context: {
+          allow_modulation: state.reharmonizeAllowModulation,
+          target_key: state.reharmonizeAllowModulation ? (state.reharmonizeTargetKey || null) : null,
+          target_chord: state.reharmonizeTargetChord || null,
+        },
+        selection_options: {
+          provider: state.reharmonizeEngine === 'ai' ? (state.selectedProvider || null) : null,
+          model: state.reharmonizeEngine === 'ai' ? (state.selectedModel || null) : null,
+        },
+      });
+
+      const latest = get();
+      if (requestId !== latest.reharmonizeRequestId) {
+        console.warn('[musicStore] Ignoring stale reharmonize preview response', { requestId });
+        return false;
+      }
+      if (latest.compositionRevision !== baseRevision) {
+        console.warn('[musicStore] Reharmonize preview stale base revision');
+        set({
+          reharmonizeStatus: 'stale',
+          reharmonizeError: 'Composition changed while preview was loading',
+          reharmonizeCandidate: null,
+        });
+        return false;
+      }
+
+      set({
+        reharmonizeStatus: 'ready',
+        reharmonizeError: '',
+        reharmonizeWarnings: Array.isArray(response.warnings) ? response.warnings : [],
+        reharmonizeBaseFingerprint: response.base_fingerprint,
+        reharmonizeProposalFingerprint: response.proposal_fingerprint,
+        reharmonizeCandidate: response.composition,
+        reharmonizeHarmonyChanges: response.harmony_changes || [],
+        reharmonizeTrackChanges: response.track_changes || [],
+        reharmonizePreservation: response.preservation || [],
+        reharmonizeCompatibility: response.compatibility || null,
+        reharmonizeProvider: response.provider || null,
+        reharmonizeModel: response.model || null,
+        reharmonizeStartTick: response.start_tick,
+        reharmonizeEndTick: response.end_tick,
+        reharmonizeActiveKey: response.active_key || null,
+        reharmonizeRecommendedTargetTrackIds: response.recommended_target_track_ids || [],
+      });
+      console.info('[musicStore] Reharmonize preview ready', {
+        requestId,
+        provider: response.provider,
+        changedSpanCount: response.harmony_changes?.length || 0,
+        compatibilityStatus: response.compatibility?.status || null,
+      });
+      return true;
+    } catch (error) {
+      if (requestId !== get().reharmonizeRequestId) {
+        return false;
+      }
+      const message = error instanceof ReharmonizeApiError
+        ? error.message
+        : (error.message || 'Reharmonize preview failed');
+      console.error('[musicStore] Reharmonize preview failed', {
+        requestId,
+        code: error.code || null,
+        message,
+      });
+      set({
+        reharmonizeStatus: 'error',
+        reharmonizeError: message,
+        reharmonizeCandidate: null,
+      });
+      return false;
+    }
+  },
+
+  applyReharmonizePreview: async () => {
+    const state = get();
+    if (state.reharmonizeStatus !== 'ready' || !state.reharmonizeCandidate) {
+      console.warn('[musicStore] applyReharmonizePreview ignored; no ready candidate');
+      return false;
+    }
+    if (state.compositionRevision !== state.reharmonizeBaseRevision) {
+      set({
+        reharmonizeStatus: 'stale',
+        reharmonizeError: 'Base composition changed; request a new preview',
+      });
+      return false;
+    }
+
+    const currentFingerprint = await compositionSourceFingerprint(state.editedMusicJson);
+    const verification = verifyReharmonizationCandidate({
+      baseComposition: state.editedMusicJson,
+      candidateComposition: state.reharmonizeCandidate,
+      startTick: state.reharmonizeStartTick,
+      endTick: state.reharmonizeEndTick,
+      authorizedTrackIds: state.reharmonizeTargetTrackIds,
+      preserveMelody: state.reharmonizeContentPolicy !== 'preserve_harmony_adapt_melody',
+      preserveHarmony: state.reharmonizeContentPolicy !== 'preserve_melody_adapt_harmony',
+      baseFingerprint: currentFingerprint,
+      responseBaseFingerprint: state.reharmonizeBaseFingerprint,
+      proposalFingerprint: state.reharmonizeProposalFingerprint,
+      responseProposalFingerprint: state.reharmonizeProposalFingerprint,
+    });
+    if (!verification.ok) {
+      console.warn('[musicStore] applyReharmonizePreview rejected verification', {
+        failureCodes: verification.failures.map((item) => item.code).slice(0, 8),
+      });
+      set({
+        reharmonizeStatus: 'error',
+        reharmonizeError: 'Preview failed preservation or fingerprint checks',
+      });
+      return false;
+    }
+
+    const prepared = prepareCompositionForStore(state.reharmonizeCandidate);
+    const validation = validateMusicJson(prepared);
+    if (!validation.valid) {
+      set({
+        reharmonizeStatus: 'error',
+        reharmonizeError: validation.message,
+      });
+      return false;
+    }
+
+    console.info('[musicStore] Reharmonize preview applied', {
+      operation: state.reharmonizeOperation,
+      contentPolicy: state.reharmonizeContentPolicy,
+      changedSpanCount: state.reharmonizeHarmonyChanges.length,
+      changedTrackCount: state.reharmonizeTrackChanges.filter((item) => item.events_changed > 0).length,
+    });
+    applyCompositionEdit(set, get, {
+      nextComposition: prepared,
+      selectedTrackId: state.pianoRollTrackId,
+      selectedNoteId: null,
+      selectedNoteIds: [],
+      action: 'reharmonize-apply',
+      noteSummary: null,
+      statePatch: {
+        ...clearedReharmonizePreviewState({ preserveControls: true }),
+        reharmonizeStatus: 'idle',
+      },
+    });
+    return true;
   },
 }));
 
@@ -2270,7 +2720,14 @@ function snapshotNoteEditState(state) {
     pianoRollTrackId: state.pianoRollTrackId,
     pianoRollNoteId: state.pianoRollNoteId,
     pianoRollNoteIds: state.pianoRollNoteIds || [],
+    harmonySelectionStartBar: state.harmonySelectionStartBar,
+    harmonySelectionEndBar: state.harmonySelectionEndBar,
+    harmonySelectedSpanStartTick: state.harmonySelectedSpanStartTick,
   };
+}
+
+function applyCompositionEdit(set, get, options) {
+  return applyNoteEdit(set, get, options);
 }
 
 function filterExistingNoteIds(composition, trackId, noteIds) {
@@ -2296,6 +2753,7 @@ function applyNoteEdit(set, get, {
   skipHistory = false,
   historySnapshot = null,
   statePatch = {},
+  keepReharmonizePreview = false,
 }) {
   const state = get();
   const revision = compositionRevisionKey(nextComposition);
@@ -2347,10 +2805,11 @@ function applyNoteEdit(set, get, {
       nextComposition,
       state.analysisSelectedSectionKey,
     ),
+    ...(keepReharmonizePreview ? {} : clearedReharmonizePreviewState({ preserveControls: true })),
     ...statePatch,
   });
   markProjectDirty(set, get);
-  scheduleAnalysisRequest(get, { reason: 'note-edit' });
+  scheduleAnalysisRequest(get, { reason: action?.startsWith('harmony') || action === 'reharmonize-apply' ? action : 'note-edit' });
 }
 
 function findNote(composition, trackId, noteId) {
@@ -2508,6 +2967,8 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     uiError: '',
     ...clearedAnalysisState(),
     ...clearedMotifUiState(),
+    ...clearedReharmonizePreviewState(),
+    ...initialHarmonyUiState,
   });
 }
 
@@ -2627,6 +3088,32 @@ function notationStalePatch(previousNotationRevision, nextNotationRevision) {
 
 function clearedMotifUiState() {
   return { ...initialMotifUiState };
+}
+
+function clearedReharmonizePreviewState({ preserveControls = false } = {}) {
+  if (!preserveControls) {
+    return { ...initialReharmonizePreviewState };
+  }
+  return {
+    reharmonizeStatus: 'idle',
+    reharmonizeError: '',
+    reharmonizeWarnings: [],
+    reharmonizeRequestId: 0,
+    reharmonizeBaseFingerprint: null,
+    reharmonizeBaseRevision: null,
+    reharmonizeProposalFingerprint: null,
+    reharmonizeCandidate: null,
+    reharmonizeHarmonyChanges: [],
+    reharmonizeTrackChanges: [],
+    reharmonizePreservation: [],
+    reharmonizeCompatibility: null,
+    reharmonizeProvider: null,
+    reharmonizeModel: null,
+    reharmonizeStartTick: null,
+    reharmonizeEndTick: null,
+    reharmonizeActiveKey: null,
+    reharmonizeRecommendedTargetTrackIds: [],
+  };
 }
 
 function createMotifEntityId(prefix) {
