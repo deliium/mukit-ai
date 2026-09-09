@@ -186,7 +186,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
 
 ### Phase 1: Canonical Contract and Safe Editing
 
-- [ ] **Task 1: Normalize V2 harmony into explicit tick spans and migrate persisted legacy points.**
+- [x] **Task 1: Normalize V2 harmony into explicit tick spans and migrate persisted legacy points.**
   - Change `backend/app/composition_schemas.py` so `CompositionV2HarmonyItem` owns `start_tick`, `duration_ticks`, and `chord`, and root validation enforces fit, ordering, unique starts, and non-overlap against `duration_ticks`.
   - Change `backend/app/services/composition_normalizer.py`, `backend/app/services/composition_migration.py`, `backend/app/services/project_composition.py`, and frontend `frontend/src/utils/compositionVersion.js` so old V1/V2 `{bar, chord}` points deterministically become explicit spans before operational validation. Keep import output `harmony: []`.
   - Define duplicate-bar last-wins, leading-gap, final-span, malformed/mixed-shape, variable-meter, idempotence, and failed-project-rewrite behavior in code and tests.
@@ -195,7 +195,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
   - **Logging:** DEBUG legacy/canonical dispatch and bounded normalization counts; INFO successful legacy harmony normalization with schema/counts; WARNING stable codes for duplicate collapse or rejected malformed ranges. Never log chord arrays, compositions, project JSON, or note events.
   - **Dependencies:** none.
 
-- [ ] **Task 2: Implement pure harmony range operations and separate them from audible region replacement.**
+- [x] **Task 2: Implement pure harmony range operations and separate them from audible region replacement.**
   - Create `backend/app/services/composition_harmony_timeline.py` for normalization helpers, overlap queries, inferred bar labels, split/merge behavior, and immutable add/replace/remove/move/resize operations.
   - Add strict operation DTOs in a dedicated `backend/app/harmony_schemas.py`; use explicit operation discriminators so an empty replacement cannot accidentally mean clear.
   - Audit `backend/app/services/composition_region_patch.py` and `backend/app/schemas.py`: eliminate the permissive V1-first harmony union, prevent omitted target replacements from deleting notes, and ensure metadata-only harmony changes never run note boundary-crossing checks or resolve all tracks by default.
@@ -204,7 +204,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
   - **Logging:** DEBUG operation/range and before/after span counts; INFO accepted operation and changed span count; WARNING stable rejection code for overlap, out-of-bounds, ambiguous clear, or unsafe target replacement. Do not log chord payload collections or event arrays.
   - **Dependencies:** Task 1.
 
-- [ ] **Task 3: Upgrade chord parsing, tonal policy, and note-compatibility analysis for explicit spans.**
+- [x] **Task 3: Upgrade chord parsing, tonal policy, and note-compatibility analysis for explicit spans.**
   - Refactor/extend parsing in `backend/app/services/composition_tonality.py` to handle the documented roots, accidentals, qualities, extensions, alterations, and slash basses without silently discarding unknown suffixes. Preserve authored spelling separately from normalized pitch-class semantics.
   - Create `backend/app/services/composition_harmony_compatibility.py` for duration-weighted declared-versus-realized evidence, melody clash/resolution findings, bass/inversion support, accompaniment support, voice-leading/tension deltas, tonal-center support, and cadence evidence.
   - Reuse bounded deterministic outputs from `composition_harmony_analysis.py`, `composition_tension_analysis.py`, `composition_melody_analysis.py`, `composition_role_analysis.py`, and compiled timeline helpers; do not persist analysis results.
@@ -217,7 +217,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
 
 ### Phase 2: Reharmonization Domain and API
 
-- [ ] **Task 4: Define the preview API contract and deterministic reharmonization engine.**
+- [x] **Task 4: Define the preview API contract and deterministic reharmonization engine.**
   - Complete request/response DTOs in `backend/app/harmony_schemas.py`, including inclusive bar selection, operation, engine, content policy, explicit target IDs, bounded optional instruction, tonal options, compatibility report, preservation assertions, change summaries, and fingerprints.
   - Create `backend/app/services/composition_reharmonization.py` to resolve half-open tick bounds and active key, authorize targets, generate a candidate, realize canonical note replacements where policy allows, validate the whole candidate, run compatibility checks, and compute deterministic summaries/fingerprints.
   - Implement deterministic behavior for all listed operations. Use melody pitch evidence when preserving melody, preserve harmony exactly under the other two policies, favor parsimonious voice-leading, and ensure `increase_tension` changes both progression and at least one selected accompaniment/bass track when `preserve_melody_adapt_harmony` is used.
@@ -227,7 +227,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
   - **Logging:** INFO start/completion with operation, engine, policy, bar range, target count, changed-span/event counts, compatibility status, and fingerprint prefixes; DEBUG stage/finding-code counts; WARNING/ERROR sanitized domain failures. Never log instructions verbatim, harmony arrays, candidate compositions, or event arrays.
   - **Dependencies:** Tasks 1-3.
 
-- [ ] **Task 5: Add bounded AI orchestration and deterministic fake-provider proposals.**
+- [x] **Task 5: Add bounded AI orchestration and deterministic fake-provider proposals.**
   - Create `backend/app/services/llm_reharmonizer.py` or a cohesive reharmonization graph that asks the provider for a strict harmony/track proposal, validates it through Task 4, repairs bounded failures, and never lets provider output bypass authorization or preservation checks.
   - Keep deterministic planning/realization available without an LLM. For `engine: "ai"`, support existing provider/model selection and unavailable-provider errors; feed only selected-range notes, explicit harmony spans, active tonal context, strategy, preservation policy, and bounded analysis context.
   - Encode every operation and chromatic/modulation rule in prompts and structured output. Require complete explicit replacements for every authorized audible target and reject unauthorized track or metadata changes.
@@ -236,7 +236,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
   - **Logging:** INFO provider/model/stage/attempt and bounded result counts; DEBUG sanitized instruction metadata (length/hash/recognized intent only) and diagnostic codes; WARNING repair and provider failures. Never log API keys, complete prompts/responses, harmony timelines, or note arrays.
   - **Dependencies:** Task 4.
 
-- [ ] **Task 6: Expose the preview route and update every harmony consumer to span semantics.**
+- [x] **Task 6: Expose the preview route and update every harmony consumer to span semantics.**
   - Add `backend/app/routers/harmony.py`, register it in `backend/app/main.py`, and expose `POST /harmony/reharmonize/preview` with thin HTTP-to-domain error mapping (`400/422` invalid request/domain conflict, `503` missing provider, `502` invalid provider output).
   - Return the candidate and bounded summaries without project mutation. Render optional candidate MusicXML only if it can fail independently with a structured warning; do not make rendering a prerequisite for a valid musical preview.
   - Update generation assembly/plans in `composition_planner.py` and `llm_music_generator.py` to emit explicit spans and enforce valid ordered coverage where generated harmony exists.

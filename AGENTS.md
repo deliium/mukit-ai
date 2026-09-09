@@ -21,11 +21,12 @@ mukit-ai/
 │   ├── app/
 │   │   ├── main.py          # Composition / LLM / export routes
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
-│   │   ├── routers/         # Projects + imports + analysis + motifs HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. import, analysis, motifs, theme, fake_llm)
+│   │   ├── routers/         # Projects + imports + analysis + motifs + harmony HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. import, analysis, motifs, theme, harmony, reharmonization, fake_llm)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
 │   │   ├── motif_schemas.py        # Motif apply DTOs
+│   │   ├── harmony_schemas.py      # Harmony timeline + reharmonize preview DTOs
 │   │   ├── import_schemas.py       # Import DTOs, issue/error codes
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── fixtures/        # Canonical composition JSON (V1 + V2 expressive for fake LLM / tests)
@@ -38,7 +39,7 @@ mukit-ai/
 │       ├── api/             # musicApi, projectApi
 │       ├── components/      # Workspace, generator, import, analysis, motifs, piano roll, playback, …
 │       ├── store/           # Zustand musicStore
-│       └── utils/           # validation, playback, piano-roll, analysis, motif helpers
+│       └── utils/           # validation, playback, piano-roll, analysis, motif, harmony helpers
 ├── scripts/                 # e.g. v1/v2_docker_acceptance.sh
 ├── docs/                    # composition.v2/v1, analysis, import, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
@@ -58,6 +59,7 @@ mukit-ai/
 | `backend/app/motif_schemas.py` | Motif apply request/response DTOs |
 | `backend/app/routers/analysis.py` | `POST /analysis/composition` |
 | `backend/app/routers/motifs.py` | `POST /motifs/apply` |
+| `backend/app/routers/harmony.py` | `POST /harmony/reharmonize/preview` |
 | `backend/app/services/composition_analysis.py` | Analysis orchestrator + bounded LLM advisory projection |
 | `backend/app/services/composition_motif_editor.py` | Canonical motif apply + destination replacement |
 | `backend/app/services/composition_theme.py` | Structured theme plan + generation recurrence |

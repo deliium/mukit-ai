@@ -727,13 +727,54 @@ async def draft_fake_motif_variation(
     )
 
 
+async def draft_fake_reharmonization(request, provider: LLMProviderSettings):
+    """Deterministic fake reharmonization for bars 9–12 tension acceptance."""
+    from app.harmony_schemas import ReharmonizePreviewRequest
+    from app.services.composition_reharmonization import preview_reharmonization
+
+    if not isinstance(request, ReharmonizePreviewRequest):
+        raise FakeLLMError("Fake reharmonization requires ReharmonizePreviewRequest")
+
+    _maybe_inject_malformed("reharmonize")
+    logger.info(
+        "Fake LLM reharmonization started",
+        extra={
+            "provider": provider.provider,
+            "operation": request.operation,
+            "content_policy": request.content_policy,
+            "start_bar": request.selection.start_bar,
+            "end_bar": request.selection.end_bar,
+            "target_count": len(request.target_track_ids),
+        },
+    )
+    # Realize through the production deterministic engine so fake never bypasses checks.
+    response = preview_reharmonization(request.model_copy(update={"engine": "deterministic"}))
+    stamped = response.model_copy(
+        update={
+            "provider": provider.provider,
+            "model": provider.model or FAKE_MODEL_ID,
+            "warnings": [*response.warnings, "fake_provider_deterministic_realization"][:32],
+        }
+    )
+    logger.info(
+        "Fake LLM reharmonization completed",
+        extra={
+            "provider": provider.provider,
+            "changed_span_count": len(stamped.harmony_changes),
+            "changed_track_count": sum(1 for item in stamped.track_changes if item.events_changed > 0),
+            "compatibility_status": stamped.compatibility.status,
+        },
+    )
+    return stamped
+
+
 def _maybe_inject_malformed(stage: str) -> None:
     """Optionally raise InvalidLLMOutputError for safety tests (no network)."""
     # Local import avoids circular import at module load with llm_music_generator.
     from .llm_music_generator import InvalidLLMOutputError
 
     raw = os.environ.get(FAKE_MALFORMED_ENV, "").strip().lower()
-    if raw in {"1", "true", "yes", "generate", "edit", "motif", "all"}:
+    if raw in {"1", "true", "yes", "generate", "edit", "motif", "reharmonize", "all"}:
         if raw in {"1", "true", "yes", "all"} or raw == stage:
             logger.warning(
                 "Fake LLM injecting malformed output for tests",

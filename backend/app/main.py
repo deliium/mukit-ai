@@ -15,6 +15,7 @@ from .routers.projects import router as projects_router
 from .routers.imports import router as imports_router
 from .routers.analysis import router as analysis_router
 from .routers.motifs import router as motifs_router
+from .routers.harmony import router as harmony_router
 from .schemas import (
     Composition,
     LLMCompositionEditRequest,
@@ -92,6 +93,7 @@ app.include_router(projects_router)
 app.include_router(imports_router)
 app.include_router(analysis_router)
 app.include_router(motifs_router)
+app.include_router(harmony_router)
 
 
 def _composition_export_summary(composition: CompositionV2) -> dict:
