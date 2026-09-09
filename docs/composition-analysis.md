@@ -1,4 +1,4 @@
-[← Composition Development](composition-development.md) · [Back to README](../README.md) · [MIDI/MusicXML Import →](import.md)
+[← Composition Arrangement](composition-arrangement.md) · [Back to README](../README.md) · [MIDI/MusicXML Import →](import.md)
 
 # Composition Analysis
 
@@ -108,6 +108,8 @@ From `ANALYSIS_WARNING_CODES` / `WARNING_REGISTRY`. Automatic warnings cover dat
 | `percussion_only_scope` | info | limitation |
 
 Warning `details` are bounded scalars/counts/thresholds and locators — not raw note sequences or full event payloads.
+
+Analysis `note_outside_instrument_range` is advisory on the current V2. Arrangement preview applies a separate concert-pitch absolute/preferred policy only to **changed/created** targets and never persists catalog IDs or ranges into V2 — see [composition-arrangement.md](composition-arrangement.md).
 
 ### HTTP error codes (structured `422` / sanitized)
 
@@ -254,6 +256,7 @@ User instructions, hard constraints, canonical events, and deterministic patch v
 ## See Also
 
 - [Composition V2](composition-v2.md) — operational canonical contract (analysis is not part of it)
+- [Composition Arrangement](composition-arrangement.md) — orchestration preview; absolute vs preferred target ranges
 - [MIDI and MusicXML import](import.md) — raw import performs no analysis; `harmony: []`
 - [Composition V1](composition-v1.md) — staged generation and region editing
 - [Testing](testing.md) — focused, scale, and Playwright analysis commands

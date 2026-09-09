@@ -20,7 +20,7 @@
 - [x] **Motif-aware composition** — Canonical `motifs` metadata, Motifs tab apply/transform, and thematic LangGraph recurrence (`plan_themes` / `realize_themes`)
 - [x] **Interactive harmony and reharmonization** — Editable V2 harmony tick spans, Harmony tab, previewed deterministic/AI reharmonize that only mutates notes on explicit apply
 - [x] **Context-aware composition development** — Continue / add / vary sections with multi-candidate `POST /composition/development/preview`; fingerprint-gated apply preserves existing material until explicit selection
-- [ ] **AI-assisted arrangement / orchestration** — Previewed instrumentation/texture redistributions over selected tracks (`POST /composition/arrangement/preview`); melody/harmony preservation until explicit Apply
+- [x] **AI-assisted arrangement / orchestration** — Previewed instrumentation/texture redistributions over selected tracks (`POST /composition/arrangement/preview`); melody/harmony preservation until explicit Apply
 
 ## Completed
 
@@ -42,3 +42,4 @@
 | Motif-aware composition | 2026-09-09 |
 | Interactive harmony and reharmonization | 2026-09-09 |
 | Context-aware composition development | 2026-09-09 |
+| AI-assisted arrangement / orchestration | 2026-09-10 |

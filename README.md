@@ -15,6 +15,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Motif Authoring**: Mark a 1–2 bar pitched selection as a named motif, inspect usages, and apply mechanical or creative transforms via `POST /motifs/apply`; results are ordinary `tracks[].events[]` plus reference metadata (Motifs tab)
 - **Harmony & Reharmonization**: Edit explicit V2 harmony tick spans on the Harmony tab; preview deterministic or AI reharmonization via `POST /harmony/reharmonize/preview` without dirtying the project until Apply (melody/accompaniment policies; events remain the only audible source)
 - **Composition Development**: Continue, add a named section, or vary a range via the Develop tab (`POST /composition/development/preview`); 1–4 ephemeral candidates with full edit fingerprints; Apply only commits (details: [docs/composition-development.md](docs/composition-development.md))
+- **Composition Arrangement**: Orchestrate selected tracks / piano-to-ensemble and related texture ops via the Arrange tab (`GET /composition/arrangement/instruments`, `POST /composition/arrangement/preview`); session-only candidates until Apply (details: [docs/composition-arrangement.md](docs/composition-arrangement.md))
 - **Deterministic Export**: Download MusicXML, MIDI, and server-rendered WAV from the same canonical `tracks[].events[]`; export responses include projection status headers when approximations apply (motif metadata is intentionally omitted)
 
 ## 🏗️ Architecture
@@ -60,6 +61,7 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Named volume `mukit_project_data` persists SQLite at `/data/projects.db`. Prefer `docker compose restart` or `down` without `-v`.
 - Both services use `restart: unless-stopped` and healthchecks (`GET /health` on backend; HTTP on frontend).
 - Hot-reload override (optional): `docker compose -f docker-compose.yml -f compose.dev.yml up --build`
+- Optional arrangement catalog override: set `ARRANGEMENT_INSTRUMENT_CATALOG_PATH` to an **absolute path inside the backend container** (see `.env.example` and the read-only bind example in `compose.dev.yml`). Details: [docs/composition-arrangement.md](docs/composition-arrangement.md).
 - Logging: set `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` (default `INFO`). Never expect keys/prompts/raw MusicXML/MIDI/WAV or upload bytes in logs.
 - Import limits: `IMPORT_*` in `.env.example` (default upload 5 MiB). Details: [docs/import.md](docs/import.md).
 - Acceptance commands: see `docs/testing.md` (pytest, Playwright, Docker persistence script).
@@ -285,11 +287,14 @@ mukit-ai/
 │   └── package.json
 ├── docs/
 │   ├── composition-v2.md
+│   ├── composition-development.md
+│   ├── composition-arrangement.md
 │   ├── composition-analysis.md
 │   ├── import.md
 │   ├── composition-v1.md
 │   ├── project-persistence.md
-│   └── testing.md
+│   ├── testing.md
+│   └── CODEBASE_MAP.md
 └── README.md
 ```
 
@@ -299,6 +304,7 @@ mukit-ai/
 |-------|-------------|
 | [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |
+| [Composition Arrangement](docs/composition-arrangement.md) | Instrumentation / texture redistribution; catalog + preview + Apply |
 | [Composition Analysis](docs/composition-analysis.md) | Deterministic sidecar, scopes, warnings, Analysis tab |
 | [MIDI / MusicXML import](docs/import.md) | Ingestion mappings, limits, issue codes, security |
 | [Composition V1](docs/composition-v1.md) | V1 compatibility, staged generation, region editing |
@@ -383,7 +389,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🔮 Future Enhancements
 
-- Richer multi-instrument arrangement controls
+- Sectional / advanced orchestration (bar-scoped, divisi, written-pitch engraving)
 - Code-split notation/playback bundles
 - Advanced music theory constraints
 - Style transfer between different musical genres

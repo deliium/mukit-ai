@@ -41,6 +41,8 @@ services:
       IMPORT_MAX_METADATA_CHANGES: ${IMPORT_MAX_METADATA_CHANGES:-512}
       IMPORT_MAX_ACTIVE_NOTES: ${IMPORT_MAX_ACTIVE_NOTES:-512}
       IMPORT_DEFAULT_TARGET_PPQ: ${IMPORT_DEFAULT_TARGET_PPQ:-480}
+      # Optional: absolute path *inside this container* to arrangement.instruments.v1 JSON.
+      # Bind-mount the file first (see compose.dev.yml). Empty = packaged fixture.
       ARRANGEMENT_INSTRUMENT_CATALOG_PATH: ${ARRANGEMENT_INSTRUMENT_CATALOG_PATH:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/health')"]

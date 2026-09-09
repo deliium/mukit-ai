@@ -23,6 +23,7 @@ mukit-ai/
 │   │   ├── main.py                 # Composition / LLM / export HTTP handlers (composition module surface)
 │   │   ├── ready.py                # LOG_LEVEL, CORS origins, readiness report helpers
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 document contracts
+│   │   ├── arrangement_schemas.py  # Arrangement preview / catalog DTOs
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 sidecar DTOs / warning codes
 │   │   ├── schemas.py              # LLM request/response models + re-exports
 │   │   ├── project_schemas.py      # Project CRUD API models
@@ -32,11 +33,20 @@ mukit-ai/
 │   │   ├── routers/
 │   │   │   ├── projects.py         # Projects module HTTP routes
 │   │   │   ├── imports.py          # MIDI / MusicXML multipart import
-│   │   │   └── analysis.py         # POST /analysis/composition
+│   │   │   ├── analysis.py         # POST /analysis/composition
+│   │   │   ├── arrangement.py      # GET/POST /composition/arrangement/*
+│   │   │   ├── composition_development.py
+│   │   │   ├── harmony.py
+│   │   │   └── motifs.py
 │   │   ├── services/               # Application services (orchestration + domain helpers)
 │   │   │   ├── llm_music_generator.py
 │   │   │   ├── llm_composition_editor.py
-│   │   │   ├── fake_llm.py              # LLM_FAKE_MODE deterministic generate/edit
+│   │   │   ├── llm_composition_arrangement.py
+│   │   │   ├── composition_arrangement_context.py
+│   │   │   ├── composition_arrangement_patch.py
+│   │   │   ├── composition_arrangement_validation.py
+│   │   │   ├── instrument_catalog.py    # Curated arrangement GM catalog
+│   │   │   ├── fake_llm.py              # LLM_FAKE_MODE deterministic generate/edit/arrange
 │   │   │   ├── fixture_compositions.py  # Load packaged Composition V1 fixtures
 │   │   │   ├── composition_planner.py
 │   │   │   ├── generation_constraints.py # Immutable request hard/soft constraints + conformance
@@ -66,7 +76,7 @@ mukit-ai/
 │   │   │   ├── composition_wav.py
 │   │   │   ├── project_store.py         # SQLite persistence
 │   │   │   └── project_composition.py   # Project ↔ composition mapping
-│   │   ├── fixtures/               # composition.v1 + composition_v2_expressive JSON
+│   │   ├── fixtures/               # composition.v1 + composition_v2_expressive + arrangement_instruments.v1.json
 │   │   └── db/                     # Shared infrastructure: connection + SQL migrations
 │   │       ├── connection.py
 │   │       └── migrations/
@@ -74,18 +84,18 @@ mukit-ai/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
-│   ├── e2e/                        # Playwright V1/V2/import/analysis acceptance
+│   ├── e2e/                        # Playwright V1/V2/import/analysis/arrangement acceptance
 │   └── src/
 │       ├── api/                    # HTTP clients (outbound adapters)
 │       │   ├── musicApi.js
 │       │   └── projectApi.js
 │       ├── store/
-│       │   └── musicStore.js       # Zustand — shared UI/application state (incl. analysis)
-│       ├── components/             # Feature UI (projects, import, analysis, generate, piano roll, playback, export)
-│       ├── utils/                  # Client-side composition/playback/analysis helpers
+│       │   └── musicStore.js       # Zustand — shared UI/application state (incl. analysis/arrangement)
+│       ├── components/             # Feature UI (projects, import, analysis, arrangement, generate, piano roll, playback, export)
+│       ├── utils/                  # Client-side composition/playback/analysis/arrangement helpers
 │       ├── App.jsx
 │       └── main.jsx
-├── docs/                           # composition.v2/v1, analysis, import, persistence, testing
+├── docs/                           # composition.v2/v1, analysis, arrangement, import, persistence, testing
 ├── docker-compose.yml
 ├── compose.dev.yml
 ├── .env.example
@@ -99,6 +109,7 @@ mukit-ai/
 | **Projects** | `routers/projects.py`, `project_schemas.py`, `services/project_*` | `ProjectBrowser`, `projectApi.js`, project slice of `musicStore` |
 | **Import** | `routers/imports.py`, `import_schemas.py`, `import_settings.py`, `composition_*_import.py`, `composition_import.py` | `ImportControls`, `importMidi` / `importMusicXml` in `musicApi.js`, import slice of `musicStore` |
 | **Analysis** | `routers/analysis.py`, `analysis_schemas.py`, `composition_analysis.py` + analyzer cluster / fingerprint / warnings | `CompositionAnalysisPanel`, `analyzeComposition` in `musicApi.js`, `compositionAnalysis.js`, analysis slice of `musicStore` |
+| **Arrangement** | `routers/arrangement.py`, `arrangement_schemas.py`, `instrument_catalog.py`, `composition_arrangement_*`, `llm_composition_arrangement.py` | `ArrangementPanel`, arrangement APIs in `musicApi.js`, `compositionArrangementCandidates.js`, arrangement slice of `musicStore` |
 | **Harmony / reharmonize** | `routers/harmony.py`, `harmony_schemas.py`, `composition_harmony_*`, `composition_reharmonization.py`, `llm_reharmonizer.py` | `HarmonyTimelinePanel`, `previewReharmonization` in `musicApi.js`, `compositionHarmony*.js`, reharmonize slice of `musicStore` |
 | **Composition / LLM** | `main.py` LLM routes, `schemas.py`, `llm_*`, `composition_*` (plan/validate/normalize/patch); bounded analysis advisory via `build_llm_analysis_context` | `MusicGenerator`, `PromptJsonEditor`, `AiRegionEditPanel`, `musicApi.js` |
 | **Rendering / Export** | `music_json_renderer`, `composition_midi`, `composition_wav` | `NotationViewer`, `ExportControls`, playback components + `utils/playback*` / `tonePlaybackEngine` |

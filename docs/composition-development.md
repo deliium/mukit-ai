@@ -1,4 +1,4 @@
-[← Composition V2](composition-v2.md) · [Back to README](../README.md) · [Composition Analysis →](composition-analysis.md)
+[← Composition V2](composition-v2.md) · [Back to README](../README.md) · [Composition Arrangement →](composition-arrangement.md)
 
 # Composition Development
 
@@ -75,5 +75,6 @@ Finished 16-bar A → request 8-bar continuation with 3 candidates → working p
 ## See Also
 
 - [Composition V2](composition-v2.md) — canonical contract
+- [Composition Arrangement](composition-arrangement.md) — instrumentation / texture redistribution preview
 - [Testing](testing.md) — pytest / Playwright commands
 - [Composition Analysis](composition-analysis.md) — advisory sidecar (not editable authority)

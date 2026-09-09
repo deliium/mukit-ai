@@ -28,6 +28,7 @@ Rename, duplicate, and delete (with confirmation) are available on the home scre
 - Schema migrations run on startup (`schema_migrations` + numbered SQL under `backend/app/db/migrations/`).
 - Provider **API keys stay in environment variables only** — never accepted or stored in the project DB.
 - Generation metadata stores provider, model id, and a sanitized prompt snapshot.
+- Arrangement / development / reharmonize **previews are session-only** and are never written to `composition_json`. Only an explicitly **applied** candidate becomes the stored Composition V2 (same fields as any other edit). Catalog `instrument_id` and range metadata are not project columns or V2 fields.
 
 ### Volume caveat
 
@@ -87,6 +88,7 @@ No persistence test requires provider API keys.
 ## See Also
 
 - [Composition V2](composition-v2.md) — V2 contract and migrate-on-open fidelity rules
+- [Composition Arrangement](composition-arrangement.md) — session-only previews; applied V2 only
 - [Composition Analysis](composition-analysis.md) — derived reports are not stored in `composition_json`
 - [Composition V1](composition-v1.md) — V1 parser compatibility
 - [Testing](testing.md) — full test matrix including V2 suites

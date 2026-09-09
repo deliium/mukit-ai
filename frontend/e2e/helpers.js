@@ -775,3 +775,552 @@ export function sampleAnalysisReportForE2e(overrides = {}) {
     ...overrides,
   };
 }
+
+/** Acceptance baseline: piano melody + piano accompaniment + bass (composition.v2). */
+export function buildArrangementPianoSketchFixture(overrides = {}) {
+  return {
+    schema_version: 'composition.v2',
+    tempo: 100,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    duration_ticks: 7680,
+    bar_count: 4,
+    sections: [
+      {
+        id: 'a-section',
+        type: 'verse',
+        label: 'A',
+        start_bar: 1,
+        bar_count: 4,
+        start_tick: 0,
+        duration_ticks: 7680,
+      },
+    ],
+    tracks: [
+      {
+        id: 'piano-melody',
+        name: 'Piano Melody',
+        instrument: 'piano',
+        role: 'melody',
+        midi_program: 0,
+        channel: 1,
+        events: [
+          { id: 'm1', pitch: 'E4', start_tick: 0, duration_ticks: 480, velocity: 84 },
+          { id: 'm2', pitch: 'G4', start_tick: 480, duration_ticks: 480, velocity: 82 },
+          { id: 'm3', pitch: 'C5', start_tick: 960, duration_ticks: 960, velocity: 88 },
+          { id: 'm4', pitch: 'D5', start_tick: 1920, duration_ticks: 480, velocity: 80 },
+        ],
+      },
+      {
+        id: 'piano-accomp',
+        name: 'Piano Accompaniment',
+        instrument: 'piano',
+        role: 'harmony',
+        midi_program: 0,
+        channel: 2,
+        events: [
+          { id: 'a1', pitch: 'C3', start_tick: 0, duration_ticks: 960, velocity: 64 },
+          { id: 'a2', pitch: 'E3', start_tick: 0, duration_ticks: 960, velocity: 60 },
+          { id: 'a3', pitch: 'G3', start_tick: 0, duration_ticks: 960, velocity: 60 },
+          { id: 'a4', pitch: 'F3', start_tick: 1920, duration_ticks: 960, velocity: 62 },
+          { id: 'a5', pitch: 'A3', start_tick: 1920, duration_ticks: 960, velocity: 58 },
+        ],
+      },
+      {
+        id: 'bass-1',
+        name: 'Bass',
+        instrument: 'acoustic bass',
+        role: 'bass',
+        midi_program: 32,
+        channel: 3,
+        events: [
+          { id: 'b1', pitch: 'C2', start_tick: 0, duration_ticks: 1920, velocity: 70 },
+          { id: 'b2', pitch: 'F2', start_tick: 1920, duration_ticks: 1920, velocity: 68 },
+        ],
+      },
+    ],
+    harmony: [
+      { start_tick: 0, duration_ticks: 1920, chord: 'C' },
+      { start_tick: 1920, duration_ticks: 1920, chord: 'F' },
+    ],
+    tempo_changes: [],
+    time_signature_changes: [],
+    key_changes: [],
+    markers: [],
+    motifs: [],
+    ...overrides,
+  };
+}
+
+export function arrangementPart(
+  partId,
+  instrumentId,
+  {
+    role = null,
+    sourceTrackIds = [],
+    doublingPolicy = 'none',
+  } = {},
+) {
+  return {
+    part_id: partId,
+    instrument_id: instrumentId,
+    role,
+    source_track_ids: sourceTrackIds,
+    doubling_policy: doublingPolicy,
+  };
+}
+
+/** Piano → piano/cello/string-ensemble before/after inventory for acceptance. */
+export function arrangementAcceptanceInstrumentation() {
+  return {
+    before: [
+      arrangementPart('b-melody', 'acoustic_grand_piano', {
+        role: 'melody',
+        sourceTrackIds: ['piano-melody'],
+      }),
+      arrangementPart('b-accomp', 'acoustic_grand_piano', {
+        role: 'harmony',
+        sourceTrackIds: ['piano-accomp'],
+      }),
+      arrangementPart('b-bass', 'acoustic_bass', {
+        role: 'bass',
+        sourceTrackIds: ['bass-1'],
+      }),
+    ],
+    after: [
+      arrangementPart('a-piano', 'acoustic_grand_piano', { role: 'melody' }),
+      arrangementPart('a-cello', 'cello', { role: 'bass' }),
+      arrangementPart('a-strings', 'string_ensemble_1', { role: 'harmony' }),
+    ],
+  };
+}
+
+/**
+ * Per-operation store configs matching fake-provider backend acceptance builders.
+ * Returns { operation, sourceTrackIds, protectedTrackIds, instrumentation, allowUnlistedAfter? }.
+ */
+export function arrangementOperationConfig(operation) {
+  const acceptance = arrangementAcceptanceInstrumentation();
+  const builders = {
+    change_instrumentation: {
+      sourceTrackIds: ['piano-melody'],
+      protectedTrackIds: [],
+      instrumentation: {
+        before: [
+          arrangementPart('b-melody', 'acoustic_grand_piano', {
+            role: 'melody',
+            sourceTrackIds: ['piano-melody'],
+          }),
+        ],
+        after: [
+          arrangementPart('a-melody', 'violin', { role: 'melody' }),
+        ],
+      },
+    },
+    add_accompaniment: {
+      sourceTrackIds: ['piano-melody', 'piano-accomp', 'bass-1'],
+      protectedTrackIds: [],
+      instrumentation: {
+        before: acceptance.before,
+        after: [
+          ...acceptance.before,
+          arrangementPart('a-pad', 'synth_pad_new_age', { role: 'pad' }),
+        ],
+      },
+    },
+    remove_accompaniment: {
+      sourceTrackIds: ['piano-accomp'],
+      protectedTrackIds: ['piano-melody'],
+      allowUnlistedAfter: true,
+      instrumentation: {
+        before: [
+          arrangementPart('b-accomp', 'acoustic_grand_piano', {
+            role: 'harmony',
+            sourceTrackIds: ['piano-accomp'],
+          }),
+        ],
+        after: [
+          arrangementPart('a-kept', 'acoustic_grand_piano', { role: 'melody' }),
+        ],
+      },
+    },
+    orchestrate_selected_tracks: {
+      sourceTrackIds: ['piano-melody', 'piano-accomp', 'bass-1'],
+      protectedTrackIds: [],
+      instrumentation: {
+        before: acceptance.before,
+        after: [
+          arrangementPart('a-v', 'violin', { role: 'melody' }),
+          arrangementPart('a-c', 'cello', { role: 'bass' }),
+          arrangementPart('a-s', 'string_ensemble_1', { role: 'harmony' }),
+        ],
+      },
+    },
+    piano_to_ensemble: {
+      sourceTrackIds: ['piano-melody', 'piano-accomp', 'bass-1'],
+      protectedTrackIds: [],
+      instrumentation: acceptance,
+    },
+    simplify_arrangement: {
+      sourceTrackIds: ['piano-accomp'],
+      protectedTrackIds: ['piano-melody'],
+      instrumentation: {
+        before: [
+          arrangementPart('b-a', 'acoustic_grand_piano', {
+            role: 'harmony',
+            sourceTrackIds: ['piano-accomp'],
+          }),
+        ],
+        after: [
+          arrangementPart('a-a', 'acoustic_grand_piano', { role: 'harmony' }),
+        ],
+      },
+    },
+    increase_texture_density: {
+      sourceTrackIds: ['piano-accomp'],
+      protectedTrackIds: [],
+      instrumentation: {
+        before: [
+          arrangementPart('b-a', 'acoustic_grand_piano', {
+            role: 'harmony',
+            sourceTrackIds: ['piano-accomp'],
+          }),
+        ],
+        after: [
+          arrangementPart('a-a', 'acoustic_grand_piano', { role: 'harmony' }),
+        ],
+      },
+    },
+    decrease_texture_density: {
+      sourceTrackIds: ['piano-accomp'],
+      protectedTrackIds: ['piano-melody'],
+      instrumentation: {
+        before: [
+          arrangementPart('b-a', 'acoustic_grand_piano', {
+            role: 'harmony',
+            sourceTrackIds: ['piano-accomp'],
+          }),
+        ],
+        after: [
+          arrangementPart('a-a', 'acoustic_grand_piano', { role: 'harmony' }),
+        ],
+      },
+    },
+    create_countermelody: {
+      sourceTrackIds: ['piano-melody'],
+      protectedTrackIds: [],
+      instrumentation: {
+        before: [
+          arrangementPart('b1', 'acoustic_grand_piano', {
+            role: 'melody',
+            sourceTrackIds: ['piano-melody'],
+          }),
+        ],
+        after: [
+          arrangementPart('a-mel', 'acoustic_grand_piano', { role: 'melody' }),
+          arrangementPart('a-cm', 'flute', { role: 'countermelody' }),
+        ],
+      },
+    },
+    double_melody: {
+      sourceTrackIds: ['piano-melody'],
+      protectedTrackIds: [],
+      instrumentation: {
+        before: [
+          arrangementPart('b-m', 'acoustic_grand_piano', {
+            role: 'melody',
+            sourceTrackIds: ['piano-melody'],
+          }),
+        ],
+        after: [
+          arrangementPart('a-m', 'acoustic_grand_piano', { role: 'melody' }),
+          arrangementPart('a-d', 'violin', {
+            role: 'melody',
+            sourceTrackIds: ['piano-melody'],
+            doublingPolicy: 'octave',
+          }),
+        ],
+      },
+    },
+  };
+  const config = builders[operation];
+  if (!config) {
+    throw new Error(`Unknown arrangement operation: ${operation}`);
+  }
+  return { operation, ...config };
+}
+
+/** Create a project and attach a V2 composition fixture via HTTP. */
+export async function seedV2ProjectViaApi(request, {
+  name = 'Arrangement Seed',
+  fixture = null,
+} = {}) {
+  const composition = fixture || buildArrangementPianoSketchFixture();
+  const backendUrl = backendBaseUrl();
+  const create = await request.post(`${backendUrl}/projects`, { data: { name } });
+  if (!create.ok()) {
+    throw new Error(`Failed to create project: ${create.status()} ${await create.text()}`);
+  }
+  const { id: projectId } = await create.json();
+  const patch = await request.patch(`${backendUrl}/projects/${projectId}`, {
+    data: { composition },
+  });
+  if (!patch.ok()) {
+    throw new Error(`Failed to seed V2 composition: ${patch.status()} ${await patch.text()}`);
+  }
+  return {
+    projectId,
+    fixtureSchemaVersion: composition.schema_version,
+    sourceNoteSequences: extractNoteSequences(composition),
+    composition,
+  };
+}
+
+export async function ensureFakeLlmSelected(page) {
+  await page.getByTestId('llm-model-select').waitFor({ state: 'visible', timeout: 30_000 });
+  await pickFakeProvider(page);
+}
+
+export async function openArrangeTab(page) {
+  await openComposerTab(page, 'arrange');
+  await page.getByTestId('arrange-panel').waitFor({ state: 'visible', timeout: 30_000 });
+  console.info('[e2e-arrangement] Opened Arrange tab');
+}
+
+export async function waitForArrangementCatalog(page, { timeout = 30_000 } = {}) {
+  const { expect } = await import('@playwright/test');
+  await expect.poll(async () => {
+    const snapshot = await getArrangementSnapshot(page);
+    return snapshot?.catalogStatus || 'missing';
+  }, { timeout }).toBe('ready');
+  return getArrangementSnapshot(page);
+}
+
+/** Bounded arrangement snapshot (counts/ids/status only — no event arrays). */
+export async function getArrangementSnapshot(page) {
+  return page.evaluate(() => {
+    const state = window.__MUKIT_MUSIC_STORE__?.getState?.();
+    if (!state) {
+      return null;
+    }
+    const composition = state.editedMusicJson;
+    const tracks = Array.isArray(composition?.tracks) ? composition.tracks : [];
+    const melody = tracks.find((track) => track.role === 'melody')
+      || tracks.find((track) => track.id === 'piano-melody');
+    const selected = (state.arrangementCandidates || [])
+      .find((item) => item.candidate_id === state.arrangementSelectedCandidateId) || null;
+    const selectedTracks = selected?.composition?.tracks || [];
+    const selectedMelody = selectedTracks.find((track) => track.role === 'melody');
+    return {
+      saveStatus: state.saveStatus,
+      compositionRevision: state.compositionRevision,
+      schemaVersion: composition?.schema_version ?? null,
+      barCount: composition?.bar_count ?? null,
+      key: composition?.key ?? null,
+      tempo: composition?.tempo ?? null,
+      timeSignature: composition?.time_signature ?? null,
+      durationTicks: composition?.duration_ticks ?? null,
+      trackCount: tracks.length,
+      trackSummaries: tracks.map((track) => ({
+        id: track.id,
+        instrument: track.instrument,
+        role: track.role,
+        midiProgram: track.midi_program ?? null,
+        channel: track.channel ?? null,
+        eventCount: Array.isArray(track.events) ? track.events.length : 0,
+      })),
+      harmonyChords: (composition?.harmony || []).map((span) => span.chord),
+      melodyPitches: (melody?.events || []).map((event) => event.pitch),
+      undoDepth: Array.isArray(state.noteEditUndoStack) ? state.noteEditUndoStack.length : 0,
+      redoDepth: Array.isArray(state.noteEditRedoStack) ? state.noteEditRedoStack.length : 0,
+      arrangementStatus: state.arrangementStatus,
+      arrangementError: state.arrangementError || '',
+      arrangementStaleReason: state.arrangementStaleReason,
+      arrangementWarnings: Array.isArray(state.arrangementWarnings) ? state.arrangementWarnings : [],
+      candidateCount: Array.isArray(state.arrangementCandidates)
+        ? state.arrangementCandidates.length
+        : 0,
+      rejectedCount: Array.isArray(state.arrangementRejectedAttempts)
+        ? state.arrangementRejectedAttempts.length
+        : 0,
+      selectedCandidateId: state.arrangementSelectedCandidateId,
+      selectedCandidateSuffix: state.arrangementSelectedCandidateId
+        ? String(state.arrangementSelectedCandidateId).slice(-8)
+        : null,
+      auditionMode: state.arrangementAuditionMode,
+      instruction: state.arrangementInstruction || '',
+      operation: state.arrangementOperation,
+      candidateCountControl: state.arrangementCandidateCount,
+      catalogStatus: state.arrangementCatalogStatus,
+      catalogError: state.arrangementCatalogError || '',
+      catalogVersion: state.arrangementCatalog?.catalog_version || null,
+      catalogFingerprintPrefix: typeof state.arrangementCatalogFingerprint === 'string'
+        ? state.arrangementCatalogFingerprint.slice(0, 12)
+        : null,
+      provider: state.arrangementProvider,
+      selectedCandidateSummary: selected
+        ? {
+          candidateIdSuffix: String(selected.candidate_id || '').slice(-8),
+          operation: selected.operation,
+          trackCount: selectedTracks.length,
+          trackSummaries: selectedTracks.map((track) => ({
+            id: track.id,
+            instrument: track.instrument,
+            role: track.role,
+            midiProgram: track.midi_program ?? null,
+            eventCount: Array.isArray(track.events) ? track.events.length : 0,
+          })),
+          melodyPitches: (selectedMelody?.events || []).map((event) => event.pitch),
+          harmonyChords: (selected.composition?.harmony || []).map((span) => span.chord),
+          key: selected.composition?.key ?? null,
+          tempo: selected.composition?.tempo ?? null,
+          timeSignature: selected.composition?.time_signature ?? null,
+          durationTicks: selected.composition?.duration_ticks ?? null,
+          warningCodes: selected.warning_codes || [],
+          densityBefore: selected.density?.before || null,
+          densityAfter: selected.density?.after || null,
+          manifestAdded: (selected.manifest?.added_track_ids || []).length,
+          manifestRemoved: (selected.manifest?.removed_track_ids || []).length,
+          duplicateFindingCodes: (selected.duplicate_findings || [])
+            .map((item) => item.code)
+            .filter(Boolean)
+            .slice(0, 16),
+          assertionCodes: (selected.assertions || [])
+            .map((item) => item.code || item.name)
+            .filter(Boolean)
+            .slice(0, 24),
+        }
+        : null,
+      candidateIds: (state.arrangementCandidates || []).map((item) => item.candidate_id),
+      rejectedCodes: (state.arrangementRejectedAttempts || [])
+        .flatMap((attempt) => attempt.codes || [])
+        .slice(0, 24),
+    };
+  });
+}
+
+export async function waitForArrangementStatus(page, status, { timeout = 120_000 } = {}) {
+  const { expect } = await import('@playwright/test');
+  await expect.poll(async () => {
+    const snapshot = await getArrangementSnapshot(page);
+    if (snapshot?.arrangementStatus === 'error' && status !== 'error') {
+      throw new Error(
+        `Arrangement preview failed: ${snapshot.arrangementError || 'unknown'}`,
+      );
+    }
+    return snapshot?.arrangementStatus || 'missing';
+  }, { timeout }).toBe(status);
+  return getArrangementSnapshot(page);
+}
+
+/** Configure arrangement request via store (avoids brittle multi-field UI races). */
+export async function configureArrangementViaStore(page, config) {
+  return page.evaluate((cfg) => {
+    const api = window.__MUKIT_MUSIC_STORE__;
+    if (!api) {
+      return { ok: false, reason: 'store missing' };
+    }
+    const state = api.getState();
+    const patch = {
+      operation: cfg.operation,
+      sourceTrackIds: cfg.sourceTrackIds || [],
+      protectedTrackIds: cfg.protectedTrackIds || [],
+      instrumentationBefore: cfg.instrumentation?.before || [],
+      instrumentationAfter: cfg.instrumentation?.after || [],
+      preserveMelody: cfg.preserveMelody !== false,
+      preserveHarmony: cfg.preserveHarmony !== false,
+      rangeAdjustment: cfg.rangeAdjustment || 'reject',
+      candidateCount: cfg.candidateCount || 1,
+      instruction: cfg.instruction != null ? cfg.instruction : '',
+    };
+    if (cfg.allowUnlistedAfter != null) {
+      patch.allowUnlistedAfter = Boolean(cfg.allowUnlistedAfter);
+    }
+    const ok = state.setArrangementControls(patch);
+    const after = api.getState();
+    return {
+      ok: Boolean(ok),
+      operation: after.arrangementOperation,
+      sourceCount: after.arrangementSourceTrackIds.length,
+      afterPartCount: after.arrangementInstrumentationAfter.length,
+      candidateCount: after.arrangementCandidateCount,
+      catalogStatus: after.arrangementCatalogStatus,
+    };
+  }, config);
+}
+
+/** Intercept POST /composition/arrangement/preview with a deterministic body or error. */
+export async function mockArrangementPreviewRoute(page, {
+  body = null,
+  status = 200,
+  once = false,
+  capture = null,
+} = {}) {
+  const handler = async (route) => {
+    const request = route.request();
+    if (capture && typeof capture === 'object') {
+      try {
+        capture.payload = request.postDataJSON();
+      } catch {
+        capture.raw = request.postData();
+      }
+    }
+    if (status >= 400) {
+      await route.fulfill({
+        status,
+        contentType: 'application/json',
+        body: JSON.stringify(body || {
+          detail: {
+            code: 'arrangement_provider_unavailable',
+            message: 'Mocked arrangement preview failure',
+            details: { reason: 'e2e_mock' },
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(body),
+    });
+  };
+  if (once) {
+    await page.route('**/composition/arrangement/preview', async (route) => {
+      await handler(route);
+      await page.unroute('**/composition/arrangement/preview');
+    });
+  } else {
+    await page.route('**/composition/arrangement/preview', handler);
+  }
+}
+
+export async function editArrangementSourceNoteViaStore(page, {
+  trackId = 'piano-melody',
+  noteIndex = 0,
+  nextPitch = 'F4',
+} = {}) {
+  return page.evaluate(({ preferredTrackId, idx, pitch }) => {
+    const api = window.__MUKIT_MUSIC_STORE__;
+    if (!api) {
+      return { ok: false, reason: 'store missing' };
+    }
+    const state = api.getState();
+    const track = (state.editedMusicJson?.tracks || []).find((item) => item.id === preferredTrackId)
+      || (state.editedMusicJson?.tracks || [])[0];
+    if (!track?.events?.length) {
+      return { ok: false, reason: 'no events' };
+    }
+    const note = track.events[idx] || track.events[0];
+    const updated = state.updateNote(track.id, note.id, { pitch });
+    return {
+      ok: Boolean(updated),
+      trackId: track.id,
+      noteId: note.id,
+      beforePitch: note.pitch,
+      afterPitch: pitch,
+      compositionRevision: api.getState().compositionRevision,
+    };
+  }, { preferredTrackId: trackId, idx: noteIndex, pitch: nextPitch });
+}

@@ -3,6 +3,11 @@
 #
 # Prefer host-local `npm run dev` + backend uvicorn for day-to-day UI work;
 # this file keeps a containerized reload path when needed.
+#
+# Arrangement catalog override (optional):
+# 1) Uncomment the bind below so the JSON is visible inside the backend container.
+# 2) Set ARRANGEMENT_INSTRUMENT_CATALOG_PATH=/data/arrangement_instruments.v1.json
+#    in `.env` (container path — not the host path). See docs/composition-arrangement.md.
 
 services:
   backend:

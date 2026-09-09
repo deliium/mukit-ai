@@ -311,6 +311,7 @@ Before treating V2 responses as production-ready, verify:
 - **Analysis:** `POST /analysis/composition` returns a derived `composition.analysis.v1` sidecar for a scope. Not persisted; not used by playback/export. See [composition-analysis.md](composition-analysis.md).
 - **Generation / edit:** `POST /llm/generate-music-json` and `POST /llm/edit-composition-region` return V2 in `music` (input may be V1 or V2, including imported scores). Canonical validation applies; generation ensemble density does not block imported material. Edit/repair prompts may include a bounded advisory analysis summary only.
 - **Harmony / reharmonize:** `POST /harmony/reharmonize/preview` returns an ephemeral candidate (deterministic or AI). Apply is client-side only after fingerprint checks. See Harmony timeline section above.
+- **Arrangement:** `GET /composition/arrangement/instruments` and `POST /composition/arrangement/preview` return a curated catalog and ephemeral orchestration candidates. Catalog `instrument_id` / range metadata are **not** V2 fields — Apply materializes ordinary `instrument`, `role`, `midi_program`, `channel`, and `is_drum`. See [composition-arrangement.md](composition-arrangement.md).
 - **Projects:** SQLite stores V2 after open/save; V1 migrates on read. Imported projects persist with `generationMeta: null`. See [project-persistence.md](./project-persistence.md).
 - **Playback:** `tonePlaybackEngine.js` compiles V2 expression with piecewise tempo; mute/solo is UI-only. Regenerated notation after import comes from backend MusicXML of the installed V2 — never from the uploaded file.
 - **Exports:** `/export/musicxml`, `/export/midi`, and `/export/wav` accept V1 or V2 input, normalize to V2, and attach `X-Mukit-Projection-*` headers (CORS-exposed). MusicXML may report notation omissions such as `automation_omitted_from_notation`; MIDI/WAV inherit the shared MIDI projection report (tempo quantization, automation sampling, articulation transforms, and related codes). WAV uses FluidSynth on the same MIDI bytes; env vars: `FLUIDSYNTH_BIN`, `COMPOSITION_WAV_SOUNDFONT` (Docker default `/usr/share/sounds/sf2/FluidR3_GM.sf2`), `COMPOSITION_WAV_SAMPLE_RATE`, `COMPOSITION_WAV_GAIN`, `COMPOSITION_WAV_TIMEOUT_SECONDS`. Missing FluidSynth/SoundFont → `503`.
@@ -321,6 +322,7 @@ Staged generation, region editing, and V1 compatibility details: [composition-v1
 ## See Also
 
 - [Composition Development](composition-development.md) — continue / add section / vary with multi-candidate preview
+- [Composition Arrangement](composition-arrangement.md) — instrumentation / texture redistribution preview (catalog not persisted)
 - [Composition Analysis](composition-analysis.md) — deterministic sidecar report (not part of canonical V2)
 - [MIDI and MusicXML import](import.md) — ingestion mappings, limits, issue codes
 - [Composition V1](composition-v1.md) — staged generation, region editing, V1 parser compatibility

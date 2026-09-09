@@ -239,7 +239,7 @@ Each candidate response:
   - Logging requirements: captured-console assertions verify the environment/build gate suppresses disabled levels, permit only operation/version/count/status/code/fingerprint metadata when enabled, and reject instruction text, event IDs/pitches, complete candidates, compositions, and API payloads.
   - Dependencies: Tasks 9-11.
 
-- [ ] Task 13: Add deterministic Playwright acceptance for the example, every operation family, stale protection, persistence, and mobile accessibility.
+- [x] Task 13: Add deterministic Playwright acceptance for the example, every operation family, stale protection, persistence, and mobile accessibility.
   - Files: create `frontend/e2e/arrangement-workflow.spec.js`; update `frontend/e2e/helpers.js` and mock/fake-provider routing helpers as needed.
   - Deliverable: seed piano melody, piano accompaniment, and bass; request three piano/cello/string-ensemble candidates with melody preservation; prove the working V2/revision/history/save state is unchanged through preview and audition; apply a non-first candidate; verify recognizable melody, exact harmony/top-level metadata, explicit target notes, catalog-consistent programs/ranges, declared topology, no accidental clones, one undo entry, and save/reopen persistence of only the applied V2.
   - Deliverable: cover add/remove accompaniment, simplify/density direction, countermelody, intentional doubling, stale after note/settings change, warning confirmation, rejected impossible range, source/candidate playback, undo/redo, API failure atomicity, keyboard operation, and 390x844 no-overflow layout.
@@ -247,7 +247,7 @@ Each candidate response:
   - Logging requirements: E2E may assert sanitized operation/candidate-count/version/status/code logs only. Do not emit or attach raw prompts, instructions, compositions, event arrays, or secrets beyond normal governed Playwright failure artifacts.
   - Dependencies: Tasks 7, 11, and 12.
 
-- [ ] Task 14: Document arrangement contracts, catalog/range policy, operation semantics, lifecycle, safety guarantees, and tests.
+- [x] Task 14: Document arrangement contracts, catalog/range policy, operation semantics, lifecycle, safety guarantees, and tests.
   - Files: create `docs/composition-arrangement.md`; update `README.md`, `docs/composition-v2.md`, `docs/composition-analysis.md`, `docs/project-persistence.md`, `docs/testing.md`, `docs/CODEBASE_MAP.md`, `.env.example`, `docker-compose.yml`/`compose.dev.yml` usage documentation where the optional override is exposed, and `AGENTS.md`. Route documentation through the mandatory `$aif-docs` checkpoint.
   - Deliverable: document API examples including explicit before/after instrumentation, role-versus-instrument semantics, curated GM scope, configurable catalog validation/versioning, concert-pitch absolute/preferred ranges, hard errors versus warnings, source-note redistribution, duplicate/doubling policy, harmony/melody preservation, explicit-event requirement, channel limits, topology manifest, fingerprints, candidate lifecycle, fake mode, and error/warning codes.
   - Deliverable: document the piano/cello/string-ensemble acceptance example, focused/full test commands, privacy-safe logging fields, frontend log-level control, and deferred sectional/advanced orchestration scope. State clearly that previews are session-only and only applied Composition V2 is persisted. Explain that an override path must be visible inside the backend container and provide a read-only Compose override example rather than implying an arbitrary host path works automatically.
@@ -255,7 +255,7 @@ Each candidate response:
   - Logging requirements: docs list allowed operation/stage/provider/model/version/count/timing/code/fingerprint fields and prohibited keys, prompt/instruction text, provider output, full composition/analysis, event/pitch/harmony arrays, and catalog override contents.
   - Dependencies: Tasks 7, 11, 12, and 13.
 
-- [ ] Task 15: Run focused and full quality gates and fix regressions without weakening arrangement invariants.
+- [x] Task 15: Run focused and full quality gates and fix regressions without weakening arrangement invariants.
   - Files: no planned artifact beyond corrections required by failing checks; do not create a test report.
   - Deliverable: run focused backend catalog/schema/context/patch/validation/LLM/route tests, full backend pytest, frontend unit tests, production build, focused fake-provider Playwright arrangement workflow, and relevant development/harmony/motif/import/export E2E regressions when the stack is available.
   - Commands: from `backend/`, run `../.venv/bin/python -m pytest tests/test_instrument_catalog.py tests/test_arrangement_schemas.py tests/test_composition_arrangement_context.py tests/test_composition_arrangement_patch.py tests/test_composition_arrangement_validation.py tests/test_llm_composition_arrangement.py tests/test_composition_arrangement_routes.py`, then `../.venv/bin/python -m pytest`. From `frontend/`, run `npm test`, `npm run build`, and `npm run test:e2e -- e2e/arrangement-workflow.spec.js` against `LLM_FAKE_MODE=1`.
