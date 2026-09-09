@@ -108,22 +108,28 @@ function candidateFrom(base, { candidateId = 'dev-cand-aaaa', fingerprint = 'b'.
   };
 }
 
-test('development preview is ephemeral and apply mutates with one history entry', async (t) => {
+test('development preview is ephemeral and apply succeeds with matching fingerprints', async (t) => {
+  const { compositionEditFingerprint } = await import('../utils/compositionCandidates.js');
   const base = sixteenBarComposition();
+  const candA = candidateFrom(base, { candidateId: 'dev-cand-one1' });
+  const candB = candidateFrom(base, { candidateId: 'dev-cand-two2' });
+  const sourceFp = await compositionEditFingerprint(base);
+  candA.edit_source_fingerprint = sourceFp;
+  candB.edit_source_fingerprint = sourceFp;
+  candA.candidate_fingerprint = await compositionEditFingerprint(candA.composition);
+  candB.candidate_fingerprint = await compositionEditFingerprint(candB.composition);
+
   const restore = installAxiosStub(async (config) => {
     assert.equal(config.url, '/composition/development/preview');
     return {
       data: {
-        edit_source_fingerprint: 'a'.repeat(64),
+        edit_source_fingerprint: sourceFp,
         algorithm_version: 'composition.development.v1',
         operation: 'continue',
         development_intent: 'continue',
         variation_strength: 'balanced',
         requested_candidate_count: 2,
-        candidates: [
-          candidateFrom(base, { candidateId: 'dev-cand-one1', fingerprint: 'b'.repeat(64) }),
-          candidateFrom(base, { candidateId: 'dev-cand-two2', fingerprint: 'c'.repeat(64) }),
-        ],
+        candidates: [candA, candB],
         warning_codes: [],
         provider: 'fake',
         model: 'fake-deterministic',
@@ -154,6 +160,7 @@ test('development preview is ephemeral and apply mutates with one history entry'
     developmentAuditionActive: false,
     selectedProvider: 'fake',
     selectedModel: 'fake-deterministic',
+    currentProjectId: null,
   });
 
   const before = structuredClone(useMusicStore.getState().editedMusicJson);
@@ -161,16 +168,20 @@ test('development preview is ephemeral and apply mutates with one history entry'
   assert.equal(ok, true);
   assert.deepEqual(useMusicStore.getState().editedMusicJson, before);
   assert.equal(useMusicStore.getState().developmentCandidates.length, 2);
-  assert.equal(useMusicStore.getState().developmentSelectedCandidateId, 'dev-cand-one1');
 
   useMusicStore.getState().selectDevelopmentCandidate('dev-cand-two2');
   assert.equal(useMusicStore.getState().developmentSelectedCandidateId, 'dev-cand-two2');
   assert.deepEqual(useMusicStore.getState().editedMusicJson, before);
 
-  // Fingerprints in stub won't match local recompute — expect apply to fail verification.
   const applied = await useMusicStore.getState().applySelectedDevelopmentCandidate();
-  assert.equal(applied, false);
-  assert.deepEqual(useMusicStore.getState().editedMusicJson, before);
+  assert.equal(applied, true);
+  const after = useMusicStore.getState().editedMusicJson;
+  assert.equal(after.bar_count, 24);
+  assert.equal(useMusicStore.getState().noteEditUndoStack.length, 1);
+  for (let i = 0; i < before.tracks[0].events.length; i += 1) {
+    assert.equal(after.tracks[0].events[i].pitch, before.tracks[0].events[i].pitch);
+    assert.equal(after.tracks[0].events[i].start_tick, before.tracks[0].events[i].start_tick);
+  }
 });
 
 test('development selection and discard do not dirty history', () => {

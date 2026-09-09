@@ -24,14 +24,13 @@ export const VARIATION_STRENGTHS = Object.freeze(['conservative', 'balanced', 'e
 export const DEVELOPMENT_SECTION_TYPES = Object.freeze([
   'intro',
   'verse',
+  'pre_chorus',
   'chorus',
   'bridge',
-  'outro',
   'solo',
-  'break',
-  'interlude',
-  'prechorus',
-  'other',
+  'breakdown',
+  'outro',
+  'unsectioned',
 ]);
 
 export const DEVELOPMENT_MIN_CANDIDATE_COUNT = 1;

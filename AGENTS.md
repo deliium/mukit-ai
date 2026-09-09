@@ -76,11 +76,16 @@ mukit-ai/
 | `backend/app/routers/projects.py` | Project CRUD + autosave APIs |
 | `backend/run.py` / `uvicorn app.main:app` | Backend process entry |
 | `frontend/src/main.jsx` | Frontend bootstrap |
-| `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import + analysis + harmony preview) |
+| `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import + analysis + harmony + development preview) |
 | `frontend/src/components/ImportControls.jsx` | Import / replace UX |
 | `frontend/src/components/CompositionAnalysisPanel.jsx` | Analysis tab UI |
+| `frontend/src/components/CompositionDevelopmentPanel.jsx` | Develop tab candidate workflow |
 | `frontend/src/components/MotifPanel.jsx` | Motifs tab authoring / apply UI |
 | `frontend/src/components/HarmonyTimelinePanel.jsx` | Harmony tab timeline + reharmonize preview/apply |
+| `backend/app/routers/composition_development.py` | `POST /composition/development/preview` |
+| `backend/app/composition_development_schemas.py` | Development preview request/candidate DTOs |
+| `backend/app/services/llm_composition_development.py` | Multi-candidate development orchestration |
+| `backend/app/services/composition_development_patch.py` | Append/variation draft realization |
 | `docker-compose.yml` | Production-local backend + nginx frontend |
 | `compose.dev.yml` | Optional hot-reload override |
 | `.env.example` | Env template for LLM/import settings |
@@ -93,6 +98,7 @@ mukit-ai/
 | README | `README.md` | Install, features, env vars, run instructions |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |
+| Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |
 | Project persistence | `docs/project-persistence.md` | SQLite projects and migrations |

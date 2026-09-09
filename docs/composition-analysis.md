@@ -1,4 +1,4 @@
-[← Composition V2](composition-v2.md) · [Back to README](../README.md) · [MIDI/MusicXML Import →](import.md)
+[← Composition Development](composition-development.md) · [Back to README](../README.md) · [MIDI/MusicXML Import →](import.md)
 
 # Composition Analysis
 
@@ -11,7 +11,7 @@ Native Python over integer ticks and MIDI pitch classes is authoritative. `music
 | Rule | Detail |
 |------|--------|
 | Schema | `schema_version: "composition.analysis.v1"` |
-| Algorithm identity | `algorithm_version` (currently `analysis.native.v1`) |
+| Algorithm identity | `algorithm_version` (currently `analysis.native.v2`) |
 | Source identity | `source_fingerprint` from analysis-relevant V2 fields only |
 | Persistence | No database migration; no server-side analysis cache |
 | Frontend cache | At most one successful report in Zustand, keyed by contract version + full `compositionRevision` + normalized scope |

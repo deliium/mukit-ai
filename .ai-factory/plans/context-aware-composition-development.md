@@ -172,7 +172,7 @@ Each candidate response includes:
 
 ### Phase 4: Acceptance, Documentation, and Quality Gates
 
-- [ ] Task 10: Finish frontend API, utility, store, and playback regression coverage.
+- [x] Task 10: Finish frontend API, utility, store, and playback regression coverage.
   - Files: complete `frontend/src/api/musicApi.test.js`, `frontend/src/utils/compositionCandidates.test.js`, `frontend/src/store/musicStore.development.test.js` (or existing store tests), and relevant `frontend/src/utils/playback*.test.js` suites.
   - Deliverable: prove non-mutating preview and candidate selection, stale/tamper rejection, canonical extension validation, source/outside-range preservation, candidate audition isolation, and one-step apply/undo across all three operations.
   - Expected behavior: existing generation, import, analysis, motif, harmony, piano-roll, playback, project, save, and reset tests continue to pass. No candidate state appears in persisted project payloads.
@@ -180,7 +180,7 @@ Each candidate response includes:
   - Logging requirements: captured console tests permit operation/count/status/code/fingerprint-prefix metadata and reject full payloads, event arrays, instructions, and candidate documents.
   - Dependencies: Tasks 7-9.
 
-- [ ] Task 11: Add deterministic Playwright acceptance for continuation, variation, stale protection, persistence, and mobile layout.
+- [x] Task 11: Add deterministic Playwright acceptance for continuation, variation, stale protection, persistence, and mobile layout.
   - Files: create `frontend/e2e/composition-development-workflow.spec.js`; update `frontend/e2e/helpers.js` and Playwright fixture/routing helpers as needed.
   - Deliverable: with `LLM_FAKE_MODE=1`, open a finished 16-bar A composition, request three independent 8-bar continuation candidates, prove the working composition/revision/save state/history remain unchanged, audition and select a non-default candidate, apply it, and verify a canonical 24-bar result whose original 16 bars are deep-equal to the source.
   - Deliverable: cover add-section transitions from intro to verse/chorus/bridge/outro, contrasting B identity diagnostics, selected-section alternative replacement, exact outside-range preservation, undo/redo, save/reopen of only the applied candidate, discard, and edit-after-preview stale blocking.
@@ -189,7 +189,7 @@ Each candidate response includes:
   - Logging requirements: E2E may inspect sanitized operation/candidate-count/status/code logs only. Do not emit or attach full composition/event/prompt data except normal Playwright failure artifacts already governed by repository policy.
   - Dependencies: Tasks 5, 9, and 10.
 
-- [ ] Task 12: Document the Composition Development contract, lifecycle, controls, safety guarantees, and test commands.
+- [x] Task 12: Document the Composition Development contract, lifecycle, controls, safety guarantees, and test commands.
   - Files: create `docs/composition-development.md`; update `README.md`, `docs/composition-v2.md`, `docs/testing.md`, `docs/CODEBASE_MAP.md`, `.env.example` only if new limits/settings are introduced, and `AGENTS.md` if the project structure/key entry points change. Route documentation work through the mandatory `$aif-docs` checkpoint.
   - Deliverable: document operations/intents/strength semantics, request/response examples, independent candidate generation, stateless preview/apply lifecycle, full edit fingerprints, source preservation, track/instrument rules, mixed-meter extension, motifs/harmony/analysis context, seam policy, partial candidate success, fake mode, error codes, limits, and privacy-safe logging.
   - Deliverable: add focused backend/frontend/E2E commands and the 16+8 acceptance scenario. State clearly that analysis is derived/advisory, harmony is non-playable metadata, candidates are not persisted until Apply, and source ties crossing an immutable append boundary are rejected in this version.
@@ -197,7 +197,7 @@ Each candidate response includes:
   - Logging requirements: documentation must list allowed fields (operation, stage, provider/model, counts, timings, codes, fingerprint prefixes) and prohibited data (keys, prompts/instructions, full compositions/analysis, event/harmony arrays, provider raw output).
   - Dependencies: Tasks 5, 9, 10, and 11.
 
-- [ ] Task 13: Run focused and full quality gates and fix regressions without weakening invariants.
+- [x] Task 13: Run focused and full quality gates and fix regressions without weakening invariants.
   - Files: no planned artifact beyond corrections required by failing checks; do not create a test report.
   - Deliverable: run backend focused development tests, full backend pytest, frontend unit tests, frontend production build, focused Playwright fake-provider workflow, and relevant existing harmony/motif/editing E2E regressions when the stack is available.
   - Commands: from `backend/`, `../.venv/bin/python -m pytest tests/test_composition_development_schemas.py tests/test_composition_edit_fingerprint.py tests/test_composition_development_context.py tests/test_composition_development_identity.py tests/test_composition_development_patch.py tests/test_llm_composition_development.py tests/test_composition_development_routes.py`; then `../.venv/bin/python -m pytest`. From `frontend/`, run `npm test`, `npm run build`, and `npm run test:e2e -- e2e/composition-development-workflow.spec.js` against `LLM_FAKE_MODE=1`.

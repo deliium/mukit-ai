@@ -39,6 +39,10 @@ export default defineConfig({
         target: 'http://localhost:8888',
         changeOrigin: true
       },
+      '/composition': {
+        target: 'http://localhost:8888',
+        changeOrigin: true
+      },
       '/ready': {
         target: 'http://localhost:8888',
         changeOrigin: true

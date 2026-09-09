@@ -215,6 +215,25 @@ cd frontend && npm run test:e2e -- e2e/harmony-workflow.spec.js
 
 Covers Harmony tab timeline, bars 9–12 `increase_tension` + `preserve_melody_adapt_harmony` preview non-mutation, apply with melody deep-equality, undo restore, local replace preserving note events, and 390px no document overflow. Backend suites: `test_composition_harmony_*.py`, `test_composition_reharmonization.py`, `test_harmony_routes.py`, `test_llm_reharmonization.py`. Logs may include operation, policy, bar range, counts, finding codes, and fingerprint prefixes only — never instructions, chord arrays, compositions, or events.
 
+### Composition development (continuation / variation)
+
+```bash
+cd backend && ../.venv/bin/python -m pytest \
+  tests/test_composition_development_schemas.py \
+  tests/test_composition_edit_fingerprint.py \
+  tests/test_composition_development_context.py \
+  tests/test_composition_development_identity.py \
+  tests/test_composition_development_patch.py \
+  tests/test_llm_composition_development.py \
+  tests/test_composition_development_routes.py \
+  tests/test_composition_development_backend_suite.py -q
+
+cd frontend && npm test -- src/utils/compositionCandidates.test.js src/store/musicStore.development.test.js
+cd frontend && LLM_FAKE_MODE=1 npm run test:e2e -- e2e/composition-development-workflow.spec.js
+```
+
+Covers 16-bar A + 8-bar continuation with three candidates, non-mutating preview, select non-first candidate, Apply to 24 bars with exact prefix, Develop tab + 390px layout. Contract: [composition-development.md](composition-development.md).
+
 Artifacts (trace/video on failure) are gitignored under `frontend/test-results/` and `frontend/playwright-report/`.
 
 ## Frontend Smoke Checks

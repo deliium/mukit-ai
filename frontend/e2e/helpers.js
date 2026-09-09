@@ -498,6 +498,12 @@ export async function openHarmonyTab(page) {
   console.info('[e2e-harmony] Opened Harmony tab');
 }
 
+export async function openDevelopTab(page) {
+  await openComposerTab(page, 'develop');
+  await page.getByTestId('develop-panel').waitFor({ state: 'visible', timeout: 30_000 });
+  console.info('[e2e-develop] Opened Develop tab');
+}
+
 export async function openPianoTab(page) {
   await openComposerTab(page, 'piano');
   await page.getByTestId('piano-roll-grid').waitFor({ state: 'visible', timeout: 30_000 });

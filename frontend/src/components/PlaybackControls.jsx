@@ -82,12 +82,12 @@ const PlaybackControls = () => {
         return candidate.composition;
       }
     }
-    return playbackComposition;
+    return editedMusicJson;
   }, [
     developmentAuditionActive,
     developmentCandidates,
     developmentSelectedCandidateId,
-    playbackComposition,
+    editedMusicJson,
   ]);
 
   const playbackRevision = useMemo(

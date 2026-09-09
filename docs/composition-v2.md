@@ -1,4 +1,4 @@
-[Back to README](../README.md) · [Composition Analysis →](composition-analysis.md)
+[Back to README](../README.md) · [Composition Development →](composition-development.md)
 
 # Composition V2
 
@@ -320,6 +320,7 @@ Staged generation, region editing, and V1 compatibility details: [composition-v1
 
 ## See Also
 
+- [Composition Development](composition-development.md) — continue / add section / vary with multi-candidate preview
 - [Composition Analysis](composition-analysis.md) — deterministic sidecar report (not part of canonical V2)
 - [MIDI and MusicXML import](import.md) — ingestion mappings, limits, issue codes
 - [Composition V1](composition-v1.md) — staged generation, region editing, V1 parser compatibility
