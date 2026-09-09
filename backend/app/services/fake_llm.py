@@ -201,6 +201,305 @@ async def draft_fake_composition_development(
     return draft
 
 
+async def draft_fake_composition_arrangement(
+    request,
+    provider: LLMProviderSettings,
+    *,
+    context=None,
+    candidate_ordinal: int = 1,
+    creative_direction: str = "preserve melody contour; redistribute support across target instruments",
+    repair_codes: list[str] | None = None,
+):
+    """Deterministic relative arrangement draft (no network).
+
+    Returns a ``CompositionArrangementDraft`` that must still pass through
+    production context/realization/validation — never a preassembled V2.
+    """
+    from app.arrangement_schemas import (
+        CompositionArrangementDraft,
+        CompositionArrangementPreviewRequest,
+    )
+    from app.services.composition_arrangement_context import build_arrangement_source_context
+    from app.services.instrument_identity import normalize_role
+
+    if not isinstance(request, CompositionArrangementPreviewRequest):
+        raise FakeLLMError("Fake composition arrangement requires CompositionArrangementPreviewRequest")
+
+    _maybe_inject_malformed("arrangement")
+    active_context = context or build_arrangement_source_context(request)
+    track_by_id = {track.id: track for track in request.composition.tracks}
+    source_set = set(request.source_track_ids)
+
+    def refs_for(track_id: str) -> list[str]:
+        return [note.ref for note in active_context.source_notes if note.track_id == track_id]
+
+    def source_tracks_for_role(role: str | None) -> list[str]:
+        if role is None:
+            return []
+        wanted = normalize_role(role) or role
+        matched: list[str] = []
+        for track_id in request.source_track_ids:
+            track = track_by_id.get(track_id)
+            if track is None:
+                continue
+            if (normalize_role(track.role) or track.role) == wanted:
+                matched.append(track_id)
+        return matched
+
+    before_by_id = {part.part_id: part for part in request.instrumentation.before}
+    after_parts = list(request.instrumentation.after)
+    operation = request.operation
+    parts: list[dict] = []
+    claimed_sources: set[str] = set()
+
+    # Candidate variation: drop additional accompaniment notes / nudge generated pitches.
+    density_drop = max(0, candidate_ordinal - 1)
+    pitch_cycle = _pitch_cycle(candidate_ordinal - 1)
+
+    def generated_notes(*, count: int = 1, start_tick: int = 0, duration: int = 480) -> list[dict]:
+        notes = []
+        for index in range(count):
+            pitch = pitch_cycle[index % len(pitch_cycle)]
+            notes.append(
+                {
+                    "pitch": pitch,
+                    "relative_start_tick": start_tick + index * duration,
+                    "duration_ticks": duration,
+                    "velocity": 55 + (candidate_ordinal % 7),
+                }
+            )
+        return notes
+
+    if operation == "remove_accompaniment":
+        for before in request.instrumentation.before:
+            track_ids = list(before.source_track_ids) or [
+                tid for tid in request.source_track_ids if tid in source_set
+            ]
+            parts.append(
+                {
+                    "action": "remove",
+                    "part_id": before.part_id,
+                    "source_track_ids": track_ids,
+                }
+            )
+    elif operation == "change_instrumentation":
+        for after in after_parts:
+            source_ids = list(after.source_track_ids)
+            if not source_ids:
+                # Prefer before part with same ordinal / matching role.
+                for before in request.instrumentation.before:
+                    if before.role == after.role and before.source_track_ids:
+                        source_ids = list(before.source_track_ids)
+                        break
+                if not source_ids and request.source_track_ids:
+                    source_ids = [request.source_track_ids[0]]
+            parts.append(
+                {
+                    "action": "reinstrument",
+                    "part_id": after.part_id,
+                    "source_track_ids": source_ids[:1],
+                }
+            )
+    elif operation == "double_melody":
+        retain_part = next(
+            (part for part in after_parts if part.doubling_policy == "none"),
+            after_parts[0],
+        )
+        double_part = next(
+            (part for part in after_parts if part.doubling_policy != "none"),
+            after_parts[-1],
+        )
+        melody_sources = list(double_part.source_track_ids) or source_tracks_for_role("melody") or list(
+            request.source_track_ids
+        )
+        melody_id = melody_sources[0]
+        parts.append(
+            {
+                "action": "retain",
+                "part_id": retain_part.part_id,
+                "source_track_ids": [melody_id],
+            }
+        )
+        parts.append(
+            {
+                "action": "double",
+                "part_id": double_part.part_id,
+                "source_track_ids": [melody_id],
+                "source_note_refs": refs_for(melody_id),
+            }
+        )
+    elif operation == "create_countermelody":
+        for after in after_parts:
+            if after.role == "countermelody":
+                parts.append(
+                    {
+                        "action": "add",
+                        "part_id": after.part_id,
+                        "notes": generated_notes(count=1 + (candidate_ordinal % 2)),
+                    }
+                )
+                continue
+            sources = list(after.source_track_ids) or source_tracks_for_role(after.role) or list(
+                request.source_track_ids
+            )
+            parts.append(
+                {
+                    "action": "retain",
+                    "part_id": after.part_id,
+                    "source_track_ids": sources[:1],
+                }
+            )
+    elif operation == "add_accompaniment":
+        used_after: set[str] = set()
+        for track_id in request.source_track_ids:
+            track = track_by_id[track_id]
+            track_role = normalize_role(track.role) or track.role
+            match = next(
+                (
+                    part
+                    for part in after_parts
+                    if part.part_id not in used_after
+                    and (normalize_role(part.role) or part.role) == track_role
+                ),
+                None,
+            )
+            if match is None:
+                match = next(
+                    (
+                        part
+                        for part in after_parts
+                        if part.part_id not in used_after and part.part_id in before_by_id
+                    ),
+                    None,
+                )
+            if match is None:
+                continue
+            used_after.add(match.part_id)
+            parts.append(
+                {
+                    "action": "retain",
+                    "part_id": match.part_id,
+                    "source_track_ids": [track_id],
+                }
+            )
+        for after in after_parts:
+            if after.part_id in used_after:
+                continue
+            parts.append(
+                {
+                    "action": "add",
+                    "part_id": after.part_id,
+                    "notes": generated_notes(
+                        count=1 + (candidate_ordinal % 2),
+                        duration=max(240, request.composition.ticks_per_quarter),
+                    ),
+                }
+            )
+    elif operation in {
+        "simplify_arrangement",
+        "decrease_texture_density",
+        "increase_texture_density",
+        "orchestrate_selected_tracks",
+        "piano_to_ensemble",
+    }:
+        # Role-aware redistribution: melody→melody, bass→bass, accompaniment→harmony/pad/rhythm.
+        remaining_refs_by_track = {
+            track_id: refs_for(track_id) for track_id in request.source_track_ids
+        }
+
+        def take_refs(track_ids: list[str], *, drop: int = 0) -> tuple[list[str], list[str]]:
+            chosen_tracks: list[str] = []
+            chosen_refs: list[str] = []
+            for track_id in track_ids:
+                refs = list(remaining_refs_by_track.get(track_id) or [])
+                if not refs:
+                    continue
+                if operation in {"simplify_arrangement", "decrease_texture_density"} and len(refs) > 1:
+                    drop_count = max(1, drop)
+                    keep = max(1, len(refs) - drop_count)
+                    refs = refs[:keep]
+                chosen_tracks.append(track_id)
+                chosen_refs.extend(refs)
+                remaining_refs_by_track[track_id] = [
+                    ref for ref in remaining_refs_by_track.get(track_id, []) if ref not in set(refs)
+                ]
+            return chosen_tracks, chosen_refs
+
+        for after in after_parts:
+            role = normalize_role(after.role) if after.role else None
+            preferred = source_tracks_for_role(after.role) if after.role else []
+            if not preferred:
+                if role in {"melody", "lead"}:
+                    preferred = source_tracks_for_role("melody") or source_tracks_for_role("lead")
+                elif role == "bass":
+                    preferred = source_tracks_for_role("bass")
+                elif role in {"harmony", "pad", "rhythm", "countermelody"}:
+                    preferred = (
+                        source_tracks_for_role("harmony")
+                        or source_tracks_for_role("pad")
+                        or source_tracks_for_role("rhythm")
+                    )
+            if not preferred:
+                preferred = [
+                    track_id
+                    for track_id, refs in remaining_refs_by_track.items()
+                    if refs and track_id not in claimed_sources
+                ]
+            if not preferred and remaining_refs_by_track:
+                preferred = [tid for tid, refs in remaining_refs_by_track.items() if refs][:1]
+
+            source_ids, note_refs = take_refs(preferred, drop=density_drop)
+            claimed_sources.update(source_ids)
+            part_payload: dict = {
+                "action": "redistribute",
+                "part_id": after.part_id,
+                "source_track_ids": source_ids or preferred[:1] or list(request.source_track_ids[:1]),
+                "source_note_refs": note_refs,
+            }
+            if operation == "increase_texture_density":
+                part_payload["notes"] = generated_notes(
+                    count=1,
+                    start_tick=request.composition.ticks_per_quarter,
+                    duration=max(240, request.composition.ticks_per_quarter // 2),
+                )
+            parts.append(part_payload)
+
+        # Ensure every selected source note is claimed for orchestrate/piano_to_ensemble.
+        if operation in {"orchestrate_selected_tracks", "piano_to_ensemble"}:
+            leftover = [
+                (track_id, ref)
+                for track_id, refs in remaining_refs_by_track.items()
+                for ref in refs
+            ]
+            if leftover and parts:
+                target = parts[-1]
+                for track_id, ref in leftover:
+                    if track_id not in target["source_track_ids"]:
+                        target["source_track_ids"].append(track_id)
+                    if ref not in target["source_note_refs"]:
+                        target["source_note_refs"].append(ref)
+    else:
+        raise FakeLLMError(f"Fake arrangement does not support operation={operation}")
+
+    draft = CompositionArrangementDraft.model_validate({"parts": parts})
+    logger.info(
+        "Fake LLM composition arrangement draft created",
+        extra={
+            "provider": provider.provider,
+            "model": provider.model or FAKE_MODEL_ID,
+            "operation": operation,
+            "candidate_ordinal": candidate_ordinal,
+            "part_count": len(parts),
+            "source_note_ref_count": sum(len(part.get("source_note_refs") or []) for part in parts),
+            "generated_note_count": sum(len(part.get("notes") or []) for part in parts),
+            "creative_direction_len": len(creative_direction),
+            "repair_code_count": len(repair_codes or []),
+            "context_note_count": len(active_context.source_notes),
+        },
+    )
+    return draft
+
+
 # Keep generate_fake_music_json and other exports below.
 
 async def generate_fake_music_json(
@@ -917,7 +1216,18 @@ def _maybe_inject_malformed(stage: str) -> None:
     from .llm_music_generator import InvalidLLMOutputError
 
     raw = os.environ.get(FAKE_MALFORMED_ENV, "").strip().lower()
-    if raw in {"1", "true", "yes", "generate", "edit", "motif", "reharmonize", "development", "all"}:
+    if raw in {
+        "1",
+        "true",
+        "yes",
+        "generate",
+        "edit",
+        "motif",
+        "reharmonize",
+        "development",
+        "arrangement",
+        "all",
+    }:
         if raw in {"1", "true", "yes", "all"} or raw == stage:
             logger.warning(
                 "Fake LLM injecting malformed output for tests",

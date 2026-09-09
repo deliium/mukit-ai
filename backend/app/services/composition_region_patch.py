@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from pydantic import ValidationError
 
@@ -14,6 +15,7 @@ from ..composition_schemas import (
     CompositionV1,
     CompositionV2,
     CompositionV2MotifDefinition,
+    CompositionV2NoteEvent,
     reconcile_motifs_for_removed_event_ids,
 )
 from ..schemas import (
@@ -21,7 +23,6 @@ from ..schemas import (
     CompositionEditSelection,
     CompositionRegionReplacementPatch,
     CompositionTrack,
-    CompositionV2NoteEvent,
     LLMMusicHarmonyItem,
     NoteEvent,
 )
@@ -369,6 +370,76 @@ def _event_semantic_tuple(event: NoteEvent | CompositionV2NoteEvent | dict[str, 
 
 def canonical_json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def collect_used_composition_ids(composition: CompositionLike) -> set[str]:
+    """Collect track, event, section, motif, and occurrence ids currently in use."""
+    used: set[str] = set()
+    for track in composition.tracks:
+        used.add(track.id)
+        for event in track.events:
+            if event.id:
+                used.add(event.id)
+    for section in composition.sections:
+        if section.id:
+            used.add(section.id)
+    for motif in getattr(composition, "motifs", []) or []:
+        used.add(motif.id)
+        for occurrence in motif.occurrences:
+            used.add(occurrence.id)
+    return used
+
+
+def allocate_deterministic_id(
+    prefix: str,
+    parts: Sequence[Any],
+    used: set[str],
+    *,
+    digest_bytes: int = 10,
+) -> tuple[str, bool]:
+    """Allocate a collision-free deterministic id. Returns ``(id, collided)``."""
+    digest = hashlib.sha256("|".join(str(part) for part in parts).encode("utf-8")).hexdigest()[
+        :digest_bytes
+    ]
+    base = f"{prefix}-{digest}"
+    candidate = base
+    collided = False
+    suffix = 2
+    while candidate in used:
+        collided = True
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate, collided
+
+
+def group_events_by_tie(
+    events: Sequence[CompositionV2NoteEvent | NoteEvent | dict[str, Any]],
+) -> dict[str, list[Any]]:
+    """Group events that participate in a tie chain by ``tie.group_id``."""
+    groups: dict[str, list[Any]] = {}
+    for event in events:
+        tie = event.get("tie") if isinstance(event, dict) else getattr(event, "tie", None)
+        if tie is None:
+            continue
+        group_id = tie.get("group_id") if isinstance(tie, dict) else tie.group_id
+        groups.setdefault(str(group_id), []).append(event)
+    return groups
+
+
+def sort_note_events_deterministically(
+    events: Sequence[CompositionV2NoteEvent],
+) -> list[CompositionV2NoteEvent]:
+    """Canonical event order: start_tick, pitch, duration_ticks, id."""
+    return sorted(
+        events,
+        key=lambda event: (
+            event.start_tick,
+            event.pitch,
+            event.duration_ticks,
+            event.id or "",
+        ),
+    )
 
 
 def preserved_region_events(

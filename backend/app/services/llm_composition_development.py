@@ -30,16 +30,15 @@ from app.services.composition_development_context import (
     development_context_prompt_payload,
 )
 from app.services.composition_development_patch import realize_development_draft
+from app.services.composition_development_fingerprint import derive_development_candidate_id
 from app.services.composition_edit_fingerprint import (
     composition_edit_fingerprint,
-    derive_development_candidate_id,
     edit_fingerprint_log_prefix,
 )
 from app.services.llm_music_generator import (
     InvalidLLMOutputError,
     LLMGenerationError,
-    NoLLMProviderConfiguredError,
-    UnsupportedLLMProviderError,
+    select_llm_provider,
 )
 
 
@@ -57,22 +56,11 @@ def _select_development_provider(
     request: CompositionDevelopmentPreviewRequest,
     settings: LLMSettings,
 ) -> LLMProviderSettings:
-    if not settings.providers:
-        raise NoLLMProviderConfiguredError("No LLM providers are configured")
-    requested = (request.selection.provider or settings.default_provider or "").strip()
-    requested_model = request.selection.model
-    for provider in settings.providers:
-        if provider.provider == requested:
-            if requested_model and requested_model != provider.model:
-                return LLMProviderSettings(
-                    provider=provider.provider,
-                    model=requested_model,
-                    api_key=provider.api_key,
-                    base_url=provider.base_url,
-                    is_default=provider.is_default,
-                )
-            return provider
-    raise UnsupportedLLMProviderError(f"Unsupported or unavailable LLM provider: {requested}")
+    return select_llm_provider(
+        provider=request.selection.provider,
+        model=request.selection.model,
+        settings=settings,
+    )
 
 
 def _instruction_meta(instruction: str | None) -> dict[str, Any]:

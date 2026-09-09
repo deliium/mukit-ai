@@ -421,3 +421,43 @@ def test_fake_composition_development_draft_is_relative(fake_env):
         for event in track.events:
             assert event.relative_start_tick >= 0
             assert "start_tick" not in event.model_dump(mode="json")
+
+
+def test_fake_composition_arrangement_draft_is_relative(fake_env):
+    from app.arrangement_schemas import CompositionArrangementPreviewRequest
+    from app.llm_settings import LLMProviderSettings
+    from app.services.composition_arrangement_context import build_arrangement_source_context
+    from app.services.composition_arrangement_patch import realize_arrangement_draft
+    from app.services.composition_arrangement_validation import validate_arrangement_candidate
+    from app.services.fake_llm import draft_fake_composition_arrangement
+    from tests.test_composition_arrangement_context import _acceptance_instrumentation, _piano_sketch_v2
+
+    request = CompositionArrangementPreviewRequest.model_validate(
+        {
+            "composition": _piano_sketch_v2(),
+            "operation": "piano_to_ensemble",
+            "source_track_ids": ["piano-melody", "piano-accomp", "bass-1"],
+            "instrumentation": _acceptance_instrumentation(),
+            "candidate_count": 2,
+            "selection": {"provider": "fake", "model": "fake-deterministic"},
+        }
+    )
+    provider = LLMProviderSettings(provider="fake", model="fake-deterministic", api_key="unused")
+    context = build_arrangement_source_context(request)
+    draft = asyncio.run(
+        draft_fake_composition_arrangement(
+            request,
+            provider,
+            context=context,
+            candidate_ordinal=1,
+        )
+    )
+    dumped = draft.model_dump(mode="json")
+    assert "bar_count" not in dumped
+    assert "tracks" not in dumped
+    assert "duration_ticks" not in dumped
+    assert draft.parts
+    # Production path still required.
+    realized = realize_arrangement_draft(request, draft, context=context, candidate_ordinal=1)
+    validation = validate_arrangement_candidate(request, realized, context=context)
+    assert validation.ok is True

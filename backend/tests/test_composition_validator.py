@@ -527,3 +527,45 @@ def test_canonical_profile_rejects_dangling_motif_references():
     result = validate_composition_integrity(composition, profile="canonical")
     assert not result.ok
     assert "motif_event_unresolved" in result.error_codes()
+
+
+def test_practical_range_scope_limits_hard_errors_to_named_tracks():
+    """Opt-in scope: only listed tracks emit practical range hard errors."""
+    payload = _base_composition()
+    payload["tracks"][1]["events"][0]["pitch"] = "C5"  # bass out of practical range
+    # Default: still fails (regression).
+    default = validate_composition_integrity(payload, complexity="simple")
+    assert not default.ok
+    assert "event_out_of_range" in default.error_codes()
+
+    # Scope to unrelated melody track: bass outlier is ignored for practical range.
+    scoped_other = validate_composition_integrity(
+        payload,
+        complexity="simple",
+        practical_range_track_ids=["melody-1"],
+    )
+    assert scoped_other.ok
+    assert "event_out_of_range" not in scoped_other.error_codes()
+
+    # Scope includes the bass track: still a hard error.
+    scoped_bass = validate_composition_integrity(
+        payload,
+        complexity="simple",
+        practical_range_track_ids=["bass-1"],
+    )
+    assert not scoped_bass.ok
+    assert "event_out_of_range" in scoped_bass.error_codes()
+
+
+def test_practical_range_scope_keeps_structural_errors_outside_set():
+    """Structural bounds still fail even when the track is outside the range scope."""
+    payload = _base_composition()
+    payload["tracks"][1]["events"][0]["start_tick"] = 7500
+    payload["tracks"][1]["events"][0]["duration_ticks"] = 480
+    result = validate_composition_integrity(
+        payload,
+        complexity="simple",
+        practical_range_track_ids=["melody-1"],
+    )
+    assert not result.ok
+    assert "event_out_of_range" in result.error_codes() or "schema_invalid" in result.error_codes()

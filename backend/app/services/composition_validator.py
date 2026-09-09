@@ -78,6 +78,7 @@ def validate_composition_integrity(
     requested_instruments: Iterable[str] | None = None,
     complexity: str = "moderate",
     profile: ValidationProfile = "generation",
+    practical_range_track_ids: Iterable[str] | None = None,
 ) -> CompositionValidationResult:
     """Run schema plus musical integrity checks; return structured diagnostics.
 
@@ -89,8 +90,16 @@ def validate_composition_integrity(
     ``requested_instruments`` is accepted for call-site compatibility but does not
     emit ``missing_requested_instrument`` here, avoiding duplicate diagnostics with
     ``constraint_missing_instrument_family`` during staged generation.
+
+    ``practical_range_track_ids`` (opt-in): when provided, role/instrument practical
+    pitch-range hard errors are limited to those track IDs. All other structural
+    checks still run for every track. Default ``None`` retains all-track range
+    enforcement for existing callers.
     """
     requested = list(requested_instruments or [])
+    range_scope = (
+        None if practical_range_track_ids is None else frozenset(practical_range_track_ids)
+    )
     logger.debug(
         "Starting composition integrity validation",
         extra={
@@ -99,6 +108,8 @@ def validate_composition_integrity(
             "requested_instrument_check": "delegated_to_generation_constraints",
             "complexity": complexity,
             "input_type": type(music).__name__,
+            "practical_range_scoped": range_scope is not None,
+            "practical_range_track_count": None if range_scope is None else len(range_scope),
         },
     )
     if requested:
@@ -142,7 +153,7 @@ def validate_composition_integrity(
         _check_bar_overflow(composition, errors, warnings)
     else:
         _check_canonical_tracks(composition, errors, warnings)
-    _check_pitch_ranges(composition, errors, warnings)
+    _check_pitch_ranges(composition, errors, warnings, practical_range_track_ids=range_scope)
     if isinstance(composition, CompositionV2):
         _check_v2_expression(composition, errors, warnings)
         _check_v2_motifs(composition, errors, warnings)
@@ -346,6 +357,8 @@ def _check_pitch_ranges(
     composition: CompositionLike,
     errors: list[ValidationDiagnostic],
     warnings: list[ValidationDiagnostic],
+    *,
+    practical_range_track_ids: frozenset[str] | None = None,
 ) -> None:
     for track in composition.tracks:
         if track.is_drum:
@@ -360,6 +373,11 @@ def _check_pitch_ranges(
                 )
             continue
 
+        # Opt-in scope: skip practical role/instrument range hard errors for
+        # tracks outside the changed-target set. Invalid pitch parsing still runs.
+        apply_practical_range = (
+            practical_range_track_ids is None or track.id in practical_range_track_ids
+        )
         low, high = _pitch_range_for_track(track.role, track.instrument, track.staff)
         for event in track.events:
             try:
@@ -372,6 +390,8 @@ def _check_pitch_ranges(
                         context={"track_id": track.id, "pitch": event.pitch},
                     )
                 )
+                continue
+            if not apply_practical_range:
                 continue
             if midi < low or midi > high:
                 errors.append(

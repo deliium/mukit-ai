@@ -6,7 +6,7 @@ import logging
 import re
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Literal, TypedDict
+from typing import Literal, Sequence, TypedDict
 
 from app.composition_schemas import (
     CompositionV1,
@@ -220,6 +220,7 @@ def render_midi_with_report(composition: CompositionV1 | CompositionV2) -> MidiR
         record_motif_metadata_omission(composition, report)
         track_notes = _project_all_tracks(composition, report)
         cc_streams = [_build_track_cc_stream(track, composition, timeline, report) for track in composition.tracks]
+        assert_shared_channel_program_compatible(composition.tracks)
         _assert_no_channel_control_conflicts(composition.tracks, cc_streams, report)
 
         stream = _build_projection_stream(composition, timeline, track_notes, cc_streams, report)
@@ -492,10 +493,125 @@ def _dedupe_consecutive_cc_values(
     return deduped
 
 
+def assert_shared_channel_program_compatible(
+    tracks: Sequence[CompositionV2Track],
+) -> None:
+    """Reject shared MIDI channels with conflicting programs or drum placement.
+
+    Channel 10 is reserved for drums. Pitched tracks that share a channel must
+    use the same ``midi_program``. Callers that also need CC-stream equality
+    should use :func:`assert_shared_channel_control_compatible` or MIDI render.
+    """
+    by_channel: dict[int, list[CompositionV2Track]] = {}
+    for track in tracks:
+        by_channel.setdefault(int(track.channel), []).append(track)
+
+    for channel, group in by_channel.items():
+        if channel == 10:
+            non_drums = [track.id for track in group if not track.is_drum]
+            if non_drums:
+                logger.error(
+                    "Non-drum track assigned to reserved drum channel",
+                    extra={"channel": channel, "track_count": len(non_drums)},
+                )
+                raise CompositionMidiError(
+                    f"Channel 10 is reserved for drums (conflicting track count={len(non_drums)})"
+                )
+            continue
+        drums = [track.id for track in group if track.is_drum]
+        if drums:
+            logger.error(
+                "Drum track assigned outside channel 10",
+                extra={"channel": channel, "track_count": len(drums)},
+            )
+            raise CompositionMidiError(
+                f"Drum tracks must use channel 10 (conflicting track count={len(drums)})"
+            )
+        if len(group) < 2:
+            continue
+        programs = {int(track.midi_program) for track in group}
+        if len(programs) > 1:
+            logger.error(
+                "MIDI channel program conflict",
+                extra={
+                    "channel": channel,
+                    "track_count": len(group),
+                    "program_count": len(programs),
+                },
+            )
+            raise CompositionMidiError(
+                f"Tracks sharing channel {channel} must use the same midi_program "
+                f"(found {len(programs)} programs across {len(group)} tracks)"
+            )
+
+
+def tracks_share_channel_controllers(
+    left: CompositionV2Track,
+    right: CompositionV2Track,
+) -> bool:
+    """True when static volume/pan/expression and CC-like lanes are compatible for sharing."""
+    if (
+        left.volume != right.volume
+        or left.pan != right.pan
+        or left.expression != right.expression
+    ):
+        return False
+    left_pedals = [pedal.model_dump(mode="json") for pedal in left.sustain_pedals]
+    right_pedals = [pedal.model_dump(mode="json") for pedal in right.sustain_pedals]
+    if left_pedals != right_pedals:
+        return False
+    left_auto = [lane.model_dump(mode="json") for lane in left.automation]
+    right_auto = [lane.model_dump(mode="json") for lane in right.automation]
+    return left_auto == right_auto
+
+
+def assert_shared_channel_control_compatible(
+    tracks: Sequence[CompositionV2Track],
+    cc_streams: Sequence[Sequence[tuple[int, int, int]]] | None = None,
+    *,
+    report: ProjectionReport | None = None,
+) -> None:
+    """Reject shared-channel tracks whose compiled CC streams disagree."""
+    if cc_streams is None:
+        # Static compatibility only (volume/pan/expression/pedals/automation).
+        by_channel: dict[int, list[CompositionV2Track]] = {}
+        for track in tracks:
+            by_channel.setdefault(int(track.channel), []).append(track)
+        for channel, group in by_channel.items():
+            if len(group) < 2:
+                continue
+            reference = group[0]
+            for track in group[1:]:
+                if not tracks_share_channel_controllers(reference, track):
+                    if report is not None:
+                        report.add_issue(
+                            code="midi_channel_control_conflict",
+                            severity="error",
+                            status="failed",
+                            path=f"tracks/{track.id}",
+                            details={"channel": channel, "reference_track_id": reference.id},
+                        )
+                    logger.error(
+                        "MIDI channel control conflict",
+                        extra={
+                            "channel": channel,
+                            "track_id": track.id,
+                            "reference_track_id": reference.id,
+                        },
+                    )
+                    raise CompositionMidiError(
+                        f"Track-local MIDI controls conflict on channel {channel} "
+                        f"(track {track.id} vs {reference.id})"
+                    )
+        return
+
+    _assert_no_channel_control_conflicts(list(tracks), list(cc_streams), report)
+
+
 def _assert_no_channel_control_conflicts(
     tracks: list[CompositionV2Track],
     cc_streams: list[list[tuple[int, int, int]]],
-    report: ProjectionReport,
+    report: ProjectionReport | None,
 ) -> None:
     by_channel: dict[int, list[tuple[str, list[tuple[int, int, int]]]]] = {}
     for track, stream in zip(tracks, cc_streams):
@@ -507,13 +623,14 @@ def _assert_no_channel_control_conflicts(
         reference_id, reference = entries[0]
         for track_id, stream in entries[1:]:
             if stream != reference:
-                report.add_issue(
-                    code="midi_channel_control_conflict",
-                    severity="error",
-                    status="failed",
-                    path=f"tracks/{track_id}",
-                    details={"channel": channel, "reference_track_id": reference_id},
-                )
+                if report is not None:
+                    report.add_issue(
+                        code="midi_channel_control_conflict",
+                        severity="error",
+                        status="failed",
+                        path=f"tracks/{track_id}",
+                        details={"channel": channel, "reference_track_id": reference_id},
+                    )
                 logger.error(
                     "MIDI channel control conflict",
                     extra={"channel": channel, "track_id": track_id, "reference_track_id": reference_id},

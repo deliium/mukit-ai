@@ -135,6 +135,7 @@ __all__ = [
     "OversizedLLMGenerationRequestError",
     "UnsupportedLLMProviderError",
     "generate_music_json",
+    "select_llm_provider",
 ]
 
 
@@ -332,27 +333,43 @@ async def generate_music_json(
         return music, warnings, provider, validation_report
 
 
-def _select_provider(request: LLMMusicGenerationRequest, settings: LLMSettings) -> LLMProviderSettings:
+def select_llm_provider(
+    *,
+    provider: str | None,
+    model: str | None,
+    settings: LLMSettings,
+) -> LLMProviderSettings:
+    """Resolve a configured provider/model pair shared by generate/edit/arrangement."""
     if not settings.providers:
         logger.warning("LLM generation requested without configured providers")
         raise NoLLMProviderConfiguredError("No LLM providers are configured")
 
-    requested_provider = request.selection.provider or settings.default_provider
-    requested_model = request.selection.model
-    for provider in settings.providers:
-        if provider.provider == requested_provider:
-            if requested_model and requested_model != provider.model:
+    requested_provider = provider or settings.default_provider
+    requested_model = model
+    for configured in settings.providers:
+        if configured.provider == requested_provider:
+            if requested_model and requested_model != configured.model:
                 return LLMProviderSettings(
-                    provider=provider.provider,
+                    provider=configured.provider,
                     model=requested_model,
-                    api_key=provider.api_key,
-                    base_url=provider.base_url,
-                    is_default=provider.is_default,
+                    api_key=configured.api_key,
+                    base_url=configured.base_url,
+                    is_default=configured.is_default,
                 )
-            return provider
+            return configured
 
     logger.warning("Unsupported LLM provider requested", extra={"provider": requested_provider})
-    raise UnsupportedLLMProviderError(f"Unsupported or unavailable LLM provider: {requested_provider}")
+    raise UnsupportedLLMProviderError(
+        f"Unsupported or unavailable LLM provider: {requested_provider}"
+    )
+
+
+def _select_provider(request: LLMMusicGenerationRequest, settings: LLMSettings) -> LLMProviderSettings:
+    return select_llm_provider(
+        provider=request.selection.provider,
+        model=request.selection.model,
+        settings=settings,
+    )
 
 
 def _build_generation_graph():
