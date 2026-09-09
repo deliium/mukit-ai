@@ -74,3 +74,39 @@ def test_missing_program_defaults_and_preserves_name_when_possible():
     assert resolved.instrument_defaulted is True
     assert resolved.instrument == "violin"
     assert resolved.role == "other"
+
+
+def test_arrangement_catalog_does_not_rewrite_import_resolution():
+    """Import GM map / role inference stays independent of arrangement catalog load."""
+    from app.services.instrument_catalog import get_catalog, list_profiles
+
+    catalog = get_catalog()
+    assert catalog.fingerprint
+    assert list_profiles()
+
+    # Full GM import table remains 128 entries and is not trimmed to the curated palette.
+    assert len(GM_PROGRAM_BY_NUMBER) == 128
+    assert gm_program_name(127) == "Gunshot"
+    curated_programs = {p.midi_program for p in list_profiles() if not p.is_drum}
+    assert len(curated_programs) < 128
+
+    resolved = resolve_import_instrument(
+        source_program=42,
+        instrument_name="Violoncello",
+        explicit_role=None,
+        channel=3,
+    )
+    assert resolved.midi_program == 42
+    assert resolved.instrument_defaulted is False
+    # Import may keep source label; catalog must not force arrangement IDs into import output.
+    assert "cello" in resolved.instrument.lower() or resolved.instrument == "Violoncello"
+
+    mismatched = resolve_import_instrument(
+        source_program=0,
+        instrument_name="cello",
+        explicit_role="bass",
+        channel=2,
+    )
+    assert mismatched.midi_program == 0
+    assert mismatched.role == "bass"
+    assert mismatched.role_source == "explicit_role"

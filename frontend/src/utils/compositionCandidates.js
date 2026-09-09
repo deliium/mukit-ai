@@ -75,7 +75,11 @@ export async function compositionEditFingerprint(composition) {
     .join('');
 }
 
-function eventFingerprint(event) {
+/**
+ * Compact event identity for development prefix/outside-range checks.
+ * Shared with arrangement verification for stable event comparisons.
+ */
+export function eventFingerprint(event) {
   return [
     event?.type || 'note',
     event?.id ?? null,
@@ -86,7 +90,11 @@ function eventFingerprint(event) {
   ].join('|');
 }
 
-function trackTopologyFingerprint(track) {
+/**
+ * Track topology identity used by development's fixed-topology verifier.
+ * Arrangement verification intentionally does NOT require this to stay fixed.
+ */
+export function trackTopologyFingerprint(track) {
   return [
     track?.id,
     track?.name,

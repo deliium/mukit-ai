@@ -950,16 +950,19 @@ def _clef_for_legacy_track(clef_module, track: LLMMusicTrack):
 
 
 def _instrument_for_composition_track(instrument_module, track: CompositionTrackLike):
-    instrument_name = track.instrument.lower()
-    if "flute" in instrument_name:
-        return instrument_module.Flute()
-    if "bass" in instrument_name or track.role == "bass":
-        return instrument_module.ElectricBass()
-    if "drum" in instrument_name or track.role in {"drums", "percussion"} or track.is_drum:
-        return instrument_module.Woodblock()
-    if "string" in instrument_name or track.role == "pad":
-        return instrument_module.StringInstrument()
-    return instrument_module.Piano()
+    """Resolve music21 instrument preferring program/name over authored role.
+
+    Arrangement candidates may assign bass/pad/etc. roles to non-matching
+    instruments (e.g. cello with role=bass). Explicit ``midi_program`` and
+    instrument labels must win; role is only a fallback when identity is blank.
+    """
+    return _resolve_music21_instrument(
+        instrument_module,
+        instrument=track.instrument,
+        role=track.role,
+        midi_program=getattr(track, "midi_program", None),
+        is_drum=bool(getattr(track, "is_drum", False)),
+    )
 
 
 def _total_bars(music: LLMMusicJson) -> int:
@@ -967,14 +970,112 @@ def _total_bars(music: LLMMusicJson) -> int:
 
 
 def _instrument_for_track(instrument_module, track: LLMMusicTrack):
-    instrument_name = track.instrument.lower()
-    if "bass" in instrument_name or track.role == "bass":
-        return instrument_module.ElectricBass()
-    if "drum" in instrument_name or track.role in {"drums", "percussion"}:
+    return _resolve_music21_instrument(
+        instrument_module,
+        instrument=track.instrument,
+        role=track.role,
+        midi_program=getattr(track, "midi_program", None),
+        is_drum=False,
+    )
+
+
+def _resolve_music21_instrument(
+    instrument_module,
+    *,
+    instrument: str | None,
+    role: str | None,
+    midi_program: int | None,
+    is_drum: bool,
+):
+    instrument_name = (instrument or "").lower().strip()
+    role_name = (role or "").lower().strip()
+
+    if is_drum or role_name in {"drums", "percussion"} or "drum" in instrument_name:
         return instrument_module.Woodblock()
-    if "string" in instrument_name:
+
+    if midi_program is not None:
+        try:
+            program = int(midi_program)
+        except (TypeError, ValueError):
+            program = None
+        if program is not None and 0 <= program <= 127:
+            try:
+                resolved = instrument_module.instrumentFromMidiProgram(program)
+                if resolved is not None:
+                    return resolved
+            except Exception:
+                logger.debug(
+                    "music21 instrumentFromMidiProgram failed; falling back to name/role",
+                    extra={"midi_program": program},
+                )
+
+    named = _instrument_from_explicit_name(instrument_module, instrument_name)
+    if named is not None:
+        return named
+
+    # Role is a last-resort fallback when label/program did not identify a sound.
+    if role_name == "bass":
+        return instrument_module.ElectricBass()
+    if role_name in {"pad", "harmony"} and not instrument_name:
         return instrument_module.StringInstrument()
     return instrument_module.Piano()
+
+
+def _instrument_from_explicit_name(instrument_module, instrument_name: str):
+    """Map a non-empty instrument label without letting role or 'bass' substrings steal."""
+    if not instrument_name:
+        return None
+    # Specific woodwinds before the generic "bass" token check (bassoon).
+    if "bassoon" in instrument_name:
+        return instrument_module.Bassoon()
+    if "flute" in instrument_name or "piccolo" in instrument_name:
+        return instrument_module.Flute()
+    if "clarinet" in instrument_name:
+        return instrument_module.Clarinet()
+    if "oboe" in instrument_name:
+        return instrument_module.Oboe()
+    if "english horn" in instrument_name or "englishhorn" in instrument_name:
+        return instrument_module.EnglishHorn()
+    if "cello" in instrument_name or "violoncello" in instrument_name:
+        return instrument_module.Violoncello()
+    if "viola" in instrument_name:
+        return instrument_module.Viola()
+    if "violin" in instrument_name:
+        return instrument_module.Violin()
+    if "contrabass" in instrument_name or "double bass" in instrument_name:
+        return instrument_module.Contrabass()
+    if (
+        instrument_name in {"bass", "acoustic bass", "electric bass", "bass guitar"}
+        or "electric bass" in instrument_name
+        or "acoustic bass" in instrument_name
+        or instrument_name.endswith(" bass")
+        or instrument_name.startswith("bass ")
+    ):
+        return instrument_module.ElectricBass()
+    if "trumpet" in instrument_name:
+        return instrument_module.Trumpet()
+    if "trombone" in instrument_name:
+        return instrument_module.Trombone()
+    if "tuba" in instrument_name:
+        return instrument_module.Tuba()
+    if "horn" in instrument_name:
+        return instrument_module.Horn()
+    if "guitar" in instrument_name:
+        return instrument_module.AcousticGuitar()
+    if "harp" in instrument_name:
+        return instrument_module.Harp()
+    if "organ" in instrument_name:
+        return instrument_module.PipeOrgan()
+    if (
+        "string" in instrument_name
+        or instrument_name in {"pad", "strings"}
+        or "synth pad" in instrument_name
+        or instrument_name.endswith(" pad")
+    ):
+        return instrument_module.StringInstrument()
+    if "piano" in instrument_name or "keyboard" in instrument_name:
+        return instrument_module.Piano()
+    return None
 
 
 def _is_piano_track(track: LLMMusicTrack) -> bool:

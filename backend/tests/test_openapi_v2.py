@@ -94,3 +94,35 @@ def test_openapi_composition_development_preview_contract():
     assert candidate["properties"]["composition"]["$ref"].endswith("/CompositionV2")
     assert "candidate_id" in candidate["properties"]
     assert "candidate_fingerprint" in candidate["properties"]
+
+
+def test_openapi_composition_arrangement_contracts():
+    schema = app.openapi()
+    paths = schema["paths"]
+    assert "/composition/arrangement/instruments" in paths
+    assert "/composition/arrangement/preview" in paths
+    assert "get" in paths["/composition/arrangement/instruments"]
+    post = paths["/composition/arrangement/preview"]["post"]
+    assert "application/json" in json.dumps(post.get("requestBody", {}))
+
+    catalog = _component("ArrangementInstrumentCatalogResponse")
+    assert "instruments" in catalog["properties"]
+    assert "track_roles" in catalog["properties"]
+    assert "fingerprint" in catalog["properties"]
+    assert "CompositionV1" not in json.dumps(catalog)
+
+    request = _component("CompositionArrangementPreviewRequest")
+    composition = request["properties"]["composition"]
+    assert composition["$ref"].endswith("/CompositionV2")
+    assert "CompositionV1" not in json.dumps(composition)
+    assert request["properties"]["candidate_count"]["minimum"] == 1
+    assert request["properties"]["candidate_count"]["maximum"] == 4
+
+    response = _component("CompositionArrangementPreviewResponse")
+    assert response["properties"]["edit_source_fingerprint"]["type"] == "string"
+    assert response["properties"]["catalog_fingerprint"]["type"] == "string"
+    candidates = response["properties"]["candidates"]
+    assert candidates["maxItems"] == 4
+    candidate = _component("ArrangementCandidate")
+    assert candidate["properties"]["composition"]["$ref"].endswith("/CompositionV2")
+    assert "rejected_attempts" in response["properties"]

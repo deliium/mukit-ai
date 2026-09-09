@@ -569,3 +569,32 @@ def test_practical_range_scope_keeps_structural_errors_outside_set():
     )
     assert not result.ok
     assert "event_out_of_range" in result.error_codes() or "schema_invalid" in result.error_codes()
+
+
+def test_practical_range_scope_multiple_changed_targets_only():
+    """Arrangement-style scope: only named changed tracks receive practical range hard errors."""
+    payload = _base_composition()
+    # Out-of-range on both melody and bass.
+    payload["tracks"][0]["events"][0]["pitch"] = "C8"
+    payload["tracks"][1]["events"][0]["pitch"] = "C5"
+
+    both = validate_composition_integrity(payload, complexity="simple")
+    assert not both.ok
+    assert "event_out_of_range" in both.error_codes()
+
+    only_melody = validate_composition_integrity(
+        payload,
+        complexity="simple",
+        practical_range_track_ids=["melody-1"],
+    )
+    # Bass outlier ignored; melody still fails.
+    assert not only_melody.ok
+    assert "event_out_of_range" in only_melody.error_codes()
+
+    empty_scope = validate_composition_integrity(
+        payload,
+        complexity="simple",
+        practical_range_track_ids=[],
+    )
+    # Empty opt-in scope disables practical-range hard errors (structural still apply).
+    assert "event_out_of_range" not in empty_scope.error_codes() or empty_scope.ok

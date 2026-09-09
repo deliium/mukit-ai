@@ -222,3 +222,30 @@ def test_composition_development_preview_omits_secrets_from_logs(monkeypatch, ca
     joined = "\n".join(record.getMessage() for record in caplog.records)
     assert "sk-dev-must-never-leak" not in joined
     assert "secret-instruction-should-not-appear-in-logs" not in joined
+
+
+def test_composition_arrangement_preview_omits_secrets_from_logs(monkeypatch, caplog):
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-arr-must-never-leak")
+    from tests.test_composition_arrangement_context import (
+        _acceptance_instrumentation,
+        _piano_sketch_v2,
+    )
+
+    body = {
+        "composition": _piano_sketch_v2().model_dump(mode="json"),
+        "operation": "piano_to_ensemble",
+        "source_track_ids": ["piano-melody", "piano-accomp", "bass-1"],
+        "instrumentation": _acceptance_instrumentation(),
+        "candidate_count": 1,
+        "instruction": "arrangement-secret-instruction-must-not-log",
+        "selection": {"provider": "fake", "model": "fake-deterministic"},
+    }
+    client = TestClient(app)
+    with caplog.at_level("DEBUG"):
+        response = client.post("/composition/arrangement/preview", json=body)
+    assert response.status_code == 200, response.text
+    assert_no_secret_leakage(response.json(), context="POST /composition/arrangement/preview")
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "sk-arr-must-never-leak" not in joined
+    assert "arrangement-secret-instruction-must-not-log" not in joined

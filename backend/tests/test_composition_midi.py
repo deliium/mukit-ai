@@ -330,3 +330,56 @@ def test_midi_projection_skips_motif_omission_without_motifs():
     composition = CompositionV2.model_validate(minimal_v2(tracks=[_motif_track()]))
     result = render_midi_with_report(composition)
     assert "motif_metadata_omitted" not in result.report.compact_codes()
+
+
+def test_arranged_candidate_midi_preserves_explicit_programs():
+    """MIDI export uses track midi_program, not role-inferred remapping."""
+    import asyncio
+
+    from app.arrangement_schemas import CompositionArrangementPreviewRequest
+    from app.llm_settings import LLMProviderSettings, LLMSettings
+    from app.schemas import LLMModelSelection
+    from app.services.llm_composition_arrangement import run_composition_arrangement_preview
+    from tests.test_composition_arrangement_context import (
+        _acceptance_instrumentation,
+        _piano_sketch_v2,
+    )
+
+    settings = LLMSettings(
+        providers=(
+            LLMProviderSettings(
+                provider="fake",
+                model="fake-deterministic",
+                api_key="unused",
+                is_default=True,
+            ),
+        ),
+        default_provider="fake",
+        request_timeout_seconds=30,
+        temperature=0.4,
+    )
+    request = CompositionArrangementPreviewRequest.model_validate(
+        {
+            "composition": _piano_sketch_v2(),
+            "operation": "piano_to_ensemble",
+            "source_track_ids": ["piano-melody", "piano-accomp", "bass-1"],
+            "instrumentation": _acceptance_instrumentation(),
+            "candidate_count": 1,
+            "selection": LLMModelSelection(provider="fake", model="fake-deterministic"),
+        }
+    )
+    import os
+
+    os.environ["LLM_FAKE_MODE"] = "1"
+    response = asyncio.run(run_composition_arrangement_preview(request, settings=settings))
+    candidate = response.candidates[0].composition
+    result = render_midi_with_report(candidate)
+    assert result.midi_bytes[:4] == b"MThd"
+
+    # Cello (42) and string ensemble (48) programs must appear when present on tracks.
+    programs = {track.midi_program for track in candidate.tracks}
+    assert 42 in programs or any("cello" in t.instrument.lower() for t in candidate.tracks)
+    midi_ready = composition_to_midi_ready(candidate)
+    for track, ready in zip(candidate.tracks, midi_ready["tracks"], strict=True):
+        assert ready["midi_program"] == track.midi_program
+        assert ready["channel"] == track.channel

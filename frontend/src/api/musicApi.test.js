@@ -7,19 +7,33 @@ import {
   AnalysisApiError,
   analyzeComposition,
   applyMotif,
+  ArrangementApiError,
   DevelopmentApiError,
   editCompositionRegion,
+  fetchArrangementInstruments,
   generateLlmMusicJson,
   importMidi,
   importMusicXml,
   ImportApiError,
+  loadArrangementInstruments,
   MotifApiError,
   parseProjectionHeaders,
+  previewCompositionArrangement,
   previewCompositionDevelopment,
   previewReharmonization,
   projectionWarningsFromHeaders,
   ReharmonizeApiError,
+  resetArrangementInstrumentCache,
 } from './musicApi.js';
+import {
+  ARRANGEMENT_ALGORITHM_VERSION,
+  ARRANGEMENT_CATALOG_VERSION,
+  ARRANGEMENT_RANGE_POLICY_VERSION,
+  clearArrangementCatalogCache,
+  getCachedArrangementCatalog,
+} from '../utils/compositionArrangementCandidates.js';
+import { compositionEditFingerprint } from '../utils/compositionCandidates.js';
+import { SUPPORTED_TRACK_ROLES } from '../utils/musicJsonValidation.js';
 
 function canonicalV1Composition() {
   return {
@@ -1044,6 +1058,360 @@ test('previewCompositionDevelopment preserves structured backend errors', async 
       assert.ok(error instanceof DevelopmentApiError);
       assert.equal(error.status, 502);
       assert.equal(error.code, 'development_candidate_exhausted');
+      return true;
+    },
+  );
+});
+
+function sampleArrangementCatalog() {
+  return {
+    catalog_version: ARRANGEMENT_CATALOG_VERSION,
+    range_policy_version: ARRANGEMENT_RANGE_POLICY_VERSION,
+    fingerprint: 'd'.repeat(64),
+    source_path_category: 'packaged',
+    instruments: [
+      {
+        instrument_id: 'acoustic_grand_piano',
+        display_name: 'Acoustic Grand Piano',
+        aliases: ['piano'],
+        midi_program: 0,
+        gm_family: 'piano',
+        compatibility_identity: 'piano',
+        compatibility_family: 'keyboard',
+        is_drum: false,
+        range_policy: 'absolute',
+        playable_low: 21,
+        playable_high: 108,
+        preferred_low: 36,
+        preferred_high: 96,
+        suggested_roles: ['melody', 'harmony'],
+        fingerprint: 'p'.repeat(64),
+      },
+      {
+        instrument_id: 'cello',
+        display_name: 'Cello',
+        aliases: [],
+        midi_program: 42,
+        gm_family: 'strings',
+        compatibility_identity: 'cello',
+        compatibility_family: 'strings',
+        is_drum: false,
+        range_policy: 'absolute',
+        playable_low: 36,
+        playable_high: 84,
+        preferred_low: 36,
+        preferred_high: 72,
+        suggested_roles: ['melody', 'bass'],
+        fingerprint: 'c'.repeat(64),
+      },
+    ],
+    track_roles: [...SUPPORTED_TRACK_ROLES],
+  };
+}
+
+async function sampleArrangementPreviewResponse(composition, overrides = {}) {
+  const candidateComposition = structuredClone(composition);
+  const melody = candidateComposition.tracks.find((track) => track.id === 'melody-1')
+    || candidateComposition.tracks[0];
+  melody.instrument = 'cello';
+  melody.midi_program = 42;
+  const sourceFp = await compositionEditFingerprint(composition);
+  const candidateFp = await compositionEditFingerprint(candidateComposition);
+  return {
+    edit_source_fingerprint: sourceFp,
+    algorithm_version: ARRANGEMENT_ALGORITHM_VERSION,
+    catalog_version: ARRANGEMENT_CATALOG_VERSION,
+    range_policy_version: ARRANGEMENT_RANGE_POLICY_VERSION,
+    catalog_fingerprint: 'd'.repeat(64),
+    operation: 'change_instrumentation',
+    requested_candidate_count: 1,
+    candidates: [
+      {
+        candidate_id: 'arr-cand-abcdefgh',
+        candidate_fingerprint: candidateFp,
+        edit_source_fingerprint: sourceFp,
+        algorithm_version: ARRANGEMENT_ALGORITHM_VERSION,
+        catalog_version: ARRANGEMENT_CATALOG_VERSION,
+        range_policy_version: ARRANGEMENT_RANGE_POLICY_VERSION,
+        catalog_fingerprint: 'd'.repeat(64),
+        target_profile_fingerprints: [
+          { instrument_id: 'cello', profile_fingerprint: 'c'.repeat(64) },
+        ],
+        operation: 'change_instrumentation',
+        composition: candidateComposition,
+        provider: 'fake',
+        model: 'fake-deterministic',
+        before_inventory: composition.tracks.map((track) => ({
+          track_id: track.id,
+          instrument: track.instrument,
+          role: track.role,
+          midi_program: track.midi_program,
+          event_count: (track.events || []).length,
+          part_id: null,
+        })),
+        after_inventory: candidateComposition.tracks.map((track) => ({
+          track_id: track.id,
+          instrument: track.instrument,
+          role: track.role,
+          midi_program: track.midi_program,
+          event_count: (track.events || []).length,
+          part_id: null,
+        })),
+        manifest: {
+          retained_track_ids: candidateComposition.tracks
+            .map((track) => track.id)
+            .filter((id) => id !== melody.id),
+          removed_track_ids: [],
+          added_track_ids: [],
+          reordered_track_ids: [],
+          reinstrumented_track_ids: [melody.id],
+          split_track_ids: [],
+          merged_track_ids: [],
+          source_to_target: [{
+            source_track_id: melody.id,
+            target_track_id: melody.id,
+            relationship: 'reinstrumented',
+          }],
+        },
+        event_counts: {
+          copied: 1,
+          moved: 0,
+          generated: 0,
+          removed: 0,
+          octave_adjusted: 0,
+          unchanged: Math.max(0, candidateComposition.tracks.length - 1),
+        },
+        density: null,
+        range_findings: [],
+        duplicate_findings: [],
+        harmony_compatibility: null,
+        assertions: [{
+          kind: 'topology_authorization',
+          satisfied: true,
+          required: true,
+          detail: 'ok',
+          track_id: null,
+        }],
+        warning_codes: [],
+      },
+    ],
+    rejected_attempts: [],
+    warning_codes: [],
+    provider: 'fake',
+    model: 'fake-deterministic',
+    ...overrides,
+  };
+}
+
+test('loadArrangementInstruments caches normalized catalog and serves cache hits', async (t) => {
+  resetArrangementInstrumentCache();
+  let hits = 0;
+  const restore = installAxiosStub(async (config) => {
+    hits += 1;
+    assert.equal(String(config.method || 'get').toLowerCase(), 'get');
+    assert.equal(config.url, '/composition/arrangement/instruments');
+    return {
+      data: sampleArrangementCatalog(),
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(() => {
+    restore();
+    resetArrangementInstrumentCache();
+  });
+
+  const catalog = await loadArrangementInstruments();
+  assert.equal(catalog.catalog_version, ARRANGEMENT_CATALOG_VERSION);
+  assert.equal(catalog.instruments.length, 2);
+  assert.equal(getCachedArrangementCatalog().fingerprint, 'd'.repeat(64));
+  for (const role of SUPPORTED_TRACK_ROLES) {
+    assert.ok(catalog.track_roles.includes(role));
+  }
+
+  const again = await loadArrangementInstruments();
+  assert.equal(again.fingerprint, catalog.fingerprint);
+  assert.equal(hits, 1);
+
+  await loadArrangementInstruments({ forceRefresh: true });
+  assert.equal(hits, 2);
+
+  // Alias still works
+  const viaAlias = await fetchArrangementInstruments();
+  assert.equal(viaAlias.fingerprint, catalog.fingerprint);
+  assert.equal(hits, 2);
+});
+
+test('previewCompositionArrangement posts normalized payload and validates candidates', async (t) => {
+  clearArrangementCatalogCache();
+  const composition = canonicalV2Composition();
+  const immutable = structuredClone(composition);
+  const trackId = composition.tracks[0].id;
+  let posted = null;
+  const restore = installAxiosStub(async (config) => {
+    assert.equal(String(config.method || 'get').toLowerCase(), 'post');
+    assert.equal(config.url, '/composition/arrangement/preview');
+    posted = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+    return {
+      data: await sampleArrangementPreviewResponse(composition),
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(() => {
+    restore();
+    clearArrangementCatalogCache();
+  });
+
+  const response = await previewCompositionArrangement({
+    composition,
+    operation: 'change_instrumentation',
+    source_track_ids: [trackId],
+    protected_track_ids: [],
+    instrumentation: {
+      before: [{
+        part_id: 'b1',
+        instrument_id: 'acoustic_grand_piano',
+        role: 'melody',
+        source_track_ids: [trackId],
+        doubling_policy: 'none',
+      }],
+      after: [{
+        part_id: 'a1',
+        instrument_id: 'cello',
+        role: 'melody',
+        source_track_ids: [trackId],
+        doubling_policy: 'none',
+      }],
+    },
+    candidate_count: 1,
+    instruction: 'keep the melody recognizable',
+    selection: { provider: 'fake', model: 'fake-deterministic' },
+  });
+
+  assert.deepEqual(composition, immutable);
+  assert.equal(posted.operation, 'change_instrumentation');
+  assert.equal(posted.candidate_count, 1);
+  assert.equal(posted.composition.schema_version, 'composition.v2');
+  assert.equal(response.candidates.length, 1);
+  assert.equal(response.candidates[0].candidate_id, 'arr-cand-abcdefgh');
+  assert.equal(response.catalog_version, ARRANGEMENT_CATALOG_VERSION);
+});
+
+test('previewCompositionArrangement rejects source/protected overlap locally', async () => {
+  const composition = canonicalV2Composition();
+  const trackId = composition.tracks[0].id;
+  await assert.rejects(
+    () => previewCompositionArrangement({
+      composition,
+      operation: 'change_instrumentation',
+      source_track_ids: [trackId],
+      protected_track_ids: [trackId],
+      instrumentation: {
+        before: [{
+          part_id: 'b1',
+          instrument_id: 'acoustic_grand_piano',
+          role: 'melody',
+          source_track_ids: [trackId],
+        }],
+        after: [{
+          part_id: 'a1',
+          instrument_id: 'cello',
+          role: 'melody',
+          source_track_ids: [trackId],
+        }],
+      },
+    }),
+    (error) => {
+      assert.ok(error instanceof ArrangementApiError);
+      assert.equal(error.code, 'arrangement_source_protected_overlap');
+      return true;
+    },
+  );
+});
+
+test('previewCompositionArrangement preserves structured backend errors', async (t) => {
+  const composition = canonicalV2Composition();
+  const trackId = composition.tracks[0].id;
+  const restore = installAxiosStub(async () => {
+    const error = new Error('Request failed');
+    error.isAxiosError = true;
+    error.response = {
+      status: 502,
+      data: {
+        detail: {
+          code: 'arrangement_candidate_exhausted',
+          message: 'No valid arrangement candidate survived generation and repair.',
+          details: { returned_candidate_count: 0 },
+        },
+      },
+    };
+    throw error;
+  });
+  t.after(restore);
+
+  await assert.rejects(
+    () => previewCompositionArrangement({
+      composition,
+      operation: 'change_instrumentation',
+      source_track_ids: [trackId],
+      instrumentation: {
+        before: [{
+          part_id: 'b1',
+          instrument_id: 'acoustic_grand_piano',
+          role: 'melody',
+          source_track_ids: [trackId],
+        }],
+        after: [{
+          part_id: 'a1',
+          instrument_id: 'cello',
+          role: 'melody',
+          source_track_ids: [trackId],
+        }],
+      },
+      candidate_count: 1,
+    }),
+    (error) => {
+      assert.ok(error instanceof ArrangementApiError);
+      assert.equal(error.status, 502);
+      assert.equal(error.code, 'arrangement_candidate_exhausted');
+      return true;
+    },
+  );
+});
+
+test('loadArrangementInstruments preserves structured catalog errors', async (t) => {
+  resetArrangementInstrumentCache();
+  const restore = installAxiosStub(async () => {
+    const error = new Error('Request failed');
+    error.isAxiosError = true;
+    error.response = {
+      status: 503,
+      data: {
+        detail: {
+          code: 'arrangement_catalog_unavailable',
+          message: 'Arrangement instrument catalog is unavailable or invalid.',
+          details: { catalog_code: 'invalid_schema', path_category: 'invalid' },
+        },
+      },
+    };
+    throw error;
+  });
+  t.after(() => {
+    restore();
+    resetArrangementInstrumentCache();
+  });
+
+  await assert.rejects(
+    () => loadArrangementInstruments(),
+    (error) => {
+      assert.ok(error instanceof ArrangementApiError);
+      assert.equal(error.status, 503);
+      assert.equal(error.code, 'arrangement_catalog_unavailable');
       return true;
     },
   );

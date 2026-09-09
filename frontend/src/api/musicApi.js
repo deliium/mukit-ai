@@ -16,6 +16,18 @@ import {
   normalizeDevelopmentPreviewResponse,
   normalizeDevelopmentRequest,
 } from '../utils/compositionCandidates.js';
+import {
+  cacheArrangementCatalog,
+  clearArrangementCatalogCache,
+  editFingerprintLogPrefix as arrangementFingerprintPrefix,
+  getCachedArrangementCatalog,
+  normalizeArrangementCatalog,
+  normalizeArrangementPreviewResponse,
+  normalizeArrangementRequest,
+} from '../utils/compositionArrangementCandidates.js';
+import { createAppLogger } from '../utils/appLogger.js';
+
+const arrangementLogger = createAppLogger('musicApi.arrangement');
 
 export const PROJECTION_HEADER_NAMES = {
   status: 'x-mukit-projection-status',
@@ -293,6 +305,16 @@ export class DevelopmentApiError extends Error {
   constructor(message, { status = null, code = null, details = null } = {}) {
     super(message);
     this.name = 'DevelopmentApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export class ArrangementApiError extends Error {
+  constructor(message, { status = null, code = null, details = null } = {}) {
+    super(message);
+    this.name = 'ArrangementApiError';
     this.status = status;
     this.code = code;
     this.details = details;
@@ -640,6 +662,161 @@ export async function previewCompositionDevelopment(payload) {
       operation: requestBody.operation,
     });
     throw new DevelopmentApiError(parsed.message, {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
+}
+
+/**
+ * GET /composition/arrangement/instruments — versioned selectable catalog.
+ * Normalizes, caches by fingerprint, and never logs catalog payloads.
+ * Pass `forceRefresh: true` to bypass the module cache.
+ */
+export async function loadArrangementInstruments({ forceRefresh = false } = {}) {
+  if (!forceRefresh) {
+    const cached = getCachedArrangementCatalog();
+    if (cached) {
+      arrangementLogger.debug('Arrangement instruments cache hit', {
+        endpoint: 'GET /composition/arrangement/instruments',
+        catalogVersion: cached.catalog_version,
+        instrumentCount: cached.instruments.length,
+        fingerprintPrefix: arrangementFingerprintPrefix(cached.fingerprint),
+      });
+      return cached;
+    }
+  }
+
+  arrangementLogger.debug('Arrangement instruments request started', {
+    endpoint: 'GET /composition/arrangement/instruments',
+    forceRefresh: Boolean(forceRefresh),
+  });
+  try {
+    const axiosResponse = await axios.get('/composition/arrangement/instruments');
+    const normalized = normalizeArrangementCatalog(axiosResponse.data || {});
+    if (!normalized.ok) {
+      throw new ArrangementApiError(normalized.message, { code: normalized.code });
+    }
+    const catalog = cacheArrangementCatalog(normalized.catalog);
+    arrangementLogger.debug('Arrangement instruments catalog accepted', {
+      endpoint: 'GET /composition/arrangement/instruments',
+      catalogVersion: catalog.catalog_version,
+      instrumentCount: catalog.instruments.length,
+      roleCount: catalog.track_roles.length,
+      fingerprintPrefix: arrangementFingerprintPrefix(catalog.fingerprint),
+      status: axiosResponse.status,
+    });
+    return catalog;
+  } catch (error) {
+    if (error instanceof ArrangementApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseMotifErrorDetail(error.response?.data?.detail ?? error.message);
+    arrangementLogger.error('Arrangement instruments request failed', {
+      endpoint: 'GET /composition/arrangement/instruments',
+      status,
+      code: parsed.code,
+    });
+    throw new ArrangementApiError(parsed.message, {
+      status,
+      code: parsed.code || 'arrangement_catalog_unavailable',
+      details: parsed.details,
+    });
+  }
+}
+
+/** @deprecated Prefer loadArrangementInstruments — kept as a thin alias. */
+export async function fetchArrangementInstruments(options) {
+  return loadArrangementInstruments(options);
+}
+
+/** Test/helper: clear the module arrangement catalog cache. */
+export function resetArrangementInstrumentCache() {
+  clearArrangementCatalogCache();
+}
+
+/**
+ * POST /composition/arrangement/preview — multi-candidate arrangement.
+ * Stateless: never persists projects; returns ephemeral candidates + rejected attempts.
+ */
+export async function previewCompositionArrangement(payload) {
+  const normalized = normalizeArrangementRequest(payload);
+  if (!normalized.ok) {
+    throw new ArrangementApiError(normalized.message, { code: normalized.code });
+  }
+
+  const requestBody = normalized.request;
+  arrangementLogger.info('Arrangement preview request started', {
+    endpoint: 'POST /composition/arrangement/preview',
+    operation: requestBody.operation,
+    candidateCount: requestBody.candidate_count,
+    sourceTrackCount: requestBody.source_track_ids.length,
+    protectedTrackCount: requestBody.protected_track_ids.length,
+    beforePartCount: requestBody.instrumentation.before.length,
+    afterPartCount: requestBody.instrumentation.after.length,
+    provider: requestBody.selection?.provider || null,
+    model: requestBody.selection?.model || null,
+    instructionLen: typeof requestBody.instruction === 'string' ? requestBody.instruction.length : 0,
+  });
+
+  const inboundComposition = normalizeApiComposition(requestBody.composition, {
+    context: 'arrangement-preview-request',
+  });
+  validateCanonicalForApi(inboundComposition, { action: 'composition arrangement preview' });
+  if (!isCanonicalComposition(inboundComposition)) {
+    throw new ArrangementApiError('Arrangement accepts only composition.v2 documents', {
+      code: 'arrangement_invalid_source',
+    });
+  }
+
+  try {
+    const axiosResponse = await axios.post('/composition/arrangement/preview', {
+      ...requestBody,
+      composition: inboundComposition,
+    });
+    const response = axiosResponse.data || {};
+    const contract = normalizeArrangementPreviewResponse(response);
+    if (!contract.ok) {
+      throw new ArrangementApiError(contract.message, { code: contract.code });
+    }
+    const candidates = contract.response.candidates.map((candidate) => {
+      const composition = normalizeApiComposition(candidate.composition, {
+        context: 'arrangement-preview-candidate',
+      });
+      const validation = validateMusicJson(composition);
+      if (!validation.valid) {
+        throw new ArrangementApiError(validation.message, { code: 'arrangement_invalid_response' });
+      }
+      return { ...candidate, composition };
+    });
+    arrangementLogger.debug('Arrangement preview response validated', {
+      endpoint: 'POST /composition/arrangement/preview',
+      operation: contract.response.operation,
+      catalogVersion: contract.response.catalog_version,
+      returnedCandidateCount: candidates.length,
+      rejectedCount: contract.response.rejected_attempts.length,
+      warningCodeCount: contract.response.warning_codes.length,
+      editSourcePrefix: arrangementFingerprintPrefix(contract.response.edit_source_fingerprint),
+      catalogPrefix: arrangementFingerprintPrefix(contract.response.catalog_fingerprint),
+      provider: contract.response.provider || null,
+      status: axiosResponse.status,
+    });
+    return { ...contract.response, candidates };
+  } catch (error) {
+    if (error instanceof ArrangementApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseMotifErrorDetail(error.response?.data?.detail ?? error.message);
+    arrangementLogger.error('Arrangement preview request failed', {
+      endpoint: 'POST /composition/arrangement/preview',
+      status,
+      code: parsed.code,
+      operation: requestBody.operation,
+    });
+    throw new ArrangementApiError(parsed.message, {
       status,
       code: parsed.code,
       details: parsed.details,

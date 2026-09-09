@@ -10,6 +10,7 @@ from app.services.instrument_identity import (
     classify_content_relationship,
     collect_instrument_families,
     collect_instrument_requirements,
+    family_for_identity,
     instrument_satisfies_requirement,
     normalize_instrument_identity,
     normalize_instrument_family,
@@ -296,3 +297,28 @@ def test_drums_skipped_from_requirements_and_unexpected():
     assert analysis.requirements[0].key == "piano"
     assert "drums" not in analysis.missing_keys
     assert analysis.unexpected_identities == ()
+
+
+def test_arrangement_catalog_identities_remain_compatible():
+    """Catalog compatibility identities must still satisfy instrument_identity APIs."""
+    from app.services.instrument_catalog import list_profiles
+
+    for profile in list_profiles():
+        if profile.is_drum:
+            continue
+        identity = normalize_instrument_identity(profile.display_name) or normalize_instrument_identity(
+            profile.instrument_id.replace("_", " ")
+        )
+        # Compatibility identity from catalog should align with normalize when known.
+        if profile.compatibility_identity in {"piano", "bass", "strings", "violin", "cello", "flute", "bassoon"}:
+            assert normalize_instrument_family(profile.display_name) == profile.compatibility_family or (
+                family_for_identity(profile.compatibility_identity) == profile.compatibility_family
+            )
+        assert profile.midi_program >= 0
+        assert identity is None or isinstance(identity, str)
+
+
+def test_imported_mismatch_labels_do_not_collapse_distinct_brass():
+    assert normalize_instrument_identity("trumpet") != normalize_instrument_identity("trombone")
+    assert instrument_satisfies_requirement("trumpet", "trumpet")
+    assert not instrument_satisfies_requirement("trumpet", "trombone")

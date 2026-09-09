@@ -183,7 +183,7 @@ Each candidate response:
   - Logging requirements: INFO request/candidate ordinal, operation, provider/model, stage, repair attempt, outcome code, counts, fingerprint prefix, and elapsed time; DEBUG prompt character budget and diagnostic-code counts. Never log prompt/instruction text, raw provider output, API keys, drafts, events, or candidates.
   - Dependencies: Tasks 1-5.
 
-- [ ] Task 7: Expose the instrument catalog and stateless arrangement preview through thin FastAPI routes.
+- [x] Task 7: Expose the instrument catalog and stateless arrangement preview through thin FastAPI routes.
   - Files: create `backend/app/routers/arrangement.py`; update `backend/app/main.py` only to register the router; update `backend/app/ready.py`; create `backend/tests/test_composition_arrangement_routes.py`; extend `backend/tests/test_openapi_v2.py`, `backend/tests/test_health_and_cors.py`, and `backend/tests/test_secret_hygiene.py`.
   - Deliverable: implement `GET /composition/arrangement/instruments` and `POST /composition/arrangement/preview`; return the complete canonical track-role vocabulary separately from instrument role suggestions; load validated catalog/provider settings at the boundary. Map impossible request/preflight ranges and authorization/inventory errors to `422`; map provider-generated range/postcondition violations that exhaust repair/all candidates to `502`; map unavailable provider/catalog dependency to `503`; map unexpected failures to sanitized `500`.
   - Deliverable: expose catalog validity/version/fingerprint in readiness without leaking override contents, and make the global readiness result false when a configured arrangement catalog cannot be loaded or validated. Return stable `{code, message, details?}` errors with bounded scalar/code details and no project persistence or rendering side effects.
@@ -192,7 +192,7 @@ Each candidate response:
   - Logging requirements: INFO endpoint, operation, provider/model, selected/target/candidate counts, catalog version, fingerprint prefix, warning count, status, and elapsed time; WARN/ERROR stable code and exception class once at the boundary. Never log catalog payloads, instructions, compositions, events, prompts, keys, or provider bodies.
   - Dependencies: Task 6.
 
-- [ ] Task 8: Complete backend regression, scale, import, analysis, and export-fidelity coverage.
+- [x] Task 8: Complete backend regression, scale, import, analysis, and export-fidelity coverage.
   - Files: extend tests from Tasks 1-7 plus `backend/tests/test_instrument_identity.py`, `backend/tests/test_import_instruments.py`, `backend/tests/test_composition_analysis_warnings.py`, `backend/tests/test_composition_validator.py`, `backend/tests/test_composition_midi.py`, `backend/tests/test_music_json_renderer.py`, and `backend/tests/test_export_fidelity.py`; add a compact arrangement fixture only if existing builders cannot express the acceptance source clearly.
   - Deliverable: prove the arrangement catalog does not alter persisted/migrated/imported source metadata, update `backend/app/services/music_json_renderer.py` and playback/export resolution only where required so explicit target instrument/program identity is not overridden by role, keep practical range policy scoped to changed arrangement targets, and prove accepted candidates remain playable/exportable from explicit events.
   - Expected behavior: generation, import, migration, analysis, motif, harmony, development, region edit, and export semantics remain stable. Maximum allowed source/candidate/context sizes are bounded and over-limit requests fail before provider invocation.
@@ -202,7 +202,7 @@ Each candidate response:
 
 ### Phase 4: Frontend Candidate Lifecycle and UX
 
-- [ ] Task 9: Add frontend catalog/API contracts and topology-aware pure candidate verification.
+- [x] Task 9: Add frontend catalog/API contracts and topology-aware pure candidate verification.
   - Files: create `frontend/src/utils/compositionArrangementCandidates.js`, `frontend/src/utils/compositionArrangementCandidates.test.js`, and `frontend/src/utils/appLogger.js` if no existing environment-controlled logger can satisfy the feature; update `frontend/src/api/musicApi.js`, `frontend/src/api/musicApi.test.js`, and `frontend/src/utils/compositionCandidates.js` only to expose shared full-document fingerprint primitives without weakening development verification.
   - Deliverable: load/cache the versioned selectable catalog; normalize every operation request and explicit part mapping; validate response bounds, candidate compositions, version/fingerprint consistency, manifests, summaries, warnings, and required assertions; preserve structured API errors.
   - Deliverable: independently recompute source/candidate fingerprints and actual topology/event diffs. Verify the currently loaded catalog fingerprint and target-profile fingerprints still match, every base/result track is explained, protected/unselected tracks are exact, added/removed/re-instrumented tracks are authorized, complete event fields and root metadata satisfy preservation, motif references are valid, and server summary counts agree with actual V2.

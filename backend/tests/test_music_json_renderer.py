@@ -470,3 +470,131 @@ def test_render_musicxml_skips_motif_omission_for_old_v2_without_motifs():
     composition = CompositionV2.model_validate(minimal_v2(tracks=[_motif_track()]))
     _musicxml, report = render_musicxml(composition)
     assert "motif_metadata_omitted" not in report.compact_codes()
+
+
+def test_render_prefers_midi_program_over_bass_role_for_cello():
+    """Arrangement may assign role=bass to cello; export must keep cello identity."""
+    from music21 import converter, instrument as m21_instrument
+
+    composition = CompositionV2.model_validate(
+        {
+            "schema_version": "composition.v2",
+            "tempo": 120,
+            "key": "C major",
+            "time_signature": "4/4",
+            "ticks_per_quarter": 480,
+            "bar_count": 1,
+            "duration_ticks": 1920,
+            "sections": [
+                {
+                    "id": "s1",
+                    "type": "verse",
+                    "start_bar": 1,
+                    "bar_count": 1,
+                    "start_tick": 0,
+                    "duration_ticks": 1920,
+                }
+            ],
+            "tracks": [
+                {
+                    "id": "cello-bass-role",
+                    "name": "Cello",
+                    "instrument": "cello",
+                    "role": "bass",
+                    "midi_program": 42,
+                    "channel": 1,
+                    "events": [
+                        {
+                            "type": "note",
+                            "pitch": "C3",
+                            "start_tick": 0,
+                            "duration_ticks": 960,
+                            "velocity": 80,
+                        }
+                    ],
+                },
+                {
+                    "id": "bassoon-1",
+                    "name": "Bassoon",
+                    "instrument": "bassoon",
+                    "role": "melody",
+                    "midi_program": 70,
+                    "channel": 2,
+                    "events": [
+                        {
+                            "type": "note",
+                            "pitch": "C4",
+                            "start_tick": 0,
+                            "duration_ticks": 480,
+                            "velocity": 85,
+                        }
+                    ],
+                },
+            ],
+            "harmony": [],
+        }
+    )
+    musicxml, report = render_musicxml(composition)
+    assert report.status in {"exact", "approximate"}
+    score = converter.parseData(musicxml)
+    parts = list(score.parts)
+    assert len(parts) >= 2
+    cello_inst = parts[0].getInstrument(returnDefault=True)
+    bassoon_inst = parts[1].getInstrument(returnDefault=True)
+    assert isinstance(cello_inst, m21_instrument.Violoncello)
+    assert not isinstance(cello_inst, m21_instrument.ElectricBass)
+    assert isinstance(bassoon_inst, m21_instrument.Bassoon)
+    assert getattr(cello_inst, "midiProgram", None) == 42
+    assert getattr(bassoon_inst, "midiProgram", None) == 70
+
+
+def test_render_midi_program_wins_over_mismatched_label_and_role():
+    from music21 import converter, instrument as m21_instrument
+
+    composition = CompositionV2.model_validate(
+        {
+            "schema_version": "composition.v2",
+            "tempo": 120,
+            "key": "C major",
+            "time_signature": "4/4",
+            "ticks_per_quarter": 480,
+            "bar_count": 1,
+            "duration_ticks": 1920,
+            "sections": [
+                {
+                    "id": "s1",
+                    "type": "verse",
+                    "start_bar": 1,
+                    "bar_count": 1,
+                    "start_tick": 0,
+                    "duration_ticks": 1920,
+                }
+            ],
+            "tracks": [
+                {
+                    "id": "mystery-bass-role",
+                    "name": "Mystery",
+                    "instrument": "Custom Mystery Voice",
+                    "role": "bass",
+                    "midi_program": 42,
+                    "channel": 1,
+                    "events": [
+                        {
+                            "type": "note",
+                            "pitch": "C3",
+                            "start_tick": 0,
+                            "duration_ticks": 480,
+                            "velocity": 70,
+                        }
+                    ],
+                }
+            ],
+            "harmony": [],
+        }
+    )
+    musicxml, _report = render_musicxml(composition)
+    score = converter.parseData(musicxml)
+    inst = list(score.parts)[0].getInstrument(returnDefault=True)
+    # Program 42 (cello) must win over role=bass and an unrecognized label.
+    assert isinstance(inst, m21_instrument.Violoncello)
+    assert getattr(inst, "midiProgram", None) == 42

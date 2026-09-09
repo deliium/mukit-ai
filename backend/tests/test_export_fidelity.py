@@ -685,3 +685,71 @@ def test_wav_projection_includes_motif_metadata_omission(monkeypatch, tmp_path):
     monkeypatch.setattr(wav_module.subprocess, "run", fake_run)
     result = render_wav_with_report(composition)
     assert "motif_metadata_omitted" in result.report.compact_codes()
+
+
+def test_arrangement_candidate_export_fidelity_across_midi_and_musicxml(monkeypatch):
+    """Accepted arrangement candidates remain playable/exportable from explicit events."""
+    import asyncio
+    import os
+
+    from app.arrangement_schemas import CompositionArrangementPreviewRequest
+    from app.llm_settings import LLMProviderSettings, LLMSettings
+    from app.schemas import LLMModelSelection
+    from app.services.composition_midi import render_midi
+    from app.services.llm_composition_arrangement import run_composition_arrangement_preview
+    from app.services.music_json_renderer import render_musicxml
+    from tests.test_composition_arrangement_context import (
+        _acceptance_instrumentation,
+        _piano_sketch_v2,
+    )
+
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    settings = LLMSettings(
+        providers=(
+            LLMProviderSettings(
+                provider="fake",
+                model="fake-deterministic",
+                api_key="unused",
+                is_default=True,
+            ),
+        ),
+        default_provider="fake",
+        request_timeout_seconds=30,
+        temperature=0.4,
+    )
+    response = asyncio.run(
+        run_composition_arrangement_preview(
+            CompositionArrangementPreviewRequest.model_validate(
+                {
+                    "composition": _piano_sketch_v2(),
+                    "operation": "piano_to_ensemble",
+                    "source_track_ids": ["piano-melody", "piano-accomp", "bass-1"],
+                    "instrumentation": _acceptance_instrumentation(),
+                    "candidate_count": 1,
+                    "selection": LLMModelSelection(provider="fake", model="fake-deterministic"),
+                }
+            ),
+            settings=settings,
+        )
+    )
+    candidate = response.candidates[0].composition
+    expected = canonical_note_tuples(candidate)
+    midi_bytes = render_midi(candidate)
+    musicxml, _report = render_musicxml(candidate)
+    assert_note_tuples_equal(
+        expected,
+        midi_note_tuples_from_bytes(midi_bytes, candidate),
+        source_format="midi",
+    )
+    assert_note_tuples_equal(
+        [n._replace(velocity=0) for n in expected],
+        [n._replace(velocity=0) for n in musicxml_note_tuples(musicxml, candidate)],
+        source_format="musicxml",
+    )
+    # WAV-ready: same MIDI projection the WAV exporter consumes.
+    from app.services.composition_midi import render_midi_with_report
+    from app.services.composition_wav import expected_duration_seconds
+
+    midi_report = render_midi_with_report(candidate)
+    assert midi_report.midi_bytes[:4] == b"MThd"
+    assert expected_duration_seconds(candidate) > 0

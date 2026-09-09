@@ -454,3 +454,44 @@ def test_declared_key_change_conflict_warning():
     codes = _codes(warnings)
     assert "declared_key_change_conflicts_with_inference" in codes
     assert "declared_key_conflicts_with_inference" in codes
+
+
+def test_analysis_range_unaffected_by_arrangement_catalog_load():
+    """Loading the arrangement catalog must not change analysis warning semantics."""
+    from app.services.instrument_catalog import get_catalog
+
+    catalog = get_catalog()
+    assert catalog.fingerprint
+
+    # Bassoon high note still warns; drums still skipped.
+    bassoon = _evaluate(
+        _v2_shell(bar_count=1, tracks=[_track([_note("C6", start=0, duration=1920)], instrument="bassoon", role="melody")])
+    )
+    assert "note_outside_instrument_range" in _codes(bassoon)
+
+    drums = _evaluate(
+        _v2_shell(
+            bar_count=1,
+            tracks=[_track([_note("C8", start=0, duration=480)], track_id="drums-1", instrument="Drum Kit", role="drums", is_drum=True)],
+        )
+    )
+    assert "note_outside_instrument_range" not in _codes(drums)
+
+    # Empty harmony compositions still analyze without crashing.
+    empty_harmony = _v2_shell(
+        bar_count=1,
+        tracks=[_track([_note("C4", start=0, duration=480)], instrument="piano", role="melody")],
+    )
+    empty_harmony["harmony"] = []
+    warnings = _evaluate(empty_harmony)
+    assert isinstance(warnings, list)
+
+
+def test_imported_program_mismatch_track_still_range_checked_by_label():
+    """Track labeled cello with piano program still uses cello-ish analysis identity."""
+    events = [_note("C7", start=0, duration=480)]  # far above cello
+    track = _track(events, track_id="mismatch-1", instrument="cello", role="bass")
+    track["midi_program"] = 0
+    raw = _v2_shell(bar_count=1, tracks=[track])
+    warnings = _evaluate(raw)
+    assert "note_outside_instrument_range" in _codes(warnings)

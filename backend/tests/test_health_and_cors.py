@@ -32,6 +32,7 @@ def test_ready_report_has_no_secret_fields(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("LLM_FAKE_MODE", raising=False)
+    monkeypatch.delenv("ARRANGEMENT_INSTRUMENT_CATALOG_PATH", raising=False)
 
     report = build_readiness_report()
     payload = str(report)
@@ -42,6 +43,10 @@ def test_ready_report_has_no_secret_fields(monkeypatch, tmp_path):
     assert "providers" in report["llm"]
     assert "database" in report
     assert "wav" in report
+    assert report["arrangement_catalog"]["ok"] is True
+    assert report["arrangement_catalog"]["fingerprint"]
+    assert report["arrangement_catalog"]["catalog_version"]
+    assert "path" not in report["arrangement_catalog"]
 
 
 def test_ready_endpoint_ok_without_llm(monkeypatch, tmp_path):
@@ -49,10 +54,30 @@ def test_ready_endpoint_ok_without_llm(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("LLM_FAKE_MODE", raising=False)
+    monkeypatch.delenv("ARRANGEMENT_INSTRUMENT_CATALOG_PATH", raising=False)
 
     report = asyncio.run(readiness_check())
     assert report["ready"] is True
     assert report["llm"]["configured"] is False
+    assert report["arrangement_catalog"]["ok"] is True
+
+
+def test_ready_false_when_arrangement_catalog_invalid(monkeypatch, tmp_path):
+    monkeypatch.setenv("PROJECT_DB_PATH", str(tmp_path / "ready-catalog.db"))
+    bad = tmp_path / "invalid-catalog.json"
+    bad.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setenv("ARRANGEMENT_INSTRUMENT_CATALOG_PATH", str(bad))
+    from app.services.instrument_catalog import clear_catalog_cache
+
+    clear_catalog_cache()
+    try:
+        report = build_readiness_report()
+        assert report["ready"] is False
+        assert report["arrangement_catalog"]["ok"] is False
+        assert report["arrangement_catalog"]["error_code"] == "catalog_invalid_json"
+        assert str(bad) not in str(report)
+    finally:
+        clear_catalog_cache()
 
 
 def test_cors_allows_configured_origin(monkeypatch, tmp_path):
