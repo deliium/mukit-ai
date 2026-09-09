@@ -60,6 +60,8 @@ mukit-ai/
 | `backend/app/routers/analysis.py` | `POST /analysis/composition` |
 | `backend/app/routers/motifs.py` | `POST /motifs/apply` |
 | `backend/app/routers/harmony.py` | `POST /harmony/reharmonize/preview` |
+| `backend/app/harmony_schemas.py` | Harmony timeline + reharmonize preview DTOs |
+| `backend/app/services/composition_reharmonization.py` | Deterministic reharmonize preview engine |
 | `backend/app/services/composition_analysis.py` | Analysis orchestrator + bounded LLM advisory projection |
 | `backend/app/services/composition_motif_editor.py` | Canonical motif apply + destination replacement |
 | `backend/app/services/composition_theme.py` | Structured theme plan + generation recurrence |
@@ -74,10 +76,11 @@ mukit-ai/
 | `backend/app/routers/projects.py` | Project CRUD + autosave APIs |
 | `backend/run.py` / `uvicorn app.main:app` | Backend process entry |
 | `frontend/src/main.jsx` | Frontend bootstrap |
-| `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import + analysis transitions) |
+| `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import + analysis + harmony preview) |
 | `frontend/src/components/ImportControls.jsx` | Import / replace UX |
 | `frontend/src/components/CompositionAnalysisPanel.jsx` | Analysis tab UI |
 | `frontend/src/components/MotifPanel.jsx` | Motifs tab authoring / apply UI |
+| `frontend/src/components/HarmonyTimelinePanel.jsx` | Harmony tab timeline + reharmonize preview/apply |
 | `docker-compose.yml` | Production-local backend + nginx frontend |
 | `compose.dev.yml` | Optional hot-reload override |
 | `.env.example` | Env template for LLM/import settings |

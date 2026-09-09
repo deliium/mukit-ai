@@ -2,13 +2,14 @@
 
 ## Overview
 
-Full-stack LLM music composer that generates and edits canonical playable `composition.v2` JSON. A FastAPI backend orchestrates multi-stage LangChain/LangGraph composition, validation, secure MIDI/MusicXML import into V2, deterministic `composition.analysis.v1` musical analysis, MusicXML/MIDI/WAV export, and SQLite project persistence. A React/Vite frontend provides prompt controls, import workflows, piano-roll and JSON editing, an Analysis tab for scoped sidecar reports, OSMD notation, and Tone.js playback of the same canonical note events. `composition.v1` remains accepted migration/parser input.
+Full-stack LLM music composer that generates and edits canonical playable `composition.v2` JSON. A FastAPI backend orchestrates multi-stage LangChain/LangGraph composition, validation, secure MIDI/MusicXML import into V2, deterministic `composition.analysis.v1` musical analysis, harmony timeline editing and reharmonization preview, MusicXML/MIDI/WAV export, and SQLite project persistence. A React/Vite frontend provides prompt controls, import workflows, piano-roll and JSON editing, Analysis / Motifs / Harmony tabs, OSMD notation, and Tone.js playback of the same canonical note events. `composition.v1` remains accepted migration/parser input.
 
 ## Core Features
 
 - Multi-stage LLM generation of operational `composition.v2` (form → harmony → melody → bass → accompaniment → assemble → validate/repair)
 - Secure MIDI / MusicXML / MXL import into the same V2 workspace with session import reports (no LLM required; no retained source files)
 - Deterministic composition analysis (`composition.analysis.v1`) over current V2 scopes; frontend-derived cache only; optional bounded advisory context for LLM edit/repair
+- Explicit harmony tick-span timeline with local add/replace/remove/move/resize; `POST /harmony/reharmonize/preview` for deterministic/AI candidates (apply is client-side, fingerprint-gated)
 - Partial region editing via LLM patch (`replace_region`) without regenerating the full score
 - Local project CRUD with SQLite persistence and debounced autosave
 - Piano-roll and JSON editors sharing the same `editedMusicJson` Zustand state
@@ -30,7 +31,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 
 - Monolith: one API service + one SPA; logical modules (projects, import, analysis, composition/LLM, rendering/export) live inside `backend/app/` and `frontend/src/`
 - Dependency direction: HTTP handlers → services → DB / external I/O; Pydantic schemas are shared contracts
-- `composition.v2` is the operational source of truth for playable notes; `composition.v1` is migration/parser input. External imports convert directly to V2. `harmony` is metadata only and must not invent audible events; raw import leaves `harmony: []`. Analysis is a non-persisted sidecar over V2 events.
+- `composition.v2` is the operational source of truth for playable notes; `composition.v1` is migration/parser input. External imports convert directly to V2. `harmony` is explicit tick-span metadata only and must not invent audible events; raw import leaves `harmony: []`. Analysis and reharmonize previews are non-persisted until the user explicitly applies a candidate.
 
 ## Architecture
 

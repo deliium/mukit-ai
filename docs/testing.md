@@ -39,6 +39,7 @@ Focused canonical coverage includes:
 - `backend/tests/test_llm_staged_composer.py` for mocked multi-stage sequencing (including `plan_themes` / `realize_themes`), repair/retry (including duplicate bass/bass accompaniment regression), oversized request rejection, provider/model override, F#-minor constraint repair/exhaustion, and actionable API errors.
 - `backend/tests/test_composition_theme.py` and thematic assertions in `test_llm_fake_provider.py` for structured theme plans, Motif A recurrence through production transforms, and bounded validation outcomes.
 - `backend/tests/test_motif_schemas.py`, `test_motif_routes.py`, `test_composition_motif_editor.py`, `test_composition_motif_transform.py`, and `test_llm_motif_editing.py` for `POST /motifs/apply`, mechanical/creative paths, identity checks, and fake creative proposals.
+- `backend/tests/test_composition_harmony_spans.py`, `test_composition_harmony_timeline.py`, `test_composition_harmony_compatibility.py`, `test_composition_reharmonization.py`, `test_harmony_routes.py`, and `test_llm_reharmonization.py` for explicit harmony ranges, timeline ops, compatibility findings, deterministic/AI preview, and `POST /harmony/reharmonize/preview`.
 - `backend/tests/test_composition_region_patch.py` for deterministic bar-to-tick selection, melody/all-track replacement, added tracks, harmony/metadata preservation, motif-reference reconciliation, and rejected out-of-scope patches.
 - `backend/tests/test_llm_composition_editing.py` for mocked region-edit graph success paths (dramatic melody bars 9–12 with unchanged outside notes/harmony), accompaniment/bass/counter-melody scenarios, malformed JSON, out-of-scope repair exhaustion, and provider failures.
 - `backend/tests/test_llm_routes.py` for `/llm/edit-composition-region` success, `503` without providers, and `502` invalid patch mapping.
@@ -205,6 +206,14 @@ cd frontend && npm run test:e2e -- e2e/motif-panel.spec.js e2e/motif-workflow.sp
 ```
 
 Covers Motifs tab controls, marking `Motif A` from a 1–2 bar pitched selection, mechanical `POST /motifs/apply` (transpose/repeat), mocked `422`/`503` atomic failure UI, undo, save/reopen motif metadata, keyboard tab navigation, and 390px layout. Backend motif suites: `test_motif_*.py`, `test_composition_motif_*.py`, `test_composition_theme.py`, thematic stages in `test_llm_staged_composer.py` / `test_llm_fake_provider.py`. Logs and E2E `console.info` may include motif IDs, operation, counts, and codes only — never selected pitches, event arrays, or full compositions.
+
+Harmony editing / reharmonization journey (requires running stack with `LLM_FAKE_MODE=1`):
+
+```bash
+cd frontend && npm run test:e2e -- e2e/harmony-workflow.spec.js
+```
+
+Covers Harmony tab timeline, bars 9–12 `increase_tension` + `preserve_melody_adapt_harmony` preview non-mutation, apply with melody deep-equality, undo restore, local replace preserving note events, and 390px no document overflow. Backend suites: `test_composition_harmony_*.py`, `test_composition_reharmonization.py`, `test_harmony_routes.py`, `test_llm_reharmonization.py`. Logs may include operation, policy, bar range, counts, finding codes, and fingerprint prefixes only — never instructions, chord arrays, compositions, or events.
 
 Artifacts (trace/video on failure) are gitignored under `frontend/test-results/` and `frontend/playwright-report/`.
 

@@ -43,7 +43,7 @@ V1 root fields are preserved. **Initial** conductor state is at tick `0`:
 | `bar_count`, `duration_ticks` | Total length; `duration_ticks` must match compiled bar map |
 | `sections` | Contiguous boundaries; optional stable `id` and free-text `label`. Import may use a single `unsectioned` section when form markers are absent |
 | `tracks` | Ordered track list with events and track-local expression. Import may use `role: "other"` when role metadata is insufficient |
-| `harmony` | Chord-symbol metadata only. Raw imports always set `harmony: []` (no analysis) |
+| `harmony` | Explicit half-open chord-symbol spans `{start_tick, duration_ticks, chord}` only. Sorted, non-overlapping, in bounds. Legacy `{bar, chord}` points normalize to spans on ingest (change-point → next declaration / end). Raw imports always set `harmony: []` (no analysis). Never a playable note source |
 | `motifs` | Optional authored motif definitions (default `[]`). Each definition stores `id`/`label` plus occurrences that reference existing `tracks[].events[].id` values — never copied pitches/onsets. Exactly one `original` occurrence per motif. Consumers derive spans from referenced events. |
 
 **Timeline change arrays** contain transitions **after** tick `0` only (no duplicate tick-`0` entries):
@@ -275,9 +275,23 @@ See `backend/app/fixtures/composition_v2_expressive.json` for a full 4-bar multi
       ]
     }
   ],
-  "harmony": [{ "bar": 1, "chord": "C" }]
+  "harmony": [{ "start_tick": 0, "duration_ticks": 1920, "chord": "C" }]
 }
 ```
+
+## Harmony timeline and reharmonization
+
+Authored harmony is an explicit tick-span timeline (gaps allowed; overlaps rejected). Local Harmony-tab edits (`add` / `replace` / `remove` / `move` / `resize`) mutate metadata only and leave every `tracks[].events[]` unchanged.
+
+`POST /harmony/reharmonize/preview` returns a validated candidate composition plus change summaries, preservation assertions, and a compatibility report. Preview is **stateless**: it never writes a project. Apply is a frontend atomic commit only when the current composition fingerprint still matches `base_fingerprint`. Content policies:
+
+| Policy | Exact-preserved | May change |
+|--------|-----------------|------------|
+| `preserve_melody_adapt_harmony` | Melody/lead events | Harmony spans + explicitly listed bass/accompaniment targets |
+| `preserve_harmony_adapt_melody` | Harmony spans | Explicitly listed melody/lead tracks |
+| `adapt_accompaniment_only` | Harmony + melody/lead | Explicitly listed bass/harmony/pad/rhythm tracks |
+
+Target track IDs are always explicit (role inference may recommend only). Drums are excluded; `countermelody` / `other` require opt-in. Modulation requires `allow_modulation` plus `target_key`. MusicXML may project chord symbols at span starts; Tone/MIDI/WAV never invent notes from harmony.
 
 ## Release checklist (V2 enablement)
 
@@ -296,6 +310,7 @@ Before treating V2 responses as production-ready, verify:
 - **Import:** `POST /imports/midi` and `POST /imports/musicxml` return V2 in `composition` plus regenerated `musicxml` and `import_report`. See [import.md](import.md).
 - **Analysis:** `POST /analysis/composition` returns a derived `composition.analysis.v1` sidecar for a scope. Not persisted; not used by playback/export. See [composition-analysis.md](composition-analysis.md).
 - **Generation / edit:** `POST /llm/generate-music-json` and `POST /llm/edit-composition-region` return V2 in `music` (input may be V1 or V2, including imported scores). Canonical validation applies; generation ensemble density does not block imported material. Edit/repair prompts may include a bounded advisory analysis summary only.
+- **Harmony / reharmonize:** `POST /harmony/reharmonize/preview` returns an ephemeral candidate (deterministic or AI). Apply is client-side only after fingerprint checks. See Harmony timeline section above.
 - **Projects:** SQLite stores V2 after open/save; V1 migrates on read. Imported projects persist with `generationMeta: null`. See [project-persistence.md](./project-persistence.md).
 - **Playback:** `tonePlaybackEngine.js` compiles V2 expression with piecewise tempo; mute/solo is UI-only. Regenerated notation after import comes from backend MusicXML of the installed V2 — never from the uploaded file.
 - **Exports:** `/export/musicxml`, `/export/midi`, and `/export/wav` accept V1 or V2 input, normalize to V2, and attach `X-Mukit-Projection-*` headers (CORS-exposed). MusicXML may report notation omissions such as `automation_omitted_from_notation`; MIDI/WAV inherit the shared MIDI projection report (tempo quantization, automation sampling, articulation transforms, and related codes). WAV uses FluidSynth on the same MIDI bytes; env vars: `FLUIDSYNTH_BIN`, `COMPOSITION_WAV_SOUNDFONT` (Docker default `/usr/share/sounds/sf2/FluidR3_GM.sf2`), `COMPOSITION_WAV_SAMPLE_RATE`, `COMPOSITION_WAV_GAIN`, `COMPOSITION_WAV_TIMEOUT_SECONDS`. Missing FluidSynth/SoundFont → `503`.

@@ -250,7 +250,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
 
 ### Phase 3: Frontend Model, State, and API
 
-- [ ] **Task 7: Add frontend harmony validation, timeline operations, diffs, and preservation checks.**
+- [x] **Task 7: Add frontend harmony validation, timeline operations, diffs, and preservation checks.**
   - Create `frontend/src/utils/compositionHarmony.js` using `compositionTimeline.js` boundaries for span-to-bar projection, selection geometry, immutable add/replace/remove/move/resize, normalization, split/merge rules, and before/after diffs.
   - Extend `frontend/src/utils/musicJsonValidation.js`, `compositionVersion.js`, `compositionAnalysis.js`, and persistence/notation revision projections to mirror backend range invariants and legacy normalization exactly.
   - Add pure candidate verification that compares authorized inside-range changes, exact-preserved melody/harmony as required, exact outside-range events, conductor/section metadata, and proposal/base fingerprints.
@@ -259,7 +259,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
   - **Logging:** Pure utilities do not log normal flow. Callers log DEBUG operation names/counts and WARNING validation/preservation codes; tests assert logs never serialize compositions, chord lists, or events.
   - **Dependencies:** Tasks 1-3 and finalized DTO semantics from Task 4.
 
-- [ ] **Task 8: Generalize Zustand composition transactions and add isolated preview lifecycle state.**
+- [x] **Task 8: Generalize Zustand composition transactions and add isolated preview lifecycle state.**
   - Refactor `frontend/src/store/musicStore.js` so the existing note-only commit/history mechanism becomes a composition-edit transaction reused by note, motif, harmony, and accepted reharmonization edits without changing existing behavior.
   - Add structured harmony selection/edit actions and include relevant selection in undo snapshots. Each pointer resize/move produces one history entry; subsequent drag updates use the existing `skipHistory` pattern.
   - Add ephemeral preview state: request sequence, status/error/warnings, base revision/fingerprint, candidate, patch/change summaries, compatibility, optional candidate MusicXML, and engine/provider metadata.
@@ -270,7 +270,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
   - **Logging:** INFO preview lifecycle and apply/discard summaries; DEBUG sequence/revision prefixes, operation, policy, counts, and undo depth; WARNING stale/invalid/duplicate actions; ERROR sanitized API/apply failures. Never log instructions, compositions, harmony arrays, or events.
   - **Dependencies:** Task 7.
 
-- [ ] **Task 9: Add the frontend reharmonization API client and strict response validation.**
+- [x] **Task 9: Add the frontend reharmonization API client and strict response validation.**
   - Extend `frontend/src/api/musicApi.js` with `previewReharmonization(payload)` and a typed error class following analysis/motif/import conventions.
   - Normalize and validate the outbound composition, validate all enums/selection/targets, post to `/harmony/reharmonize/preview`, normalize/validate the candidate, and verify response fingerprints/summaries before returning it to the store.
   - Keep the existing generic region editor behavior separate; do not enable its dormant `harmony_patch` as a shortcut.
@@ -282,7 +282,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
 
 ### Phase 4: Interactive UI, Acceptance, and Documentation
 
-- [ ] **Task 10: Build the Harmony tab, timeline editor, strategy controls, and preview review UI.**
+- [x] **Task 10: Build the Harmony tab, timeline editor, strategy controls, and preview review UI.**
   - Create `frontend/src/components/HarmonyTimelinePanel.jsx` and add a `harmony` tab in `ComposerWorkspace.jsx` using existing accessible tab behavior.
   - Render a horizontally scrollable bar/tick ruler from compiled variable-meter boundaries, explicit chord blocks, range selection overlay, and handles for move/resize. Reuse/extract piano-roll bar-selection math rather than duplicating fixed-meter arithmetic.
   - Support pointer and keyboard/numeric add, replace, remove, move, and resize actions with clear overlap/clear confirmation and 44px touch targets. Display gaps explicitly and state that harmony metadata itself is silent.
@@ -294,7 +294,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
   - **Logging:** INFO explicit user operations, preview requests, applies, and discards using bounded metadata; DEBUG disabled reasons/selection/target counts; WARNING blocked destructive/stale actions; ERROR sanitized UI failures. Never log text instructions, chord arrays, compositions, or events.
   - **Dependencies:** Tasks 7-9.
 
-- [ ] **Task 11: Add end-to-end acceptance and complete regression verification.**
+- [x] **Task 11: Add end-to-end acceptance and complete regression verification.**
   - Add `frontend/e2e/harmony-workflow.spec.js` and helper route/store utilities in `frontend/e2e/helpers.js` using a deterministic 16-bar multi-track fixture.
   - Cover local timeline CRUD/resize, variable meter, keyboard access, chromatic symbols, destructive confirmations, preview loading/error/retry/discard, stale-base rejection, undo/redo, save/reopen, and mobile no-overflow behavior.
   - Implement the exact acceptance scenario: select bars 9-12, request increased tension with `preserve_melody_adapt_harmony`, assert captured request scope/policy/targets, return or generate a deterministic candidate, prove preview non-mutation, apply, prove melody deep equality, prove coherent harmony plus accompaniment/bass changes inside range, prove outside-range/structural preservation, then undo/redo and reopen.
@@ -309,7 +309,7 @@ The frontend stores the response outside `editedMusicJson`. Apply is a local ato
   - **Logging:** Test fixtures capture/assert stable operation, policy, range, count, finding, and failure codes; secret-hygiene tests reject prompts, raw compositions, harmony arrays, event arrays, and provider secrets in logs. Playwright diagnostics may include bounded IDs/counts but not full musical payloads.
   - **Dependencies:** Tasks 1-10.
 
-- [ ] **Task 12: Document the canonical range contract, strategy semantics, API, UX, testing, and migration behavior.**
+- [x] **Task 12: Document the canonical range contract, strategy semantics, API, UX, testing, and migration behavior.**
   - Route the documentation checkpoint through `$aif-docs` and update `docs/composition-v2.md`, `docs/composition-analysis.md`, `docs/project-persistence.md`, `docs/testing.md`, `README.md`, `.ai-factory/DESCRIPTION.md`, `.ai-factory/ARCHITECTURE.md`, and `AGENTS.md` only where the implemented structure/entry points change.
   - Document explicit half-open harmony ranges, legacy point normalization, gap/overlap/resize semantics, chromatic support, active-key behavior, explicit modulation, every operation/content policy, target authorization, compatibility findings, preview/apply transaction, undo/autosave behavior, and export/playback fidelity.
   - Include request/response examples for deterministic and AI preview without real prompts or event-array dumps, plus focused backend/frontend/E2E commands and the bars 9-12 acceptance journey.

@@ -492,6 +492,12 @@ export async function openMotifsTab(page) {
   console.info('[e2e-motifs] Opened Motifs tab');
 }
 
+export async function openHarmonyTab(page) {
+  await openComposerTab(page, 'harmony');
+  await page.getByTestId('harmony-panel').waitFor({ state: 'visible', timeout: 30_000 });
+  console.info('[e2e-harmony] Opened Harmony tab');
+}
+
 export async function openPianoTab(page) {
   await openComposerTab(page, 'piano');
   await page.getByTestId('piano-roll-grid').waitFor({ state: 'visible', timeout: 30_000 });

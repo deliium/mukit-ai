@@ -7,6 +7,7 @@ import ExportControls from './ExportControls.jsx';
 import PianoRollEditor from './PianoRollEditor.jsx';
 import AiRegionEditPanel from './AiRegionEditPanel.jsx';
 import CompositionAnalysisPanel from './CompositionAnalysisPanel.jsx';
+import HarmonyTimelinePanel from './HarmonyTimelinePanel.jsx';
 import MotifPanel from './MotifPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
@@ -80,6 +81,7 @@ const TABS = [
   { id: 'piano', label: 'Piano roll' },
   { id: 'notation', label: 'Notation' },
   { id: 'motifs', label: 'Motifs' },
+  { id: 'harmony', label: 'Harmony' },
   { id: 'advanced', label: 'Advanced JSON' },
   { id: 'analysis', label: 'Analysis' },
 ];
@@ -214,6 +216,7 @@ const ComposerWorkspace = () => {
             {tab.id === 'motifs' && selected ? (
               <MotifPanel onOpenPianoTab={() => onTabChange('piano')} />
             ) : null}
+            {tab.id === 'harmony' && selected ? <HarmonyTimelinePanel /> : null}
           </Panel>
         );
       })}
