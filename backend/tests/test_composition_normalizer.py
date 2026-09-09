@@ -103,3 +103,25 @@ def test_canonical_normalization_preserves_same_instrument_multi_role_tracks():
     assert [track.instrument for track in composition.tracks] == ["piano", "piano"]
     assert [track.role for track in composition.tracks] == ["melody", "harmony"]
     assert [track.id for track in composition.tracks] == ["melody-1", "harmony-1"]
+
+
+def test_normalizer_preserves_empty_motifs_on_v2():
+    from tests.test_composition_v2_schema import minimal_v2
+
+    composition = normalize_composition_json(minimal_v2())
+    assert composition.schema_version == "composition.v2"
+    assert composition.motifs == []
+
+
+def test_normalizer_preserves_valid_motif_references():
+    from tests.test_composition_v2_schema import (
+        _motif_definition,
+        _motif_track,
+        minimal_v2,
+    )
+
+    payload = minimal_v2(tracks=[_motif_track()], motifs=[_motif_definition()])
+    composition = normalize_composition_json(payload)
+    assert len(composition.motifs) == 1
+    assert composition.motifs[0].label == "Motif A"
+    assert composition.motifs[0].occurrences[0].event_ids == ["n1", "n2", "n3"]

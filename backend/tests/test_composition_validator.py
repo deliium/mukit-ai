@@ -492,3 +492,38 @@ def test_canonical_profile_accepts_mixed_meter_timeline():
 
     canonical = validate_composition_integrity(payload, profile="canonical")
     assert canonical.ok
+
+
+def test_canonical_profile_accepts_valid_motif_references():
+    from tests.test_composition_v2_schema import _motif_definition, _motif_track, minimal_v2
+
+    payload = minimal_v2(tracks=[_motif_track()], motifs=[_motif_definition()])
+    result = validate_composition_integrity(payload, profile="canonical")
+    assert result.ok
+
+
+def test_canonical_profile_rejects_dangling_motif_references():
+    from app.composition_schemas import (
+        CompositionV2,
+        CompositionV2MotifDefinition,
+        CompositionV2MotifOccurrence,
+    )
+    from tests.test_composition_v2_schema import _motif_track, minimal_v2
+
+    base = CompositionV2.model_validate(minimal_v2(tracks=[_motif_track()], motifs=[]))
+    occurrence = CompositionV2MotifOccurrence.model_construct(
+        id="occ-orig",
+        track_id="melody-1",
+        event_ids=["n1", "n2", "ghost"],
+        relationship="original",
+        transform=None,
+    )
+    motif = CompositionV2MotifDefinition.model_construct(
+        id="motif-a",
+        label="Motif A",
+        occurrences=[occurrence],
+    )
+    composition = base.model_copy(update={"motifs": [motif]})
+    result = validate_composition_integrity(composition, profile="canonical")
+    assert not result.ok
+    assert "motif_event_unresolved" in result.error_codes()

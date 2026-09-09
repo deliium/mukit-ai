@@ -36,7 +36,18 @@ def test_migrate_v1_to_v2_preserves_note_sequence_and_is_source_immutable():
         assert left.voice == right.voice
     assert v2.sections[0].id == "section-1"
     assert v2.tempo_changes == []
+    assert v2.motifs == []
     assert v2.tracks[0].expression == 127
+    assert result.default_field_counts["motifs"] == 0
+
+
+def test_migrate_v1_to_v2_never_assigns_motif_event_ids():
+    source = valid_composition()
+    for event in source["tracks"][0]["events"]:
+        event.pop("id", None)
+    result = migrate_v1_to_v2(source)
+    assert result.composition.motifs == []
+    assert all(event.id is None for track in result.composition.tracks for event in track.events)
 
 
 def test_migrate_v1_to_v2_is_idempotent_via_normalizer():

@@ -11,7 +11,7 @@
   "vectors": {
     "major_tonality": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -49,18 +49,11 @@
         "exact",
         "transposed",
         "transposed",
-        "transposed",
-        "rhythm_only",
-        "rhythm_only",
-        "rhythm_only",
-        "rhythm_only",
-        "rhythm_only",
         "rhythm_only"
       ],
       "motif_transpositions": [
         5,
-        7,
-        0
+        7
       ],
       "max_simultaneity": 1,
       "tension_status": "ok",
@@ -68,7 +61,7 @@
     },
     "minor_tonality": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -105,19 +98,12 @@
         "transposed",
         "transposed",
         "transposed",
-        "transposed",
-        "rhythm_only",
-        "rhythm_only",
-        "rhythm_only",
-        "rhythm_only",
-        "rhythm_only",
         "rhythm_only"
       ],
       "motif_transpositions": [
         5,
         5,
-        5,
-        0
+        5
       ],
       "max_simultaneity": 1,
       "tension_status": "ok",
@@ -125,7 +111,7 @@
     },
     "modulation": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -164,19 +150,14 @@
         "transposed",
         "transposed",
         "transposed",
-        "transposed",
-        "rhythm_only",
-        "rhythm_only",
-        "rhythm_only",
         "rhythm_only",
         "rhythm_only",
         "rhythm_only"
       ],
       "motif_transpositions": [
+        -7,
         5,
-        7,
-        -5,
-        0
+        5
       ],
       "max_simultaneity": 1,
       "tension_status": "ok",
@@ -184,7 +165,7 @@
     },
     "chord_inversions_nct": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -225,7 +206,7 @@
     },
     "cadences": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -306,18 +287,6 @@
         "exact",
         "exact",
         "transposed",
-        "transposed",
-        "transposed",
-        "transposed",
-        "transposed",
-        "transposed",
-        "transposed",
-        "transposed",
-        "transposed",
-        "transposed",
-        "transposed",
-        "transposed",
-        "transposed",
         "rhythm_only",
         "rhythm_only",
         "rhythm_only",
@@ -350,14 +319,7 @@
         "rhythm_only"
       ],
       "motif_transpositions": [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
+        -2
       ],
       "max_simultaneity": 5,
       "tension_status": "ok",
@@ -365,7 +327,7 @@
     },
     "motifs": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -403,14 +365,11 @@
       "motif_kinds": [
         "exact",
         "transposed",
-        "transposed",
-        "rhythm_only",
         "rhythm_only",
         "rhythm_only",
         "rhythm_only"
       ],
       "motif_transpositions": [
-        0,
         2
       ],
       "max_simultaneity": 1,
@@ -419,7 +378,7 @@
     },
     "mixed_meter": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -444,7 +403,7 @@
     },
     "polyphony_dissonance": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -481,7 +440,7 @@
     },
     "range_violation": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -506,7 +465,7 @@
     },
     "duplicate_notes": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -532,7 +491,7 @@
     },
     "empty_section_track": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -557,7 +516,7 @@
     },
     "percussion_only": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "composition",
       "scope_start_tick": 0,
@@ -577,32 +536,9 @@
       "tension_status": "not_applicable",
       "fingerprint": "1857c4995c875daaf15c33b7f57197ecbbcef35f0f45883fce2fde762c39e11b"
     },
-    "empty_section_scope": {
-      "status": "empty",
-      "algorithm_version": "analysis.native.v1",
-      "schema_version": "composition.analysis.v1",
-      "scope_kind": "section",
-      "scope_start_tick": 3840,
-      "scope_end_tick": 7680,
-      "warning_codes": [
-        "empty_analysis_scope",
-        "insufficient_tonal_evidence"
-      ],
-      "tonality_status": "insufficient_evidence",
-      "global_key": null,
-      "key_candidates": [],
-      "harmony_symbols": [],
-      "harmony_bass_pcs": [],
-      "cadence_kinds": [],
-      "motif_kinds": [],
-      "motif_transpositions": [],
-      "max_simultaneity": 0,
-      "tension_status": "insufficient_evidence",
-      "fingerprint": "2d1f87067b66a267cfae91c51bd182ae15f336691ee419df9e051a2517170224"
-    },
     "chord_inversions_nct_root_section": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "section",
       "scope_start_tick": 0,
@@ -643,7 +579,7 @@
     },
     "chord_inversions_nct_inv_section": {
       "status": "partial",
-      "algorithm_version": "analysis.native.v1",
+      "algorithm_version": "analysis.native.v2",
       "schema_version": "composition.analysis.v1",
       "scope_kind": "section",
       "scope_start_tick": 1920,
@@ -681,6 +617,29 @@
       "max_simultaneity": 4,
       "tension_status": "ok",
       "fingerprint": "6560a03c1455bcbe9b17188780dd29ed4e04b697365b2d8e3c470ac3e9d16f49"
+    },
+    "empty_section_scope": {
+      "status": "empty",
+      "algorithm_version": "analysis.native.v2",
+      "schema_version": "composition.analysis.v1",
+      "scope_kind": "section",
+      "scope_start_tick": 3840,
+      "scope_end_tick": 7680,
+      "warning_codes": [
+        "empty_analysis_scope",
+        "insufficient_tonal_evidence"
+      ],
+      "tonality_status": "insufficient_evidence",
+      "global_key": null,
+      "key_candidates": [],
+      "harmony_symbols": [],
+      "harmony_bass_pcs": [],
+      "cadence_kinds": [],
+      "motif_kinds": [],
+      "motif_transpositions": [],
+      "max_simultaneity": 0,
+      "tension_status": "insufficient_evidence",
+      "fingerprint": "2d1f87067b66a267cfae91c51bd182ae15f336691ee419df9e051a2517170224"
     }
   }
 }

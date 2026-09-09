@@ -7,6 +7,7 @@ export/playback. There is no timestamp and no random IDs.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 from typing import Annotated, Any, Literal
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 ANALYSIS_SCHEMA_VERSION: Literal["composition.analysis.v1"] = "composition.analysis.v1"
 # Semantic algorithm/profile version for report identity and frontend freshness.
-ANALYSIS_ALGORITHM_VERSION = "analysis.native.v1"
+ANALYSIS_ALGORITHM_VERSION = "analysis.native.v2"
 ANALYSIS_FINGERPRINT_PROFILE = "analysis.source.v1"
 
 # --- Caps / rounding -----------------------------------------------------------
@@ -173,6 +174,15 @@ def make_derived_id(*parts: Any) -> str:
     if not normalized:
         raise ValueError("derived id requires at least one part")
     return ":".join(normalized)[:200]
+
+
+def make_sha256_derived_id(prefix: str, *parts: Any) -> str:
+    """Fixed-length SHA-256 digest ID for bounded motif family/occurrence identity."""
+    if not prefix.strip():
+        raise ValueError("sha256 derived id requires a non-empty prefix")
+    normalized = "|".join(str(part) for part in parts if part is not None)
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}:{digest}"
 
 
 # --- Shared inference / evidence ----------------------------------------------
@@ -587,6 +597,123 @@ class RoleAnalysisResult(BaseModel):
         return value
 
 
+DetectedMotifRelationshipKind = Literal[
+    "exact",
+    "transposed",
+    "rhythm_only",
+    "inversion",
+    "augmentation",
+    "diminution",
+    "sequence",
+]
+
+# Shared bound for motif note spans (analysis repetition + occurrence notes).
+MAX_MOTIF_NOTES_BOUND = 12
+
+
+class DetectedNoteReference(BaseModel):
+    """Fingerprint-bound locator for one logical note in a detected occurrence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_ids: list[str] | None = Field(
+        default=None,
+        description="Canonical event IDs when present on the source composition.",
+    )
+    event_indexes: list[int] | None = Field(
+        default=None,
+        description="Fallback indexes into track.events when IDs are absent.",
+    )
+
+    @field_validator("event_ids")
+    @classmethod
+    def validate_event_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if len(value) > ANALYSIS_MAX_EVIDENCE_ITEMS:
+            raise ValueError(f"note event_ids limited to {ANALYSIS_MAX_EVIDENCE_ITEMS}")
+        return value
+
+    @field_validator("event_indexes")
+    @classmethod
+    def validate_event_indexes(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if len(value) > ANALYSIS_MAX_EVIDENCE_ITEMS:
+            raise ValueError(f"note event_indexes limited to {ANALYSIS_MAX_EVIDENCE_ITEMS}")
+        for index in value:
+            if index < 0:
+                raise ValueError("event_indexes must be >= 0")
+        return value
+
+    @model_validator(mode="after")
+    def validate_has_reference(self) -> DetectedNoteReference:
+        if not self.event_ids and not self.event_indexes:
+            raise ValueError("note reference requires event_ids or event_indexes")
+        return self
+
+
+class DetectedMotifOccurrence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., min_length=1, max_length=80)
+    kind: DetectedMotifRelationshipKind
+    track_id: str | None = Field(default=None, max_length=80)
+    start_tick: int = Field(..., ge=0)
+    end_tick: int = Field(..., ge=0)
+    note_count: int = Field(..., ge=1)
+    identity_score: float = Field(..., ge=0.0, le=1.0)
+    transposition_semitones: int | None = None
+    time_scale_numerator: int | None = Field(default=None, ge=1, le=8)
+    time_scale_denominator: int | None = Field(default=None, ge=1, le=8)
+    notes: list[DetectedNoteReference] = Field(default_factory=list)
+    inference: InferenceMeta = Field(default_factory=InferenceMeta)
+
+    @field_validator("identity_score")
+    @classmethod
+    def validate_identity_score(cls, value: float) -> float:
+        return round_analysis_float(value)
+
+    @field_validator("notes")
+    @classmethod
+    def validate_notes_cap(
+        cls, value: list[DetectedNoteReference]
+    ) -> list[DetectedNoteReference]:
+        if len(value) > MAX_MOTIF_NOTES_BOUND:
+            raise ValueError(f"occurrence notes limited to {MAX_MOTIF_NOTES_BOUND}")
+        return value
+
+
+class DetectedMotifFamily(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., min_length=1, max_length=80)
+    reference: DetectedMotifOccurrence
+    matched_occurrences: list[DetectedMotifOccurrence] = Field(default_factory=list)
+    relationship_kinds: list[DetectedMotifRelationshipKind] = Field(default_factory=list)
+    note_count: int = Field(..., ge=1)
+    inference: InferenceMeta = Field(default_factory=InferenceMeta)
+
+    @field_validator("matched_occurrences")
+    @classmethod
+    def validate_matched_cap(
+        cls, value: list[DetectedMotifOccurrence]
+    ) -> list[DetectedMotifOccurrence]:
+        # Keep family payloads bounded for analysis.v1 response size caps.
+        if len(value) > ANALYSIS_MAX_EVIDENCE_ITEMS:
+            raise ValueError(f"matched occurrences limited to {ANALYSIS_MAX_EVIDENCE_ITEMS}")
+        return value
+
+    @field_validator("relationship_kinds")
+    @classmethod
+    def validate_kinds_cap(
+        cls, value: list[DetectedMotifRelationshipKind]
+    ) -> list[DetectedMotifRelationshipKind]:
+        if len(value) > 8:
+            raise ValueError("relationship_kinds limited to 8 entries")
+        return value
+
+
 class MotifOccurrence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -602,7 +729,20 @@ class MotifOccurrence(BaseModel):
 class RepetitionAnalysisResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    motifs: list[MotifOccurrence] = Field(default_factory=list)
+    motifs: list[MotifOccurrence] = Field(
+        default_factory=list,
+        description=(
+            "Flattened matched targets for backward-compatible consumers. "
+            "Prefer motif_families for grouping and reference/match pairing."
+        ),
+    )
+    motif_families: list[DetectedMotifFamily] = Field(
+        default_factory=list,
+        description=(
+            "Authoritative motif grouping: each family contains a reference occurrence "
+            "and all matched occurrences with actionable note references."
+        ),
+    )
     section_fingerprint_ids: list[str] = Field(default_factory=list)
     inference: InferenceMeta = Field(default_factory=InferenceMeta)
 
@@ -611,6 +751,15 @@ class RepetitionAnalysisResult(BaseModel):
     def validate_motif_cap(cls, value: list[MotifOccurrence]) -> list[MotifOccurrence]:
         if len(value) > ANALYSIS_MAX_MOTIFS:
             raise ValueError(f"motifs limited to {ANALYSIS_MAX_MOTIFS}")
+        return value
+
+    @field_validator("motif_families")
+    @classmethod
+    def validate_family_cap(
+        cls, value: list[DetectedMotifFamily]
+    ) -> list[DetectedMotifFamily]:
+        if len(value) > ANALYSIS_MAX_MOTIFS:
+            raise ValueError(f"motif_families limited to {ANALYSIS_MAX_MOTIFS}")
         return value
 
 

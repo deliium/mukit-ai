@@ -3,9 +3,12 @@ from pydantic import ValidationError
 
 from app.composition_schemas import (
     CompositionV2,
+    MOTIF_RECONCILE_WARNING_DEFINITION_REMOVED,
+    MOTIF_RECONCILE_WARNING_OCCURRENCE_PRUNED,
     UnsupportedSchemaVersionError,
     collect_ignored_v1_paths,
     parse_composition_document,
+    reconcile_motifs_for_removed_event_ids,
 )
 from app.services.composition_projection import (
     PROJECTION_ISSUE_CODES,
@@ -347,3 +350,253 @@ def test_projection_report_tracks_counts_and_registry():
     failed = ProjectionReport()
     failed.add_issue(code="midi_channel_control_conflict", status="failed", severity="error")
     assert failed.status == "failed"
+
+
+def _motif_source_events():
+    return [
+        {"type": "note", "pitch": "C4", "start_tick": 0, "duration_ticks": 480, "velocity": 80, "id": "n1"},
+        {"type": "note", "pitch": "D4", "start_tick": 480, "duration_ticks": 480, "velocity": 80, "id": "n2"},
+        {"type": "note", "pitch": "E4", "start_tick": 960, "duration_ticks": 480, "velocity": 80, "id": "n3"},
+        {"type": "note", "pitch": "F4", "start_tick": 1440, "duration_ticks": 480, "velocity": 80, "id": "n4"},
+    ]
+
+
+def _motif_track(**overrides):
+    track = {
+        "id": "melody-1",
+        "name": "Melody",
+        "instrument": "piano",
+        "role": "melody",
+        "midi_program": 0,
+        "channel": 1,
+        "events": _motif_source_events(),
+    }
+    track.update(overrides)
+    return track
+
+
+def _motif_definition(**overrides):
+    motif = {
+        "id": "motif-a",
+        "label": "Motif A",
+        "occurrences": [
+            {
+                "id": "occ-orig",
+                "track_id": "melody-1",
+                "event_ids": ["n1", "n2", "n3"],
+                "relationship": "original",
+            }
+        ],
+    }
+    motif.update(overrides)
+    return motif
+
+
+def test_composition_v2_defaults_motifs_empty():
+    composition = CompositionV2.model_validate(minimal_v2())
+    assert composition.motifs == []
+
+
+def test_composition_v2_accepts_old_payload_without_motifs_field():
+    data = minimal_v2()
+    assert "motifs" not in data
+    composition = CompositionV2.model_validate(data)
+    assert composition.motifs == []
+
+
+def test_composition_v2_accepts_canonical_motif_references():
+    composition = CompositionV2.model_validate(
+        minimal_v2(tracks=[_motif_track()], motifs=[_motif_definition()])
+    )
+    assert len(composition.motifs) == 1
+    occurrence = composition.motifs[0].occurrences[0]
+    assert occurrence.event_ids == ["n1", "n2", "n3"]
+    dumped = composition.model_dump(mode="json")
+    assert "pitch" not in dumped["motifs"][0]
+    assert "notes" not in dumped["motifs"][0]["occurrences"][0]
+    assert "events" not in dumped["motifs"][0]["occurrences"][0]
+
+
+def test_composition_v2_rejects_unknown_motif_fields():
+    with pytest.raises(ValidationError):
+        CompositionV2.model_validate(
+            minimal_v2(
+                tracks=[_motif_track()],
+                motifs=[_motif_definition(pitch="C4")],
+            )
+        )
+
+
+def test_composition_v2_rejects_dangling_motif_event_refs():
+    with pytest.raises(ValidationError):
+        CompositionV2.model_validate(
+            minimal_v2(
+                tracks=[_motif_track()],
+                motifs=[
+                    _motif_definition(
+                        occurrences=[
+                            {
+                                "id": "occ-orig",
+                                "track_id": "melody-1",
+                                "event_ids": ["n1", "n2", "missing"],
+                                "relationship": "original",
+                            }
+                        ]
+                    )
+                ],
+            )
+        )
+
+
+def test_composition_v2_rejects_non_chronological_motif_event_ids():
+    with pytest.raises(ValidationError):
+        CompositionV2.model_validate(
+            minimal_v2(
+                tracks=[_motif_track()],
+                motifs=[
+                    _motif_definition(
+                        occurrences=[
+                            {
+                                "id": "occ-orig",
+                                "track_id": "melody-1",
+                                "event_ids": ["n3", "n2", "n1"],
+                                "relationship": "original",
+                            }
+                        ]
+                    )
+                ],
+            )
+        )
+
+
+def test_composition_v2_rejects_incomplete_tie_chain_in_motif():
+    events = _motif_source_events()
+    events[0]["tie"] = {"group_id": "tie-1", "type": "start"}
+    events[1]["tie"] = {"group_id": "tie-1", "type": "stop"}
+    events[0]["pitch"] = "C4"
+    events[1]["pitch"] = "C4"
+    with pytest.raises(ValidationError):
+        CompositionV2.model_validate(
+            minimal_v2(
+                tracks=[_motif_track(events=events)],
+                motifs=[
+                    _motif_definition(
+                        occurrences=[
+                            {
+                                "id": "occ-orig",
+                                "track_id": "melody-1",
+                                "event_ids": ["n1", "n3", "n4"],
+                                "relationship": "original",
+                            }
+                        ]
+                    )
+                ],
+            )
+        )
+
+
+def test_composition_v2_rejects_percussion_motif_source():
+    with pytest.raises(ValidationError):
+        CompositionV2.model_validate(
+            minimal_v2(
+                tracks=[_motif_track(id="drums-1", role="drums", is_drum=True, channel=10)],
+                motifs=[
+                    _motif_definition(
+                        occurrences=[
+                            {
+                                "id": "occ-orig",
+                                "track_id": "drums-1",
+                                "event_ids": ["n1", "n2", "n3"],
+                                "relationship": "original",
+                            }
+                        ]
+                    )
+                ],
+            )
+        )
+
+
+def test_composition_v2_rejects_duplicate_motif_occurrence_ids():
+    with pytest.raises(ValidationError):
+        CompositionV2.model_validate(
+            minimal_v2(
+                tracks=[_motif_track()],
+                motifs=[
+                    _motif_definition(),
+                    {
+                        "id": "motif-b",
+                        "label": "Motif B",
+                        "occurrences": [
+                            {
+                                "id": "occ-orig",
+                                "track_id": "melody-1",
+                                "event_ids": ["n2", "n3", "n4"],
+                                "relationship": "original",
+                            }
+                        ],
+                    },
+                ],
+            )
+        )
+
+
+def test_reconcile_motifs_removes_definition_when_original_invalidated():
+    composition = CompositionV2.model_validate(
+        minimal_v2(
+            tracks=[_motif_track()],
+            motifs=[
+                _motif_definition(
+                    occurrences=[
+                        {
+                            "id": "occ-orig",
+                            "track_id": "melody-1",
+                            "event_ids": ["n1", "n2", "n3"],
+                            "relationship": "original",
+                        },
+                        {
+                            "id": "occ-repeat",
+                            "track_id": "melody-1",
+                            "event_ids": ["n2", "n3", "n4"],
+                            "relationship": "repeat",
+                        },
+                    ]
+                )
+            ],
+        )
+    )
+    result = reconcile_motifs_for_removed_event_ids(composition.motifs, {"n1"})
+    assert result.motifs == []
+    assert {warning.code for warning in result.warnings} == {
+        MOTIF_RECONCILE_WARNING_OCCURRENCE_PRUNED,
+        MOTIF_RECONCILE_WARNING_DEFINITION_REMOVED,
+    }
+
+
+def test_reconcile_motifs_prunes_non_original_occurrence_only():
+    composition = CompositionV2.model_validate(
+        minimal_v2(
+            tracks=[_motif_track()],
+            motifs=[
+                _motif_definition(
+                    occurrences=[
+                        {
+                            "id": "occ-orig",
+                            "track_id": "melody-1",
+                            "event_ids": ["n1", "n2", "n3"],
+                            "relationship": "original",
+                        },
+                        {
+                            "id": "occ-repeat",
+                            "track_id": "melody-1",
+                            "event_ids": ["n2", "n3", "n4"],
+                            "relationship": "repeat",
+                        },
+                    ]
+                )
+            ],
+        )
+    )
+    result = reconcile_motifs_for_removed_event_ids(composition.motifs, {"n4"})
+    assert len(result.motifs) == 1
+    assert [occ.id for occ in result.motifs[0].occurrences] == ["occ-orig"]
+    assert result.warnings[0].code == MOTIF_RECONCILE_WARNING_OCCURRENCE_PRUNED

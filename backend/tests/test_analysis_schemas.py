@@ -267,6 +267,57 @@ def test_make_derived_id_is_deterministic():
     assert make_derived_id("a", "b") != make_derived_id("a", "c")
 
 
+def test_make_sha256_derived_id_is_deterministic():
+    from app.analysis_schemas import make_sha256_derived_id
+
+    assert make_sha256_derived_id("motif_family", "a", 1) == make_sha256_derived_id(
+        "motif_family", "a", 1
+    )
+    assert make_sha256_derived_id("motif_family", "a", 1) != make_sha256_derived_id(
+        "motif_family", "a", 2
+    )
+
+
+def test_repetition_result_accepts_motif_families():
+    from app.analysis_schemas import (
+        DetectedMotifFamily,
+        DetectedMotifOccurrence,
+        DetectedNoteReference,
+        RepetitionAnalysisResult,
+    )
+
+    reference = DetectedMotifOccurrence(
+        id="motif_occ:abc",
+        kind="exact",
+        track_id="t1",
+        start_tick=0,
+        end_tick=1920,
+        note_count=4,
+        identity_score=1.0,
+        notes=[DetectedNoteReference(event_ids=["e1"])],
+    )
+    matched = DetectedMotifOccurrence(
+        id="motif_occ:def",
+        kind="exact",
+        track_id="t1",
+        start_tick=1920,
+        end_tick=3840,
+        note_count=4,
+        identity_score=0.95,
+        notes=[DetectedNoteReference(event_indexes=[4])],
+    )
+    family = DetectedMotifFamily(
+        id="motif_family:abc123",
+        reference=reference,
+        matched_occurrences=[matched],
+        relationship_kinds=["exact"],
+        note_count=4,
+    )
+    result = RepetitionAnalysisResult(motif_families=[family])
+    assert len(result.motif_families) == 1
+    assert result.motif_families[0].reference.id == "motif_occ:abc"
+
+
 def test_resolved_scope_model_forbids_inverted_ticks():
     with pytest.raises(ValidationError):
         ResolvedAnalysisScope(

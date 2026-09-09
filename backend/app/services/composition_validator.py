@@ -145,6 +145,7 @@ def validate_composition_integrity(
     _check_pitch_ranges(composition, errors, warnings)
     if isinstance(composition, CompositionV2):
         _check_v2_expression(composition, errors, warnings)
+        _check_v2_motifs(composition, errors, warnings)
 
     result = CompositionValidationResult(ok=not errors, errors=errors, warnings=warnings)
     if result.ok:
@@ -530,6 +531,8 @@ def _expressive_feature_counts(composition: CompositionLike) -> dict[str, int]:
             "meter_change_count": 0,
             "key_change_count": 0,
             "marker_count": 0,
+            "motif_count": 0,
+            "motif_occurrence_count": 0,
             "articulation_note_count": 0,
             "tied_note_count": 0,
         }
@@ -538,6 +541,8 @@ def _expressive_feature_counts(composition: CompositionLike) -> dict[str, int]:
         "meter_change_count": len(composition.time_signature_changes),
         "key_change_count": len(composition.key_changes),
         "marker_count": len(composition.markers),
+        "motif_count": len(composition.motifs),
+        "motif_occurrence_count": sum(len(motif.occurrences) for motif in composition.motifs),
         "articulation_note_count": sum(
             1 for track in composition.tracks for event in track.events if event.articulations
         ),
@@ -676,3 +681,109 @@ def _check_v2_expression(
                         )
                     )
                     break
+
+
+def _check_v2_motifs(
+    composition: CompositionV2,
+    errors: list[ValidationDiagnostic],
+    warnings: list[ValidationDiagnostic],
+) -> None:
+    """Emit stable integrity codes for dangling or inconsistent motif references."""
+    del warnings  # reserved for non-blocking motif advice
+    if not composition.motifs:
+        logger.debug(
+            "Canonical motif integrity skipped (empty)",
+            extra={"motif_count": 0},
+        )
+        return
+
+    tracks_by_id = {track.id: track for track in composition.tracks}
+    event_locations: dict[str, str] = {}
+    for track in composition.tracks:
+        for event in track.events:
+            if event.id is None:
+                continue
+            event_locations[event.id] = track.id
+
+    logger.debug(
+        "Checking canonical motif integrity",
+        extra={
+            "motif_count": len(composition.motifs),
+            "motif_occurrence_count": sum(len(motif.occurrences) for motif in composition.motifs),
+        },
+    )
+
+    for motif in composition.motifs:
+        originals = [occ for occ in motif.occurrences if occ.relationship == "original"]
+        if len(originals) != 1:
+            errors.append(
+                ValidationDiagnostic(
+                    code="motif_original_invalid",
+                    message=f"Motif {motif.id} requires exactly one original occurrence",
+                    severity="error",
+                    context={"motif_id": motif.id, "original_count": len(originals)},
+                )
+            )
+        for occurrence in motif.occurrences:
+            track = tracks_by_id.get(occurrence.track_id)
+            if track is None:
+                errors.append(
+                    ValidationDiagnostic(
+                        code="motif_track_missing",
+                        message=f"Motif occurrence {occurrence.id} references unknown track",
+                        severity="error",
+                        context={"motif_id": motif.id, "occurrence_id": occurrence.id},
+                    )
+                )
+                continue
+            if track.is_drum or track.role in {"drums", "percussion"}:
+                errors.append(
+                    ValidationDiagnostic(
+                        code="motif_percussion_source",
+                        message=f"Motif occurrence {occurrence.id} cannot use a percussion track",
+                        severity="error",
+                        context={
+                            "motif_id": motif.id,
+                            "occurrence_id": occurrence.id,
+                            "track_id": track.id,
+                        },
+                    )
+                )
+            for event_id in occurrence.event_ids:
+                owner = event_locations.get(event_id)
+                if owner is None:
+                    errors.append(
+                        ValidationDiagnostic(
+                            code="motif_event_unresolved",
+                            message=f"Motif occurrence {occurrence.id} has dangling event reference",
+                            severity="error",
+                            context={
+                                "motif_id": motif.id,
+                                "occurrence_id": occurrence.id,
+                                "event_id": event_id,
+                            },
+                        )
+                    )
+                elif owner != occurrence.track_id:
+                    errors.append(
+                        ValidationDiagnostic(
+                            code="motif_event_track_mismatch",
+                            message=f"Motif occurrence {occurrence.id} event belongs to another track",
+                            severity="error",
+                            context={
+                                "motif_id": motif.id,
+                                "occurrence_id": occurrence.id,
+                                "event_id": event_id,
+                                "track_id": occurrence.track_id,
+                                "owner_track_id": owner,
+                            },
+                        )
+                    )
+
+    logger.info(
+        "Canonical motif integrity check completed",
+        extra={
+            "motif_count": len(composition.motifs),
+            "error_codes": [item.code for item in errors if item.code.startswith("motif_")],
+        },
+    )

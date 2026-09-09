@@ -111,6 +111,8 @@ def normalize_composition_json(raw: Any) -> CompositionV2:
                 "schema_version": composition.schema_version,
                 "track_count": len(composition.tracks),
                 "event_count": sum(len(track.events) for track in composition.tracks),
+                "motif_count": len(composition.motifs),
+                "motif_occurrence_count": sum(len(motif.occurrences) for motif in composition.motifs),
             },
         )
         return composition

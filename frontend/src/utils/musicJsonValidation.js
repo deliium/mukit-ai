@@ -1,5 +1,6 @@
 import { classifyCompositionVersion, SCHEMA_VERSION_V2 } from './compositionVersion.js';
 import { barEndTick, barStartTick, compileTimeline } from './compositionTimeline.js';
+import { validateMotifDefinitions } from './compositionMotifs.js';
 
 const KEY_PATTERN = /^[A-G](?:#|b)?\s+(?:major|minor)$/;
 const TIME_SIGNATURE_PATTERN = /^\d{1,2}\/\d{1,2}$/;
@@ -150,6 +151,10 @@ function validateCanonicalComposition(value, variant) {
     if (!markersResult.valid) {
       return markersResult;
     }
+    const motifsResult = validateMotifDefinitions(value);
+    if (!motifsResult.valid) {
+      return motifsResult;
+    }
   }
 
   console.debug('[musicJsonValidation] Canonical composition validation completed', {
@@ -159,6 +164,7 @@ function validateCanonicalComposition(value, variant) {
     eventCount: value.tracks.reduce((count, track) => count + (Array.isArray(track.events) ? track.events.length : 0), 0),
     durationTicks,
     meterChangeCount: timeline ? timeline.timeSignatureChanges.length : 0,
+    motifCount: Array.isArray(value.motifs) ? value.motifs.length : 0,
   });
   const label = value.schema_version === SCHEMA_VERSION_V2 ? 'composition.v2' : 'composition.v1';
   return valid(`Canonical ${label} JSON is valid for preview and playback.`);

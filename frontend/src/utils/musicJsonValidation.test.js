@@ -136,6 +136,65 @@ test('rejects legacy harmony-only JSON', () => {
   assert.match(result.message, /no note events/);
 });
 
+test('accepts V2 with empty motifs default and valid motif references', () => {
+  const composition = migrateV1ToV2(canonicalV1Composition());
+  composition.tracks[0].events = [
+    { type: 'note', pitch: 'C4', start_tick: 0, duration_ticks: 240, velocity: 90, id: 'n1' },
+    { type: 'note', pitch: 'D4', start_tick: 240, duration_ticks: 240, velocity: 90, id: 'n2' },
+    { type: 'note', pitch: 'E4', start_tick: 480, duration_ticks: 240, velocity: 90, id: 'n3' },
+    { type: 'note', pitch: 'F4', start_tick: 720, duration_ticks: 240, velocity: 90, id: 'n4' },
+  ];
+  assert.equal(validateMusicJson(composition).valid, true);
+
+  composition.motifs = [
+    {
+      id: 'motif-a',
+      label: 'Motif A',
+      occurrences: [
+        {
+          id: 'occ-orig',
+          track_id: composition.tracks[0].id,
+          event_ids: ['n1', 'n2', 'n3'],
+          relationship: 'original',
+        },
+      ],
+    },
+  ];
+  assert.equal(validateMusicJson(composition).valid, true, validateMusicJson(composition).message);
+});
+
+test('rejects dangling motif event references and note payloads', () => {
+  const composition = migrateV1ToV2(canonicalV1Composition());
+  composition.tracks[0].events = [
+    { type: 'note', pitch: 'C4', start_tick: 0, duration_ticks: 240, velocity: 90, id: 'n1' },
+    { type: 'note', pitch: 'D4', start_tick: 240, duration_ticks: 240, velocity: 90, id: 'n2' },
+    { type: 'note', pitch: 'E4', start_tick: 480, duration_ticks: 240, velocity: 90, id: 'n3' },
+  ];
+  composition.motifs = [
+    {
+      id: 'motif-a',
+      label: 'Motif A',
+      occurrences: [
+        {
+          id: 'occ-orig',
+          track_id: composition.tracks[0].id,
+          event_ids: ['n1', 'n2', 'missing'],
+          relationship: 'original',
+        },
+      ],
+    },
+  ];
+  const dangling = validateMusicJson(composition);
+  assert.equal(dangling.valid, false);
+  assert.match(dangling.message, /unresolved event/i);
+
+  composition.motifs[0].pitch = 'C4';
+  composition.motifs[0].occurrences[0].event_ids = ['n1', 'n2', 'n3'];
+  const payload = validateMusicJson(composition);
+  assert.equal(payload.valid, false);
+  assert.match(payload.message, /note payloads/i);
+});
+
 function canonicalV1Composition() {
   return {
     schema_version: 'composition.v1',

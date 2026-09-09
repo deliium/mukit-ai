@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -81,6 +82,37 @@ MarkerKind = Literal["rehearsal", "text"]
 DynamicLevel = Literal["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff"]
 AutomationParameter = Literal["volume", "pan", "expression"]
 AutomationInterpolation = Literal["step", "linear"]
+
+MOTIF_RELATIONSHIP_VALUES = (
+    "original",
+    "repeat",
+    "transpose",
+    "rhythmic_variation",
+    "melodic_variation",
+    "inversion",
+    "augmentation",
+    "diminution",
+    "sequence",
+    "answer",
+    "counterphrase",
+)
+MotifRelationshipKind = Literal[
+    "original",
+    "repeat",
+    "transpose",
+    "rhythmic_variation",
+    "melodic_variation",
+    "inversion",
+    "augmentation",
+    "diminution",
+    "sequence",
+    "answer",
+    "counterphrase",
+]
+MOTIF_MIN_EVENT_REFS = 3
+MOTIF_MAX_EVENT_REFS = 32
+MOTIF_RECONCILE_WARNING_OCCURRENCE_PRUNED = "motif_occurrence_pruned"
+MOTIF_RECONCILE_WARNING_DEFINITION_REMOVED = "motif_definition_removed"
 
 DYNAMIC_LEVEL_TO_EXPRESSION: dict[str, int] = {
     "ppp": 32,
@@ -840,6 +872,126 @@ def _validate_tie_chains(track: CompositionV2Track) -> None:
                 raise ValueError(f"Tie group {group_id} members must be contiguous without gap or overlap")
 
 
+class CompositionV2MotifTransformProvenance(BaseModel):
+    """Bounded authored transform metadata — never a playable note payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation: MotifRelationshipKind
+    variation_strength: float | None = Field(default=None, ge=0.0, le=1.0)
+    source_occurrence_id: str | None = Field(default=None, min_length=1, max_length=120)
+    transpose_semitones: int | None = Field(default=None, ge=-48, le=48)
+    inversion_axis_pitch: str | None = Field(default=None, min_length=2, max_length=5)
+    time_scale_numerator: int | None = Field(default=None, ge=1, le=8)
+    time_scale_denominator: int | None = Field(default=None, ge=1, le=8)
+    sequence_steps: int | None = Field(default=None, ge=1, le=16)
+    sequence_interval_semitones: int | None = Field(default=None, ge=-24, le=24)
+    sequence_step_ticks: int | None = Field(default=None, gt=0)
+
+    @field_validator("inversion_axis_pitch")
+    @classmethod
+    def validate_inversion_axis_pitch(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        pitch = value.strip()
+        try:
+            midi_pitch_number(pitch)
+        except ValueError as exc:
+            log_validation_failure(cls.__name__, "inversion_axis_pitch", value, str(exc))
+            raise
+        return pitch
+
+    @model_validator(mode="after")
+    def validate_provenance_bounds(self) -> CompositionV2MotifTransformProvenance:
+        if self.operation == "original":
+            raise ValueError("transform provenance must not use operation=original")
+        if self.variation_strength is not None and (
+            self.variation_strength != self.variation_strength  # NaN
+            or self.variation_strength in (float("inf"), float("-inf"))
+        ):
+            raise ValueError("variation_strength must be a finite float in 0..1")
+        has_num = self.time_scale_numerator is not None
+        has_den = self.time_scale_denominator is not None
+        if has_num != has_den:
+            raise ValueError("time_scale_numerator and time_scale_denominator must be set together")
+        return self
+
+
+class CompositionV2MotifOccurrence(BaseModel):
+    """Reference to existing canonical events — consumers derive span/notes from IDs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., min_length=1, max_length=120)
+    track_id: str = Field(..., min_length=1, max_length=80)
+    event_ids: list[str] = Field(
+        ...,
+        min_length=MOTIF_MIN_EVENT_REFS,
+        max_length=MOTIF_MAX_EVENT_REFS,
+    )
+    relationship: MotifRelationshipKind
+    transform: CompositionV2MotifTransformProvenance | None = None
+
+    @field_validator("id", "track_id")
+    @classmethod
+    def validate_non_empty_ids(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Motif occurrence ids must not be empty")
+        return normalized
+
+    @field_validator("event_ids")
+    @classmethod
+    def validate_event_ids(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("Motif occurrence event_ids must not be empty")
+        normalized: list[str] = []
+        for event_id in value:
+            if not isinstance(event_id, str) or not event_id.strip():
+                raise ValueError("Motif occurrence event_ids must be non-empty strings")
+            normalized.append(event_id.strip())
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Motif occurrence event_ids must be duplicate-free")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_relationship_transform(self) -> CompositionV2MotifOccurrence:
+        if self.relationship == "original":
+            if self.transform is not None:
+                raise ValueError("original motif occurrence must not carry transform provenance")
+        elif self.transform is not None and self.transform.operation != self.relationship:
+            raise ValueError("transform.operation must match occurrence relationship")
+        return self
+
+
+class CompositionV2MotifDefinition(BaseModel):
+    """Authored motif identity — playable pitches remain only in tracks[].events[]."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(..., min_length=1, max_length=120)
+    label: str = Field(..., min_length=1, max_length=120)
+    occurrences: list[CompositionV2MotifOccurrence] = Field(..., min_length=1)
+
+    @field_validator("id", "label")
+    @classmethod
+    def validate_non_empty_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Motif id and label must not be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_one_original(self) -> CompositionV2MotifDefinition:
+        originals = [occ for occ in self.occurrences if occ.relationship == "original"]
+        if len(originals) != 1:
+            raise ValueError("Each motif definition requires exactly one original occurrence")
+        occurrence_ids = [occ.id for occ in self.occurrences]
+        if len(occurrence_ids) != len(set(occurrence_ids)):
+            raise ValueError("Motif occurrence ids must be unique within a definition")
+        return self
+
+
 class CompositionV2(BaseModel):
     """Strict latest operational composition document."""
 
@@ -859,6 +1011,7 @@ class CompositionV2(BaseModel):
     time_signature_changes: list[CompositionV2TimeSignatureChange] = Field(default_factory=list)
     key_changes: list[CompositionV2KeyChange] = Field(default_factory=list)
     markers: list[CompositionV2Marker] = Field(default_factory=list)
+    motifs: list[CompositionV2MotifDefinition] = Field(default_factory=list)
 
     @field_validator("key")
     @classmethod
@@ -880,6 +1033,8 @@ class CompositionV2(BaseModel):
                 "meter_change_count": len(self.time_signature_changes),
                 "key_change_count": len(self.key_changes),
                 "marker_count": len(self.markers),
+                "motif_count": len(self.motifs),
+                "motif_occurrence_count": sum(len(motif.occurrences) for motif in self.motifs),
             },
         )
 
@@ -991,6 +1146,8 @@ class CompositionV2(BaseModel):
         if len(event_ids) != len(set(event_ids)):
             raise ValueError("Note event ids must be unique when present")
 
+        _validate_composition_motifs(self)
+
         logger.info(
             "Composition V2 validation completed",
             extra={
@@ -1002,10 +1159,233 @@ class CompositionV2(BaseModel):
                 "meter_change_count": len(self.time_signature_changes),
                 "key_change_count": len(self.key_changes),
                 "marker_count": len(self.markers),
+                "motif_count": len(self.motifs),
+                "motif_occurrence_count": sum(len(motif.occurrences) for motif in self.motifs),
                 "duration_ticks": self.duration_ticks,
             },
         )
         return self
+
+
+def _index_events_by_id(
+    composition: CompositionV2,
+) -> dict[str, tuple[CompositionV2Track, CompositionV2NoteEvent]]:
+    indexed: dict[str, tuple[CompositionV2Track, CompositionV2NoteEvent]] = {}
+    for track in composition.tracks:
+        for event in track.events:
+            if event.id is None:
+                continue
+            indexed[event.id] = (track, event)
+    return indexed
+
+
+def _tie_group_members(
+    track: CompositionV2Track,
+    event: CompositionV2NoteEvent,
+) -> list[CompositionV2NoteEvent]:
+    if event.tie is None:
+        return [event]
+    group_id = event.tie.group_id
+    members = [item for item in track.events if item.tie is not None and item.tie.group_id == group_id]
+    return sorted(members, key=lambda item: (item.start_tick, item.duration_ticks, item.id or ""))
+
+
+def derive_motif_occurrence_span(
+    composition: CompositionV2,
+    occurrence: CompositionV2MotifOccurrence,
+) -> tuple[int, int]:
+    """Derive [start_tick, end_tick) exclusively from referenced canonical events."""
+    indexed = _index_events_by_id(composition)
+    starts: list[int] = []
+    ends: list[int] = []
+    for event_id in occurrence.event_ids:
+        track, event = indexed[event_id]
+        if track.id != occurrence.track_id:
+            raise ValueError(f"Event {event_id} is not on track {occurrence.track_id}")
+        starts.append(event.start_tick)
+        ends.append(event.start_tick + event.duration_ticks)
+    return min(starts), max(ends)
+
+
+def _validate_composition_motifs(composition: CompositionV2) -> None:
+    if not composition.motifs:
+        logger.debug(
+            "Composition V2 motif validation skipped (empty)",
+            extra={"motif_count": 0},
+        )
+        return
+
+    motif_ids = [motif.id for motif in composition.motifs]
+    if len(motif_ids) != len(set(motif_ids)):
+        raise ValueError("Motif ids must be unique")
+    motif_labels = [motif.label for motif in composition.motifs]
+    if len(motif_labels) != len(set(motif_labels)):
+        raise ValueError("Motif labels must be unique")
+
+    occurrence_ids = [
+        occurrence.id for motif in composition.motifs for occurrence in motif.occurrences
+    ]
+    if len(occurrence_ids) != len(set(occurrence_ids)):
+        raise ValueError("Motif occurrence ids must be unique across the composition")
+
+    tracks_by_id = {track.id: track for track in composition.tracks}
+    indexed = _index_events_by_id(composition)
+
+    for motif in composition.motifs:
+        logger.debug(
+            "Validating motif definition references",
+            extra={
+                "motif_id": motif.id,
+                "occurrence_count": len(motif.occurrences),
+            },
+        )
+        for occurrence in motif.occurrences:
+            track = tracks_by_id.get(occurrence.track_id)
+            if track is None:
+                raise ValueError(f"Motif occurrence {occurrence.id} references unknown track")
+            if track.is_drum or track.role in {"drums", "percussion"}:
+                raise ValueError(
+                    f"Motif occurrence {occurrence.id} must reference a non-percussion pitched track"
+                )
+
+            resolved: list[CompositionV2NoteEvent] = []
+            for event_id in occurrence.event_ids:
+                located = indexed.get(event_id)
+                if located is None:
+                    raise ValueError(
+                        f"Motif occurrence {occurrence.id} references unresolved event id"
+                    )
+                event_track, event = located
+                if event_track.id != occurrence.track_id:
+                    raise ValueError(
+                        f"Motif occurrence {occurrence.id} event {event_id} is not on track "
+                        f"{occurrence.track_id}"
+                    )
+                resolved.append(event)
+
+            ordered = sorted(
+                resolved,
+                key=lambda event: (event.start_tick, event.duration_ticks, event.id or ""),
+            )
+            ordered_ids = [event.id for event in ordered if event.id is not None]
+            if ordered_ids != occurrence.event_ids:
+                raise ValueError(
+                    f"Motif occurrence {occurrence.id} event_ids must be chronological"
+                )
+
+            referenced_ids = set(occurrence.event_ids)
+            for event in resolved:
+                if event.tie is None:
+                    continue
+                members = _tie_group_members(track, event)
+                member_ids = [member.id for member in members]
+                if any(member_id is None for member_id in member_ids):
+                    raise ValueError(
+                        f"Motif occurrence {occurrence.id} references a tie chain with missing ids"
+                    )
+                if not set(member_ids).issubset(referenced_ids):
+                    raise ValueError(
+                        f"Motif occurrence {occurrence.id} must include complete tie chains"
+                    )
+
+    logger.debug(
+        "Composition V2 motif validation completed",
+        extra={
+            "motif_count": len(composition.motifs),
+            "motif_occurrence_count": len(occurrence_ids),
+        },
+    )
+
+
+@dataclass(frozen=True)
+class MotifReconcileWarning:
+    code: str
+    motif_id: str
+    occurrence_id: str | None = None
+
+
+@dataclass(frozen=True)
+class MotifReconcileResult:
+    motifs: list[CompositionV2MotifDefinition]
+    warnings: tuple[MotifReconcileWarning, ...]
+
+
+def reconcile_motifs_for_removed_event_ids(
+    motifs: list[CompositionV2MotifDefinition],
+    removed_event_ids: set[str] | frozenset[str],
+) -> MotifReconcileResult:
+    """Controlled reconciliation after explicit event deletion/replacement.
+
+    Removes affected occurrences atomically. Deletes a definition only when its
+    original occurrence is invalidated. Direct malformed JSON remains a schema error.
+    """
+    if not motifs or not removed_event_ids:
+        return MotifReconcileResult(motifs=list(motifs), warnings=())
+
+    logger.debug(
+        "Reconciling motif references after event removal",
+        extra={
+            "motif_count": len(motifs),
+            "removed_event_id_count": len(removed_event_ids),
+        },
+    )
+
+    next_motifs: list[CompositionV2MotifDefinition] = []
+    warnings: list[MotifReconcileWarning] = []
+
+    for motif in motifs:
+        surviving: list[CompositionV2MotifOccurrence] = []
+        original_removed = False
+        for occurrence in motif.occurrences:
+            if removed_event_ids.intersection(occurrence.event_ids):
+                warnings.append(
+                    MotifReconcileWarning(
+                        code=MOTIF_RECONCILE_WARNING_OCCURRENCE_PRUNED,
+                        motif_id=motif.id,
+                        occurrence_id=occurrence.id,
+                    )
+                )
+                logger.warning(
+                    "Pruned motif occurrence after event removal",
+                    extra={
+                        "code": MOTIF_RECONCILE_WARNING_OCCURRENCE_PRUNED,
+                        "motif_id": motif.id,
+                        "occurrence_id": occurrence.id,
+                    },
+                )
+                if occurrence.relationship == "original":
+                    original_removed = True
+                continue
+            surviving.append(occurrence)
+
+        if original_removed or not surviving:
+            warnings.append(
+                MotifReconcileWarning(
+                    code=MOTIF_RECONCILE_WARNING_DEFINITION_REMOVED,
+                    motif_id=motif.id,
+                )
+            )
+            logger.warning(
+                "Removed motif definition after original occurrence invalidation",
+                extra={
+                    "code": MOTIF_RECONCILE_WARNING_DEFINITION_REMOVED,
+                    "motif_id": motif.id,
+                },
+            )
+            continue
+
+        next_motifs.append(motif.model_copy(update={"occurrences": surviving}))
+
+    logger.info(
+        "Motif reference reconciliation completed",
+        extra={
+            "motif_count_before": len(motifs),
+            "motif_count_after": len(next_motifs),
+            "warning_count": len(warnings),
+            "warning_codes": [item.code for item in warnings],
+        },
+    )
+    return MotifReconcileResult(motifs=next_motifs, warnings=tuple(warnings))
 
 
 CompositionDocument = Annotated[

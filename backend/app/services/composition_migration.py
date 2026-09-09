@@ -214,6 +214,7 @@ def migrate_v1_to_v2(
         "time_signature_changes": [],
         "key_changes": [],
         "markers": [],
+        "motifs": [],
     }
 
     try:
@@ -244,6 +245,7 @@ def migrate_v1_to_v2(
         "time_signature_changes": 0,
         "key_changes": 0,
         "markers": 0,
+        "motifs": 0,
         "section_ids_added": section_ids_added,
         "track_expression_defaults": len(tracks),
         "empty_articulation_notes": sum(len(track["events"]) for track in tracks),

@@ -194,6 +194,7 @@ def analyze_composition(
                 "stage": stage,
                 "status": repetition.inference.status,
                 "motif_count": len(repetition.motifs),
+                "family_count": len(repetition.motif_families),
             },
         )
 
@@ -435,9 +436,27 @@ def build_llm_analysis_context(
     lines.append(
         "repetition: "
         f"motif_count={len(repetition.motifs)}; "
+        f"family_count={len(repetition.motif_families)}; "
         f"section_fingerprint_count={len(repetition.section_fingerprint_ids)}; "
         f"status={repetition.inference.status}"
     )
+    family_bits: list[str] = []
+    for family in repetition.motif_families[:8]:
+        ref = family.reference
+        kinds = ",".join(family.relationship_kinds) if family.relationship_kinds else ref.kind
+        for matched in family.matched_occurrences[:3]:
+            family_bits.append(
+                f"{family.id}:ref={ref.track_id}@{ref.start_tick}-{ref.end_tick};"
+                f"match={matched.track_id}@{matched.start_tick}-{matched.end_tick};"
+                f"kind={kinds};notes={matched.note_count};score={matched.identity_score}"
+            )
+        if not family.matched_occurrences:
+            family_bits.append(
+                f"{family.id}:ref={ref.track_id}@{ref.start_tick}-{ref.end_tick};"
+                f"kind={kinds};notes={ref.note_count};score={ref.identity_score}"
+            )
+    if family_bits:
+        lines.append("motif_families_sample: " + "; ".join(family_bits[:12]))
 
     section_bits: list[str] = []
     for summary in report.section_summaries[:6]:
