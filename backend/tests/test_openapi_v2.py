@@ -73,3 +73,24 @@ def test_openapi_analysis_endpoint_and_response_contract():
     assert "resolved_scope" in response["properties"]
     assert "source_fingerprint" in response["properties"]
     assert "warnings" in response["properties"]
+
+
+def test_openapi_composition_development_preview_contract():
+    schema = app.openapi()
+    paths = schema["paths"]
+    assert "/composition/development/preview" in paths
+    post = paths["/composition/development/preview"]["post"]
+    assert "application/json" in json.dumps(post.get("requestBody", {}))
+    request = _component("CompositionDevelopmentPreviewRequest")
+    composition = request["properties"]["composition"]
+    assert composition["$ref"].endswith("/CompositionV2")
+    assert "CompositionV1" not in json.dumps(composition)
+    response = _component("CompositionDevelopmentPreviewResponse")
+    assert response["properties"]["edit_source_fingerprint"]["type"] == "string"
+    candidates = response["properties"]["candidates"]
+    assert candidates["minItems"] == 1
+    assert candidates["maxItems"] == 4
+    candidate = _component("DevelopmentCandidate")
+    assert candidate["properties"]["composition"]["$ref"].endswith("/CompositionV2")
+    assert "candidate_id" in candidate["properties"]
+    assert "candidate_fingerprint" in candidate["properties"]

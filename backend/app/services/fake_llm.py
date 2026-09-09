@@ -60,6 +60,149 @@ def is_fake_provider(provider: LLMProviderSettings | str | None) -> bool:
     return name.strip().lower() == FAKE_PROVIDER
 
 
+def _pitch_cycle(seed: int) -> list[str]:
+    cycles = (
+        ["C4", "E4", "G4", "E4"],
+        ["D4", "F4", "A4", "F4"],
+        ["E4", "G4", "B4", "G4"],
+        ["G4", "B4", "D5", "B4"],
+    )
+    return cycles[seed % len(cycles)]
+
+
+async def draft_fake_composition_development(
+    request,
+    provider: LLMProviderSettings,
+    *,
+    candidate_ordinal: int = 1,
+    creative_direction: str = "stay close to the source contour and rhythm",
+    repair_codes: list[str] | None = None,
+):
+    """Deterministic relative draft for composition development (no network).
+
+    Returns a ``CompositionDevelopmentDraft`` that must still pass through
+    production realization/validation — never a preassembled composition.
+    """
+    from app.composition_development_schemas import (
+        CompositionDevelopmentDraft,
+        CompositionDevelopmentPreviewRequest,
+    )
+    from app.services.composition_development_context import build_development_source_context
+    from app.services.composition_timeline import compile_timeline
+    from app.composition_schemas import bar_duration_ticks
+
+    if not isinstance(request, CompositionDevelopmentPreviewRequest):
+        raise FakeLLMError("Fake composition development requires CompositionDevelopmentPreviewRequest")
+
+    _maybe_inject_malformed("development")
+    context = build_development_source_context(request)
+    scope = context.scope
+    output_bars = scope.output_bars
+    if output_bars < 1:
+        raise FakeLLMError("Fake development requires a positive output span")
+
+    # Approximate output duration using active ending meter (realization recomputes exactly).
+    bar_ticks = bar_duration_ticks(context.active_time_signature, request.composition.ticks_per_quarter)
+    output_duration = bar_ticks * output_bars
+
+    pitch_cycle = _pitch_cycle(candidate_ordinal - 1)
+    # Mild strength/intent nudges for distinct candidates without breaking identity.
+    density_step = 1 if request.variation_strength == "experimental" else 2
+    if request.development_intent == "contrast":
+        density_step = 1
+    onset_nudge = (candidate_ordinal - 1) * (request.composition.ticks_per_quarter // 8)
+
+    tracks = []
+    for track in request.composition.tracks:
+        events = []
+        if track.is_drum or track.role in {"drums", "percussion"}:
+            # Sparse intentional rests / sparse hits for drums.
+            if candidate_ordinal % 2 == 1:
+                events.append(
+                    {
+                        "pitch": "C2",
+                        "relative_start_tick": onset_nudge,
+                        "duration_ticks": max(60, bar_ticks // 8),
+                        "velocity": 70,
+                        "draft_event_id": f"d{candidate_ordinal}-{track.id}-0",
+                    }
+                )
+        else:
+            for bar in range(output_bars):
+                if bar % density_step != 0 and request.variation_strength == "conservative":
+                    continue
+                start = bar * bar_ticks + (onset_nudge if bar == 0 else 0)
+                if start >= output_duration:
+                    break
+                pitch = pitch_cycle[bar % len(pitch_cycle)]
+                if track.role == "bass":
+                    letter = pitch[0]
+                    accidental = "#" if "#" in pitch else "b" if "b" in pitch else ""
+                    pitch = f"{letter}{accidental}2"
+                duration = min(bar_ticks // 2, output_duration - start)
+                if duration <= 0:
+                    continue
+                events.append(
+                    {
+                        "pitch": pitch,
+                        "relative_start_tick": start,
+                        "duration_ticks": duration,
+                        "velocity": 72 + (candidate_ordinal % 5),
+                        "draft_event_id": f"d{candidate_ordinal}-{track.id}-{bar}",
+                    }
+                )
+            if not events:
+                events.append(
+                    {
+                        "pitch": "C4" if track.role != "bass" else "C2",
+                        "relative_start_tick": 0,
+                        "duration_ticks": min(bar_ticks, output_duration),
+                        "velocity": 70,
+                        "draft_event_id": f"d{candidate_ordinal}-{track.id}-fallback",
+                    }
+                )
+        tracks.append({"track_id": track.id, "events": events})
+
+    harmony = []
+    chord_cycle = ["C", "G", "Am", "F"]
+    if request.development_intent == "contrast":
+        chord_cycle = ["Am", "Em", "F", "G"]
+    for bar in range(output_bars):
+        harmony.append(
+            {
+                "relative_start_tick": bar * bar_ticks,
+                "duration_ticks": bar_ticks,
+                "chord": chord_cycle[(bar + candidate_ordinal) % len(chord_cycle)],
+            }
+        )
+
+    draft = CompositionDevelopmentDraft.model_validate(
+        {
+            "tracks": tracks,
+            "harmony": harmony,
+            "section_label": request.target_section_label,
+        }
+    )
+    logger.info(
+        "Fake LLM composition development draft created",
+        extra={
+            "provider": provider.provider,
+            "model": provider.model or FAKE_MODEL_ID,
+            "operation": request.operation,
+            "candidate_ordinal": candidate_ordinal,
+            "output_bars": output_bars,
+            "track_count": len(tracks),
+            "event_count": sum(len(track["events"]) for track in tracks),
+            "creative_direction_len": len(creative_direction),
+            "repair_code_count": len(repair_codes or []),
+            "has_context_timeline": compile_timeline(request.composition).bar_count == request.composition.bar_count,
+        },
+    )
+    return draft
+
+
+# Keep generate_fake_music_json and other exports below.
+
 async def generate_fake_music_json(
     request: LLMMusicGenerationRequest,
     provider: LLMProviderSettings,
@@ -774,7 +917,7 @@ def _maybe_inject_malformed(stage: str) -> None:
     from .llm_music_generator import InvalidLLMOutputError
 
     raw = os.environ.get(FAKE_MALFORMED_ENV, "").strip().lower()
-    if raw in {"1", "true", "yes", "generate", "edit", "motif", "reharmonize", "all"}:
+    if raw in {"1", "true", "yes", "generate", "edit", "motif", "reharmonize", "development", "all"}:
         if raw in {"1", "true", "yes", "all"} or raw == stage:
             logger.warning(
                 "Fake LLM injecting malformed output for tests",

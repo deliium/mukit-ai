@@ -112,7 +112,7 @@ Each candidate response includes:
 
 ### Phase 2: LLM Orchestration, Fake Provider, and HTTP Boundary
 
-- [ ] Task 4: Add independent multi-candidate provider orchestration, bounded prompts, repair, and fake generation.
+- [x] Task 4: Add independent multi-candidate provider orchestration, bounded prompts, repair, and fake generation.
   - Files: create `backend/app/services/llm_composition_development.py`; update `backend/app/services/fake_llm.py`; minimally extract shared provider/model selection from `backend/app/services/llm_music_generator.py` into a focused provider helper only if necessary to avoid importing a private function; add `backend/tests/test_llm_composition_development.py` and extend `backend/tests/test_llm_fake_provider.py`.
   - Deliverable: select configured OpenAI/DeepSeek/fake providers using existing semantics, derive prompts from immutable structural constraints plus Task 2 context, and invoke structured output once per candidate. Give each call a candidate ordinal and bounded creative direction while preserving the same hard constraints.
   - Deliverable: validate and realize each draft independently, issue at most the configured bounded repair for that candidate using only diagnostic codes/bounded summaries, and collect valid candidates. Return partial success with failed-candidate warning codes; raise a sanitized domain/provider error when all fail.
@@ -122,7 +122,7 @@ Each candidate response includes:
   - Logging requirements: INFO per request and candidate for provider/model, candidate ordinal, operation, strength, stage, attempt, elapsed time, outcome code, and count summaries; DEBUG for prompt byte/character budgets and diagnostic-code counts. Never log prompts, instructions, provider output, API keys, full candidates, or event arrays.
   - Dependencies: Tasks 1-3.
 
-- [ ] Task 5: Expose the stateless development preview router with structured errors and safe observability.
+- [x] Task 5: Expose the stateless development preview router with structured errors and safe observability.
   - Files: create `backend/app/routers/composition_development.py`; update `backend/app/main.py` only to register the router; add `backend/tests/test_composition_development_routes.py`; extend `backend/tests/test_openapi_v2.py` and `backend/tests/test_secret_hygiene.py`.
   - Deliverable: implement `POST /composition/development/preview`, load LLM settings at the HTTP boundary, call the service, return the strict response model, and map invalid composition/scope/preservation errors to `422`, missing provider to `503`, provider/invalid-output exhaustion to sanitized `502`, and unexpected failures to `500`.
   - Deliverable: preserve bounded lists of stable error/assertion codes in safe error details rather than dropping every non-scalar field. Do not render MusicXML or persist projects in this route.
@@ -131,7 +131,7 @@ Each candidate response includes:
   - Logging requirements: INFO start/completion with operation, intent, strength, requested/returned candidate counts, source/output bars, provider/model, fingerprint prefix, warning-code count, and elapsed milliseconds; WARN/ERROR once at the mapped boundary with stable code and exception type. Never log instructions, source/candidate payloads, events, prompts, or keys.
   - Dependencies: Task 4.
 
-- [ ] Task 6: Complete backend regression, scale, and export-fidelity coverage for development candidates.
+- [x] Task 6: Complete backend regression, scale, and export-fidelity coverage for development candidates.
   - Files: extend the new backend test files from Tasks 1-5; update `backend/tests/test_composition_timing.py`, `backend/tests/test_export_fidelity.py`, or shared fixtures only where cross-module behavior requires coverage; add a compact deterministic fixture under `backend/tests/fixtures/` only if builders cannot express the 16-bar A case clearly.
   - Deliverable: assemble a focused backend suite that proves canonical timing/sections after append and exact source/outside-range preservation using canonical serialization, not only analysis fingerprints. Cover candidate bounds and ensure output remains consumable by MusicXML/MIDI/playback projections.
   - Expected behavior: existing generation, region editing, motif, harmony, analysis, migration, and export suites remain unchanged in semantics. Large-but-allowed input with four candidates remains within explicit request/context/event caps; over-limit requests fail before provider invocation.

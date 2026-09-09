@@ -198,3 +198,27 @@ def test_motif_apply_fake_mode_omits_secrets_and_event_arrays(monkeypatch, caplo
             assert "notes" not in occurrence
             assert "events" not in occurrence
             assert "pitch" not in occurrence
+
+
+def test_composition_development_preview_omits_secrets_from_logs(monkeypatch, caplog):
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-dev-must-never-leak")
+    from tests.test_composition_development_patch import _sixteen_bar_a
+
+    body = {
+        "composition": _sixteen_bar_a().model_dump(mode="json"),
+        "operation": "continue",
+        "output_bars": 8,
+        "variation_strength": "balanced",
+        "candidate_count": 1,
+        "instruction": "secret-instruction-should-not-appear-in-logs",
+        "selection": {"provider": "fake", "model": "fake-deterministic"},
+    }
+    client = TestClient(app)
+    with caplog.at_level("DEBUG"):
+        response = client.post("/composition/development/preview", json=body)
+    assert response.status_code == 200, response.text
+    assert_no_secret_leakage(response.json(), context="POST /composition/development/preview")
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "sk-dev-must-never-leak" not in joined
+    assert "secret-instruction-should-not-appear-in-logs" not in joined

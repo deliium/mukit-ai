@@ -385,3 +385,39 @@ def test_fake_generate_fails_genuinely_missing_requirement(fake_env, caplog):
     detail = str(exc_info.value.detail).lower()
     assert "constraint_missing_instrument_family" in detail or "fixture" in detail
     assert "Fake LLM fixture conformance failure" in caplog.text
+
+
+def test_fake_composition_development_draft_is_relative(fake_env):
+    from app.composition_development_schemas import CompositionDevelopmentPreviewRequest
+    from app.llm_settings import LLMProviderSettings
+    from app.services.fake_llm import draft_fake_composition_development
+    from tests.test_composition_development_patch import _sixteen_bar_a
+
+    request = CompositionDevelopmentPreviewRequest.model_validate(
+        {
+            "composition": _sixteen_bar_a(),
+            "operation": "continue",
+            "output_bars": 8,
+            "variation_strength": "balanced",
+            "candidate_count": 2,
+            "selection": {"provider": "fake", "model": "fake-deterministic"},
+        }
+    )
+    provider = LLMProviderSettings(provider="fake", model="fake-deterministic", api_key="unused")
+    draft = asyncio.run(
+        draft_fake_composition_development(
+            request,
+            provider,
+            candidate_ordinal=2,
+            creative_direction="develop motivic cells with moderate rhythmic variation",
+        )
+    )
+    assert {track.track_id for track in draft.tracks} == {t.id for t in request.composition.tracks}
+    # Relative draft: no absolute start_tick / complete composition fields.
+    dumped = draft.model_dump(mode="json")
+    assert "bar_count" not in dumped
+    assert "duration_ticks" not in dumped
+    for track in draft.tracks:
+        for event in track.events:
+            assert event.relative_start_tick >= 0
+            assert "start_tick" not in event.model_dump(mode="json")
