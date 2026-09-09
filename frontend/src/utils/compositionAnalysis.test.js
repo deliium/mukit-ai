@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  ANALYSIS_FINGERPRINT_PROFILE,
+  ANALYSIS_MOTIF_STALE_FINGERPRINT,
   ANALYSIS_SCHEMA_VERSION,
   AnalysisScopeError,
+  analysisFingerprintMatches,
   analysisRequestKeysEqual,
   buildAnalysisRequestKey,
   buildAnalysisRequestScope,
+  compositionSourceFingerprint,
   deriveAnalysisFreshness,
   findSectionByAnalysisKey,
   listAnalysisSectionOptions,
@@ -14,9 +18,13 @@ import {
   normalizeAnalysisReport,
   normalizeAnalysisScopeForKey,
   normalizeAnalysisWarnings,
+  normalizeMotifFamilies,
+  projectDetectedMotifUsages,
   recoverAnalysisSectionKey,
+  resolveDetectedNoteReferences,
   sanitizeScopeForLog,
 } from './compositionAnalysis.js';
+import { projectMotifUsagesForDisplay } from './compositionMotifs.js';
 
 const composition = {
   schema_version: 'composition.v2',
@@ -192,6 +200,194 @@ test('normalizeAnalysisReport enforces contract and optional arrays', () => {
     () => normalizeAnalysisReport({ schema_version: 'nope' }),
     /schema_version/,
   );
+});
+
+test('compositionSourceFingerprint matches backend profile and is stable', async () => {
+  const composition = {
+    schema_version: 'composition.v2',
+    tempo: 100,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    bar_count: 2,
+    duration_ticks: 3840,
+    sections: [{
+      type: 'intro',
+      start_bar: 1,
+      bar_count: 2,
+      start_tick: 0,
+      duration_ticks: 3840,
+    }],
+    tracks: [{
+      id: 'piano-1',
+      name: 'Piano',
+      instrument: 'piano',
+      role: 'harmony',
+      midi_program: 0,
+      channel: 1,
+      events: [{
+        pitch: 'C4',
+        start_tick: 0,
+        duration_ticks: 480,
+        velocity: 80,
+        articulations: ['accent'],
+      }],
+      volume: 100,
+    }],
+    harmony: [{ bar: 1, chord: 'C' }],
+    tempo_changes: [],
+    time_signature_changes: [],
+    key_changes: [],
+    markers: [{ tick: 0, kind: 'rehearsal', label: 'A' }],
+  };
+  const first = await compositionSourceFingerprint(composition);
+  const second = await compositionSourceFingerprint(composition);
+  assert.equal(first, second);
+  assert.equal(first.length, 64);
+  assert.match(first, /^[0-9a-f]{64}$/);
+  assert.equal(ANALYSIS_FINGERPRINT_PROFILE, 'analysis.source.v1');
+});
+
+test('normalizeAnalysisReport preserves motif families', () => {
+  const report = normalizeAnalysisReport({
+    schema_version: ANALYSIS_SCHEMA_VERSION,
+    algorithm_version: 'native-v1',
+    source_schema_version: 'composition.v2',
+    source_fingerprint: 'b'.repeat(64),
+    status: 'ok',
+    resolved_scope: { kind: 'composition' },
+    repetition: {
+      motifs: [],
+      motif_families: [{
+        id: 'motif_family:abc',
+        note_count: 4,
+        relationship_kinds: ['exact'],
+        reference: {
+          id: 'motif_occ:ref',
+          kind: 'exact',
+          track_id: 'melody-1',
+          start_tick: 0,
+          end_tick: 1920,
+          note_count: 4,
+          identity_score: 1,
+          notes: [{ event_ids: ['n1', 'n2', 'n3', 'n4'] }],
+        },
+        matched_occurrences: [],
+      }],
+    },
+  });
+  assert.equal(report.repetition.motif_families.length, 1);
+  assert.equal(normalizeMotifFamilies(report.repetition)[0].id, 'motif_family:abc');
+});
+
+test('resolveDetectedNoteReferences accepts ids and gated index fallback', () => {
+  const composition = {
+    schema_version: 'composition.v2',
+    tracks: [{
+      id: 'melody-1',
+      events: [
+        { id: 'n1', start_tick: 0, duration_ticks: 480, pitch: 'C4' },
+        { id: 'n2', start_tick: 480, duration_ticks: 480, pitch: 'D4' },
+      ],
+    }],
+  };
+  const byId = resolveDetectedNoteReferences(composition, [
+    { event_ids: ['n1'] },
+    { event_ids: ['n2'] },
+  ], { fingerprintMatches: false, trackId: 'melody-1' });
+  assert.deepEqual(byId.eventIds, ['n1', 'n2']);
+  assert.equal(byId.valid, true);
+
+  const staleIndex = resolveDetectedNoteReferences(composition, [
+    { event_indexes: [0, 1] },
+  ], { fingerprintMatches: false, trackId: 'melody-1' });
+  assert.equal(staleIndex.valid, false);
+  assert.equal(staleIndex.staleReason, ANALYSIS_MOTIF_STALE_FINGERPRINT);
+
+  const freshIndex = resolveDetectedNoteReferences(composition, [
+    { event_indexes: [0, 1] },
+  ], { fingerprintMatches: true, trackId: 'melody-1' });
+  assert.deepEqual(freshIndex.eventIds, ['n1', 'n2']);
+  assert.equal(freshIndex.valid, true);
+});
+
+test('projectDetectedMotifUsages and display merge honor fingerprint staleness', async () => {
+  const composition = {
+    schema_version: 'composition.v2',
+    tempo: 100,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    bar_count: 4,
+    duration_ticks: 7680,
+    sections: [{
+      id: 'verse',
+      type: 'verse',
+      start_bar: 1,
+      bar_count: 4,
+      start_tick: 0,
+      duration_ticks: 7680,
+    }],
+    tracks: [{
+      id: 'melody-1',
+      role: 'melody',
+      events: [
+        { id: 'n1', start_tick: 0, duration_ticks: 480, pitch: 'C4' },
+        { id: 'n2', start_tick: 480, duration_ticks: 480, pitch: 'D4' },
+        { id: 'n3', start_tick: 960, duration_ticks: 480, pitch: 'E4' },
+        { id: 'n4', start_tick: 1920, duration_ticks: 480, pitch: 'G4' },
+      ],
+    }],
+    harmony: [],
+    tempo_changes: [],
+    time_signature_changes: [],
+    key_changes: [],
+  };
+  const fingerprint = await compositionSourceFingerprint(composition);
+  const report = {
+    source_fingerprint: fingerprint,
+    repetition: {
+      motif_families: [{
+        id: 'motif_family:test',
+        note_count: 3,
+        relationship_kinds: ['exact'],
+        reference: {
+          id: 'motif_occ:ref',
+          kind: 'exact',
+          track_id: 'melody-1',
+          start_tick: 0,
+          end_tick: 1440,
+          note_count: 3,
+          identity_score: 1,
+          notes: [{ event_indexes: [0] }, { event_indexes: [1] }, { event_indexes: [2] }],
+        },
+        matched_occurrences: [{
+          id: 'motif_occ:match',
+          kind: 'exact',
+          track_id: 'melody-1',
+          start_tick: 1920,
+          end_tick: 2400,
+          note_count: 1,
+          identity_score: 1,
+          notes: [{ event_ids: ['n4'] }],
+        }],
+      }],
+    },
+  };
+  assert.equal(analysisFingerprintMatches(report, fingerprint), true);
+  const detected = projectDetectedMotifUsages(composition, report, { currentFingerprint: fingerprint });
+  assert.equal(detected.length, 2);
+  assert.equal(detected[0].stale, false);
+  assert.deepEqual(detected[0].eventIds, ['n1', 'n2', 'n3']);
+
+  const staleDetected = projectDetectedMotifUsages(composition, report, {
+    currentFingerprint: 'stale'.padEnd(64, '0'),
+  });
+  assert.equal(staleDetected[0].stale, true);
+
+  const merged = projectMotifUsagesForDisplay(composition, { detectedUsages: detected });
+  assert.equal(merged.length, 2);
+  assert.ok(merged.every((item) => item.source === 'detected'));
 });
 
 test('deriveAnalysisFreshness and sanitizeScopeForLog stay safe', () => {

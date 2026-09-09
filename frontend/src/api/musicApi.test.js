@@ -6,11 +6,13 @@ import { migrateV1ToV2 } from '../utils/compositionVersion.js';
 import {
   AnalysisApiError,
   analyzeComposition,
+  applyMotif,
   editCompositionRegion,
   generateLlmMusicJson,
   importMidi,
   importMusicXml,
   ImportApiError,
+  MotifApiError,
   parseProjectionHeaders,
   projectionWarningsFromHeaders,
 } from './musicApi.js';
@@ -451,6 +453,212 @@ test('analyzeComposition rejects malformed responses as AnalysisApiError', async
       assert.ok(error instanceof AnalysisApiError);
       assert.equal(error.code, 'analysis_invalid_response');
       assert.match(error.message, /schema_version/);
+      return true;
+    },
+  );
+});
+
+function motifReadyComposition() {
+  const composition = migrateV1ToV2(canonicalV1Composition());
+  composition.bar_count = 4;
+  composition.duration_ticks = 7680;
+  composition.sections = [
+    {
+      id: 'verse',
+      type: 'verse',
+      start_bar: 1,
+      bar_count: 2,
+      start_tick: 0,
+      duration_ticks: 3840,
+    },
+    {
+      id: 'chorus',
+      type: 'chorus',
+      start_bar: 3,
+      bar_count: 2,
+      start_tick: 3840,
+      duration_ticks: 3840,
+    },
+  ];
+  composition.tracks[0].events = [
+    { id: 'n1', type: 'note', pitch: 'C4', start_tick: 0, duration_ticks: 480, velocity: 80 },
+    { id: 'n2', type: 'note', pitch: 'D4', start_tick: 480, duration_ticks: 480, velocity: 80 },
+    { id: 'n3', type: 'note', pitch: 'E4', start_tick: 960, duration_ticks: 480, velocity: 80 },
+    { id: 'n4', type: 'note', pitch: 'F4', start_tick: 1440, duration_ticks: 480, velocity: 80 },
+  ];
+  composition.motifs = [{
+    id: 'motif-a',
+    label: 'Motif A',
+    occurrences: [{
+      id: 'occ-orig',
+      track_id: 'melody-1',
+      event_ids: ['n1', 'n2', 'n3'],
+      relationship: 'original',
+    }],
+  }];
+  return composition;
+}
+
+function sampleMotifApplyResponse(composition) {
+  return {
+    composition: {
+      ...composition,
+      motifs: [{
+        ...composition.motifs[0],
+        occurrences: [
+          ...composition.motifs[0].occurrences,
+          {
+            id: 'occ-repeat-1',
+            track_id: 'melody-1',
+            event_ids: ['n5', 'n6', 'n7'],
+            relationship: 'repeat',
+            transform: { operation: 'repeat', source_occurrence_id: 'occ-orig' },
+          },
+        ],
+      }],
+      tracks: [{
+        ...composition.tracks[0],
+        events: [
+          ...composition.tracks[0].events,
+          { id: 'n5', type: 'note', pitch: 'C4', start_tick: 3840, duration_ticks: 480, velocity: 80 },
+          { id: 'n6', type: 'note', pitch: 'D4', start_tick: 4320, duration_ticks: 480, velocity: 80 },
+          { id: 'n7', type: 'note', pitch: 'E4', start_tick: 4800, duration_ticks: 480, velocity: 80 },
+        ],
+      }],
+    },
+    result: {
+      motif_id: 'motif-a',
+      source_occurrence_id: 'occ-orig',
+      destination_section_id: 'chorus',
+      destination_track_id: 'melody-1',
+      destination_start_bar: 3,
+      destination_start_tick: 3840,
+      created_event_ids: ['n5', 'n6', 'n7'],
+      new_occurrence_id: 'occ-repeat-1',
+      relationship: 'repeat',
+      identity_score: 1,
+      provider: null,
+      model: null,
+      transform: {
+        operation: 'repeat',
+        source_occurrence_id: 'occ-orig',
+      },
+      diagnostics: {
+        source_event_count: 3,
+        created_event_count: 3,
+        replaced_event_count: 0,
+        destination_span_ticks: 1440,
+        warning_codes: [],
+      },
+    },
+    warnings: [],
+    musicxml: '<score/>',
+    musicxml_filename: 'composition-c-major-100bpm.musicxml',
+  };
+}
+
+test('applyMotif posts exact payload and validates typed response', async (t) => {
+  const composition = motifReadyComposition();
+  let posted = null;
+  const restore = installAxiosStub(async (config) => {
+    assert.equal(String(config.method || 'get').toLowerCase(), 'post');
+    assert.equal(config.url, '/motifs/apply');
+    posted = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+    return {
+      data: sampleMotifApplyResponse(composition),
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  const response = await applyMotif({
+    composition,
+    source: { motif_id: 'motif-a', occurrence_id: 'occ-orig' },
+    destination: { section_id: 'chorus', track_id: 'melody-1', start_bar: 3 },
+    operation: 'repeat',
+    parameters: {},
+  });
+
+  assert.equal(posted.composition.schema_version, 'composition.v2');
+  assert.deepEqual(posted.source, { motif_id: 'motif-a', occurrence_id: 'occ-orig' });
+  assert.equal(posted.destination.start_bar, 3);
+  assert.equal(posted.operation, 'repeat');
+  assert.equal(response.composition.schema_version, 'composition.v2');
+  assert.equal(response.result.relationship, 'repeat');
+  assert.deepEqual(response.result.created_event_ids, ['n5', 'n6', 'n7']);
+  assert.equal(response.result.diagnostics.created_event_count, 3);
+});
+
+test('applyMotif rejects malformed responses as MotifApiError', async (t) => {
+  const composition = motifReadyComposition();
+  const restore = installAxiosStub(async () => ({
+    data: {
+      composition,
+      result: {
+        motif_id: 'motif-a',
+        source_occurrence_id: 'occ-orig',
+      },
+      warnings: [],
+    },
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config: {},
+  }));
+  t.after(restore);
+
+  await assert.rejects(
+    () => applyMotif({
+      composition,
+      source: { motif_id: 'motif-a', occurrence_id: 'occ-orig' },
+      destination: { section_id: 'chorus', track_id: 'melody-1', start_bar: 3 },
+      operation: 'repeat',
+      parameters: {},
+    }),
+    (error) => {
+      assert.ok(error instanceof MotifApiError);
+      assert.equal(error.code, 'motif_invalid_response');
+      assert.match(error.message, /Motif apply result missing/);
+      return true;
+    },
+  );
+});
+
+test('applyMotif preserves structured backend motif errors', async (t) => {
+  const composition = motifReadyComposition();
+  const restore = installAxiosStub(async () => {
+    const error = new Error('Request failed');
+    error.response = {
+      status: 422,
+      data: {
+        detail: {
+          code: 'motif_destination_out_of_bounds',
+          message: 'Destination placement exceeds composition bounds',
+          details: { start_bar: 99 },
+        },
+      },
+    };
+    throw error;
+  });
+  t.after(restore);
+
+  await assert.rejects(
+    () => applyMotif({
+      composition,
+      source: { motif_id: 'motif-a', occurrence_id: 'occ-orig' },
+      destination: { section_id: 'chorus', track_id: 'melody-1', start_bar: 99 },
+      operation: 'repeat',
+      parameters: {},
+    }),
+    (error) => {
+      assert.ok(error instanceof MotifApiError);
+      assert.equal(error.status, 422);
+      assert.equal(error.code, 'motif_destination_out_of_bounds');
+      assert.match(error.message, /bounds/);
+      assert.equal(error.details?.start_bar, 99);
       return true;
     },
   );

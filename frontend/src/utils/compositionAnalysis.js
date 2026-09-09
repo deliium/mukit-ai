@@ -3,12 +3,19 @@
  * Analysis is derived UI state — never persisted as composition authority.
  */
 
+import { canonicalizeValue } from './compositionCanonical.js';
+import { barAtTick, compileTimeline } from './compositionTimeline.js';
+import { findSectionContainingTick } from './compositionMotifs.js';
+
 export const ANALYSIS_SCHEMA_VERSION = 'composition.analysis.v1';
 export const ANALYSIS_SOURCE_SCHEMA_VERSION = 'composition.v2';
+export const ANALYSIS_FINGERPRINT_PROFILE = 'analysis.source.v1';
 export const ANALYSIS_SCOPE_KINDS = Object.freeze(['composition', 'section', 'track']);
 export const ANALYSIS_DEBOUNCE_MS = 450;
 export const ANALYSIS_REVISION_LOG_PREFIX_LEN = 48;
 export const ANALYSIS_FINGERPRINT_LOG_PREFIX_LEN = 12;
+export const ANALYSIS_MOTIF_STALE_FINGERPRINT = 'analysis_motif_fingerprint_stale';
+export const ANALYSIS_MOTIF_STALE_INDEX = 'analysis_motif_index_stale';
 
 /**
  * Stable UI key for a canonical section. Prefers section.id; otherwise encodes
@@ -273,6 +280,304 @@ export function fingerprintLogPrefix(fingerprint) {
   return String(fingerprint || '').slice(0, ANALYSIS_FINGERPRINT_LOG_PREFIX_LEN);
 }
 
+function canonicalAnalysisJsonDumps(value) {
+  return JSON.stringify(canonicalizeValue(value));
+}
+
+function projectAnalysisEvent(event) {
+  if (!event || typeof event !== 'object') {
+    return null;
+  }
+  const projected = {
+    type: typeof event.type === 'string' ? event.type : 'note',
+    id: typeof event.id === 'string' ? event.id : null,
+    pitch: event.pitch ?? null,
+    start_tick: Number(event.start_tick),
+    duration_ticks: Number(event.duration_ticks),
+    velocity: Number(event.velocity),
+    staff: event.staff ?? null,
+    voice: event.voice ?? null,
+    articulations: Array.isArray(event.articulations) ? [...event.articulations] : [],
+    tie: event.tie
+      ? { group_id: event.tie.group_id, type: event.tie.type }
+      : null,
+  };
+  return projected;
+}
+
+/**
+ * Mirror backend analysis-relevant projection for source_fingerprint parity.
+ */
+export function analysisRelevantProjection(composition) {
+  if (!composition || typeof composition !== 'object') {
+    return { fingerprint_profile: ANALYSIS_FINGERPRINT_PROFILE };
+  }
+  return {
+    fingerprint_profile: ANALYSIS_FINGERPRINT_PROFILE,
+    schema_version: composition.schema_version,
+    tempo: composition.tempo,
+    key: composition.key,
+    time_signature: composition.time_signature,
+    ticks_per_quarter: composition.ticks_per_quarter,
+    duration_ticks: composition.duration_ticks,
+    bar_count: composition.bar_count,
+    tempo_changes: (composition.tempo_changes || []).map((change) => ({
+      tick: change.tick,
+      bpm: change.bpm,
+    })),
+    time_signature_changes: (composition.time_signature_changes || []).map((change) => ({
+      tick: change.tick,
+      time_signature: change.time_signature,
+    })),
+    key_changes: (composition.key_changes || []).map((change) => ({
+      tick: change.tick,
+      key: change.key,
+    })),
+    sections: (composition.sections || []).map((section) => ({
+      id: section.id ?? null,
+      type: section.type,
+      label: section.label ?? null,
+      start_bar: section.start_bar,
+      bar_count: section.bar_count,
+      start_tick: section.start_tick,
+      duration_ticks: section.duration_ticks,
+    })),
+    harmony: (composition.harmony || []).map((item) => ({
+      bar: item.bar,
+      chord: item.chord,
+    })),
+    tracks: (composition.tracks || []).map((track) => ({
+      id: track.id,
+      name: track.name,
+      instrument: track.instrument,
+      role: track.role,
+      midi_program: track.midi_program,
+      channel: track.channel,
+      is_drum: track.is_drum ?? false,
+      staff: track.staff ?? null,
+      events: (track.events || []).map((event) => projectAnalysisEvent(event)).filter(Boolean),
+    })),
+  };
+}
+
+export async function compositionSourceFingerprint(composition) {
+  const encoded = canonicalAnalysisJsonDumps(analysisRelevantProjection(composition));
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(encoded));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+export function analysisFingerprintMatches(report, currentFingerprint) {
+  const expected = typeof report?.source_fingerprint === 'string'
+    ? report.source_fingerprint
+    : '';
+  const actual = typeof currentFingerprint === 'string' ? currentFingerprint : '';
+  return Boolean(expected) && expected === actual;
+}
+
+function normalizeDetectedNoteReference(noteRef) {
+  if (!noteRef || typeof noteRef !== 'object') {
+    return null;
+  }
+  const eventIds = Array.isArray(noteRef.event_ids)
+    ? noteRef.event_ids.filter((id) => typeof id === 'string' && id.trim())
+    : null;
+  const eventIndexes = Array.isArray(noteRef.event_indexes)
+    ? noteRef.event_indexes.filter((index) => Number.isInteger(index) && index >= 0)
+    : null;
+  if ((!eventIds || !eventIds.length) && (!eventIndexes || !eventIndexes.length)) {
+    return null;
+  }
+  return {
+    eventIds: eventIds?.length ? eventIds : null,
+    eventIndexes: eventIndexes?.length ? eventIndexes : null,
+  };
+}
+
+/**
+ * Resolve detected note references to canonical event IDs.
+ * Event-index fallbacks are valid only when the analysis fingerprint matches.
+ */
+export function resolveDetectedNoteReferences(composition, noteRefs, {
+  fingerprintMatches = false,
+  trackId = null,
+} = {}) {
+  const refs = Array.isArray(noteRefs) ? noteRefs : [];
+  const tracks = Array.isArray(composition?.tracks) ? composition.tracks : [];
+  const track = trackId
+    ? tracks.find((item) => item?.id === trackId)
+    : null;
+  const eventIds = [];
+  let usedIndexFallback = false;
+
+  for (const rawRef of refs) {
+    const noteRef = normalizeDetectedNoteReference(rawRef);
+    if (!noteRef) {
+      return {
+        eventIds: [],
+        valid: false,
+        stale: true,
+        staleReason: ANALYSIS_MOTIF_STALE_INDEX,
+      };
+    }
+    if (noteRef.eventIds?.length) {
+      eventIds.push(...noteRef.eventIds);
+      continue;
+    }
+    if (!fingerprintMatches) {
+      return {
+        eventIds: [],
+        valid: false,
+        stale: true,
+        staleReason: ANALYSIS_MOTIF_STALE_FINGERPRINT,
+      };
+    }
+    if (!track || !Array.isArray(track.events)) {
+      return {
+        eventIds: [],
+        valid: false,
+        stale: true,
+        staleReason: ANALYSIS_MOTIF_STALE_INDEX,
+      };
+    }
+    usedIndexFallback = true;
+    for (const index of noteRef.eventIndexes) {
+      const event = track.events[index];
+      if (!event?.id) {
+        return {
+          eventIds: [],
+          valid: false,
+          stale: true,
+          staleReason: ANALYSIS_MOTIF_STALE_INDEX,
+        };
+      }
+      eventIds.push(event.id);
+    }
+  }
+
+  return {
+    eventIds,
+    valid: eventIds.length > 0,
+    stale: false,
+    staleReason: usedIndexFallback ? null : null,
+  };
+}
+
+function locationLabelsForSpan(composition, startTick, endTick) {
+  const timeline = compileTimeline(composition);
+  const sectionMatch = findSectionContainingTick(composition, startTick);
+  const section = sectionMatch?.section ?? null;
+  return {
+    startTick,
+    endTick,
+    startBar: timeline ? barAtTick(timeline, startTick) : null,
+    endBar: timeline ? barAtTick(timeline, Math.max(startTick, endTick - 1)) : null,
+    sectionId: typeof section?.id === 'string' ? section.id : null,
+    sectionType: typeof section?.type === 'string' ? section.type : null,
+    sectionIndex: sectionMatch?.index ?? null,
+    sectionLabel: section
+      ? (typeof section.label === 'string' && section.label.trim()
+        ? section.label.trim()
+        : (typeof section.type === 'string' ? section.type : null))
+      : null,
+  };
+}
+
+function normalizeDetectedMotifOccurrence(composition, occurrence, {
+  fingerprintMatches = false,
+  familyId = null,
+  familyLabel = null,
+} = {}) {
+  if (!occurrence || typeof occurrence !== 'object') {
+    return null;
+  }
+  const resolved = resolveDetectedNoteReferences(composition, occurrence.notes, {
+    fingerprintMatches,
+    trackId: occurrence.track_id,
+  });
+  const truncated = Array.isArray(occurrence.notes)
+    && Number.isInteger(occurrence.note_count)
+    && occurrence.notes.length < occurrence.note_count;
+  const location = locationLabelsForSpan(
+    composition,
+    occurrence.start_tick,
+    occurrence.end_tick,
+  );
+  return {
+    key: `detected:${familyId}:${occurrence.id}`,
+    familyId,
+    label: familyLabel,
+    occurrenceId: occurrence.id,
+    trackId: occurrence.track_id,
+    eventIds: resolved.eventIds,
+    relationship: occurrence.kind,
+    identityScore: occurrence.identity_score,
+    stale: !resolved.valid || resolved.stale,
+    staleReason: resolved.staleReason || (truncated ? 'analysis_motif_truncated' : null),
+    truncated,
+    ...location,
+  };
+}
+
+export function normalizeMotifFamilies(repetition) {
+  if (!repetition || typeof repetition !== 'object') {
+    return [];
+  }
+  const families = Array.isArray(repetition.motif_families) ? repetition.motif_families : [];
+  return families
+    .filter((family) => family && typeof family === 'object' && typeof family.id === 'string')
+    .map((family) => ({
+      id: family.id,
+      noteCount: family.note_count,
+      relationshipKinds: Array.isArray(family.relationship_kinds) ? [...family.relationship_kinds] : [],
+      reference: family.reference && typeof family.reference === 'object' ? { ...family.reference } : null,
+      matchedOccurrences: Array.isArray(family.matched_occurrences)
+        ? family.matched_occurrences.map((item) => ({ ...item }))
+        : [],
+    }));
+}
+
+/**
+ * Expand motif families into display-ready detected usages honoring fingerprint staleness.
+ */
+export function projectDetectedMotifUsages(composition, report, {
+  currentFingerprint = null,
+} = {}) {
+  const repetition = report?.repetition;
+  const families = normalizeMotifFamilies(repetition);
+  if (!families.length) {
+    return [];
+  }
+  const fingerprintMatches = currentFingerprint == null
+    ? false
+    : analysisFingerprintMatches(report, currentFingerprint);
+  const usages = [];
+  for (const family of families) {
+    const label = family.relationshipKinds.length
+      ? `Detected ${family.relationshipKinds.join('/')}`
+      : 'Detected motif';
+    const occurrences = [family.reference, ...family.matchedOccurrences].filter(Boolean);
+    for (const occurrence of occurrences) {
+      const projected = normalizeDetectedMotifOccurrence(composition, occurrence, {
+        fingerprintMatches,
+        familyId: family.id,
+        familyLabel: label,
+      });
+      if (projected) {
+        usages.push(projected);
+      }
+    }
+  }
+  console.debug('[compositionAnalysis] Projected detected motif usages', {
+    familyCount: families.length,
+    usageCount: usages.length,
+    fingerprintMatches,
+    fingerprintPrefix: fingerprintLogPrefix(report?.source_fingerprint),
+  });
+  return usages;
+}
+
 export function sanitizeScopeForLog(scope) {
   const normalized = normalizeAnalysisScopeForKey(scope);
   if (normalized.kind === 'composition') {
@@ -360,10 +665,25 @@ export function normalizeAnalysisReport(report) {
   if (!contract.valid) {
     throw new Error(contract.message);
   }
+  const repetition = report.repetition && typeof report.repetition === 'object'
+    ? {
+      ...report.repetition,
+      motifs: Array.isArray(report.repetition.motifs) ? report.repetition.motifs : [],
+      motif_families: normalizeMotifFamilies(report.repetition),
+      section_fingerprint_ids: Array.isArray(report.repetition.section_fingerprint_ids)
+        ? report.repetition.section_fingerprint_ids
+        : [],
+    }
+    : {
+      motifs: [],
+      motif_families: [],
+      section_fingerprint_ids: [],
+    };
   return {
     ...report,
     warnings: normalizeAnalysisWarnings(report.warnings),
     section_summaries: Array.isArray(report.section_summaries) ? report.section_summaries : [],
+    repetition,
   };
 }
 

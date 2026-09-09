@@ -87,6 +87,32 @@ test('persist revision includes generationMeta without requiring event changes',
   assert.notEqual(withMeta, otherMeta);
 });
 
+test('persist revision changes when canonical motif metadata changes', () => {
+  const first = structuredClone(BASE);
+  const withMotif = structuredClone(BASE);
+  withMotif.tracks[0].events.push(
+    { type: 'note', id: 'n2', pitch: 'D4', start_tick: 480, duration_ticks: 480, velocity: 78 },
+    { type: 'note', id: 'n3', pitch: 'E4', start_tick: 960, duration_ticks: 480, velocity: 77 },
+  );
+  withMotif.motifs = [
+    {
+      id: 'motif-a',
+      label: 'Motif A',
+      occurrences: [
+        {
+          id: 'occ-orig',
+          track_id: 'piano-1',
+          event_ids: ['n1', 'n2', 'n3'],
+          relationship: 'original',
+        },
+      ],
+    },
+  ];
+
+  assert.notEqual(projectPersistRevisionKey(first), projectPersistRevisionKey(withMotif));
+  assert.notEqual(compositionRevisionKey(first), compositionRevisionKey(withMotif));
+});
+
 test('persist revision ignores hydration-only note id differences', () => {
   const withoutIds = structuredClone(BASE);
   withoutIds.tracks[0].events = [

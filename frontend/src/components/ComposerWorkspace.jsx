@@ -7,6 +7,7 @@ import ExportControls from './ExportControls.jsx';
 import PianoRollEditor from './PianoRollEditor.jsx';
 import AiRegionEditPanel from './AiRegionEditPanel.jsx';
 import CompositionAnalysisPanel from './CompositionAnalysisPanel.jsx';
+import MotifPanel from './MotifPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const Workspace = styled.div`
@@ -78,6 +79,7 @@ const SideActions = styled.div`
 const TABS = [
   { id: 'piano', label: 'Piano roll' },
   { id: 'notation', label: 'Notation' },
+  { id: 'motifs', label: 'Motifs' },
   { id: 'advanced', label: 'Advanced JSON' },
   { id: 'analysis', label: 'Analysis' },
 ];
@@ -209,6 +211,9 @@ const ComposerWorkspace = () => {
               </>
             ) : null}
             {tab.id === 'analysis' && selected ? <CompositionAnalysisPanel /> : null}
+            {tab.id === 'motifs' && selected ? (
+              <MotifPanel onOpenPianoTab={() => onTabChange('piano')} />
+            ) : null}
           </Panel>
         );
       })}

@@ -474,6 +474,12 @@ export async function openAnalysisTab(page) {
   console.info('[e2e-analysis] Opened Analysis tab');
 }
 
+export async function openMotifsTab(page) {
+  await page.getByTestId('composer-tab-motifs').click();
+  await page.getByTestId('motif-panel').waitFor({ state: 'visible', timeout: 30_000 });
+  console.info('[e2e-motifs] Opened Motifs tab');
+}
+
 /** Intercept POST /analysis/composition with a deterministic JSON body or status. */
 export async function mockAnalysisRoute(page, {
   body = null,

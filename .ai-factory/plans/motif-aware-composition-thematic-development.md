@@ -156,7 +156,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
   - Logging: frontend DEBUG logs may include motif/section/track IDs, operation, strength, counts, and status; WARN validation/staleness codes; ERROR sanitized API code/status. Never log selected note objects, event arrays, or full compositions.
   - Files: `frontend/src/utils/compositionMotifs.js`, `frontend/src/utils/pianoRollSelection.js`, `frontend/src/utils/compositionAnalysis.js`, `frontend/src/api/musicApi.js`, and tests.
 
-- [ ] **Task 8: Add Zustand motif state, edit history, analysis invalidation, and project lifecycle behavior.** (depends on Task 7)
+- [x] **Task 8: Add Zustand motif state, edit history, analysis invalidation, and project lifecycle behavior.** (depends on Task 7)
   - Extend `frontend/src/store/musicStore.js` with source selection, selected motif, destination, operation parameters, variation strength, request status/error/warnings, and highlighted usage state. Keep motif definitions inside `editedMusicJson.motifs`, not in a second authoritative store collection.
   - Add actions to mark/rename/delete/select a motif; select/navigate usages; configure destination/transformation; and start/complete/fail motif application atomically.
   - Route mark/delete/apply and controlled source-note deletion through the existing immutable note-edit history so each user action has one undo entry, clears redo correctly, stops active playback, updates notation, invalidates analysis, and marks the project dirty.
@@ -166,7 +166,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
   - Logging: DEBUG action/status transitions with IDs and counts; INFO mark/delete/apply completion; WARN stale/pruned usage codes; ERROR sanitized API failure. Never log note arrays or full store snapshots.
   - Files: `frontend/src/store/musicStore.js`, `frontend/src/utils/projectPersistRevision.js`, and store/persistence tests.
 
-- [ ] **Task 9: Build the Motifs tab and piano-roll selection/usage visualization.** (depends on Task 8)
+- [x] **Task 9: Build the Motifs tab and piano-roll selection/usage visualization.** (depends on Task 8)
   - Add `frontend/src/components/MotifPanel.jsx` and a `Motifs` tab in `frontend/src/components/ComposerWorkspace.jsx`, preserving existing accessible tab keyboard behavior.
   - In `frontend/src/components/PianoRollEditor.jsx`, expose “Mark as motif” for the current multi-note selection, show the one/two-bar eligibility and selected-note count, and render distinct source, selected usage, and destination overlays without overloading AI region selection.
   - The Motifs tab lists authored definitions and canonical/derived occurrences with relationship, section, track, bars, confidence/identity, and stale/truncated state. “Go to usage” selects the piano-roll track/range and returns to the piano tab.

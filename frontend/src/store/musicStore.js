@@ -1,5 +1,13 @@
 import { create } from 'zustand';
-import { analyzeComposition, AnalysisApiError, importMidi, importMusicXml, renderMusicXmlPreview } from '../api/musicApi.js';
+import {
+  analyzeComposition,
+  AnalysisApiError,
+  applyMotif,
+  importMidi,
+  importMusicXml,
+  MotifApiError,
+  renderMusicXmlPreview,
+} from '../api/musicApi.js';
 import {
   createProject as createProjectRequest,
   deleteProject as deleteProjectRequest,
@@ -18,10 +26,18 @@ import {
   deriveAnalysisFreshness,
   fingerprintLogPrefix,
   normalizeAnalysisScopeKind,
+  projectDetectedMotifUsages,
   recoverAnalysisSectionKey,
   revisionLogPrefix,
   sanitizeScopeForLog,
 } from '../utils/compositionAnalysis.js';
+import {
+  applyMotifReconciliation,
+  nextMotifLabel,
+  projectMotifUsagesForDisplay,
+  validateMotifAuthoringSelection,
+  validateMotifDefinitions,
+} from '../utils/compositionMotifs.js';
 import { prepareCompositionForStore, tryPrepareCompositionForStore } from '../utils/compositionVersion.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { compositionRevisionKey, notationRevisionKey } from '../utils/playbackPosition.js';
@@ -47,6 +63,33 @@ import { projectPersistRevisionKey } from '../utils/projectPersistRevision.js';
 
 export const AUTOSAVE_DEBOUNCE_MS = 900;
 export { ANALYSIS_DEBOUNCE_MS };
+
+const MOTIF_CREATIVE_OPERATIONS = new Set([
+  'rhythmic_variation',
+  'melodic_variation',
+  'answer',
+  'counterphrase',
+]);
+
+export const DEFAULT_MOTIF_OPERATION = 'repeat';
+export const DEFAULT_MOTIF_VARIATION_STRENGTH = 0.5;
+
+const initialMotifUiState = {
+  motifSelectedMotifId: null,
+  motifSelectedOccurrenceId: null,
+  motifHighlightedUsageKey: null,
+  motifDestinationSectionId: null,
+  motifDestinationTrackId: null,
+  motifDestinationStartBar: null,
+  motifDestinationStartTick: null,
+  motifOperation: DEFAULT_MOTIF_OPERATION,
+  motifOperationParams: {},
+  motifVariationStrength: DEFAULT_MOTIF_VARIATION_STRENGTH,
+  motifApplyStatus: 'idle',
+  motifApplyError: '',
+  motifApplyWarnings: [],
+  motifReconcileWarnings: [],
+};
 
 function isManualSaveReason(reason) {
   return reason === 'manual' || reason === 'manual-force';
@@ -140,6 +183,8 @@ export const useMusicStore = create((set, get) => ({
   analysisError: '',
   analysisWarnings: [],
   analysisTabVisible: false,
+
+  ...initialMotifUiState,
 
   setApiStatus: (apiStatus) => {
     console.debug('[musicStore] API status changed', { apiStatus });
@@ -243,6 +288,7 @@ export const useMusicStore = create((set, get) => ({
       noteEditRedoStack: [],
       generationMeta,
       ...clearedAnalysisState(),
+      ...clearedMotifUiState(),
     });
     markProjectDirty(set, get);
   },
@@ -347,6 +393,7 @@ export const useMusicStore = create((set, get) => ({
       importReport: importReport || null,
       notationReport: notationReport || null,
       ...clearedAnalysisState(),
+      ...clearedMotifUiState(),
     });
     markProjectDirty(set, get);
     return true;
@@ -542,6 +589,7 @@ export const useMusicStore = create((set, get) => ({
       noteEditUndoStack: [],
       noteEditRedoStack: [],
       analysisSelectedSectionKey: recoverAnalysisSectionKey(normalized, get().analysisSelectedSectionKey),
+      ...clearedMotifUiState(),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'edited-json' });
@@ -567,6 +615,7 @@ export const useMusicStore = create((set, get) => ({
         noteEditUndoStack: [],
         noteEditRedoStack: [],
         analysisSelectedSectionKey: recoverAnalysisSectionKey(music, state.analysisSelectedSectionKey),
+        ...clearedMotifUiState(),
       };
     });
     markProjectDirty(set, get);
@@ -899,18 +948,22 @@ export const useMusicStore = create((set, get) => ({
         set({ pianoRollEditStatus: 'error' });
         return false;
       }
-      const validation = validateMusicJson(result.composition);
+      const reconciled = applyMotifReconciliation(result.composition, [noteId]);
+      const validation = validateMusicJson(reconciled.composition);
       if (!validation.valid) {
         console.warn('[musicStore] deleteNote failed validation', { message: validation.message });
         set({ pianoRollEditStatus: 'error' });
         return false;
       }
       applyNoteEdit(set, get, {
-        nextComposition: result.composition,
+        nextComposition: reconciled.composition,
         selectedTrackId: trackId,
         selectedNoteId: null,
         action: 'delete',
         noteSummary: sanitizeNoteSummary(result.deleted),
+        statePatch: reconcileMotifUiAfterCompositionChange(get(), reconciled.composition, {
+          reconcileWarnings: reconciled.warnings,
+        }),
       });
       return true;
     } catch (error) {
@@ -959,6 +1012,7 @@ export const useMusicStore = create((set, get) => ({
         previous.editedMusicJson,
         state.analysisSelectedSectionKey,
       ),
+      ...reconcileMotifUiAfterCompositionChange(state, previous.editedMusicJson),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'undo' });
@@ -1000,6 +1054,7 @@ export const useMusicStore = create((set, get) => ({
         next.editedMusicJson,
         state.analysisSelectedSectionKey,
       ),
+      ...reconcileMotifUiAfterCompositionChange(state, next.editedMusicJson),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'redo' });
@@ -1182,6 +1237,7 @@ export const useMusicStore = create((set, get) => ({
       aiEditWarnings: Array.isArray(warnings) ? warnings : [],
       pianoRollEditStatus: 'idle',
       analysisSelectedSectionKey: recoverAnalysisSectionKey(prepared, state.analysisSelectedSectionKey),
+      ...clearedMotifUiState(),
     });
     console.info('[musicStore] Project autosave-dirty transition after AI edit', {
       projectId: state.currentProjectId,
@@ -1475,6 +1531,7 @@ export const useMusicStore = create((set, get) => ({
           noteEditUndoStack: [],
           noteEditRedoStack: [],
           ...clearedAnalysisState(),
+          ...clearedMotifUiState(),
         });
       }
       await get().loadProjectList();
@@ -1660,6 +1717,478 @@ export const useMusicStore = create((set, get) => ({
   scheduleAutosave: () => {
     scheduleAutosave(set, get);
   },
+
+  selectMotif: (motifId) => {
+    const normalizedId = typeof motifId === 'string' && motifId.trim() ? motifId.trim() : null;
+    const composition = get().editedMusicJson;
+    const motif = normalizedId
+      ? (composition?.motifs || []).find((item) => item.id === normalizedId)
+      : null;
+    const original = motif?.occurrences?.find((item) => item.relationship === 'original') || null;
+    console.debug('[musicStore] Motif selected', {
+      motifId: normalizedId,
+      occurrenceId: original?.id || null,
+    });
+    set({
+      motifSelectedMotifId: motif?.id || null,
+      motifSelectedOccurrenceId: original?.id || null,
+      motifHighlightedUsageKey: motif && original
+        ? `canonical:${motif.id}:${original.id}`
+        : null,
+    });
+  },
+
+  renameMotif: (motifId, label) => {
+    const state = get();
+    const current = state.editedMusicJson;
+    const trimmedLabel = String(label || '').trim();
+    if (!motifId || !trimmedLabel || !isCanonicalComposition(current)) {
+      console.warn('[musicStore] renameMotif rejected', { motifId, labelLength: trimmedLabel.length });
+      return false;
+    }
+    const motifs = Array.isArray(current.motifs) ? current.motifs : [];
+    const index = motifs.findIndex((item) => item.id === motifId);
+    if (index < 0) {
+      console.warn('[musicStore] renameMotif motif not found', { motifId });
+      return false;
+    }
+    if (motifs.some((item, itemIndex) => itemIndex !== index && item.label === trimmedLabel)) {
+      console.warn('[musicStore] renameMotif duplicate label', { motifId, label: trimmedLabel });
+      return false;
+    }
+    const nextMotifs = motifs.map((item, itemIndex) => (
+      itemIndex === index ? { ...item, label: trimmedLabel } : item
+    ));
+    const nextComposition = { ...current, motifs: nextMotifs };
+    const motifValidation = validateMotifDefinitions(nextComposition);
+    if (!motifValidation.valid) {
+      console.warn('[musicStore] renameMotif failed motif validation', { message: motifValidation.message });
+      return false;
+    }
+    const validation = validateMusicJson(nextComposition);
+    if (!validation.valid) {
+      console.warn('[musicStore] renameMotif failed validation', { message: validation.message });
+      return false;
+    }
+    applyNoteEdit(set, get, {
+      nextComposition,
+      selectedTrackId: state.pianoRollTrackId,
+      selectedNoteId: state.pianoRollNoteId,
+      selectedNoteIds: state.pianoRollNoteIds,
+      action: 'motif-rename',
+      noteSummary: { motifId, label: trimmedLabel },
+    });
+    console.info('[musicStore] Motif renamed', { motifId, label: trimmedLabel });
+    return true;
+  },
+
+  deleteMotif: (motifId) => {
+    const state = get();
+    const current = state.editedMusicJson;
+    if (!motifId || !isCanonicalComposition(current)) {
+      console.warn('[musicStore] deleteMotif rejected', { motifId });
+      return false;
+    }
+    const motifs = Array.isArray(current.motifs) ? current.motifs : [];
+    if (!motifs.some((item) => item.id === motifId)) {
+      console.warn('[musicStore] deleteMotif motif not found', { motifId });
+      return false;
+    }
+    const nextComposition = {
+      ...current,
+      motifs: motifs.filter((item) => item.id !== motifId),
+    };
+    const validation = validateMusicJson(nextComposition);
+    if (!validation.valid) {
+      console.warn('[musicStore] deleteMotif failed validation', { message: validation.message });
+      return false;
+    }
+    applyNoteEdit(set, get, {
+      nextComposition,
+      selectedTrackId: state.pianoRollTrackId,
+      selectedNoteId: state.pianoRollNoteId,
+      selectedNoteIds: state.pianoRollNoteIds,
+      action: 'motif-delete',
+      noteSummary: { motifId },
+      statePatch: reconcileMotifUiAfterCompositionChange(state, nextComposition, {
+        clearedSelection: state.motifSelectedMotifId === motifId,
+      }),
+    });
+    console.info('[musicStore] Motif deleted', { motifId });
+    return true;
+  },
+
+  markMotifFromSelection: ({ label = null } = {}) => {
+    const state = get();
+    const current = state.editedMusicJson;
+    if (!isCanonicalComposition(current)) {
+      console.warn('[musicStore] markMotifFromSelection rejected non-canonical composition');
+      return { ok: false, message: 'Canonical composition required', code: 'motif_invalid_composition' };
+    }
+    const selection = validateMotifAuthoringSelection(current, {
+      trackId: state.pianoRollTrackId,
+      eventIds: state.pianoRollNoteIds,
+    });
+    if (!selection.valid) {
+      console.warn('[musicStore] markMotifFromSelection rejected', {
+        code: selection.code || null,
+        message: selection.message,
+      });
+      return { ok: false, message: selection.message, code: selection.code || null };
+    }
+    const existingMotifs = Array.isArray(current.motifs) ? current.motifs : [];
+    const motifId = createMotifEntityId('motif');
+    const occurrenceId = createMotifEntityId('occ');
+    const motifLabel = String(label || '').trim() || nextMotifLabel(existingMotifs);
+    const nextComposition = {
+      ...current,
+      motifs: [
+        ...existingMotifs,
+        {
+          id: motifId,
+          label: motifLabel,
+          occurrences: [{
+            id: occurrenceId,
+            track_id: selection.trackId,
+            event_ids: selection.eventIds,
+            relationship: 'original',
+          }],
+        },
+      ],
+    };
+    const motifValidation = validateMotifDefinitions(nextComposition);
+    if (!motifValidation.valid) {
+      console.warn('[musicStore] markMotifFromSelection failed motif validation', {
+        message: motifValidation.message,
+      });
+      return { ok: false, message: motifValidation.message, code: 'motif_invalid_definition' };
+    }
+    const validation = validateMusicJson(nextComposition);
+    if (!validation.valid) {
+      console.warn('[musicStore] markMotifFromSelection failed validation', { message: validation.message });
+      return { ok: false, message: validation.message, code: 'motif_invalid_composition' };
+    }
+    applyNoteEdit(set, get, {
+      nextComposition,
+      selectedTrackId: selection.trackId,
+      selectedNoteId: selection.eventIds[0] || null,
+      selectedNoteIds: selection.eventIds,
+      action: 'motif-mark',
+      noteSummary: {
+        motifId,
+        occurrenceId,
+        label: motifLabel,
+        eventCount: selection.eventIds.length,
+      },
+      statePatch: {
+        motifSelectedMotifId: motifId,
+        motifSelectedOccurrenceId: occurrenceId,
+        motifHighlightedUsageKey: `canonical:${motifId}:${occurrenceId}`,
+        motifApplyStatus: 'idle',
+        motifApplyError: '',
+        motifApplyWarnings: [],
+        motifReconcileWarnings: [],
+      },
+    });
+    console.info('[musicStore] Motif marked from selection', {
+      motifId,
+      occurrenceId,
+      label: motifLabel,
+      eventCount: selection.eventIds.length,
+    });
+    return {
+      ok: true,
+      motifId,
+      occurrenceId,
+      label: motifLabel,
+      eventCount: selection.eventIds.length,
+    };
+  },
+
+  getMotifUsages: () => {
+    const state = get();
+    const freshness = state.getAnalysisFreshness();
+    const currentFingerprint = freshness.isCurrent
+      ? state.analysisResult?.source_fingerprint
+      : null;
+    const detected = state.analysisResult
+      ? projectDetectedMotifUsages(state.editedMusicJson, state.analysisResult, {
+        currentFingerprint,
+      })
+      : [];
+    return projectMotifUsagesForDisplay(state.editedMusicJson, {
+      analysisReport: state.analysisResult,
+      detectedUsages: detected,
+      includeDetected: Boolean(state.analysisResult),
+    });
+  },
+
+  selectMotifUsage: ({
+    usageKey = null,
+    motifId = null,
+    occurrenceId = null,
+    trackId = null,
+    eventIds = null,
+  } = {}) => {
+    const resolvedTrackId = trackId || get().pianoRollTrackId;
+    const resolvedEventIds = Array.isArray(eventIds)
+      ? eventIds.map(String)
+      : (get().pianoRollNoteIds || []);
+    console.debug('[musicStore] Motif usage selected', {
+      usageKey: usageKey || null,
+      motifId: motifId || null,
+      occurrenceId: occurrenceId || null,
+      trackId: resolvedTrackId,
+      eventCount: resolvedEventIds.length,
+    });
+    set({
+      motifHighlightedUsageKey: usageKey || null,
+      motifSelectedMotifId: motifId || get().motifSelectedMotifId,
+      motifSelectedOccurrenceId: occurrenceId || get().motifSelectedOccurrenceId,
+      pianoRollTrackId: pickDefaultTrackId(get().editedMusicJson, resolvedTrackId),
+      pianoRollNoteIds: resolvedEventIds,
+      pianoRollNoteId: resolvedEventIds[0] || null,
+    });
+  },
+
+  navigateMotifUsage: (direction = 1) => {
+    const state = get();
+    const usages = state.getMotifUsages();
+    if (!usages.length) {
+      console.warn('[musicStore] navigateMotifUsage ignored; no usages');
+      return false;
+    }
+    const delta = direction === 'prev' ? -1 : (direction === 'next' ? 1 : Number(direction));
+    if (!Number.isFinite(delta) || delta === 0) {
+      return false;
+    }
+    const currentIndex = usages.findIndex((item) => item.key === state.motifHighlightedUsageKey);
+    const startIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = (startIndex + delta + usages.length) % usages.length;
+    const usage = usages[nextIndex];
+    state.selectMotifUsage({
+      usageKey: usage.key,
+      motifId: usage.motifId,
+      occurrenceId: usage.occurrenceId,
+      trackId: usage.trackId,
+      eventIds: usage.eventIds,
+    });
+    console.info('[musicStore] Motif usage navigated', {
+      direction: delta,
+      usageKey: usage.key,
+      index: nextIndex,
+      total: usages.length,
+    });
+    return true;
+  },
+
+  configureMotifDestination: ({
+    sectionId = null,
+    trackId = null,
+    startBar = null,
+    startTick = null,
+  } = {}) => {
+    const patch = {};
+    if (sectionId !== undefined) {
+      patch.motifDestinationSectionId = typeof sectionId === 'string' && sectionId.trim()
+        ? sectionId.trim()
+        : null;
+    }
+    if (trackId !== undefined) {
+      patch.motifDestinationTrackId = typeof trackId === 'string' && trackId.trim()
+        ? trackId.trim()
+        : null;
+    }
+    if (startBar !== undefined) {
+      const bar = Number(startBar);
+      patch.motifDestinationStartBar = Number.isInteger(bar) && bar >= 1 ? bar : null;
+    }
+    if (startTick !== undefined) {
+      const tick = Number(startTick);
+      patch.motifDestinationStartTick = Number.isInteger(tick) && tick >= 0 ? tick : null;
+    }
+    console.debug('[musicStore] Motif destination configured', {
+      sectionId: patch.motifDestinationSectionId ?? get().motifDestinationSectionId,
+      trackId: patch.motifDestinationTrackId ?? get().motifDestinationTrackId,
+      startBar: patch.motifDestinationStartBar ?? get().motifDestinationStartBar,
+      startTick: patch.motifDestinationStartTick ?? get().motifDestinationStartTick,
+    });
+    set(patch);
+  },
+
+  configureMotifTransformation: ({
+    operation = null,
+    operationParams = null,
+    variationStrength = null,
+  } = {}) => {
+    const patch = {};
+    if (typeof operation === 'string' && operation.trim()) {
+      patch.motifOperation = operation.trim();
+    }
+    if (operationParams && typeof operationParams === 'object' && !Array.isArray(operationParams)) {
+      patch.motifOperationParams = { ...operationParams };
+    }
+    if (variationStrength != null) {
+      const strength = Number(variationStrength);
+      if (Number.isFinite(strength)) {
+        patch.motifVariationStrength = Math.max(0, Math.min(1, strength));
+      }
+    }
+    console.debug('[musicStore] Motif transformation configured', {
+      operation: patch.motifOperation ?? get().motifOperation,
+      variationStrength: patch.motifVariationStrength ?? get().motifVariationStrength,
+      paramKeys: Object.keys(patch.motifOperationParams ?? get().motifOperationParams ?? {}),
+    });
+    set(patch);
+  },
+
+  resetMotifUiState: () => {
+    console.debug('[musicStore] Motif UI state reset');
+    set(clearedMotifUiState());
+  },
+
+  startMotifApply: () => {
+    const state = get();
+    if (state.motifApplyStatus === 'loading') {
+      console.warn('[musicStore] Duplicate motif apply blocked', {
+        motifId: state.motifSelectedMotifId,
+        operation: state.motifOperation,
+      });
+      return false;
+    }
+    if (!state.editedMusicJson || !isCanonicalComposition(state.editedMusicJson)) {
+      console.warn('[musicStore] Motif apply start rejected; composition missing/invalid');
+      return false;
+    }
+    if (!state.motifSelectedMotifId || !state.motifSelectedOccurrenceId) {
+      console.warn('[musicStore] Motif apply start rejected; no source motif/occurrence');
+      return false;
+    }
+    if (!state.motifDestinationTrackId || !state.motifDestinationStartBar) {
+      console.warn('[musicStore] Motif apply start rejected; destination incomplete');
+      return false;
+    }
+    const payloadError = validateMotifApplyRequest(state);
+    if (payloadError) {
+      console.warn('[musicStore] Motif apply start rejected', { message: payloadError });
+      set({
+        motifApplyStatus: 'error',
+        motifApplyError: payloadError,
+      });
+      return false;
+    }
+    console.info('[musicStore] Motif apply started', {
+      motifId: state.motifSelectedMotifId,
+      occurrenceId: state.motifSelectedOccurrenceId,
+      operation: state.motifOperation,
+      destinationTrackId: state.motifDestinationTrackId,
+      destinationStartBar: state.motifDestinationStartBar,
+    });
+    set({
+      motifApplyStatus: 'loading',
+      motifApplyError: '',
+      motifApplyWarnings: [],
+    });
+    return true;
+  },
+
+  failMotifApply: (message, { code = null } = {}) => {
+    const safeMessage = message || 'Motif apply failed';
+    console.error('[musicStore] Motif apply failed', { message: safeMessage, code });
+    set({
+      motifApplyStatus: 'error',
+      motifApplyError: safeMessage,
+      motifApplyWarnings: [],
+    });
+  },
+
+  completeMotifApply: ({
+    composition,
+    musicxml = '',
+    warnings = [],
+    result = null,
+  } = {}) => {
+    const state = get();
+    const prepared = prepareCompositionForStore(ensureCompositionNoteIds(composition).composition);
+    const validation = validateMusicJson(prepared);
+    const motifValidation = validateMotifDefinitions(prepared);
+    if (!validation.valid || !isCanonicalComposition(prepared) || !motifValidation.valid) {
+      const message = validation.message || motifValidation.message || 'Motif apply result failed validation';
+      console.error('[musicStore] Motif apply completion rejected invalid composition', { message });
+      set({
+        motifApplyStatus: 'error',
+        motifApplyError: message,
+      });
+      return false;
+    }
+
+    const historySnapshot = snapshotNoteEditState(state);
+    const revision = compositionRevisionKey(prepared);
+    const notationRev = notationRevisionKey(prepared);
+    const staleNotation = notationStalePatch(state.notationRevision, notationRev);
+    const newOccurrenceId = result?.new_occurrence_id || null;
+    console.info('[musicStore] Motif apply completed', {
+      motifId: result?.motif_id || state.motifSelectedMotifId,
+      sourceOccurrenceId: result?.source_occurrence_id || state.motifSelectedOccurrenceId,
+      newOccurrenceId,
+      operation: result?.relationship || state.motifOperation,
+      warningCount: warnings.length,
+      eventCount: countEvents(prepared),
+      compositionRevision: revision.slice(0, 48),
+    });
+
+    set({
+      editedMusicJson: prepared,
+      musicXml: musicxml || state.musicXml || '',
+      compositionRevision: revision,
+      notationRevision: notationRev,
+      ...staleNotation,
+      trackControls: mergeTrackControls(state.trackControls, prepared),
+      pianoRollTrackId: pickDefaultTrackId(prepared, result?.destination_track_id || state.motifDestinationTrackId),
+      pianoRollNoteId: null,
+      pianoRollNoteIds: Array.isArray(result?.created_event_ids) ? result.created_event_ids : [],
+      noteEditUndoStack: [...state.noteEditUndoStack, historySnapshot].slice(-MAX_UNDO_HISTORY),
+      noteEditRedoStack: [],
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+      motifApplyStatus: 'success',
+      motifApplyError: '',
+      motifApplyWarnings: Array.isArray(warnings) ? warnings : [],
+      motifSelectedMotifId: result?.motif_id || state.motifSelectedMotifId,
+      motifSelectedOccurrenceId: newOccurrenceId || state.motifSelectedOccurrenceId,
+      motifHighlightedUsageKey: result?.motif_id && newOccurrenceId
+        ? `canonical:${result.motif_id}:${newOccurrenceId}`
+        : state.motifHighlightedUsageKey,
+      analysisSelectedSectionKey: recoverAnalysisSectionKey(prepared, state.analysisSelectedSectionKey),
+    });
+    markProjectDirty(set, get);
+    scheduleAnalysisRequest(get, { reason: 'motif-apply' });
+    return true;
+  },
+
+  applyMotifTransformation: async () => {
+    const started = get().startMotifApply();
+    if (!started) {
+      return false;
+    }
+    const payload = buildMotifApplyPayload(get());
+    try {
+      const response = await applyMotif(payload);
+      return get().completeMotifApply({
+        composition: response.composition,
+        musicxml: response.musicxml,
+        warnings: response.warnings,
+        result: response.result,
+      });
+    } catch (error) {
+      const message = error instanceof MotifApiError
+        ? error.message
+        : (error.message || 'Motif apply failed');
+      get().failMotifApply(message, { code: error.code || null });
+      return false;
+    }
+  },
 }));
 
 // Expose store for Playwright E2E assertions (event counts, playback status).
@@ -1758,6 +2287,7 @@ function applyNoteEdit(set, get, {
   featureCounts = null,
   skipHistory = false,
   historySnapshot = null,
+  statePatch = {},
 }) {
   const state = get();
   const revision = compositionRevisionKey(nextComposition);
@@ -1802,10 +2332,14 @@ function applyNoteEdit(set, get, {
     pianoRollEditStatus: 'idle',
     noteEditUndoStack,
     noteEditRedoStack,
+    playbackStatus: 'idle',
+    playbackSeconds: 0,
+    playbackBar: 1,
     analysisSelectedSectionKey: recoverAnalysisSectionKey(
       nextComposition,
       state.analysisSelectedSectionKey,
     ),
+    ...statePatch,
   });
   markProjectDirty(set, get);
   scheduleAnalysisRequest(get, { reason: 'note-edit' });
@@ -1965,6 +2499,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     noteEditRedoStack: [],
     uiError: '',
     ...clearedAnalysisState(),
+    ...clearedMotifUiState(),
   });
 }
 
@@ -2079,6 +2614,153 @@ function notationStalePatch(previousNotationRevision, nextNotationRevision) {
     musicXml: '',
     pianoRollNotationStatus: 'idle',
     pianoRollNotationError: '',
+  };
+}
+
+function clearedMotifUiState() {
+  return { ...initialMotifUiState };
+}
+
+function createMotifEntityId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isCreativeMotifOperation(operation) {
+  return MOTIF_CREATIVE_OPERATIONS.has(operation);
+}
+
+function buildMotifOperationParameters(operationParams = {}) {
+  const params = operationParams && typeof operationParams === 'object' ? operationParams : {};
+  const mapped = {};
+  const copyIfPresent = (key) => {
+    if (params[key] != null) {
+      mapped[key] = params[key];
+    }
+  };
+  [
+    'transpose_semitones',
+    'inversion_axis_pitch',
+    'time_scale_numerator',
+    'time_scale_denominator',
+    'sequence_steps',
+    'sequence_interval_semitones',
+    'sequence_step_ticks',
+  ].forEach(copyIfPresent);
+  return mapped;
+}
+
+function validateMotifApplyRequest(state) {
+  const motif = (state.editedMusicJson?.motifs || []).find(
+    (item) => item.id === state.motifSelectedMotifId,
+  );
+  if (!motif) {
+    return 'Selected motif was not found in the composition';
+  }
+  const occurrence = (motif.occurrences || []).find(
+    (item) => item.id === state.motifSelectedOccurrenceId,
+  );
+  if (!occurrence) {
+    return 'Selected motif occurrence was not found';
+  }
+  const track = (state.editedMusicJson?.tracks || []).find(
+    (item) => String(item.id) === String(state.motifDestinationTrackId),
+  );
+  if (!track) {
+    return 'Destination track was not found';
+  }
+  if (isCreativeMotifOperation(state.motifOperation)) {
+    if (!state.selectedProvider && !state.selectedModel) {
+      return 'LLM provider or model selection is required for creative motif operations';
+    }
+    const strength = Number(state.motifVariationStrength);
+    if (!Number.isFinite(strength) || strength < 0 || strength > 1) {
+      return 'variation_strength must be a finite float in 0..1';
+    }
+  }
+  if (state.motifOperation === 'transpose' && state.motifOperationParams?.transpose_semitones == null) {
+    return 'transpose_semitones is required for transpose';
+  }
+  if (state.motifOperation === 'sequence') {
+    const required = ['sequence_steps', 'sequence_interval_semitones', 'sequence_step_ticks'];
+    const missing = required.filter((key) => state.motifOperationParams?.[key] == null);
+    if (missing.length) {
+      return `${missing.join(', ')} required for sequence`;
+    }
+  }
+  return null;
+}
+
+function buildMotifApplyPayload(state) {
+  const payload = {
+    composition: state.editedMusicJson,
+    source: {
+      motif_id: state.motifSelectedMotifId,
+      occurrence_id: state.motifSelectedOccurrenceId,
+    },
+    destination: {
+      section_id: state.motifDestinationSectionId || undefined,
+      track_id: state.motifDestinationTrackId,
+      start_bar: state.motifDestinationStartBar,
+      start_tick: state.motifDestinationStartTick ?? undefined,
+    },
+    operation: state.motifOperation,
+    parameters: buildMotifOperationParameters(state.motifOperationParams),
+  };
+  if (isCreativeMotifOperation(state.motifOperation)) {
+    payload.variation_strength = state.motifVariationStrength;
+    payload.selection = {
+      provider: state.selectedProvider || null,
+      model: state.selectedModel || null,
+    };
+  }
+  return payload;
+}
+
+function reconcileMotifUiAfterCompositionChange(state, composition, {
+  clearedSelection = false,
+  reconcileWarnings = [],
+} = {}) {
+  const motifs = Array.isArray(composition?.motifs) ? composition.motifs : [];
+  let motifSelectedMotifId = clearedSelection ? null : state.motifSelectedMotifId;
+  if (motifSelectedMotifId && !motifs.some((item) => item.id === motifSelectedMotifId)) {
+    motifSelectedMotifId = null;
+  }
+  let motifSelectedOccurrenceId = clearedSelection ? null : state.motifSelectedOccurrenceId;
+  let motifHighlightedUsageKey = clearedSelection ? null : state.motifHighlightedUsageKey;
+  if (motifSelectedMotifId) {
+    const motif = motifs.find((item) => item.id === motifSelectedMotifId);
+    const occurrence = motif?.occurrences?.find((item) => item.id === motifSelectedOccurrenceId);
+    if (!occurrence) {
+      const original = motif?.occurrences?.find((item) => item.relationship === 'original');
+      motifSelectedOccurrenceId = original?.id || null;
+      motifHighlightedUsageKey = original
+        ? `canonical:${motifSelectedMotifId}:${original.id}`
+        : null;
+    }
+  } else {
+    motifSelectedOccurrenceId = null;
+    motifHighlightedUsageKey = null;
+  }
+  if (motifHighlightedUsageKey && motifSelectedMotifId) {
+    const stillValid = motifs.some((motif) => (
+      (motif.occurrences || []).some(
+        (occurrence) => motifHighlightedUsageKey === `canonical:${motif.id}:${occurrence.id}`,
+      )
+    ));
+    if (!stillValid) {
+      motifHighlightedUsageKey = motifSelectedMotifId && motifSelectedOccurrenceId
+        ? `canonical:${motifSelectedMotifId}:${motifSelectedOccurrenceId}`
+        : null;
+    }
+  }
+  return {
+    motifSelectedMotifId,
+    motifSelectedOccurrenceId,
+    motifHighlightedUsageKey,
+    motifApplyStatus: 'idle',
+    motifApplyError: '',
+    motifApplyWarnings: [],
+    motifReconcileWarnings: Array.isArray(reconcileWarnings) ? reconcileWarnings : [],
   };
 }
 

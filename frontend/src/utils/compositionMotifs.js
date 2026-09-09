@@ -3,8 +3,17 @@
  * Motifs store identity/provenance only — never playable note payloads.
  */
 
+import { barAtTick, compileTimeline } from './compositionTimeline.js';
+
 export const MOTIF_MIN_EVENT_REFS = 3;
 export const MOTIF_MAX_EVENT_REFS = 32;
+export const MOTIF_MAX_AUTHORING_BAR_SPAN = 2;
+export const MOTIF_AUTHORING_WARNING_INCOMPLETE_TIE = 'motif_incomplete_tie_chain';
+export const MOTIF_AUTHORING_WARNING_PERCUSSION = 'motif_percussion_source';
+export const MOTIF_AUTHORING_WARNING_BAR_SPAN = 'motif_bar_span_exceeded';
+export const MOTIF_AUTHORING_WARNING_COUNT = 'motif_event_count_out_of_range';
+export const MOTIF_AUTHORING_WARNING_TRACK = 'motif_track_invalid';
+export const MOTIF_AUTHORING_WARNING_UNRESOLVED = 'motif_event_unresolved';
 export const MOTIF_RELATIONSHIP_KINDS = Object.freeze([
   'original',
   'repeat',
@@ -18,6 +27,25 @@ export const MOTIF_RELATIONSHIP_KINDS = Object.freeze([
   'answer',
   'counterphrase',
 ]);
+export const MOTIF_MECHANICAL_OPERATIONS = Object.freeze([
+  'repeat',
+  'transpose',
+  'inversion',
+  'augmentation',
+  'diminution',
+  'sequence',
+]);
+export const MOTIF_CREATIVE_OPERATIONS = Object.freeze([
+  'rhythmic_variation',
+  'melodic_variation',
+  'answer',
+  'counterphrase',
+]);
+export const MOTIF_APPLY_OPERATIONS = Object.freeze([
+  ...MOTIF_MECHANICAL_OPERATIONS,
+  ...MOTIF_CREATIVE_OPERATIONS,
+]);
+export const MOTIF_CREATIVE_OPERATION_SET = new Set(MOTIF_CREATIVE_OPERATIONS);
 export const MOTIF_RECONCILE_WARNING_OCCURRENCE_PRUNED = 'motif_occurrence_pruned';
 export const MOTIF_RECONCILE_WARNING_DEFINITION_REMOVED = 'motif_definition_removed';
 
@@ -51,6 +79,288 @@ export function indexEventsById(composition) {
     }
   }
   return indexed;
+}
+
+export function sortEventsChronologically(events) {
+  return [...(events || [])].toSorted((a, b) => {
+    if (a.start_tick !== b.start_tick) {
+      return a.start_tick - b.start_tick;
+    }
+    if (a.duration_ticks !== b.duration_ticks) {
+      return a.duration_ticks - b.duration_ticks;
+    }
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  });
+}
+
+export function collectSelectedEventIdsInOrder(composition, trackId, selectedEventIds) {
+  const ids = Array.isArray(selectedEventIds)
+    ? selectedEventIds.filter((id) => typeof id === 'string' && id.trim())
+    : [];
+  if (!ids.length) {
+    return [];
+  }
+  const indexed = indexEventsById(composition);
+  const resolved = [];
+  for (const eventId of ids) {
+    const located = indexed.get(eventId);
+    if (!located || located.track.id !== trackId) {
+      continue;
+    }
+    resolved.push(located.event);
+  }
+  return sortEventsChronologically(resolved).map((event) => event.id);
+}
+
+export function isPitchedMotifSourceTrack(track) {
+  if (!track || typeof track !== 'object') {
+    return false;
+  }
+  if (track.is_drum || track.role === 'drums' || track.role === 'percussion') {
+    return false;
+  }
+  return true;
+}
+
+export function occurrenceIncludesCompleteTieChains(track, eventIds) {
+  const referenced = new Set(eventIds || []);
+  const indexed = new Map((track?.events || []).map((event) => [event.id, event]));
+  for (const eventId of referenced) {
+    const event = indexed.get(eventId);
+    if (!event?.tie?.group_id) {
+      continue;
+    }
+    const members = tieGroupMembers(track, event);
+    const memberIds = members.map((member) => member.id);
+    if (!memberIds.every((id) => referenced.has(id))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function findSectionContainingTick(composition, tick) {
+  const sections = Array.isArray(composition?.sections) ? composition.sections : [];
+  const value = Number(tick);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  for (let index = 0; index < sections.length; index += 1) {
+    const section = sections[index];
+    const start = Number(section?.start_tick);
+    const end = start + Number(section?.duration_ticks);
+    if (Number.isFinite(start) && Number.isFinite(end) && value >= start && value < end) {
+      return { section, index };
+    }
+  }
+  return null;
+}
+
+export function resolveOccurrenceLocationLabels(composition, occurrence) {
+  const span = deriveMotifOccurrenceSpan(composition, occurrence);
+  const timeline = compileTimeline(composition);
+  const startBar = timeline ? barAtTick(timeline, span.startTick) : null;
+  const attackEndTick = Math.max(
+    ...(occurrence.event_ids || []).map((eventId) => {
+      const located = indexEventsById(composition).get(eventId);
+      return located ? located.event.start_tick : span.startTick;
+    }),
+  );
+  const endBar = timeline ? barAtTick(timeline, attackEndTick) : null;
+  const sectionMatch = findSectionContainingTick(composition, span.startTick);
+  const section = sectionMatch?.section ?? null;
+  return {
+    startTick: span.startTick,
+    endTick: span.endTick,
+    startBar,
+    endBar,
+    sectionId: typeof section?.id === 'string' ? section.id : null,
+    sectionType: typeof section?.type === 'string' ? section.type : null,
+    sectionIndex: sectionMatch?.index ?? null,
+    sectionLabel: section
+      ? (typeof section.label === 'string' && section.label.trim()
+        ? section.label.trim()
+        : (typeof section.type === 'string' ? section.type : null))
+      : null,
+  };
+}
+
+export function validateMotifAuthoringSelection(composition, { trackId, eventIds } = {}) {
+  const normalizedTrackId = typeof trackId === 'string' ? trackId.trim() : '';
+  if (!normalizedTrackId) {
+    return invalid('A track must be selected for motif authoring.', MOTIF_AUTHORING_WARNING_TRACK);
+  }
+  const tracks = Array.isArray(composition?.tracks) ? composition.tracks : [];
+  const track = tracks.find((item) => item?.id === normalizedTrackId);
+  if (!track) {
+    return invalid('Selected track was not found.', MOTIF_AUTHORING_WARNING_TRACK);
+  }
+  if (!isPitchedMotifSourceTrack(track)) {
+    return invalid(
+      'Motif source must be a pitched, non-percussion track.',
+      MOTIF_AUTHORING_WARNING_PERCUSSION,
+    );
+  }
+
+  const orderedIds = collectSelectedEventIdsInOrder(composition, normalizedTrackId, eventIds);
+  if (orderedIds.length !== (Array.isArray(eventIds) ? eventIds.length : 0)) {
+    return invalid('Selection references unresolved or cross-track events.', MOTIF_AUTHORING_WARNING_UNRESOLVED);
+  }
+  if (orderedIds.length < MOTIF_MIN_EVENT_REFS || orderedIds.length > MOTIF_MAX_EVENT_REFS) {
+    return invalid(
+      `Motif selection must contain ${MOTIF_MIN_EVENT_REFS}–${MOTIF_MAX_EVENT_REFS} notes.`,
+      MOTIF_AUTHORING_WARNING_COUNT,
+    );
+  }
+  if (!occurrenceIncludesCompleteTieChains(track, orderedIds)) {
+    return invalid(
+      'Motif selection must include complete tie chains.',
+      MOTIF_AUTHORING_WARNING_INCOMPLETE_TIE,
+    );
+  }
+
+  const timeline = compileTimeline(composition);
+  if (!timeline) {
+    return invalid('Unable to compile composition timeline for motif validation.', 'motif_timeline_unavailable');
+  }
+  const attacks = orderedIds.map((eventId) => indexEventsById(composition).get(eventId).event.start_tick);
+  const firstAttack = Math.min(...attacks);
+  const lastAttack = Math.max(...attacks);
+  const startBar = barAtTick(timeline, firstAttack);
+  const endBar = barAtTick(timeline, lastAttack);
+  const barSpan = endBar - startBar + 1;
+  if (barSpan > MOTIF_MAX_AUTHORING_BAR_SPAN) {
+    return invalid(
+      `Motif note attacks must span at most ${MOTIF_MAX_AUTHORING_BAR_SPAN} bars.`,
+      MOTIF_AUTHORING_WARNING_BAR_SPAN,
+    );
+  }
+
+  const location = resolveOccurrenceLocationLabels(composition, {
+    track_id: normalizedTrackId,
+    event_ids: orderedIds,
+  });
+
+  console.debug('[compositionMotifs] Motif authoring selection validated', {
+    trackId: normalizedTrackId,
+    eventCount: orderedIds.length,
+    startBar,
+    endBar,
+    barSpan,
+  });
+
+  return {
+    valid: true,
+    message: 'Motif selection is valid for authoring.',
+    trackId: normalizedTrackId,
+    eventIds: orderedIds,
+    startBar,
+    endBar,
+    barSpan,
+    ...location,
+  };
+}
+
+export function applyMotifReconciliation(composition, removedEventIds) {
+  const { motifs, warnings } = reconcileMotifsForRemovedEventIds(
+    composition?.motifs,
+    removedEventIds,
+  );
+  return {
+    composition: {
+      ...composition,
+      motifs,
+    },
+    warnings,
+  };
+}
+
+function canonicalUsageKey(trackId, eventIds) {
+  return `${trackId}:${(eventIds || []).join('\0')}`;
+}
+
+export function projectMotifUsagesForDisplay(composition, {
+  analysisReport = null,
+  detectedUsages = [],
+  includeDetected = true,
+} = {}) {
+  const usages = [];
+  const seenCanonical = new Set();
+  const motifs = Array.isArray(composition?.motifs) ? composition.motifs : [];
+
+  for (const motif of motifs) {
+    for (const occurrence of motif.occurrences || []) {
+      let location;
+      try {
+        location = resolveOccurrenceLocationLabels(composition, occurrence);
+      } catch (error) {
+        console.warn('[compositionMotifs] Skipping unresolved canonical occurrence', {
+          motifId: motif.id,
+          occurrenceId: occurrence.id,
+          message: error.message,
+        });
+        continue;
+      }
+      const key = canonicalUsageKey(occurrence.track_id, occurrence.event_ids);
+      seenCanonical.add(key);
+      usages.push({
+        key: `canonical:${motif.id}:${occurrence.id}`,
+        source: 'canonical',
+        motifId: motif.id,
+        motifLabel: motif.label,
+        occurrenceId: occurrence.id,
+        familyId: null,
+        trackId: occurrence.track_id,
+        eventIds: [...occurrence.event_ids],
+        relationship: occurrence.relationship,
+        identityScore: occurrence.relationship === 'original' ? 1 : null,
+        stale: false,
+        truncated: false,
+        ...location,
+      });
+    }
+  }
+
+  if (includeDetected && Array.isArray(detectedUsages) && detectedUsages.length) {
+    for (const detected of detectedUsages) {
+      const key = canonicalUsageKey(detected.trackId, detected.eventIds);
+      if (seenCanonical.has(key)) {
+        continue;
+      }
+      usages.push({
+        key: detected.key,
+        source: 'detected',
+        motifId: detected.familyId,
+        motifLabel: detected.label,
+        occurrenceId: detected.occurrenceId,
+        familyId: detected.familyId,
+        trackId: detected.trackId,
+        eventIds: detected.eventIds,
+        relationship: detected.relationship,
+        identityScore: detected.identityScore,
+        stale: Boolean(detected.stale),
+        truncated: Boolean(detected.truncated),
+        startTick: detected.startTick,
+        endTick: detected.endTick,
+        startBar: detected.startBar,
+        endBar: detected.endBar,
+        sectionId: detected.sectionId,
+        sectionType: detected.sectionType,
+        sectionIndex: detected.sectionIndex,
+        sectionLabel: detected.sectionLabel,
+        staleReason: detected.staleReason || null,
+      });
+    }
+  }
+
+  console.debug('[compositionMotifs] Projected motif usages for display', {
+    canonicalCount: motifs.reduce((total, motif) => total + (motif.occurrences?.length || 0), 0),
+    detectedCount: usages.filter((item) => item.source === 'detected').length,
+    totalCount: usages.length,
+    analysisStatus: analysisReport?.status || null,
+  });
+
+  return usages;
 }
 
 export function deriveMotifOccurrenceSpan(composition, occurrence) {
@@ -278,6 +588,60 @@ export function validateMotifDefinitions(composition) {
     occurrenceCount: occurrenceIds.size,
   });
   return valid();
+}
+
+/**
+ * Count note events on a track overlapping [startTick, endTick).
+ */
+export function countDestinationOverlapEvents(composition, trackId, startTick, endTick) {
+  const track = (composition?.tracks || []).find((item) => item?.id === trackId);
+  if (!track || !Array.isArray(track.events)) {
+    return 0;
+  }
+  const start = Number(startTick);
+  const end = Number(endTick);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return 0;
+  }
+  let count = 0;
+  for (const event of track.events) {
+    if (!event || (event.type && event.type !== 'note')) {
+      continue;
+    }
+    const eventStart = Number(event.start_tick);
+    const eventEnd = eventStart + Number(event.duration_ticks);
+    if (eventStart < end && eventEnd > start) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+export function resolveMotifOccurrenceBarSpan(composition, occurrence) {
+  if (!occurrence || typeof occurrence !== 'object') {
+    return { valid: false, startBar: null, endBar: null, barSpan: null };
+  }
+  try {
+    const location = resolveOccurrenceLocationLabels(composition, occurrence);
+    const startBar = Number(location.startBar);
+    const endBar = Number(location.endBar);
+    if (!Number.isFinite(startBar) || !Number.isFinite(endBar)) {
+      return { valid: false, startBar: null, endBar: null, barSpan: null };
+    }
+    return {
+      valid: true,
+      startBar,
+      endBar,
+      barSpan: endBar - startBar + 1,
+      ...location,
+    };
+  } catch (error) {
+    console.warn('[compositionMotifs] Unable to resolve occurrence bar span', {
+      occurrenceId: occurrence.id || null,
+      message: error.message,
+    });
+    return { valid: false, startBar: null, endBar: null, barSpan: null };
+  }
 }
 
 export function nextMotifLabel(existingMotifs = []) {

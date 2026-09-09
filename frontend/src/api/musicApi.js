@@ -264,10 +264,156 @@ export class AnalysisApiError extends Error {
   }
 }
 
+export class MotifApiError extends Error {
+  constructor(message, { status = null, code = null, details = null } = {}) {
+    super(message);
+    this.name = 'MotifApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
 /**
  * POST /analysis/composition — deterministic composition.analysis.v1 sidecar.
  * Validates complete V2 + scope locally; preserves structured backend 422 errors.
  */
+function validateMotifApplyResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return 'Motif apply response is missing result metadata';
+  }
+  const requiredStrings = [
+    'motif_id',
+    'source_occurrence_id',
+    'destination_track_id',
+    'new_occurrence_id',
+    'relationship',
+  ];
+  for (const field of requiredStrings) {
+    if (typeof result[field] !== 'string' || !result[field].trim()) {
+      return `Motif apply result missing ${field}`;
+    }
+  }
+  if (!Number.isInteger(result.destination_start_bar) || result.destination_start_bar < 1) {
+    return 'Motif apply result missing destination_start_bar';
+  }
+  if (!Number.isInteger(result.destination_start_tick) || result.destination_start_tick < 0) {
+    return 'Motif apply result missing destination_start_tick';
+  }
+  if (!Array.isArray(result.created_event_ids) || result.created_event_ids.length < 1) {
+    return 'Motif apply result missing created_event_ids';
+  }
+  if (typeof result.identity_score !== 'number' || !Number.isFinite(result.identity_score)) {
+    return 'Motif apply result missing identity_score';
+  }
+  if (!result.transform || typeof result.transform !== 'object') {
+    return 'Motif apply result missing transform provenance';
+  }
+  if (!result.diagnostics || typeof result.diagnostics !== 'object') {
+    return 'Motif apply result missing diagnostics';
+  }
+  return null;
+}
+
+function parseMotifErrorDetail(detail) {
+  if (!detail) {
+    return { code: null, message: 'Unknown motif apply failure', details: null };
+  }
+  if (typeof detail === 'string') {
+    return { code: null, message: detail, details: null };
+  }
+  if (typeof detail === 'object') {
+    const code = typeof detail.code === 'string' ? detail.code : null;
+    const message = typeof detail.message === 'string'
+      ? detail.message
+      : (typeof detail.detail === 'string' ? detail.detail : JSON.stringify(detail));
+    const details = detail.details && typeof detail.details === 'object' ? detail.details : null;
+    return { code, message, details };
+  }
+  return { code: null, message: String(detail), details: null };
+}
+
+/**
+ * POST /motifs/apply — mechanical or creative motif transformation.
+ */
+export async function applyMotif(payload) {
+  const source = payload?.source || {};
+  const destination = payload?.destination || {};
+  console.debug('[musicApi] Motif apply request started', {
+    motifId: source.motif_id || null,
+    sourceOccurrenceId: source.occurrence_id || null,
+    destinationSectionId: destination.section_id || null,
+    destinationTrackId: destination.track_id || null,
+    destinationStartBar: destination.start_bar ?? null,
+    operation: payload?.operation || null,
+    variationStrength: payload?.variation_strength ?? null,
+    provider: payload?.selection?.provider || null,
+    model: payload?.selection?.model || null,
+    schemaVersion: payload?.composition?.schema_version || 'legacy',
+  });
+
+  const inboundComposition = normalizeApiComposition(payload.composition, { context: 'motif-apply-request' });
+  validateCanonicalForApi(inboundComposition, { action: 'motif apply' });
+
+  try {
+    const axiosResponse = await axios.post('/motifs/apply', {
+      ...payload,
+      composition: inboundComposition,
+    });
+    const response = axiosResponse.data || {};
+    const composition = normalizeApiComposition(response.composition, { context: 'motif-apply-response' });
+    const validation = validateMusicJson(composition);
+    const resultError = validateMotifApplyResult(response.result);
+    const createdCount = Array.isArray(response.result?.created_event_ids)
+      ? response.result.created_event_ids.length
+      : 0;
+    console.debug('[musicApi] Motif apply response validation completed', {
+      motifId: response.result?.motif_id || null,
+      sourceOccurrenceId: response.result?.source_occurrence_id || null,
+      destinationTrackId: response.result?.destination_track_id || null,
+      operation: response.result?.relationship || payload?.operation || null,
+      variationStrength: payload?.variation_strength ?? null,
+      createdEventCount: createdCount,
+      replacedEventCount: response.result?.diagnostics?.replaced_event_count ?? null,
+      valid: validation.valid,
+      schemaVersion: composition.schema_version,
+      warningCount: response.warnings?.length || 0,
+      identityScore: response.result?.identity_score ?? null,
+      status: validation.valid && !resultError ? 'ok' : 'invalid',
+    });
+    if (!validation.valid) {
+      console.error('[musicApi] Motif apply response failed composition validation', {
+        message: validation.message,
+      });
+      throw new MotifApiError(validation.message, { code: 'motif_invalid_response' });
+    }
+    if (resultError) {
+      console.error('[musicApi] Motif apply response failed result contract', {
+        message: resultError,
+      });
+      throw new MotifApiError(resultError, { code: 'motif_invalid_response' });
+    }
+    return { ...response, composition };
+  } catch (error) {
+    if (error instanceof MotifApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseMotifErrorDetail(error.response?.data?.detail ?? error.message);
+    console.error('[musicApi] Motif apply request failed', {
+      status,
+      code: parsed.code,
+      message: parsed.message,
+      operation: payload?.operation || null,
+    });
+    throw new MotifApiError(parsed.message, {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
+}
+
 export async function analyzeComposition(composition, scope = { kind: 'composition' }) {
   let normalized;
   try {

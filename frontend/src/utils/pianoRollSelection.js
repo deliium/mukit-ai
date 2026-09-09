@@ -6,6 +6,9 @@
 import { barDurationTicks } from './playbackPosition.js';
 import { barRangeTicks, compileTimeline, pointerXToBarFromTimeline } from './compositionTimeline.js';
 
+export const MOTIF_MAX_BAR_SPAN = 2;
+export const MOTIF_BAR_SPAN_EXCEEDED_CODE = 'motif_bar_span_exceeded';
+
 /**
  * Normalize an inclusive bar range and clamp to composition bounds.
  * @returns {{ startBar: number|null, endBar: number|null, warning?: string }}
@@ -144,6 +147,154 @@ export function defaultTargetTrackIds(composition, {
 /**
  * Pixel overlay geometry for a selected inclusive bar range.
  */
+export function motifBarSpanCount(startBar, endBar) {
+  const start = Number(startBar);
+  const end = Number(endBar);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+  return Math.abs(Math.round(end) - Math.round(start)) + 1;
+}
+
+/**
+ * Validate an inclusive motif source/destination bar range (max two bars).
+ * Rejects spans wider than two bars instead of truncating.
+ * @returns {{ startBar: number|null, endBar: number|null, barSpan: number|null, valid: boolean, warning?: string, code?: string }}
+ */
+export function validateMotifBarRange(startBar, endBar, barCount) {
+  const normalized = normalizeBarRange(startBar, endBar, barCount);
+  if (normalized.startBar === null) {
+    return {
+      startBar: null,
+      endBar: null,
+      barSpan: null,
+      valid: false,
+      warning: normalized.warning,
+      code: 'motif_invalid_bar_range',
+    };
+  }
+  const barSpan = motifBarSpanCount(normalized.startBar, normalized.endBar);
+  if (barSpan > MOTIF_MAX_BAR_SPAN) {
+    return {
+      startBar: normalized.startBar,
+      endBar: normalized.endBar,
+      barSpan,
+      valid: false,
+      warning: `Motif range must span at most ${MOTIF_MAX_BAR_SPAN} bars`,
+      code: MOTIF_BAR_SPAN_EXCEEDED_CODE,
+    };
+  }
+  return {
+    startBar: normalized.startBar,
+    endBar: normalized.endBar,
+    barSpan,
+    valid: true,
+  };
+}
+
+/**
+ * Tick bounds for a motif source selection using the compiled variable-meter timeline.
+ */
+export function motifSourceTickRange(startBar, endBar, { composition = null } = {}) {
+  const barCount = Number(composition?.bar_count);
+  if (!Number.isInteger(barCount) || barCount < 1) {
+    return {
+      startTick: null,
+      endTick: null,
+      startBar: null,
+      endBar: null,
+      barSpan: null,
+      valid: false,
+      warning: 'composition bar_count must be a positive integer',
+      code: 'motif_invalid_composition',
+    };
+  }
+  const validated = validateMotifBarRange(startBar, endBar, barCount);
+  if (!validated.valid) {
+    return {
+      startTick: null,
+      endTick: null,
+      startBar: validated.startBar,
+      endBar: validated.endBar,
+      barSpan: validated.barSpan,
+      valid: false,
+      warning: validated.warning,
+      code: validated.code,
+    };
+  }
+  const timeline = compileTimeline(composition);
+  if (!timeline) {
+    return {
+      startTick: null,
+      endTick: null,
+      startBar: validated.startBar,
+      endBar: validated.endBar,
+      barSpan: validated.barSpan,
+      valid: false,
+      warning: 'Unable to compile composition timeline',
+      code: 'motif_timeline_unavailable',
+    };
+  }
+  const range = barRangeTicks(timeline, validated.startBar, validated.endBar);
+  if (!range) {
+    return {
+      startTick: null,
+      endTick: null,
+      startBar: validated.startBar,
+      endBar: validated.endBar,
+      barSpan: validated.barSpan,
+      valid: false,
+      warning: 'Invalid bar range for compiled timeline',
+      code: 'motif_invalid_bar_range',
+    };
+  }
+  return {
+    startTick: range.startTick,
+    endTick: range.endTick,
+    startBar: validated.startBar,
+    endBar: validated.endBar,
+    barSpan: validated.barSpan,
+    valid: true,
+  };
+}
+
+/**
+ * Tick bounds for a destination placement starting at startBar over barSpan bars.
+ */
+export function motifDestinationTickRange(startBar, {
+  composition = null,
+  barSpan = 1,
+} = {}) {
+  const span = Number(barSpan);
+  if (!Number.isInteger(span) || span < 1 || span > MOTIF_MAX_BAR_SPAN) {
+    return {
+      startTick: null,
+      endTick: null,
+      startBar: null,
+      endBar: null,
+      barSpan: span,
+      valid: false,
+      warning: `Destination span must be 1–${MOTIF_MAX_BAR_SPAN} bars`,
+      code: 'motif_invalid_destination_span',
+    };
+  }
+  const start = Number(startBar);
+  if (!Number.isFinite(start)) {
+    return {
+      startTick: null,
+      endTick: null,
+      startBar: null,
+      endBar: null,
+      barSpan: span,
+      valid: false,
+      warning: 'start_bar must be a number',
+      code: 'motif_invalid_bar_range',
+    };
+  }
+  const endBar = Math.round(start) + span - 1;
+  return motifSourceTickRange(Math.round(start), endBar, { composition });
+}
+
 export function selectionOverlayRect(startBar, endBar, {
   pixelsPerTick,
   barTicks,
