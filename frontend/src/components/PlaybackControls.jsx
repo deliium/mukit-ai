@@ -1,12 +1,16 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import * as Tone from 'tone';
 import styled from 'styled-components';
-import { useMusicStore } from '../store/musicStore.js';
+import {
+  ARRANGEMENT_AUDITION_CANDIDATE,
+  useMusicStore,
+} from '../store/musicStore.js';
 import { compilePlaybackSchedule } from '../utils/playbackEvents.js';
 import { buildLegacyPlaybackEvents } from '../utils/legacyPlaybackEvents.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { audibleRevisionKey } from '../utils/compositionCanonical.js';
 import { findDevelopmentCandidateById } from '../utils/compositionCandidates.js';
+import { findArrangementCandidateById } from '../utils/compositionArrangementCandidates.js';
 import { secondsToPlaybackPosition } from '../utils/playbackPosition.js';
 import { createPlaybackEngine } from '../utils/tonePlaybackEngine.js';
 import TrackPlaybackControls from './TrackPlaybackControls.jsx';
@@ -60,6 +64,10 @@ const PlaybackControls = () => {
   const developmentAuditionActive = useMusicStore((state) => state.developmentAuditionActive);
   const developmentCandidates = useMusicStore((state) => state.developmentCandidates);
   const developmentSelectedCandidateId = useMusicStore((state) => state.developmentSelectedCandidateId);
+  const arrangementAuditionMode = useMusicStore((state) => state.arrangementAuditionMode);
+  const arrangementCandidates = useMusicStore((state) => state.arrangementCandidates);
+  const arrangementSelectedCandidateId = useMusicStore((state) => state.arrangementSelectedCandidateId);
+  const arrangementCandidateTrackControls = useMusicStore((state) => state.arrangementCandidateTrackControls);
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
   const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
   const playbackBar = useMusicStore((state) => state.playbackBar);
@@ -71,8 +79,25 @@ const PlaybackControls = () => {
   const toggleTrackSolo = useMusicStore((state) => state.toggleTrackSolo);
   const setTrackVolume = useMusicStore((state) => state.setTrackVolume);
   const syncTrackControlsFromComposition = useMusicStore((state) => state.syncTrackControlsFromComposition);
+  const syncArrangementCandidateTrackControls = useMusicStore(
+    (state) => state.syncArrangementCandidateTrackControls,
+  );
+  const toggleArrangementCandidateMute = useMusicStore((state) => state.toggleArrangementCandidateMute);
+  const toggleArrangementCandidateSolo = useMusicStore((state) => state.toggleArrangementCandidateSolo);
+  const setArrangementCandidateVolume = useMusicStore((state) => state.setArrangementCandidateVolume);
+
+  const arrangementCandidateAudition = arrangementAuditionMode === ARRANGEMENT_AUDITION_CANDIDATE;
 
   const playbackComposition = useMemo(() => {
+    if (arrangementCandidateAudition) {
+      const candidate = findArrangementCandidateById(
+        arrangementCandidates,
+        arrangementSelectedCandidateId,
+      );
+      if (candidate?.composition) {
+        return candidate.composition;
+      }
+    }
     if (developmentAuditionActive) {
       const candidate = findDevelopmentCandidateById(
         developmentCandidates,
@@ -84,11 +109,18 @@ const PlaybackControls = () => {
     }
     return editedMusicJson;
   }, [
+    arrangementCandidateAudition,
+    arrangementCandidates,
+    arrangementSelectedCandidateId,
     developmentAuditionActive,
     developmentCandidates,
     developmentSelectedCandidateId,
     editedMusicJson,
   ]);
+
+  const activeTrackControls = arrangementCandidateAudition
+    ? arrangementCandidateTrackControls
+    : trackControls;
 
   const playbackRevision = useMemo(
     () => (playbackComposition ? audibleRevisionKey(playbackComposition) : 'empty'),
@@ -101,8 +133,21 @@ const PlaybackControls = () => {
   const positionTimerRef = useRef(null);
 
   useEffect(() => {
+    if (!playbackComposition) {
+      return;
+    }
+    // Candidate audition must never prune source mixer controls.
+    if (arrangementCandidateAudition) {
+      syncArrangementCandidateTrackControls(playbackComposition);
+      return;
+    }
     syncTrackControlsFromComposition(playbackComposition);
-  }, [playbackComposition, syncTrackControlsFromComposition]);
+  }, [
+    arrangementCandidateAudition,
+    playbackComposition,
+    syncArrangementCandidateTrackControls,
+    syncTrackControlsFromComposition,
+  ]);
 
   useEffect(() => {
     if (!engineRef.current) {
@@ -131,7 +176,8 @@ const PlaybackControls = () => {
       console.info('[PlaybackControls] Active playback stopped because playback source changed', {
         previousRevision: scheduledRevisionRef.current.slice(0, 48),
         currentRevision: String(playbackRevision).slice(0, 48),
-        audition: developmentAuditionActive,
+        developmentAudition: developmentAuditionActive,
+        arrangementAudition: arrangementCandidateAudition,
       });
       stopEverything({
         engineRef,
@@ -147,6 +193,7 @@ const PlaybackControls = () => {
     playbackRevision,
     playbackStatus,
     developmentAuditionActive,
+    arrangementCandidateAudition,
     setPlaybackPosition,
     setPlaybackStatus,
   ]);
@@ -159,9 +206,9 @@ const PlaybackControls = () => {
       return undefined;
     }
     console.debug('[PlaybackControls] Applying live track control overrides');
-    engineRef.current.applyTrackOverrides(trackControls);
+    engineRef.current.applyTrackOverrides(activeTrackControls);
     return undefined;
-  }, [trackControls, playbackComposition, playbackStatus]);
+  }, [activeTrackControls, playbackComposition, playbackStatus]);
 
   const handlePlay = async () => {
     if (!playbackComposition) {
@@ -200,7 +247,7 @@ const PlaybackControls = () => {
       if (isCanonicalComposition(playbackComposition)) {
         await startCanonicalPlayback({
           playbackComposition,
-          trackControls,
+          trackControls: activeTrackControls,
           engineRef,
           scheduledRevisionRef,
           positionTimerRef,
@@ -333,23 +380,53 @@ const PlaybackControls = () => {
       <StatusRow data-testid="playback-status">
         Status: {playbackStatus} · {playbackSeconds.toFixed(2)}s · bar {playbackBar}
         {canonical ? ' · composition.v2' : playbackComposition ? ' · legacy' : ''}
-        {developmentAuditionActive ? ' · auditioning candidate' : ''}
+        {arrangementCandidateAudition
+          ? ' · auditioning arrangement candidate'
+          : developmentAuditionActive
+            ? ' · auditioning candidate'
+            : ''}
       </StatusRow>
       {canonical ? (
         <TrackPlaybackControls
           tracks={tracks}
-          trackControls={trackControls}
+          trackControls={activeTrackControls}
           disabled={!playbackComposition}
+          ariaLabel={arrangementCandidateAudition ? 'Arrangement candidate mixer' : 'Track mixer'}
+          hint={arrangementCandidateAudition
+            ? 'Candidate mixer (ephemeral; does not change source track controls)'
+            : 'Tracks / mixer (canonical composition.v2; mute/solo are UI-only)'}
           onMuteToggle={(trackId) => {
-            console.info('[PlaybackControls] User mute toggle', { trackId });
+            console.info('[PlaybackControls] User mute toggle', {
+              trackId,
+              arrangementAudition: arrangementCandidateAudition,
+            });
+            if (arrangementCandidateAudition) {
+              toggleArrangementCandidateMute(trackId);
+              return;
+            }
             toggleTrackMute(trackId);
           }}
           onSoloToggle={(trackId) => {
-            console.info('[PlaybackControls] User solo toggle', { trackId });
+            console.info('[PlaybackControls] User solo toggle', {
+              trackId,
+              arrangementAudition: arrangementCandidateAudition,
+            });
+            if (arrangementCandidateAudition) {
+              toggleArrangementCandidateSolo(trackId);
+              return;
+            }
             toggleTrackSolo(trackId);
           }}
           onVolumeChange={(trackId, volumeMidi) => {
-            console.info('[PlaybackControls] User volume change', { trackId, volumeMidi });
+            console.info('[PlaybackControls] User volume change', {
+              trackId,
+              volumeMidi,
+              arrangementAudition: arrangementCandidateAudition,
+            });
+            if (arrangementCandidateAudition) {
+              setArrangementCandidateVolume(trackId, volumeMidi);
+              return;
+            }
             setTrackVolume(trackId, volumeMidi);
           }}
         />

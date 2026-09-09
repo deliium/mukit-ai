@@ -10,6 +10,7 @@ import CompositionAnalysisPanel from './CompositionAnalysisPanel.jsx';
 import HarmonyTimelinePanel from './HarmonyTimelinePanel.jsx';
 import MotifPanel from './MotifPanel.jsx';
 import CompositionDevelopmentPanel from './CompositionDevelopmentPanel.jsx';
+import ArrangementPanel from './ArrangementPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const Workspace = styled.div`
@@ -82,6 +83,7 @@ const TABS = [
   { id: 'piano', label: 'Piano roll' },
   { id: 'notation', label: 'Notation' },
   { id: 'develop', label: 'Develop' },
+  { id: 'arrange', label: 'Arrange' },
   { id: 'motifs', label: 'Motifs' },
   { id: 'harmony', label: 'Harmony' },
   { id: 'advanced', label: 'Advanced JSON' },
@@ -227,6 +229,7 @@ const ComposerWorkspace = () => {
             ) : null}
             {tab.id === 'analysis' && selected ? <CompositionAnalysisPanel /> : null}
             {tab.id === 'develop' && selected ? <CompositionDevelopmentPanel /> : null}
+            {tab.id === 'arrange' && selected ? <ArrangementPanel /> : null}
             {tab.id === 'motifs' && selected ? (
               <MotifPanel onOpenPianoTab={() => onTabChange('piano')} />
             ) : null}

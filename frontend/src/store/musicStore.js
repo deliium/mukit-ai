@@ -3,10 +3,13 @@ import {
   analyzeComposition,
   AnalysisApiError,
   applyMotif,
+  ArrangementApiError,
   DevelopmentApiError,
   importMidi,
   importMusicXml,
+  loadArrangementInstruments,
   MotifApiError,
+  previewCompositionArrangement,
   previewCompositionDevelopment,
   previewReharmonization,
   ReharmonizeApiError,
@@ -15,6 +18,7 @@ import {
   REHARMONIZE_OPERATIONS,
   renderMusicXmlPreview,
 } from '../api/musicApi.js';
+import { createAppLogger } from '../utils/appLogger.js';
 import {
   createProject as createProjectRequest,
   deleteProject as deleteProjectRequest,
@@ -65,6 +69,17 @@ import {
   resolveDevelopmentDefaults,
   verifyDevelopmentCandidate,
 } from '../utils/compositionCandidates.js';
+import {
+  ARRANGEMENT_MAX_CANDIDATE_COUNT,
+  ARRANGEMENT_MAX_INSTRUCTION_CHARS,
+  ARRANGEMENT_MIN_CANDIDATE_COUNT,
+  ARRANGEMENT_OPERATIONS,
+  ARRANGEMENT_RANGE_ADJUSTMENTS,
+  editFingerprintLogPrefix as arrangementFingerprintPrefix,
+  findArrangementCandidateById,
+  getCachedArrangementCatalog,
+  verifyArrangementCandidateForApply,
+} from '../utils/compositionArrangementCandidates.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { compositionRevisionKey, notationRevisionKey } from '../utils/playbackPosition.js';
 import {
@@ -160,6 +175,13 @@ export const DEFAULT_DEVELOPMENT_OPERATION = 'continue';
 export const DEFAULT_DEVELOPMENT_INTENT = 'continue';
 export const DEFAULT_VARIATION_STRENGTH = 'balanced';
 
+export const DEFAULT_ARRANGEMENT_OPERATION = 'change_instrumentation';
+export const DEFAULT_ARRANGEMENT_RANGE_ADJUSTMENT = 'reject';
+export const ARRANGEMENT_AUDITION_SOURCE = 'source';
+export const ARRANGEMENT_AUDITION_CANDIDATE = 'candidate';
+
+const arrangementLogger = createAppLogger('musicStore.arrangement');
+
 const initialDevelopmentControlsState = {
   developmentOperation: DEFAULT_DEVELOPMENT_OPERATION,
   developmentIntent: DEFAULT_DEVELOPMENT_INTENT,
@@ -190,6 +212,44 @@ const initialDevelopmentPreviewState = {
   developmentModel: null,
 };
 
+const initialArrangementControlsState = {
+  arrangementOperation: DEFAULT_ARRANGEMENT_OPERATION,
+  arrangementSourceTrackIds: [],
+  arrangementProtectedTrackIds: [],
+  arrangementInstrumentationBefore: [],
+  arrangementInstrumentationAfter: [],
+  arrangementAllowUnlistedAfter: false,
+  arrangementPreserveMelody: true,
+  arrangementPreserveHarmony: true,
+  arrangementRangeAdjustment: DEFAULT_ARRANGEMENT_RANGE_ADJUSTMENT,
+  arrangementCandidateCount: 1,
+  arrangementInstruction: '',
+};
+
+const initialArrangementPreviewState = {
+  ...initialArrangementControlsState,
+  arrangementCatalog: null,
+  arrangementCatalogStatus: 'idle',
+  arrangementCatalogError: '',
+  arrangementCatalogFingerprint: null,
+  arrangementStatus: 'idle',
+  arrangementError: '',
+  arrangementStaleReason: null,
+  arrangementWarnings: [],
+  arrangementRequestId: 0,
+  arrangementBaseRevision: null,
+  arrangementEditSourceFingerprint: null,
+  arrangementResponseCatalogFingerprint: null,
+  arrangementControlsFingerprint: null,
+  arrangementCandidates: [],
+  arrangementRejectedAttempts: [],
+  arrangementSelectedCandidateId: null,
+  arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+  arrangementCandidateTrackControls: {},
+  arrangementProvider: null,
+  arrangementModel: null,
+};
+
 function isManualSaveReason(reason) {
   return reason === 'manual' || reason === 'manual-force';
 }
@@ -202,6 +262,8 @@ let analysisDebounceTimer = null;
 let analysisInFlightKey = null;
 let reharmonizeRequestSeq = 0;
 let developmentRequestSeq = 0;
+let arrangementRequestSeq = 0;
+let arrangementCatalogRequestSeq = 0;
 
 const initialPrompt = {
   genre: 'ambient',
@@ -288,6 +350,7 @@ export const useMusicStore = create((set, get) => ({
   ...initialHarmonyUiState,
   ...initialReharmonizePreviewState,
   ...initialDevelopmentPreviewState,
+  ...initialArrangementPreviewState,
   composerTabRequest: null,
   composerTabRequestSeq: 0,
   ...initialMotifUiState,
@@ -397,6 +460,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedMotifUiState(),
       ...clearedReharmonizePreviewState(),
       ...clearedDevelopmentPreviewState(),
+      ...clearedArrangementPreviewState(),
       ...initialHarmonyUiState,
     });
     markProjectDirty(set, get);
@@ -505,6 +569,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedMotifUiState(),
       ...clearedReharmonizePreviewState(),
       ...clearedDevelopmentPreviewState(),
+      ...clearedArrangementPreviewState(),
       ...initialHarmonyUiState,
     });
     markProjectDirty(set, get);
@@ -704,6 +769,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedMotifUiState(),
       ...clearedReharmonizePreviewState(),
       ...clearedDevelopmentPreviewState(),
+      ...clearedArrangementPreviewState(),
       ...initialHarmonyUiState,
     });
     markProjectDirty(set, get);
@@ -733,6 +799,7 @@ export const useMusicStore = create((set, get) => ({
         ...clearedMotifUiState(),
         ...clearedReharmonizePreviewState(),
       ...clearedDevelopmentPreviewState(),
+      ...clearedArrangementPreviewState(),
         ...initialHarmonyUiState,
       };
     });
@@ -1119,7 +1186,9 @@ export const useMusicStore = create((set, get) => ({
       compositionRevision: revision,
       notationRevision: notationRev,
       ...staleNotation,
-      trackControls: mergeTrackControls(state.trackControls, previous.editedMusicJson),
+      trackControls: previous.trackControls
+        ? { ...previous.trackControls }
+        : mergeTrackControls(state.trackControls, previous.editedMusicJson),
       pianoRollTrackId: previous.pianoRollTrackId,
       pianoRollNoteId: previous.pianoRollNoteId,
       pianoRollNoteIds: previous.pianoRollNoteIds || [],
@@ -1136,6 +1205,7 @@ export const useMusicStore = create((set, get) => ({
       ...reconcileMotifUiAfterCompositionChange(state, previous.editedMusicJson),
       ...clearedReharmonizePreviewState({ preserveControls: true }),
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'undo' });
@@ -1166,7 +1236,9 @@ export const useMusicStore = create((set, get) => ({
       compositionRevision: revision,
       notationRevision: notationRev,
       ...staleNotation,
-      trackControls: mergeTrackControls(state.trackControls, next.editedMusicJson),
+      trackControls: next.trackControls
+        ? { ...next.trackControls }
+        : mergeTrackControls(state.trackControls, next.editedMusicJson),
       pianoRollTrackId: next.pianoRollTrackId,
       pianoRollNoteId: next.pianoRollNoteId,
       pianoRollNoteIds: next.pianoRollNoteIds || [],
@@ -1183,6 +1255,7 @@ export const useMusicStore = create((set, get) => ({
       ...reconcileMotifUiAfterCompositionChange(state, next.editedMusicJson),
       ...clearedReharmonizePreviewState({ preserveControls: true }),
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'redo' });
@@ -1368,6 +1441,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedMotifUiState(),
       ...clearedReharmonizePreviewState(),
       ...clearedDevelopmentPreviewState(),
+      ...clearedArrangementPreviewState(),
     });
     console.info('[musicStore] Project autosave-dirty transition after AI edit', {
       projectId: state.currentProjectId,
@@ -1664,6 +1738,7 @@ export const useMusicStore = create((set, get) => ({
           ...clearedMotifUiState(),
           ...clearedReharmonizePreviewState(),
       ...clearedDevelopmentPreviewState(),
+      ...clearedArrangementPreviewState(),
           ...initialHarmonyUiState,
         });
       }
@@ -2304,6 +2379,7 @@ export const useMusicStore = create((set, get) => ({
       analysisSelectedSectionKey: recoverAnalysisSectionKey(prepared, state.analysisSelectedSectionKey),
       ...clearedReharmonizePreviewState({ preserveControls: true }),
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'motif-apply' });
@@ -2346,6 +2422,7 @@ export const useMusicStore = create((set, get) => ({
       harmonySelectionEndBar: end,
       ...clearedReharmonizePreviewState({ preserveControls: true }),
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
     });
     return true;
   },
@@ -2398,6 +2475,7 @@ export const useMusicStore = create((set, get) => ({
       ...next,
       ...clearedReharmonizePreviewState({ preserveControls: true }),
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
     });
     return true;
   },
@@ -2421,6 +2499,7 @@ export const useMusicStore = create((set, get) => ({
       statePatch: {
         ...clearedReharmonizePreviewState({ preserveControls: true }),
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
       },
     });
     return true;
@@ -2602,6 +2681,7 @@ export const useMusicStore = create((set, get) => ({
     set({
       ...next,
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
     });
     return true;
   },
@@ -2620,6 +2700,7 @@ export const useMusicStore = create((set, get) => ({
       developmentSourceSectionKey: defaults.sourceSectionKey,
       developmentOutputBars: null,
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
       composerTabRequest: 'develop',
       composerTabRequestSeq: (state.composerTabRequestSeq || 0) + 1,
     });
@@ -2673,7 +2754,9 @@ export const useMusicStore = create((set, get) => ({
 
   discardDevelopmentCandidates: () => {
     console.info('[musicStore] Development candidates discarded');
-    set(clearedDevelopmentPreviewState({ preserveControls: true }));
+    set({
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
+    });
   },
 
   startDevelopmentPreview: async () => {
@@ -2888,6 +2971,582 @@ export const useMusicStore = create((set, get) => ({
     return true;
   },
 
+  loadArrangementCatalog: async ({ forceRefresh = false } = {}) => {
+    arrangementCatalogRequestSeq += 1;
+    const requestId = arrangementCatalogRequestSeq;
+    const cached = !forceRefresh ? getCachedArrangementCatalog() : null;
+    if (cached) {
+      set({
+        arrangementCatalog: cached,
+        arrangementCatalogStatus: 'ready',
+        arrangementCatalogError: '',
+        arrangementCatalogFingerprint: cached.fingerprint || null,
+      });
+      markArrangementStaleIfCatalogChanged(set, get, cached.fingerprint);
+      return cached;
+    }
+
+    set({
+      arrangementCatalogStatus: 'loading',
+      arrangementCatalogError: '',
+    });
+    arrangementLogger.info('Arrangement catalog load started', {
+      forceRefresh: Boolean(forceRefresh),
+      requestId,
+    });
+    try {
+      const catalog = await loadArrangementInstruments({ forceRefresh });
+      if (requestId !== arrangementCatalogRequestSeq) {
+        arrangementLogger.debug('Arrangement catalog response ignored (superseded)', { requestId });
+        return null;
+      }
+      set({
+        arrangementCatalog: catalog,
+        arrangementCatalogStatus: 'ready',
+        arrangementCatalogError: '',
+        arrangementCatalogFingerprint: catalog.fingerprint || null,
+      });
+      markArrangementStaleIfCatalogChanged(set, get, catalog.fingerprint);
+      arrangementLogger.info('Arrangement catalog ready', {
+        requestId,
+        instrumentCount: catalog.instruments?.length || 0,
+        fingerprintPrefix: arrangementFingerprintPrefix(catalog.fingerprint),
+      });
+      return catalog;
+    } catch (error) {
+      if (requestId !== arrangementCatalogRequestSeq) {
+        return null;
+      }
+      const message = error instanceof ArrangementApiError
+        ? error.message
+        : (error.message || 'Arrangement catalog unavailable');
+      arrangementLogger.error('Arrangement catalog load failed', {
+        requestId,
+        code: error.code || null,
+        status: error.status || null,
+      });
+      set({
+        arrangementCatalogStatus: 'error',
+        arrangementCatalogError: message,
+      });
+      return null;
+    }
+  },
+
+  setArrangementControls: (patch = {}) => {
+    const state = get();
+    const next = {};
+    if (patch.operation != null) {
+      if (!ARRANGEMENT_OPERATIONS.includes(patch.operation)) {
+        return false;
+      }
+      next.arrangementOperation = patch.operation;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'sourceTrackIds')) {
+      if (!Array.isArray(patch.sourceTrackIds)) {
+        return false;
+      }
+      next.arrangementSourceTrackIds = uniqueStringIds(patch.sourceTrackIds);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'protectedTrackIds')) {
+      if (!Array.isArray(patch.protectedTrackIds)) {
+        return false;
+      }
+      next.arrangementProtectedTrackIds = uniqueStringIds(patch.protectedTrackIds);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'instrumentationBefore')) {
+      if (!Array.isArray(patch.instrumentationBefore)) {
+        return false;
+      }
+      next.arrangementInstrumentationBefore = patch.instrumentationBefore;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'instrumentationAfter')) {
+      if (!Array.isArray(patch.instrumentationAfter)) {
+        return false;
+      }
+      next.arrangementInstrumentationAfter = patch.instrumentationAfter;
+    }
+    if (patch.allowUnlistedAfter != null) {
+      next.arrangementAllowUnlistedAfter = Boolean(patch.allowUnlistedAfter);
+    }
+    if (patch.preserveMelody != null) {
+      next.arrangementPreserveMelody = Boolean(patch.preserveMelody);
+    }
+    if (patch.preserveHarmony != null) {
+      next.arrangementPreserveHarmony = Boolean(patch.preserveHarmony);
+    }
+    if (patch.rangeAdjustment != null) {
+      if (!ARRANGEMENT_RANGE_ADJUSTMENTS.includes(patch.rangeAdjustment)) {
+        return false;
+      }
+      next.arrangementRangeAdjustment = patch.rangeAdjustment;
+    }
+    if (patch.candidateCount != null) {
+      const count = Number(patch.candidateCount);
+      if (
+        !Number.isInteger(count)
+        || count < ARRANGEMENT_MIN_CANDIDATE_COUNT
+        || count > ARRANGEMENT_MAX_CANDIDATE_COUNT
+      ) {
+        return false;
+      }
+      next.arrangementCandidateCount = count;
+    }
+    if (patch.instruction != null) {
+      next.arrangementInstruction = String(patch.instruction)
+        .slice(0, ARRANGEMENT_MAX_INSTRUCTION_CHARS);
+    }
+
+    const merged = { ...state, ...next };
+    const controlsFp = arrangementControlsFingerprint(merged);
+    const hasPreview = state.arrangementStatus === 'ready'
+      || state.arrangementStatus === 'stale'
+      || (Array.isArray(state.arrangementCandidates) && state.arrangementCandidates.length > 0);
+    const settingsChanged = hasPreview
+      && state.arrangementControlsFingerprint
+      && controlsFp !== state.arrangementControlsFingerprint;
+
+    if (settingsChanged) {
+      arrangementLogger.debug('Arrangement preview marked stale (settings changed)', {
+        operation: merged.arrangementOperation,
+        previousStatus: state.arrangementStatus,
+      });
+      set({
+        ...next,
+        arrangementStatus: 'stale',
+        arrangementStaleReason: 'settings_changed',
+        arrangementError: 'Arrangement settings changed; request a new preview',
+        arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+      });
+      return true;
+    }
+
+    set(next);
+    return true;
+  },
+
+  selectArrangementCandidate: (candidateId) => {
+    const state = get();
+    const candidate = findArrangementCandidateById(state.arrangementCandidates, candidateId);
+    if (!candidate) {
+      arrangementLogger.warn('Arrangement candidate selection ignored', {
+        candidateIdSuffix: String(candidateId || '').slice(-8),
+      });
+      return false;
+    }
+    arrangementLogger.info('Arrangement candidate selected', {
+      operation: state.arrangementOperation,
+      candidateIdSuffix: candidateId.slice(-8),
+      fingerprintPrefix: arrangementFingerprintPrefix(candidate.candidate_fingerprint),
+      revision: String(state.arrangementBaseRevision || '').slice(0, 48),
+    });
+    set({
+      arrangementSelectedCandidateId: candidateId,
+      arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+      arrangementCandidateTrackControls: buildDefaultTrackControls(candidate.composition),
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  setArrangementAuditionMode: (mode) => {
+    const nextMode = mode === ARRANGEMENT_AUDITION_CANDIDATE
+      ? ARRANGEMENT_AUDITION_CANDIDATE
+      : ARRANGEMENT_AUDITION_SOURCE;
+    const state = get();
+    if (nextMode === ARRANGEMENT_AUDITION_CANDIDATE) {
+      const candidate = findArrangementCandidateById(
+        state.arrangementCandidates,
+        state.arrangementSelectedCandidateId,
+      );
+      if (!candidate || state.arrangementStatus !== 'ready') {
+        return false;
+      }
+      const nextControls = Object.keys(state.arrangementCandidateTrackControls || {}).length
+        ? state.arrangementCandidateTrackControls
+        : buildDefaultTrackControls(candidate.composition);
+      arrangementLogger.info('Arrangement audition mode changed', {
+        mode: nextMode,
+        operation: state.arrangementOperation,
+        candidateIdSuffix: String(state.arrangementSelectedCandidateId || '').slice(-8),
+      });
+      set({
+        arrangementAuditionMode: nextMode,
+        arrangementCandidateTrackControls: nextControls,
+        developmentAuditionActive: false,
+        playbackStatus: 'idle',
+        playbackSeconds: 0,
+        playbackBar: 1,
+      });
+      return true;
+    }
+    arrangementLogger.info('Arrangement audition mode changed', {
+      mode: nextMode,
+      operation: state.arrangementOperation,
+      candidateIdSuffix: String(state.arrangementSelectedCandidateId || '').slice(-8),
+    });
+    set({
+      arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  syncArrangementCandidateTrackControls: (musicJson) => {
+    set((state) => ({
+      arrangementCandidateTrackControls: mergeTrackControls(
+        state.arrangementCandidateTrackControls,
+        musicJson,
+      ),
+    }));
+  },
+
+  toggleArrangementCandidateMute: (trackId) => {
+    set((state) => {
+      const current = state.arrangementCandidateTrackControls[trackId] || defaultControl();
+      return {
+        arrangementCandidateTrackControls: {
+          ...state.arrangementCandidateTrackControls,
+          [trackId]: { ...current, muted: !current.muted },
+        },
+      };
+    });
+  },
+
+  toggleArrangementCandidateSolo: (trackId) => {
+    set((state) => {
+      const current = state.arrangementCandidateTrackControls[trackId] || defaultControl();
+      return {
+        arrangementCandidateTrackControls: {
+          ...state.arrangementCandidateTrackControls,
+          [trackId]: { ...current, solo: !current.solo },
+        },
+      };
+    });
+  },
+
+  setArrangementCandidateVolume: (trackId, volumeMidi) => {
+    const clamped = Math.max(0, Math.min(127, Number(volumeMidi) || 0));
+    set((state) => {
+      const current = state.arrangementCandidateTrackControls[trackId] || defaultControl();
+      return {
+        arrangementCandidateTrackControls: {
+          ...state.arrangementCandidateTrackControls,
+          [trackId]: { ...current, volumeMidi: clamped },
+        },
+      };
+    });
+  },
+
+  discardArrangementCandidates: () => {
+    arrangementRequestSeq += 1;
+    arrangementLogger.info('Arrangement candidates discarded', {
+      operation: get().arrangementOperation,
+      revision: String(get().arrangementBaseRevision || '').slice(0, 48),
+      candidateCount: get().arrangementCandidates?.length || 0,
+    });
+    set({
+      ...clearedArrangementPreviewState({ preserveControls: true }),
+      arrangementRequestId: arrangementRequestSeq,
+    });
+  },
+
+  startArrangementPreview: async () => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    if (!isCanonicalComposition(composition)) {
+      set({
+        arrangementStatus: 'error',
+        arrangementError: 'Canonical composition.v2 required for arrangement',
+        arrangementStaleReason: null,
+      });
+      return false;
+    }
+
+    arrangementRequestSeq += 1;
+    const requestId = arrangementRequestSeq;
+    const baseRevision = state.compositionRevision;
+    const controlsFp = arrangementControlsFingerprint(state);
+    const catalog = state.arrangementCatalog || getCachedArrangementCatalog();
+
+    arrangementLogger.info('Arrangement preview started', {
+      requestId,
+      operation: state.arrangementOperation,
+      revision: String(baseRevision || '').slice(0, 48),
+      sourceCount: state.arrangementSourceTrackIds.length,
+      protectedCount: state.arrangementProtectedTrackIds.length,
+      candidateCount: state.arrangementCandidateCount,
+      catalogPrefix: arrangementFingerprintPrefix(
+        catalog?.fingerprint || state.arrangementCatalogFingerprint,
+      ),
+    });
+
+    set({
+      arrangementStatus: 'loading',
+      arrangementError: '',
+      arrangementStaleReason: null,
+      arrangementWarnings: [],
+      arrangementRequestId: requestId,
+      arrangementBaseRevision: baseRevision,
+      arrangementControlsFingerprint: controlsFp,
+      arrangementCandidates: [],
+      arrangementRejectedAttempts: [],
+      arrangementSelectedCandidateId: null,
+      arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+      arrangementCandidateTrackControls: {},
+      arrangementEditSourceFingerprint: null,
+      arrangementResponseCatalogFingerprint: null,
+    });
+
+    try {
+      const response = await previewCompositionArrangement({
+        composition,
+        operation: state.arrangementOperation,
+        source_track_ids: state.arrangementSourceTrackIds,
+        protected_track_ids: state.arrangementProtectedTrackIds,
+        instrumentation: {
+          before: state.arrangementInstrumentationBefore,
+          after: state.arrangementInstrumentationAfter,
+        },
+        allow_unlisted_after: state.arrangementAllowUnlistedAfter,
+        preserve_melody: state.arrangementPreserveMelody,
+        preserve_harmony: state.arrangementPreserveHarmony,
+        range_adjustment: state.arrangementRangeAdjustment,
+        candidate_count: state.arrangementCandidateCount,
+        instruction: state.arrangementInstruction || null,
+        selection: {
+          provider: state.selectedProvider || null,
+          model: state.selectedModel || null,
+        },
+      });
+
+      const latest = get();
+      if (requestId !== latest.arrangementRequestId) {
+        arrangementLogger.debug('Ignoring superseded arrangement preview response', {
+          requestId,
+          latestRequestId: latest.arrangementRequestId,
+        });
+        return false;
+      }
+      if (latest.compositionRevision !== baseRevision) {
+        arrangementLogger.debug('Arrangement preview stale (source revision changed)', {
+          requestId,
+        });
+        set({
+          arrangementStatus: 'stale',
+          arrangementStaleReason: 'source_changed',
+          arrangementError: 'Composition changed while preview was loading',
+          arrangementCandidates: [],
+          arrangementRejectedAttempts: [],
+          arrangementSelectedCandidateId: null,
+          arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+          arrangementCandidateTrackControls: {},
+        });
+        return false;
+      }
+
+      const selectedId = response.candidates[0]?.candidate_id || null;
+      const selectedCandidate = findArrangementCandidateById(response.candidates, selectedId);
+      set({
+        arrangementStatus: 'ready',
+        arrangementError: '',
+        arrangementStaleReason: null,
+        arrangementWarnings: response.warning_codes || [],
+        arrangementEditSourceFingerprint: response.edit_source_fingerprint,
+        arrangementResponseCatalogFingerprint: response.catalog_fingerprint || null,
+        arrangementCandidates: response.candidates,
+        arrangementRejectedAttempts: response.rejected_attempts || [],
+        arrangementSelectedCandidateId: selectedId,
+        arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+        arrangementCandidateTrackControls: selectedCandidate
+          ? buildDefaultTrackControls(selectedCandidate.composition)
+          : {},
+        arrangementProvider: response.provider || null,
+        arrangementModel: response.model || null,
+        arrangementControlsFingerprint: controlsFp,
+      });
+      arrangementLogger.info('Arrangement preview ready', {
+        requestId,
+        operation: response.operation,
+        revision: String(baseRevision || '').slice(0, 48),
+        returnedCandidateCount: response.candidates.length,
+        rejectedCount: (response.rejected_attempts || []).length,
+        editSourcePrefix: arrangementFingerprintPrefix(response.edit_source_fingerprint),
+        catalogPrefix: arrangementFingerprintPrefix(response.catalog_fingerprint),
+        status: 'ready',
+      });
+      return true;
+    } catch (error) {
+      if (requestId !== get().arrangementRequestId) {
+        return false;
+      }
+      const message = error instanceof ArrangementApiError
+        ? error.message
+        : (error.message || 'Arrangement preview failed');
+      arrangementLogger.error('Arrangement preview failed', {
+        requestId,
+        code: error.code || null,
+        status: error.status || null,
+      });
+      set({
+        arrangementStatus: 'error',
+        arrangementError: message,
+        arrangementStaleReason: null,
+        arrangementCandidates: [],
+        arrangementRejectedAttempts: [],
+        arrangementSelectedCandidateId: null,
+        arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+        arrangementCandidateTrackControls: {},
+      });
+      return false;
+    }
+  },
+
+  applySelectedArrangementCandidate: async () => {
+    const state = get();
+    if (state.arrangementStatus !== 'ready') {
+      return false;
+    }
+    const candidate = findArrangementCandidateById(
+      state.arrangementCandidates,
+      state.arrangementSelectedCandidateId,
+    );
+    if (!candidate) {
+      set({
+        arrangementStatus: 'error',
+        arrangementError: 'Select a candidate before applying',
+      });
+      return false;
+    }
+    if (state.compositionRevision !== state.arrangementBaseRevision) {
+      arrangementLogger.debug('Arrangement apply blocked; base revision stale', {
+        candidateIdSuffix: candidate.candidate_id.slice(-8),
+      });
+      set({
+        arrangementStatus: 'stale',
+        arrangementStaleReason: 'source_changed',
+        arrangementError: 'Base composition changed; request a new preview',
+        arrangementCandidates: [],
+        arrangementRejectedAttempts: [],
+        arrangementSelectedCandidateId: null,
+        arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+        arrangementCandidateTrackControls: {},
+      });
+      return false;
+    }
+
+    const catalog = state.arrangementCatalog || getCachedArrangementCatalog();
+    if (
+      state.arrangementResponseCatalogFingerprint
+      && catalog?.fingerprint
+      && catalog.fingerprint !== state.arrangementResponseCatalogFingerprint
+    ) {
+      arrangementLogger.debug('Arrangement apply blocked; catalog fingerprint stale', {
+        candidateIdSuffix: candidate.candidate_id.slice(-8),
+      });
+      set({
+        arrangementStatus: 'stale',
+        arrangementStaleReason: 'catalog_changed',
+        arrangementError: 'Instrument catalog changed; request a new preview',
+      });
+      return false;
+    }
+
+    const request = {
+      operation: state.arrangementOperation,
+      source_track_ids: state.arrangementSourceTrackIds,
+      protected_track_ids: state.arrangementProtectedTrackIds,
+      instrumentation: {
+        before: state.arrangementInstrumentationBefore,
+        after: state.arrangementInstrumentationAfter,
+      },
+      preserve_melody: state.arrangementPreserveMelody,
+      preserve_harmony: state.arrangementPreserveHarmony,
+      range_adjustment: state.arrangementRangeAdjustment,
+    };
+
+    const verification = await verifyArrangementCandidateForApply(
+      state.editedMusicJson,
+      candidate,
+      {
+        catalog,
+        request,
+        responseSourceFingerprint: state.arrangementEditSourceFingerprint,
+      },
+    );
+    if (!verification.ok) {
+      const failureCodes = verification.failures.map((item) => item.code).slice(0, 12);
+      arrangementLogger.warn('Arrangement apply blocked by verification', {
+        failureCodes,
+        failureCount: verification.failures.length,
+        candidateIdSuffix: candidate.candidate_id.slice(-8),
+        assertionCodeCount: failureCodes.length,
+      });
+      arrangementLogger.debug('Arrangement verification failure codes', {
+        codes: failureCodes,
+      });
+      set({
+        arrangementStatus: 'error',
+        arrangementError: 'Candidate failed fingerprint or topology checks',
+      });
+      return false;
+    }
+
+    const prepared = prepareCompositionForStore(candidate.composition);
+    const validation = validateMusicJson(prepared);
+    if (!validation.valid || !isCanonicalComposition(prepared)) {
+      set({
+        arrangementStatus: 'error',
+        arrangementError: validation.message || 'Candidate composition invalid',
+      });
+      return false;
+    }
+
+    const selection = recoverPianoRollSelectionAfterTopology(
+      prepared,
+      state.pianoRollTrackId,
+      state.pianoRollNoteId,
+      state.pianoRollNoteIds,
+    );
+    const historySnapshot = snapshotNoteEditState(state);
+    const nextTrackControls = mergeTrackControls(state.trackControls, prepared);
+
+    arrangementLogger.info('Arrangement candidate apply', {
+      operation: state.arrangementOperation,
+      candidateIdSuffix: candidate.candidate_id.slice(-8),
+      fingerprintPrefix: arrangementFingerprintPrefix(verification.localCandidateFingerprint),
+      revision: String(state.arrangementBaseRevision || '').slice(0, 48),
+      trackCount: prepared.tracks?.length || 0,
+      status: 'apply',
+    });
+
+    applyCompositionEdit(set, get, {
+      nextComposition: prepared,
+      selectedTrackId: selection.trackId,
+      selectedNoteId: selection.noteId,
+      selectedNoteIds: selection.noteIds,
+      action: 'arrangement-apply',
+      noteSummary: null,
+      historySnapshot,
+      statePatch: {
+        trackControls: nextTrackControls,
+        ...reconcileMotifUiAfterCompositionChange(state, prepared),
+        ...clearedArrangementPreviewState({ preserveControls: true }),
+        ...clearedDevelopmentPreviewState({ preserveControls: true }),
+        ...clearedReharmonizePreviewState({ preserveControls: true }),
+        arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+      },
+    });
+
+    // Explicit notation refresh after topology apply (do not await for store return).
+    void get().refreshMusicXmlFromEditedComposition();
+    return true;
+  },
+
   startReharmonizePreview: async () => {
     const state = get();
     const composition = state.editedMusicJson;
@@ -3087,6 +3746,7 @@ export const useMusicStore = create((set, get) => ({
       statePatch: {
         ...clearedReharmonizePreviewState({ preserveControls: true }),
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
         reharmonizeStatus: 'idle',
       },
     });
@@ -3168,6 +3828,7 @@ function snapshotNoteEditState(state) {
     harmonySelectionStartBar: state.harmonySelectionStartBar,
     harmonySelectionEndBar: state.harmonySelectionEndBar,
     harmonySelectedSpanStartTick: state.harmonySelectedSpanStartTick,
+    trackControls: state.trackControls ? { ...state.trackControls } : {},
   };
 }
 
@@ -3252,10 +3913,17 @@ function applyNoteEdit(set, get, {
     ),
     ...(keepReharmonizePreview ? {} : clearedReharmonizePreviewState({ preserveControls: true })),
     ...(keepReharmonizePreview ? {} : clearedDevelopmentPreviewState({ preserveControls: true })),
+    ...(keepReharmonizePreview ? {} : clearedArrangementPreviewState({ preserveControls: true })),
     ...statePatch,
   });
   markProjectDirty(set, get);
-  scheduleAnalysisRequest(get, { reason: action?.startsWith('harmony') || action === 'reharmonize-apply' || action === 'development-apply' ? action : 'note-edit' });
+  const analysisReason = action?.startsWith('harmony')
+    || action === 'reharmonize-apply'
+    || action === 'development-apply'
+    || action === 'arrangement-apply'
+    ? action
+    : 'note-edit';
+  scheduleAnalysisRequest(get, { reason: analysisReason });
 }
 
 function findNote(composition, trackId, noteId) {
@@ -3415,6 +4083,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     ...clearedMotifUiState(),
     ...clearedReharmonizePreviewState(),
       ...clearedDevelopmentPreviewState(),
+      ...clearedArrangementPreviewState(),
     ...initialHarmonyUiState,
   });
 }
@@ -3579,6 +4248,108 @@ function clearedDevelopmentPreviewState({ preserveControls = false } = {}) {
     developmentAuditionActive: false,
     developmentProvider: null,
     developmentModel: null,
+  };
+}
+
+function clearedArrangementPreviewState({ preserveControls = false } = {}) {
+  if (!preserveControls) {
+    return { ...initialArrangementPreviewState };
+  }
+  return {
+    arrangementStatus: 'idle',
+    arrangementError: '',
+    arrangementStaleReason: null,
+    arrangementWarnings: [],
+    arrangementRequestId: 0,
+    arrangementBaseRevision: null,
+    arrangementEditSourceFingerprint: null,
+    arrangementResponseCatalogFingerprint: null,
+    arrangementControlsFingerprint: null,
+    arrangementCandidates: [],
+    arrangementRejectedAttempts: [],
+    arrangementSelectedCandidateId: null,
+    arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+    arrangementCandidateTrackControls: {},
+    arrangementProvider: null,
+    arrangementModel: null,
+  };
+}
+
+function uniqueStringIds(values) {
+  const seen = new Set();
+  const ids = [];
+  for (const value of values) {
+    const id = String(value || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function arrangementControlsFingerprint(state) {
+  return JSON.stringify({
+    operation: state.arrangementOperation,
+    sourceTrackIds: state.arrangementSourceTrackIds || [],
+    protectedTrackIds: state.arrangementProtectedTrackIds || [],
+    before: state.arrangementInstrumentationBefore || [],
+    after: state.arrangementInstrumentationAfter || [],
+    allowUnlistedAfter: Boolean(state.arrangementAllowUnlistedAfter),
+    preserveMelody: state.arrangementPreserveMelody !== false,
+    preserveHarmony: state.arrangementPreserveHarmony !== false,
+    rangeAdjustment: state.arrangementRangeAdjustment,
+    candidateCount: state.arrangementCandidateCount,
+    instruction: state.arrangementInstruction || '',
+  });
+}
+
+function markArrangementStaleIfCatalogChanged(set, get, nextFingerprint) {
+  const state = get();
+  if (!nextFingerprint) {
+    return;
+  }
+  const hasPreview = state.arrangementStatus === 'ready'
+    || state.arrangementStatus === 'stale'
+    || (Array.isArray(state.arrangementCandidates) && state.arrangementCandidates.length > 0);
+  if (!hasPreview) {
+    return;
+  }
+  const previous = state.arrangementResponseCatalogFingerprint || state.arrangementCatalogFingerprint;
+  if (previous && previous !== nextFingerprint) {
+    arrangementLogger.debug('Arrangement preview marked stale (catalog fingerprint changed)', {
+      operation: state.arrangementOperation,
+      previousPrefix: arrangementFingerprintPrefix(previous),
+      nextPrefix: arrangementFingerprintPrefix(nextFingerprint),
+    });
+    set({
+      arrangementStatus: 'stale',
+      arrangementStaleReason: 'catalog_changed',
+      arrangementError: 'Instrument catalog changed; request a new preview',
+      arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+      arrangementCatalogFingerprint: nextFingerprint,
+    });
+  }
+}
+
+function recoverPianoRollSelectionAfterTopology(composition, trackId, noteId, noteIds) {
+  const tracks = Array.isArray(composition?.tracks) ? composition.tracks : [];
+  const trackExists = tracks.some((track) => String(track.id) === String(trackId));
+  if (!trackExists) {
+    const fallbackTrackId = pickDefaultTrackId(composition);
+    return {
+      trackId: fallbackTrackId,
+      noteId: null,
+      noteIds: [],
+    };
+  }
+  const existingNoteIds = filterExistingNoteIds(composition, trackId, noteIds || []);
+  const nextNoteId = noteId && existingNoteIds.includes(String(noteId))
+    ? noteId
+    : (existingNoteIds[0] || null);
+  return {
+    trackId,
+    noteId: nextNoteId,
+    noteIds: existingNoteIds,
   };
 }
 

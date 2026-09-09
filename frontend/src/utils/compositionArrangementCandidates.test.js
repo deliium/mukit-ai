@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { setAppLogLevelForTests } from './appLogger.js';
 import { SUPPORTED_TRACK_ROLES } from './musicJsonValidation.js';
 import { compositionEditFingerprint } from './compositionCandidates.js';
 import {
@@ -9,6 +10,7 @@ import {
   ARRANGEMENT_RANGE_POLICY_VERSION,
   cacheArrangementCatalog,
   clearArrangementCatalogCache,
+  computeArrangementTopologyDiff,
   findArrangementCandidateById,
   normalizeArrangementCatalog,
   normalizeArrangementPreviewResponse,
@@ -971,4 +973,466 @@ test('event field tampering on unselected track is rejected', async () => {
   });
   assert.equal(result.ok, false);
   assert.ok(result.failures.some((item) => item.code === 'unselected_track_changed'));
+});
+
+test('same-instrument different roles stay independent in request and verify', async () => {
+  clearArrangementCatalogCache();
+  const catalog = normalizeArrangementCatalog(sampleCatalogResponse()).catalog;
+  cacheArrangementCatalog(catalog);
+  const source = arrangementSource();
+  // Two piano parts with distinct roles are not treated as duplicates.
+  const request = normalizeArrangementRequest({
+    composition: source,
+    operation: 'change_instrumentation',
+    source_track_ids: ['melody-1', 'harmony-1'],
+    protected_track_ids: ['bass-1'],
+    instrumentation: {
+      before: [
+        {
+          part_id: 'p-melody',
+          instrument_id: 'acoustic_grand_piano',
+          role: 'melody',
+          source_track_ids: ['melody-1'],
+          doubling_policy: 'none',
+        },
+        {
+          part_id: 'p-harmony',
+          instrument_id: 'acoustic_grand_piano',
+          role: 'harmony',
+          source_track_ids: ['harmony-1'],
+          doubling_policy: 'none',
+        },
+      ],
+      after: [
+        {
+          part_id: 'p-melody',
+          instrument_id: 'acoustic_grand_piano',
+          role: 'melody',
+          source_track_ids: ['melody-1'],
+          doubling_policy: 'none',
+        },
+        {
+          part_id: 'p-harmony',
+          instrument_id: 'string_ensemble_1',
+          role: 'harmony',
+          source_track_ids: ['harmony-1'],
+          doubling_policy: 'none',
+        },
+      ],
+    },
+  });
+  assert.equal(request.ok, true, request.message);
+  assert.equal(request.request.instrumentation.before[0].instrument_id, 'acoustic_grand_piano');
+  assert.equal(request.request.instrumentation.before[1].instrument_id, 'acoustic_grand_piano');
+  assert.notEqual(
+    request.request.instrumentation.before[0].role,
+    request.request.instrumentation.before[1].role,
+  );
+
+  const composition = structuredClone(source);
+  const harmony = composition.tracks.find((item) => item.id === 'harmony-1');
+  harmony.instrument = 'strings';
+  harmony.midi_program = 48;
+  const candidate = {
+    ...(await buildValidCandidate(source)),
+    operation: 'change_instrumentation',
+    composition,
+    candidate_fingerprint: await compositionEditFingerprint(composition),
+    before_inventory: inventoryFrom(source),
+    after_inventory: inventoryFrom(composition),
+    target_profile_fingerprints: [
+      { instrument_id: 'string_ensemble_1', profile_fingerprint: 's'.repeat(64) },
+    ],
+    manifest: {
+      retained_track_ids: ['melody-1', 'bass-1'],
+      removed_track_ids: [],
+      added_track_ids: [],
+      reordered_track_ids: [],
+      reinstrumented_track_ids: ['harmony-1'],
+      split_track_ids: [],
+      merged_track_ids: [],
+      source_to_target: [
+        { source_track_id: 'melody-1', target_track_id: 'melody-1', relationship: 'retained' },
+        { source_track_id: 'harmony-1', target_track_id: 'harmony-1', relationship: 'reinstrumented' },
+        { source_track_id: 'bass-1', target_track_id: 'bass-1', relationship: 'retained' },
+      ],
+    },
+  };
+  const verified = await verifyArrangementCandidateForApply(source, candidate, {
+    catalog,
+    request: request.request,
+    responseSourceFingerprint: candidate.edit_source_fingerprint,
+  });
+  assert.equal(verified.ok, true, JSON.stringify(verified.failures));
+});
+
+test('accidental undeclared doubling fails required assertion gate', async () => {
+  clearArrangementCatalogCache();
+  const catalog = normalizeArrangementCatalog(sampleCatalogResponse()).catalog;
+  cacheArrangementCatalog(catalog);
+  const source = arrangementSource();
+  const composition = structuredClone(source);
+  composition.tracks.push(track({
+    id: 'melody-clone',
+    name: 'Accidental Clone',
+    instrument: 'cello',
+    role: 'melody',
+    midi_program: 42,
+    channel: 4,
+    events: composition.tracks[0].events.map((event, index) => ({
+      ...event,
+      id: `clone-${index}`,
+    })),
+  }));
+  const request = normalizeArrangementRequest(validRequest({ composition: source })).request;
+  const candidate = {
+    ...(await buildValidCandidate(source)),
+    composition,
+    candidate_fingerprint: await compositionEditFingerprint(composition),
+    before_inventory: inventoryFrom(source),
+    after_inventory: inventoryFrom(composition),
+    manifest: {
+      retained_track_ids: ['melody-1', 'harmony-1', 'bass-1'],
+      removed_track_ids: [],
+      added_track_ids: ['melody-clone'],
+      reordered_track_ids: [],
+      reinstrumented_track_ids: [],
+      split_track_ids: [],
+      merged_track_ids: [],
+      source_to_target: [
+        { source_track_id: 'melody-1', target_track_id: 'melody-1', relationship: 'retained' },
+        { source_track_id: 'harmony-1', target_track_id: 'harmony-1', relationship: 'retained' },
+        { source_track_id: 'bass-1', target_track_id: 'bass-1', relationship: 'retained' },
+        { source_track_id: 'melody-1', target_track_id: 'melody-clone', relationship: 'doubled' },
+      ],
+    },
+    duplicate_findings: [{
+      severity: 'error',
+      code: 'accidental_clone',
+      source_track_id: 'melody-1',
+      target_track_id: 'melody-clone',
+      detail: 'undeclared doubling',
+    }],
+    assertions: [{
+      kind: 'declared_doubling',
+      satisfied: false,
+      required: true,
+      detail: 'doubling was not authorized',
+      track_id: 'melody-clone',
+    }],
+    warning_codes: ['candidate_failed_duplicate'],
+  };
+  const result = await verifyArrangementCandidateForApply(source, candidate, {
+    catalog,
+    request,
+    responseSourceFingerprint: candidate.edit_source_fingerprint,
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.failures.some((item) => item.code === 'declared_doubling'));
+});
+
+test('topology add/remove/reorder manifests verify independently', async () => {
+  clearArrangementCatalogCache();
+  const catalog = normalizeArrangementCatalog(sampleCatalogResponse()).catalog;
+  cacheArrangementCatalog(catalog);
+  const source = arrangementSource();
+
+  // Remove accompaniment, add pad, reorder remaining tracks.
+  const composition = structuredClone(source);
+  composition.tracks = composition.tracks.filter((item) => item.id !== 'harmony-1');
+  composition.tracks.push(track({
+    id: 'pad-new',
+    name: 'Pad',
+    instrument: 'strings',
+    role: 'pad',
+    midi_program: 48,
+    channel: 4,
+    events: [note('pad1', 'G3', 0, 3840)],
+  }));
+  // Reorder: bass, melody, pad
+  const byId = Object.fromEntries(composition.tracks.map((item) => [item.id, item]));
+  composition.tracks = [byId['bass-1'], byId['melody-1'], byId['pad-new']];
+
+  const request = normalizeArrangementRequest({
+    composition: source,
+    operation: 'add_accompaniment',
+    source_track_ids: ['harmony-1'],
+    protected_track_ids: ['melody-1', 'bass-1'],
+    instrumentation: {
+      before: [baseParts().before[1]],
+      after: [
+        {
+          part_id: 'p-pad',
+          instrument_id: 'string_ensemble_1',
+          role: 'pad',
+          source_track_ids: [],
+          doubling_policy: 'none',
+        },
+      ],
+    },
+  }).request;
+
+  const candidate = {
+    candidate_id: 'arr-topology-addrm1',
+    candidate_fingerprint: await compositionEditFingerprint(composition),
+    edit_source_fingerprint: await compositionEditFingerprint(source),
+    algorithm_version: 'composition.arrangement.v1',
+    catalog_version: ARRANGEMENT_CATALOG_VERSION,
+    range_policy_version: ARRANGEMENT_RANGE_POLICY_VERSION,
+    catalog_fingerprint: catalog.fingerprint,
+    target_profile_fingerprints: [
+      { instrument_id: 'string_ensemble_1', profile_fingerprint: 's'.repeat(64) },
+    ],
+    operation: 'add_accompaniment',
+    composition,
+    provider: 'fake',
+    model: null,
+    before_inventory: inventoryFrom(source),
+    after_inventory: inventoryFrom(composition),
+    manifest: {
+      retained_track_ids: ['melody-1', 'bass-1'],
+      removed_track_ids: ['harmony-1'],
+      added_track_ids: ['pad-new'],
+      reordered_track_ids: ['bass-1', 'melody-1', 'pad-new'],
+      reinstrumented_track_ids: [],
+      split_track_ids: [],
+      merged_track_ids: [],
+      source_to_target: [
+        { source_track_id: 'melody-1', target_track_id: 'melody-1', relationship: 'retained' },
+        { source_track_id: 'bass-1', target_track_id: 'bass-1', relationship: 'retained' },
+        { source_track_id: 'harmony-1', target_track_id: 'harmony-1', relationship: 'removed' },
+        { source_track_id: 'harmony-1', target_track_id: 'pad-new', relationship: 'redistributed' },
+      ],
+    },
+    event_counts: {
+      copied: 3,
+      moved: 0,
+      generated: 1,
+      removed: 2,
+      octave_adjusted: 0,
+      unchanged: 3,
+    },
+    density: null,
+    range_findings: [],
+    duplicate_findings: [],
+    harmony_compatibility: null,
+    assertions: [{
+      kind: 'topology_authorization',
+      satisfied: true,
+      required: true,
+      detail: 'ok',
+      track_id: null,
+    }],
+    warning_codes: [],
+  };
+
+  const verified = await verifyArrangementCandidateForApply(source, candidate, {
+    catalog,
+    request,
+    responseSourceFingerprint: candidate.edit_source_fingerprint,
+  });
+  assert.equal(verified.ok, true, JSON.stringify(verified.failures));
+  const diff = computeArrangementTopologyDiff(source, composition);
+  assert.deepEqual(diff.removed_track_ids, ['harmony-1']);
+  assert.deepEqual(diff.added_track_ids, ['pad-new']);
+  assert.equal(composition.tracks[0].id, 'bass-1');
+});
+
+test('motifs remain valid on apply; broken motif references reject', async () => {
+  clearArrangementCatalogCache();
+  const catalog = normalizeArrangementCatalog(sampleCatalogResponse()).catalog;
+  cacheArrangementCatalog(catalog);
+  const source = arrangementSource();
+  source.tracks[0].events = [
+    note('m1', 'C4', 0),
+    note('m2', 'D4', 480),
+    note('m3', 'E4', 960),
+  ];
+  source.motifs = [{
+    id: 'motif-a',
+    label: 'Motif A',
+    occurrences: [{
+      id: 'occ-orig',
+      track_id: 'melody-1',
+      event_ids: ['m1', 'm2', 'm3'],
+      relationship: 'original',
+    }],
+  }];
+  const request = normalizeArrangementRequest(validRequest({ composition: source })).request;
+
+  const okCandidate = await buildValidCandidate(source);
+  okCandidate.composition.motifs = structuredClone(source.motifs);
+  okCandidate.candidate_fingerprint = await compositionEditFingerprint(okCandidate.composition);
+  okCandidate.before_inventory = inventoryFrom(source);
+  okCandidate.after_inventory = inventoryFrom(okCandidate.composition);
+  const okResult = await verifyArrangementCandidateForApply(source, okCandidate, {
+    catalog,
+    request,
+    responseSourceFingerprint: okCandidate.edit_source_fingerprint,
+  });
+  assert.equal(okResult.ok, true, JSON.stringify(okResult.failures));
+
+  const broken = structuredClone(okCandidate);
+  broken.composition.motifs[0].occurrences[0].event_ids = ['missing-a', 'missing-b', 'missing-c'];
+  broken.candidate_fingerprint = await compositionEditFingerprint(broken.composition);
+  const brokenResult = await verifyArrangementCandidateForApply(source, broken, {
+    catalog,
+    request,
+    responseSourceFingerprint: broken.edit_source_fingerprint,
+  });
+  assert.equal(brokenResult.ok, false);
+  assert.ok(brokenResult.failures.some((item) => item.code === 'motif_integrity_failed'));
+});
+
+test('empty harmony and variable meter are preserved; mutations reject', async () => {
+  clearArrangementCatalogCache();
+  const catalog = normalizeArrangementCatalog(sampleCatalogResponse()).catalog;
+  cacheArrangementCatalog(catalog);
+
+  const emptyHarmony = arrangementSource();
+  emptyHarmony.harmony = [];
+  const emptyRequest = normalizeArrangementRequest(validRequest({
+    composition: emptyHarmony,
+  })).request;
+  const emptyCandidate = await buildValidCandidate(emptyHarmony);
+  const emptyOk = await verifyArrangementCandidateForApply(emptyHarmony, emptyCandidate, {
+    catalog,
+    request: emptyRequest,
+    responseSourceFingerprint: emptyCandidate.edit_source_fingerprint,
+  });
+  assert.equal(emptyOk.ok, true, JSON.stringify(emptyOk.failures));
+
+  const emptyTampered = await buildValidCandidate(emptyHarmony);
+  emptyTampered.composition.harmony = [{ chord: 'G', start_tick: 0, duration_ticks: 3840 }];
+  emptyTampered.candidate_fingerprint = await compositionEditFingerprint(emptyTampered.composition);
+  const emptyBad = await verifyArrangementCandidateForApply(emptyHarmony, emptyTampered, {
+    catalog,
+    request: emptyRequest,
+    responseSourceFingerprint: emptyTampered.edit_source_fingerprint,
+  });
+  assert.equal(emptyBad.ok, false);
+  assert.ok(emptyBad.failures.some((item) => item.code === 'harmony_metadata_changed'));
+
+  const variable = arrangementSource();
+  variable.time_signature_changes = [
+    { tick: 0, time_signature: '4/4' },
+    { tick: 1920, time_signature: '3/4' },
+  ];
+  variable.duration_ticks = 3360;
+  variable.bar_count = 2;
+  variable.sections[0].duration_ticks = 3360;
+  const variableRequest = normalizeArrangementRequest(validRequest({
+    composition: variable,
+  })).request;
+  const variableCandidate = await buildValidCandidate(variable);
+  const variableOk = await verifyArrangementCandidateForApply(variable, variableCandidate, {
+    catalog,
+    request: variableRequest,
+    responseSourceFingerprint: variableCandidate.edit_source_fingerprint,
+  });
+  assert.equal(variableOk.ok, true, JSON.stringify(variableOk.failures));
+
+  const meterTampered = await buildValidCandidate(variable);
+  meterTampered.composition.time_signature_changes = [
+    { tick: 0, time_signature: '4/4' },
+  ];
+  meterTampered.candidate_fingerprint = await compositionEditFingerprint(meterTampered.composition);
+  const meterBad = await verifyArrangementCandidateForApply(variable, meterTampered, {
+    catalog,
+    request: variableRequest,
+    responseSourceFingerprint: meterTampered.edit_source_fingerprint,
+  });
+  assert.equal(meterBad.ok, false);
+  assert.ok(meterBad.failures.some((item) => item.code === 'root_metadata_changed'));
+});
+
+test('inventory count mismatch rejects apply', async () => {
+  clearArrangementCatalogCache();
+  const catalog = normalizeArrangementCatalog(sampleCatalogResponse()).catalog;
+  cacheArrangementCatalog(catalog);
+  const source = arrangementSource();
+  const request = normalizeArrangementRequest(validRequest({ composition: source })).request;
+  const candidate = await buildValidCandidate(source);
+  candidate.after_inventory = candidate.after_inventory.slice(0, 1);
+  const result = await verifyArrangementCandidateForApply(source, candidate, {
+    catalog,
+    request,
+    responseSourceFingerprint: candidate.edit_source_fingerprint,
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.failures.some((item) => item.code === 'inventory_count_mismatch'));
+});
+
+test('frontend fingerprint vectors match locally recomputed source and candidate digests', async () => {
+  clearArrangementCatalogCache();
+  const catalog = normalizeArrangementCatalog(sampleCatalogResponse()).catalog;
+  cacheArrangementCatalog(catalog);
+  const source = arrangementSource();
+  const candidate = await buildValidCandidate(source);
+  const request = normalizeArrangementRequest(validRequest({ composition: source })).request;
+
+  const localSource = await compositionEditFingerprint(source);
+  const localCandidate = await compositionEditFingerprint(candidate.composition);
+  assert.equal(candidate.edit_source_fingerprint, localSource);
+  assert.equal(candidate.candidate_fingerprint, localCandidate);
+
+  const verified = await verifyArrangementCandidate({
+    baseComposition: source,
+    candidate,
+    request,
+    responseSourceFingerprint: localSource,
+    loadedCatalog: catalog,
+  });
+  assert.equal(verified.ok, true, JSON.stringify(verified.failures));
+  assert.equal(verified.localSourceFingerprint, localSource);
+  assert.equal(verified.localCandidateFingerprint, localCandidate);
+});
+
+test('arrangement candidate logger gate suppresses and sanitizes console output', async () => {
+  clearArrangementCatalogCache();
+  const catalog = normalizeArrangementCatalog(sampleCatalogResponse()).catalog;
+  cacheArrangementCatalog(catalog);
+  const source = arrangementSource();
+  const candidate = await buildValidCandidate(source);
+  const request = normalizeArrangementRequest(validRequest({
+    composition: source,
+    instruction: 'secret arrange instruction with C4 pitch',
+  })).request;
+
+  const lines = [];
+  const originalDebug = console.debug;
+  const originalInfo = console.info;
+  console.debug = (...args) => { lines.push(JSON.stringify(args)); };
+  console.info = (...args) => { lines.push(JSON.stringify(args)); };
+
+  try {
+    setAppLogLevelForTests('silent');
+    lines.length = 0;
+    await verifyArrangementCandidateForApply(source, candidate, {
+      catalog,
+      request,
+      responseSourceFingerprint: candidate.edit_source_fingerprint,
+    });
+    assert.equal(lines.length, 0);
+
+    setAppLogLevelForTests('debug');
+    lines.length = 0;
+    await verifyArrangementCandidateForApply(source, candidate, {
+      catalog,
+      request,
+      responseSourceFingerprint: candidate.edit_source_fingerprint,
+    });
+    assert.ok(lines.length >= 1);
+    const joined = lines.join('\n');
+    assert.equal(joined.includes('secret arrange'), false);
+    assert.equal(joined.includes('C4'), false);
+    assert.equal(joined.includes('"events"'), false);
+    assert.equal(joined.includes(candidate.candidate_id), false);
+    assert.equal(joined.includes('m1'), false);
+    assert.match(joined, /operation|failureCount|candidatePrefix|ok/i);
+  } finally {
+    console.debug = originalDebug;
+    console.info = originalInfo;
+    setAppLogLevelForTests(null);
+  }
 });

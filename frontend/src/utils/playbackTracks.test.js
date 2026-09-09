@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { setAppLogLevelForTests } from './appLogger.js';
 import {
   buildTrackPlaybackStates,
   isTrackAudible,
@@ -35,6 +36,42 @@ test('keeps piano harmony tracks on piano strategy', () => {
     midi_program: 0,
   });
   assert.equal(strategy.id, 'piano_keyboard');
+});
+
+test('prefers instrument identity over conflicting role', () => {
+  const celloBassRole = selectInstrumentStrategy({
+    instrument: 'cello',
+    role: 'bass',
+    midi_program: 42,
+  });
+  assert.equal(celloBassRole.id, 'strings_pad');
+  assert.equal(celloBassRole.fallback, false);
+
+  const pianoMelody = selectInstrumentStrategy({
+    instrument: 'piano',
+    role: 'melody',
+    midi_program: 0,
+  });
+  assert.equal(pianoMelody.id, 'piano_keyboard');
+});
+
+test('uses midi_program over role when instrument is empty', () => {
+  const byProgram = selectInstrumentStrategy({
+    instrument: '',
+    role: 'bass',
+    midi_program: 48,
+  });
+  assert.equal(byProgram.id, 'strings_pad');
+  assert.equal(byProgram.fallback, false);
+});
+
+test('uses role only as fallback when instrument and program are absent', () => {
+  const roleFallback = selectInstrumentStrategy({
+    instrument: '',
+    role: 'bass',
+  });
+  assert.equal(roleFallback.id, 'bass');
+  assert.equal(roleFallback.fallback, true);
 });
 
 test('resolves mute and solo effective audible state', () => {
@@ -84,4 +121,50 @@ test('mute/solo effective gain stays independent from persisted track volume fie
   assert.equal(effective[0].volumeMidi, 127);
   assert.notEqual(effective[0].volumeMidi, 64);
   assert.equal(effective[0].effectiveGain, 1);
+});
+
+test('playback diagnostics use controlled appLogger levels', () => {
+  const debugLogs = [];
+  const previousDebug = console.debug;
+  console.debug = (...args) => {
+    debugLogs.push(args);
+  };
+  try {
+    setAppLogLevelForTests('silent');
+    selectInstrumentStrategy({ instrument: 'piano', midi_program: 0, id: 't1' });
+    assert.equal(debugLogs.length, 0);
+
+    setAppLogLevelForTests('debug');
+    selectInstrumentStrategy({ instrument: 'piano', midi_program: 0, id: 't2' });
+    assert.ok(debugLogs.length >= 1);
+    const joined = JSON.stringify(debugLogs);
+    assert.equal(joined.includes('C4'), false);
+    assert.equal(joined.includes('events'), false);
+  } finally {
+    console.debug = previousDebug;
+    setAppLogLevelForTests(null);
+  }
+});
+
+test('arrangement catalog GM programs map by instrument identity not role', () => {
+  assert.equal(
+    selectInstrumentStrategy({ instrument: 'cello', role: 'melody', midi_program: 42 }).id,
+    'strings_pad',
+  );
+  assert.equal(
+    selectInstrumentStrategy({ instrument: 'cello', role: 'bass', midi_program: 42 }).id,
+    'strings_pad',
+  );
+  assert.equal(
+    selectInstrumentStrategy({ instrument: 'string_ensemble_1', role: 'harmony', midi_program: 48 }).id,
+    'strings_pad',
+  );
+  assert.equal(
+    selectInstrumentStrategy({ instrument: 'acoustic_bass', role: 'melody', midi_program: 32 }).id,
+    'bass',
+  );
+  assert.equal(
+    selectInstrumentStrategy({ instrument: 'acoustic_grand_piano', role: 'pad', midi_program: 0 }).id,
+    'piano_keyboard',
+  );
 });

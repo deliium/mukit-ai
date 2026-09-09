@@ -52,6 +52,34 @@ test('accepts import-neutral other role and unsectioned section', () => {
   assert.equal(result.valid, true);
 });
 
+test('SUPPORTED_TRACK_ROLES mirrors arrangement catalog role vocabulary', async () => {
+  const { SUPPORTED_TRACK_ROLES } = await import('./musicJsonValidation.js');
+  const expected = [
+    'melody',
+    'harmony',
+    'bass',
+    'drums',
+    'percussion',
+    'countermelody',
+    'pad',
+    'lead',
+    'rhythm',
+    'other',
+  ];
+  assert.equal(SUPPORTED_TRACK_ROLES.size, expected.length);
+  for (const role of expected) {
+    assert.ok(SUPPORTED_TRACK_ROLES.has(role), role);
+  }
+
+  const composition = migrateV1ToV2(canonicalV1Composition());
+  composition.tracks[0].role = 'countermelody';
+  assert.equal(validateMusicJson(composition).valid, true);
+
+  composition.harmony = [];
+  assert.equal(validateMusicJson(composition).valid, true);
+  assert.equal(isCanonicalComposition(composition), true);
+});
+
 test('accepts variable-meter V2 duration and section spans from compiled bar map', async () => {
   const { readFile } = await import('node:fs/promises');
   const { fileURLToPath } = await import('node:url');

@@ -211,7 +211,7 @@ Each candidate response:
   - Logging requirements: API/utils may DEBUG endpoint, operation, catalog version, counts, status/code, and fingerprint prefixes only through an environment-controlled logger (for example `VITE_LOG_LEVEL`, disabled/reduced in production without source edits). Never console-log request/response payloads, instructions, compositions, manifests containing event data, or events.
   - Dependencies: Tasks 2 and 7.
 
-- [ ] Task 10: Implement ephemeral Zustand arrangement state, race/stale handling, topology-safe Apply/undo, and isolated audition playback.
+- [x] Task 10: Implement ephemeral Zustand arrangement state, race/stale handling, topology-safe Apply/undo, and isolated audition playback.
   - Files: update `frontend/src/store/musicStore.js`, `frontend/src/components/PlaybackControls.jsx`, `frontend/src/components/TrackPlaybackControls.jsx`, `frontend/src/utils/playbackTracks.js`, and `frontend/src/utils/playbackTracks.test.js`; create `frontend/src/store/musicStore.arrangement.test.js`; extend other focused playback/state helpers and tests as required.
   - Deliverable: add operation/source/protected/target/preservation/range/candidate controls; catalog/loading/error state; request sequence/base revision/fingerprint; candidates/selection; stale reason; source/candidate audition mode; and separate candidate mixer controls. Ignore superseded responses and mark retained previews stale when source/settings change.
   - Deliverable: preview/select/audition/discard without composition/history/dirty/autosave/analysis/notation mutation. Apply only after Task 9 verification through `applyCompositionEdit`, creating one history entry, recovering selected track/note IDs, snapshotting/restoring mixer state for topology undo/redo, invalidating other previews, reconciling motif/analysis selections, and explicitly refreshing notation. Update browser playback strategy to prefer canonical instrument/program identity and use role only as a fallback, with diagnostics routed through the Task 9 controlled logger.
@@ -220,7 +220,7 @@ Each candidate response:
   - Logging requirements: INFO request/select/audition/apply/discard lifecycle with operation, revision, counts, candidate ID suffix/fingerprint prefix, status/code; DEBUG race/stale reasons and assertion-code counts through the Task 9 environment-controlled logger. Never log instructions, candidates, composition/event data, catalog payloads, or project JSON.
   - Dependencies: Task 9.
 
-- [ ] Task 11: Build the responsive accessible Arrange tab for explicit source/target mapping, candidate comparison, audition, and Apply.
+- [x] Task 11: Build the responsive accessible Arrange tab for explicit source/target mapping, candidate comparison, audition, and Apply.
   - Files: create `frontend/src/components/ArrangementPanel.jsx`; update `frontend/src/components/ComposerWorkspace.jsx`; update `frontend/src/components/TrackPlaybackControls.jsx` for `aria-pressed` and track-specific labels if not completed in Task 10.
   - Deliverable: add an `Arrange` tab after Develop with operation-specific help; source and protected track fieldsets; actual before inventory; target part rows populated from the backend catalog with independent role/instrument controls; preservation/range controls; candidate count/provider/model/instruction; and clear invalid-request reasons.
   - Deliverable: render valid candidates as a real radio group with before/after instrumentation, topology and event counts, density deltas, preservation assertions, range/duplicate/harmony warnings, provider/model, and expandable details. Render rejected attempts separately with ordinal/stage/stable reasons and no audition/apply controls. Add Generate/Regenerate, Play source, Audition candidate, Discard, Apply selected, and inline confirmation summarizing destructive/warning counts.
@@ -231,7 +231,7 @@ Each candidate response:
 
 ### Phase 5: Acceptance, Documentation, and Quality Gates
 
-- [ ] Task 12: Finish frontend API, utility, store, playback, history, and regression coverage.
+- [x] Task 12: Finish frontend API, utility, store, playback, history, and regression coverage.
   - Files: complete `frontend/src/api/musicApi.test.js`, `frontend/src/utils/compositionArrangementCandidates.test.js`, `frontend/src/store/musicStore.arrangement.test.js`, `frontend/src/utils/musicJsonValidation.test.js`, and relevant playback/store regression suites.
   - Deliverable: prove non-mutating preview/selection/audition, strict topology authorization, catalog-driven roles/instruments/programs, safe stale/tamper handling, atomic topology Apply, mixer/history restoration, and no candidate state in project payloads across all operations.
   - Expected behavior: existing generation, import, analysis, motif, harmony, development, piano-roll, playback, notation, project, save, and reset tests retain their semantics.

@@ -1416,3 +1416,163 @@ test('loadArrangementInstruments preserves structured catalog errors', async (t)
     },
   );
 });
+
+test('previewCompositionArrangement preserves structured 422 inventory errors', async (t) => {
+  const composition = canonicalV2Composition();
+  const trackId = composition.tracks[0].id;
+  const restore = installAxiosStub(async () => {
+    const error = new Error('Request failed');
+    error.isAxiosError = true;
+    error.response = {
+      status: 422,
+      data: {
+        detail: {
+          code: 'arrangement_inventory_mismatch',
+          message: 'Before instrumentation does not match selected source tracks.',
+          details: { before_part_count: 1, source_track_count: 1 },
+        },
+      },
+    };
+    throw error;
+  });
+  t.after(restore);
+
+  await assert.rejects(
+    () => previewCompositionArrangement({
+      composition,
+      operation: 'change_instrumentation',
+      source_track_ids: [trackId],
+      instrumentation: {
+        before: [{
+          part_id: 'b1',
+          instrument_id: 'acoustic_grand_piano',
+          role: 'melody',
+          source_track_ids: [trackId],
+        }],
+        after: [{
+          part_id: 'a1',
+          instrument_id: 'cello',
+          role: 'melody',
+          source_track_ids: [trackId],
+        }],
+      },
+      candidate_count: 1,
+    }),
+    (error) => {
+      assert.ok(error instanceof ArrangementApiError);
+      assert.equal(error.status, 422);
+      assert.equal(error.code, 'arrangement_inventory_mismatch');
+      assert.equal(error.details?.before_part_count, 1);
+      return true;
+    },
+  );
+});
+
+test('arrangement API logger gate suppresses disabled levels and omits musical payloads', async (t) => {
+  const { setAppLogLevelForTests } = await import('../utils/appLogger.js');
+  resetArrangementInstrumentCache();
+  clearArrangementCatalogCache();
+  const composition = canonicalV2Composition();
+  const trackId = composition.tracks[0].id;
+  const restore = installAxiosStub(async (config) => {
+    if (config.url === '/composition/arrangement/instruments') {
+      return {
+        data: sampleArrangementCatalog(),
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return {
+      data: await sampleArrangementPreviewResponse(composition),
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(() => {
+    restore();
+    resetArrangementInstrumentCache();
+    clearArrangementCatalogCache();
+    setAppLogLevelForTests(null);
+  });
+
+  const lines = [];
+  const originalDebug = console.debug;
+  const originalInfo = console.info;
+  const originalError = console.error;
+  console.debug = (...args) => { lines.push(JSON.stringify(args)); };
+  console.info = (...args) => { lines.push(JSON.stringify(args)); };
+  console.error = (...args) => { lines.push(JSON.stringify(args)); };
+
+  setAppLogLevelForTests('silent');
+  lines.length = 0;
+  await loadArrangementInstruments({ forceRefresh: true });
+  await previewCompositionArrangement({
+    composition,
+    operation: 'change_instrumentation',
+    source_track_ids: [trackId],
+    instrumentation: {
+      before: [{
+        part_id: 'b1',
+        instrument_id: 'acoustic_grand_piano',
+        role: 'melody',
+        source_track_ids: [trackId],
+        doubling_policy: 'none',
+      }],
+      after: [{
+        part_id: 'a1',
+        instrument_id: 'cello',
+        role: 'melody',
+        source_track_ids: [trackId],
+        doubling_policy: 'none',
+      }],
+    },
+    candidate_count: 1,
+    instruction: 'keep the C4 melody recognizable please',
+    selection: { provider: 'fake', model: 'fake-deterministic' },
+  });
+  const silentArrangement = lines.filter((line) => line.includes('[musicApi.arrangement]'));
+  assert.equal(silentArrangement.length, 0);
+
+  setAppLogLevelForTests('debug');
+  lines.length = 0;
+  await loadArrangementInstruments({ forceRefresh: true });
+  await previewCompositionArrangement({
+    composition,
+    operation: 'change_instrumentation',
+    source_track_ids: [trackId],
+    instrumentation: {
+      before: [{
+        part_id: 'b1',
+        instrument_id: 'acoustic_grand_piano',
+        role: 'melody',
+        source_track_ids: [trackId],
+        doubling_policy: 'none',
+      }],
+      after: [{
+        part_id: 'a1',
+        instrument_id: 'cello',
+        role: 'melody',
+        source_track_ids: [trackId],
+        doubling_policy: 'none',
+      }],
+    },
+    candidate_count: 1,
+    instruction: 'keep the C4 melody recognizable please',
+    selection: { provider: 'fake', model: 'fake-deterministic' },
+  });
+  console.debug = originalDebug;
+  console.info = originalInfo;
+  console.error = originalError;
+
+  const arrangementLines = lines.filter((line) => line.includes('[musicApi.arrangement]'));
+  assert.ok(arrangementLines.length >= 1);
+  const joined = arrangementLines.join('\n');
+  assert.equal(joined.includes('keep the C4'), false);
+  assert.equal(joined.includes('"events"'), false);
+  assert.equal(joined.includes(composition.tracks[0].events[0].pitch), false);
+  assert.match(joined, /operation|candidateCount|catalogVersion|fingerprintPrefix|status/i);
+});

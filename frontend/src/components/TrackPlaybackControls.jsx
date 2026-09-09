@@ -42,6 +42,8 @@ const ToggleButton = styled.button`
   padding: 8px 10px;
   cursor: pointer;
   font-weight: 600;
+  min-height: 44px;
+  min-width: 44px;
 `;
 
 const VolumeControl = styled.label`
@@ -52,6 +54,7 @@ const VolumeControl = styled.label`
 
   input {
     width: 100%;
+    min-height: 44px;
   }
 `;
 
@@ -68,18 +71,21 @@ const TrackPlaybackControls = ({
   onMuteToggle,
   onSoloToggle,
   onVolumeChange,
+  ariaLabel = 'Track mixer',
+  hint = 'Tracks / mixer (canonical composition.v2; mute/solo are UI-only)',
 }) => {
   if (!tracks.length) {
     return <Hint>Track controls appear for canonical composition payloads.</Hint>;
   }
 
   return (
-    <TrackList aria-label="Track mixer">
+    <TrackList aria-label={ariaLabel}>
       <Hint style={{ marginTop: 0 }}>
-        Tracks / mixer (canonical composition.v2; mute/solo are UI-only)
+        {hint}
       </Hint>
       {tracks.map((track) => {
         const trackId = String(track.id);
+        const trackName = track.name || trackId;
         const control = trackControls[trackId] || {
           muted: false,
           solo: false,
@@ -88,7 +94,7 @@ const TrackPlaybackControls = ({
         return (
           <TrackRow key={trackId}>
             <TrackLabel>
-              <strong>{track.name || trackId}</strong>
+              <strong>{trackName}</strong>
               <span>
                 {track.instrument || 'unknown'} · ch {track.channel ?? '-'} · prog {track.midi_program ?? '-'}
                 {Number.isInteger(Number(track.expression)) ? ` · expr ${track.expression}` : ''}
@@ -98,6 +104,8 @@ const TrackPlaybackControls = ({
               type="button"
               $active={control.muted}
               disabled={disabled}
+              aria-pressed={Boolean(control.muted)}
+              aria-label={`Mute ${trackName}`}
               onClick={() => onMuteToggle?.(trackId)}
             >
               Mute
@@ -106,6 +114,8 @@ const TrackPlaybackControls = ({
               type="button"
               $active={control.solo}
               disabled={disabled}
+              aria-pressed={Boolean(control.solo)}
+              aria-label={`Solo ${trackName}`}
               onClick={() => onSoloToggle?.(trackId)}
             >
               Solo
@@ -118,6 +128,7 @@ const TrackPlaybackControls = ({
                 max="127"
                 value={control.volumeMidi}
                 disabled={disabled}
+                aria-label={`Volume ${trackName}`}
                 onChange={(event) => onVolumeChange?.(trackId, Number(event.target.value))}
               />
             </VolumeControl>
