@@ -18,7 +18,8 @@
 - [x] **MIDI and MusicXML import** — Secure MIDI/MusicXML/MXL ingestion into canonical `composition.v2` with session import reports
 - [x] **Deterministic composition analysis** — Versioned `composition.analysis.v1` sidecar over V2 scopes (API + Analysis tab); advisory LLM context only; not persisted or playable
 - [x] **Motif-aware composition** — Canonical `motifs` metadata, Motifs tab apply/transform, and thematic LangGraph recurrence (`plan_themes` / `realize_themes`)
-- [ ] **Interactive harmony and reharmonization** — Editable V2 harmony tick spans, Harmony tab, previewed deterministic/AI reharmonize that only mutates notes on explicit apply
+- [x] **Interactive harmony and reharmonization** — Editable V2 harmony tick spans, Harmony tab, previewed deterministic/AI reharmonize that only mutates notes on explicit apply
+- [ ] **Context-aware composition development** — Continue / add / vary sections with multi-candidate `POST /composition/development/preview`; fingerprint-gated apply preserves existing material until explicit selection
 
 ## Completed
 
@@ -38,3 +39,4 @@
 | MIDI and MusicXML import | 2026-09-08 |
 | Deterministic composition analysis | 2026-09-09 |
 | Motif-aware composition | 2026-09-09 |
+| Interactive harmony and reharmonization | 2026-09-09 |
