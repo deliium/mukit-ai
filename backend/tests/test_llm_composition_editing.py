@@ -129,8 +129,11 @@ def test_edit_composition_region_dramatic_melody_preserves_outside_and_harmony(m
     assert composition.duration_ticks == original.duration_ticks
     assert composition.tempo_changes == []
     assert composition.markers == []
+    from app.services.composition_normalizer import normalize_composition_json
+
+    original_v2 = normalize_composition_json(original)
     assert canonical_json_dumps([item.model_dump(mode="json") for item in composition.harmony]) == (
-        canonical_json_dumps([item.model_dump(mode="json") for item in original.harmony])
+        canonical_json_dumps([item.model_dump(mode="json") for item in original_v2.harmony])
     )
     assert canonical_json_dumps(_outside_melody_events(composition)) == canonical_json_dumps(
         _outside_melody_events(original)

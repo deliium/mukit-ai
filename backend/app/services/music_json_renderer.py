@@ -230,7 +230,14 @@ def _render_canonical_musicxml(composition: CompositionLike) -> tuple[str, Proje
 def _build_notation_context(composition: CompositionLike) -> _NotationContext:
     timeline = compile_timeline(composition)
     report = empty_projection_report()
-    harmony_by_bar = {item.bar: item.chord for item in composition.harmony}
+    from app.services.composition_harmony_spans import harmony_change_points_by_bar
+
+    harmony_by_bar = harmony_change_points_by_bar(
+        composition.harmony,
+        boundaries=timeline.bar_boundaries,
+        duration_ticks=timeline.duration_ticks,
+        bar_count=timeline.bar_count,
+    )
 
     section_label_by_bar: dict[int, str] = {}
     for section in composition.sections:

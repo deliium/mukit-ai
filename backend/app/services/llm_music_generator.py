@@ -9,7 +9,6 @@ from ..llm_settings import LLMProviderSettings, LLMSettings, load_llm_settings
 from ..schemas import (
     Composition,
     CompositionV2,
-    CompositionV2HarmonyItem,
     CompositionV2NoteEvent,
     CompositionV2Section,
     CompositionV2Track,
@@ -782,9 +781,18 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
                     draft=draft,
                 )
 
-        harmony_items = [
-            CompositionV2HarmonyItem(bar=event.bar, chord=event.chord) for event in harmony.events
-        ]
+        in_range_events = [event for event in harmony.events if 1 <= int(event.bar) <= locked_bars]
+        dropped_harmony = len(harmony.events) - len(in_range_events)
+        if dropped_harmony:
+            logger.warning(
+                "Dropped out-of-range harmony bars during assemble",
+                extra={
+                    "code": "harmony_legacy_bar_out_of_range",
+                    "dropped_count": dropped_harmony,
+                    "bar_count": locked_bars,
+                },
+            )
+        harmony_items = [{"bar": event.bar, "chord": event.chord} for event in in_range_events]
         theme_motifs = list(state.get("theme_motifs") or [])
         composition = CompositionV2(
             schema_version=COMPOSITION_SCHEMA_VERSION_V2,

@@ -2,6 +2,8 @@
  * Client-side composition version boundary: classify, migrate V1→V2, reject unsupported.
  */
 
+import { normalizeCompositionHarmonySpans, HarmonySpanNormalizationError } from './compositionHarmonySpans.js';
+
 export const SCHEMA_VERSION_V1 = 'composition.v1';
 export const SCHEMA_VERSION_V2 = 'composition.v2';
 
@@ -77,7 +79,10 @@ export function migrateV1ToV2(source) {
     time_signature_changes: Array.isArray(v1.time_signature_changes) ? v1.time_signature_changes : [],
     key_changes: Array.isArray(v1.key_changes) ? v1.key_changes : [],
     markers: Array.isArray(v1.markers) ? v1.markers : [],
+    harmony: Array.isArray(v1.harmony) ? v1.harmony : [],
   };
+
+  normalizeCompositionHarmonySpans(v2);
 
   console.debug('[compositionVersion] V1 to V2 migration completed', {
     sourceSchemaVersion: SCHEMA_VERSION_V1,
@@ -85,6 +90,7 @@ export function migrateV1ToV2(source) {
     sectionCount: sections.length,
     trackCount: tracks.length,
     sectionIdsAdded: sectionIdsAdded.length,
+    harmonySpanCount: Array.isArray(v2.harmony) ? v2.harmony.length : 0,
   });
 
   return v2;
@@ -102,11 +108,33 @@ export function prepareCompositionForStore(raw) {
   });
 
   if (category === 'v2') {
-    return structuredClone(raw);
+    const cloned = structuredClone(raw);
+    try {
+      normalizeCompositionHarmonySpans(cloned);
+    } catch (error) {
+      if (error instanceof HarmonySpanNormalizationError) {
+        throw new CompositionVersionError(error.message, {
+          code: error.code,
+          schemaVersion: SCHEMA_VERSION_V2,
+        });
+      }
+      throw error;
+    }
+    return cloned;
   }
   if (category === 'v1') {
     console.info('[compositionVersion] Normalizing composition.v1 input to composition.v2');
-    return migrateV1ToV2(raw);
+    try {
+      return migrateV1ToV2(raw);
+    } catch (error) {
+      if (error instanceof HarmonySpanNormalizationError) {
+        throw new CompositionVersionError(error.message, {
+          code: error.code,
+          schemaVersion: SCHEMA_VERSION_V1,
+        });
+      }
+      throw error;
+    }
   }
   if (category === 'legacy') {
     throw new CompositionVersionError(

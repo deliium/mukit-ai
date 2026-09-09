@@ -324,11 +324,12 @@ class CompositionHarmonyItem(BaseModel):
 
 
 class CompositionV2HarmonyItem(BaseModel):
-    """V2 harmony metadata with strict extras policy."""
+    """V2 harmony metadata as an explicit half-open tick span (never playable notes)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    bar: int = Field(..., ge=1, le=512)
+    start_tick: int = Field(..., ge=0)
+    duration_ticks: int = Field(..., gt=0)
     chord: str = Field(..., min_length=1, max_length=32)
 
     @field_validator("chord")
@@ -339,6 +340,22 @@ class CompositionV2HarmonyItem(BaseModel):
             log_validation_failure(cls.__name__, "chord", value, "chord is empty")
             raise ValueError("Chord must not be empty")
         return chord
+
+    @field_validator("start_tick")
+    @classmethod
+    def validate_start_tick(cls, value: int) -> int:
+        if value < 0:
+            log_validation_failure(cls.__name__, "start_tick", value, "start tick cannot be negative")
+            raise ValueError("Harmony start_tick cannot be negative")
+        return value
+
+    @field_validator("duration_ticks")
+    @classmethod
+    def validate_duration_ticks(cls, value: int) -> int:
+        if value <= 0:
+            log_validation_failure(cls.__name__, "duration_ticks", value, "duration must be positive")
+            raise ValueError("Harmony duration_ticks must be positive")
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -833,6 +850,25 @@ class CompositionV2Track(BaseModel):
         return self
 
 
+def _validate_harmony_spans(harmony: list[CompositionV2HarmonyItem], *, duration_ticks: int) -> None:
+    """Enforce sorted, unique-start, non-overlapping spans within composition duration."""
+    if not harmony:
+        return
+    starts = [item.start_tick for item in harmony]
+    if starts != sorted(starts):
+        raise ValueError("harmony spans must be sorted by start_tick")
+    if len(starts) != len(set(starts)):
+        raise ValueError("harmony span start_tick values must be unique")
+    previous_end = 0
+    for item in harmony:
+        end_tick = item.start_tick + item.duration_ticks
+        if end_tick > duration_ticks:
+            raise ValueError("harmony spans must fit within composition duration_ticks")
+        if item.start_tick < previous_end:
+            raise ValueError("harmony spans must not overlap")
+        previous_end = end_tick
+
+
 def _validate_tie_chains(track: CompositionV2Track) -> None:
     groups: dict[str, list[CompositionV2NoteEvent]] = {}
     for event in track.events:
@@ -1023,6 +1059,51 @@ class CompositionV2(BaseModel):
     def validate_composition_time_signature(cls, value: str) -> str:
         return normalize_time_signature(value, model_name=cls.__name__)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_harmony_spans_before_validation(cls, data: Any) -> Any:
+        """Accept legacy `{bar, chord}` points and rewrite them to explicit spans."""
+        if not isinstance(data, dict):
+            return data
+        harmony = data.get("harmony")
+        if harmony is None:
+            return data
+
+        # Local import avoids a circular dependency with services package init.
+        from app.services.composition_harmony_spans import (
+            HarmonySpanNormalizationError,
+            ensure_canonical_harmony_spans,
+        )
+
+        try:
+            spans, stats = ensure_canonical_harmony_spans(
+                harmony,
+                time_signature=str(data.get("time_signature") or "4/4"),
+                ticks_per_quarter=int(data.get("ticks_per_quarter") or 480),
+                bar_count=int(data["bar_count"]),
+                duration_ticks=int(data["duration_ticks"]),
+                time_signature_changes=data.get("time_signature_changes") or [],
+            )
+        except HarmonySpanNormalizationError as exc:
+            log_validation_failure(cls.__name__, "harmony", None, exc.message)
+            raise ValueError(exc.message) from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            log_validation_failure(cls.__name__, "harmony", None, str(exc))
+            raise ValueError(f"Harmony normalization failed: {exc}") from exc
+
+        if stats.get("shape") == "legacy_bar_points":
+            logger.debug(
+                "Composition V2 pre-normalized legacy harmony",
+                extra={
+                    "input_count": stats.get("input_count", 0),
+                    "span_count": stats.get("span_count", 0),
+                    "duplicate_collapsed_count": stats.get("duplicate_collapsed_count", 0),
+                },
+            )
+        updated = dict(data)
+        updated["harmony"] = spans
+        return updated
+
     @model_validator(mode="after")
     def validate_composition_v2(self) -> CompositionV2:
         logger.debug(
@@ -1035,6 +1116,7 @@ class CompositionV2(BaseModel):
                 "marker_count": len(self.markers),
                 "motif_count": len(self.motifs),
                 "motif_occurrence_count": sum(len(motif.occurrences) for motif in self.motifs),
+                "harmony_span_count": len(self.harmony),
             },
         )
 
@@ -1049,6 +1131,8 @@ class CompositionV2(BaseModel):
         except ValueError as exc:
             log_validation_failure(self.__class__.__name__, "meter_map", self.duration_ticks, str(exc))
             raise
+
+        _validate_harmony_spans(self.harmony, duration_ticks=self.duration_ticks)
 
         boundary_set = set(boundaries[:-1])
 
@@ -1161,6 +1245,7 @@ class CompositionV2(BaseModel):
                 "marker_count": len(self.markers),
                 "motif_count": len(self.motifs),
                 "motif_occurrence_count": sum(len(motif.occurrences) for motif in self.motifs),
+                "harmony_span_count": len(self.harmony),
                 "duration_ticks": self.duration_ticks,
             },
         )

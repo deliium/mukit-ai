@@ -292,6 +292,7 @@ def test_harmony_preserving_edit_rejects_harmony_patch_by_default():
     composition = _sixteen_bar_composition()
     selection = CompositionEditSelection(start_bar=9, end_bar=12, track_ids=["melody-1"])
     patch = CompositionRegionReplacementPatch(
+        schema_version="composition.v1",
         start_bar=9,
         end_bar=12,
         target_track_ids=["melody-1"],
@@ -370,7 +371,9 @@ def test_invalid_boundaries_are_rejected(caplog):
         start_bar=8,
         end_bar=12,
         target_track_ids=["melody-1"],
-        replace_tracks=[],
+        replace_tracks=[
+            CompositionRegionTrackReplacement(track_id="melody-1", events=[]),
+        ],
     )
 
     with caplog.at_level(logging.WARNING):

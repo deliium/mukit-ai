@@ -485,7 +485,20 @@ def _check_harmony_usefulness(
         )
         return
 
-    covered_bars = {item.bar for item in composition.harmony}
+    covered_bars = set()
+    if composition.harmony:
+        from app.services.composition_harmony_spans import harmony_change_points_by_bar
+        from app.services.composition_timeline import compile_timeline
+
+        timeline = compile_timeline(composition)
+        covered_bars = set(
+            harmony_change_points_by_bar(
+                composition.harmony,
+                boundaries=timeline.bar_boundaries,
+                duration_ticks=timeline.duration_ticks,
+                bar_count=timeline.bar_count,
+            ).keys()
+        )
     section_starts = {section.start_bar for section in composition.sections}
     missing_starts = sorted(section_starts - covered_bars)
     if missing_starts:

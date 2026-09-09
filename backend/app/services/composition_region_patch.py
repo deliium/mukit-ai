@@ -153,11 +153,37 @@ def selection_tick_bounds(
 def resolve_target_track_ids(
     composition: CompositionLike,
     track_ids: list[str] | None,
+    *,
+    replace_track_ids: list[str] | None = None,
+    default_to_all: bool = False,
 ) -> list[str]:
     known = [track.id for track in composition.tracks]
     if track_ids is None:
-        logger.debug("Resolving target tracks to all composition tracks", extra={"track_count": len(known)})
-        return list(known)
+        if default_to_all:
+            logger.debug(
+                "Resolving target tracks to all composition tracks",
+                extra={"track_count": len(known)},
+            )
+            return list(known)
+        # Do not default to every track during patch apply: omitted replacements
+        # previously erased in-region notes on non-listed tracks.
+        resolved = list(replace_track_ids or [])
+        unknown = sorted(set(resolved) - set(known))
+        if unknown:
+            logger.warning(
+                "Rejected unknown target track ids",
+                extra={"unknown_track_ids": unknown, "code": "unknown_track_ids"},
+            )
+            raise CompositionRegionPatchError(
+                "Selection track_ids must exist in the composition",
+                code="unknown_track_ids",
+                context={"unknown_track_ids": unknown},
+            )
+        logger.debug(
+            "Resolving target tracks from explicit replace_tracks only",
+            extra={"target_track_count": len(resolved)},
+        )
+        return resolved
 
     unknown = sorted(set(track_ids) - set(known))
     if unknown:
@@ -264,7 +290,11 @@ def summarize_region_selection(
     selection: CompositionEditSelection,
 ) -> RegionSelectionSummary:
     bounds = selection_tick_bounds(composition, selection)
-    target_track_ids = resolve_target_track_ids(composition, selection.track_ids)
+    target_track_ids = resolve_target_track_ids(
+        composition,
+        selection.track_ids,
+        default_to_all=True,
+    )
     target_set = set(target_track_ids)
 
     in_region_event_counts: dict[str, int] = {}
@@ -662,11 +692,12 @@ def _validate_added_tracks(
 
 
 def _apply_harmony_patch(
-    original_harmony: list[LLMMusicHarmonyItem],
-    harmony_patch: list[LLMMusicHarmonyItem] | None,
+    original_harmony: list[Any],
+    harmony_patch: list[Any] | None,
     bounds: RegionTickBounds,
     *,
     allow_harmony_changes: bool,
+    composition: CompositionLike | None = None,
 ) -> list[dict[str, Any]]:
     if harmony_patch is None:
         return [item.model_dump(mode="json") for item in original_harmony]
@@ -680,26 +711,79 @@ def _apply_harmony_patch(
             code="harmony_patch_not_allowed",
             context={"harmony_patch_count": len(harmony_patch)},
         )
+    if composition is None:
+        raise CompositionRegionPatchError(
+            "composition context is required for harmony patch application",
+            code="harmony_patch_missing_composition",
+        )
 
+    # Prefer dedicated harmony timeline ops for metadata-only V2 edits.
+    if isinstance(composition, CompositionV2):
+        from app.services.composition_harmony_timeline import apply_replace
+        from app.harmony_schemas import HarmonyReplaceOperation, HarmonySpanInput
+
+        logger.info(
+            "Applying V2 harmony_patch via dedicated timeline replace",
+            extra={
+                "start_tick": bounds.start_tick,
+                "duration_ticks": bounds.end_tick - bounds.start_tick,
+                "replacement_count": len(harmony_patch),
+            },
+        )
+        spans = [
+            HarmonySpanInput(
+                start_tick=int(item.start_tick),
+                duration_ticks=int(item.duration_ticks),
+                chord=str(item.chord),
+            )
+            for item in harmony_patch
+        ]
+        updated = apply_replace(
+            composition,
+            HarmonyReplaceOperation(
+                start_tick=bounds.start_tick,
+                duration_ticks=bounds.end_tick - bounds.start_tick,
+                spans=spans,
+            ),
+        )
+        return [item.model_dump(mode="json") for item in updated.harmony]
+
+    # Legacy V1 bar-point path.
     preserved = [
         item.model_dump(mode="json")
         for item in original_harmony
-        if item.bar < bounds.start_bar or item.bar > bounds.end_bar
+        if getattr(item, "bar", None) is not None
+        and (item.bar < bounds.start_bar or item.bar > bounds.end_bar)
     ]
     for item in harmony_patch:
-        if item.bar < bounds.start_bar or item.bar > bounds.end_bar:
+        bar = getattr(item, "bar", None)
+        if bar is None:
+            raise CompositionRegionPatchError(
+                "composition.v1 harmony_patch items must use bar/chord",
+                code="harmony_patch_invalid_shape",
+            )
+        if bar < bounds.start_bar or bar > bounds.end_bar:
             logger.warning(
                 "Rejected harmony patch item outside selection",
-                extra={"bar": item.bar, "code": "harmony_patch_out_of_region"},
+                extra={"bar": bar, "code": "harmony_patch_out_of_region"},
             )
             raise CompositionRegionPatchError(
                 "harmony_patch items must fall within the selected bars",
                 code="harmony_patch_out_of_region",
-                context={"bar": item.bar, "start_bar": bounds.start_bar, "end_bar": bounds.end_bar},
+                context={"bar": bar, "start_bar": bounds.start_bar, "end_bar": bounds.end_bar},
             )
-        preserved.append(item.model_dump(mode="json"))
+        preserved.append({"bar": bar, "chord": item.chord})
     preserved.sort(key=lambda item: int(item["bar"]))
     return preserved
+
+
+def _is_harmony_metadata_only_patch(patch: CompositionRegionReplacementPatch) -> bool:
+    return (
+        patch.harmony_patch is not None
+        and not patch.replace_tracks
+        and not patch.added_tracks
+        and patch.target_track_ids is None
+    )
 
 
 def apply_region_replacement_patch(
@@ -725,15 +809,22 @@ def apply_region_replacement_patch(
     )
 
     bounds = _validate_patch_boundaries(composition, patch, selection)
+    harmony_only = _is_harmony_metadata_only_patch(patch)
     requested_targets = (
         selection.track_ids
         if selection is not None and selection.track_ids is not None
         else patch.target_track_ids
     )
-    target_track_ids = resolve_target_track_ids(composition, requested_targets)
+    replace_ids = [item.track_id for item in patch.replace_tracks]
+    target_track_ids = resolve_target_track_ids(
+        composition,
+        requested_targets,
+        replace_track_ids=replace_ids,
+        default_to_all=False,
+    )
     target_set = set(target_track_ids)
     removed_event_ids: set[str] = set()
-    if isinstance(composition, CompositionV2):
+    if isinstance(composition, CompositionV2) and not harmony_only:
         for track in composition.tracks:
             if track.id not in target_set:
                 continue
@@ -747,8 +838,15 @@ def apply_region_replacement_patch(
                 "motif_count": len(composition.motifs),
             },
         )
-    reject_boundary_crossing_content(composition, bounds, target_track_ids)
-    replaced_event_count = _validate_replacement_events(patch.replace_tracks, bounds, target_track_ids)
+    if not harmony_only:
+        reject_boundary_crossing_content(composition, bounds, target_track_ids)
+        replaced_event_count = _validate_replacement_events(patch.replace_tracks, bounds, target_track_ids)
+    else:
+        logger.debug(
+            "Skipping note boundary checks for harmony-metadata-only patch",
+            extra={"code": "harmony_metadata_only"},
+        )
+        replaced_event_count = 0
     _validate_added_tracks(composition, patch.added_tracks, allow_added_tracks=allow_added_tracks)
 
     replacements = {item.track_id: item.events for item in patch.replace_tracks}
@@ -759,7 +857,7 @@ def apply_region_replacement_patch(
     for track_data in original_data["tracks"]:
         track_id = track_data["id"]
         original_events = track_data.get("events", [])
-        if track_id not in set(target_track_ids):
+        if harmony_only or track_id not in set(target_track_ids):
             preserved_event_count += len(original_events)
             updated_tracks.append(copy.deepcopy(track_data))
             continue
@@ -782,12 +880,37 @@ def apply_region_replacement_patch(
 
     updated_data = copy.deepcopy(original_data)
     updated_data["tracks"] = updated_tracks
-    updated_data["harmony"] = _apply_harmony_patch(
-        composition.harmony,
-        patch.harmony_patch,
-        bounds,
-        allow_harmony_changes=allow_harmony_changes,
-    )
+    # For harmony-only V2 edits, apply_replace already returns a full composition;
+    # we still rewrite harmony on the cloned payload for a single validation path.
+    if harmony_only and isinstance(composition, CompositionV2) and allow_harmony_changes:
+        from app.services.composition_harmony_timeline import apply_replace
+        from app.harmony_schemas import HarmonyReplaceOperation, HarmonySpanInput
+
+        spans = [
+            HarmonySpanInput(
+                start_tick=int(item.start_tick),
+                duration_ticks=int(item.duration_ticks),
+                chord=str(item.chord),
+            )
+            for item in (patch.harmony_patch or [])
+        ]
+        harmony_updated = apply_replace(
+            composition,
+            HarmonyReplaceOperation(
+                start_tick=bounds.start_tick,
+                duration_ticks=bounds.end_tick - bounds.start_tick,
+                spans=spans,
+            ),
+        )
+        updated_data["harmony"] = [item.model_dump(mode="json") for item in harmony_updated.harmony]
+    else:
+        updated_data["harmony"] = _apply_harmony_patch(
+            composition.harmony,
+            patch.harmony_patch,
+            bounds,
+            allow_harmony_changes=allow_harmony_changes,
+            composition=composition,
+        )
 
     motif_reconcile_warnings: list[str] = []
     if isinstance(composition, CompositionV2) and composition.motifs:

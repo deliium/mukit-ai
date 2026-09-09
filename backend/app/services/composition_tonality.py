@@ -95,9 +95,13 @@ _PC_TO_NAME = {
 
 _CHORD_RE = re.compile(
     r"^\s*([A-Ga-g])([#b]?)"
-    r"(maj7|maj9|maj|min7|min9|min|m7|m9|m|dim7|dim|aug|sus4|sus2|sus|7|9|6|°)?"
-    r"(.*)?\s*$"
+    r"(maj7|maj9|maj13|maj|min7b5|min7|min9|min|m7b5|m7|m9|m|dim7|dim|aug|sus4|sus2|sus|add9|add2|7|9|11|13|6|°)?"
+    r"(.*?)\s*$"
 )
+
+_SLASH_BASS_RE = re.compile(r"^(.*?)/([A-Ga-g][#b]?)\s*$")
+_ALTERATION_TOKEN_RE = re.compile(r"(?:^|[(),\s])([#b]?(?:9|11|13|5|6))(?=$|[(),\s])")
+_EXTENSION_TOKEN_RE = re.compile(r"(?:^|[(),\s])(add(?:2|4|6|9)|omit[35]|no[35]|alt)(?=$|[(),\s])", re.I)
 
 # Relative scale degrees for major / natural minor (pitch-class offsets).
 _MAJOR_SCALE = (0, 2, 4, 5, 7, 9, 11)
@@ -127,6 +131,16 @@ class ParsedChord:
     quality: str
     raw: str
     parseable: bool = True
+    authored_spelling: str = ""
+    bass_pc: int | None = None
+    extensions: tuple[str, ...] = ()
+    alterations: tuple[str, ...] = ()
+    unknown_suffix: str | None = None
+    pitch_classes: frozenset[int] = frozenset()
+
+    @property
+    def has_unknown_syntax(self) -> bool:
+        return bool(self.unknown_suffix)
 
 
 @dataclass
@@ -206,24 +220,137 @@ def parse_key(key: str) -> ParsedKey | None:
 
 def parse_chord_symbol(symbol: str) -> ParsedChord:
     raw = symbol.strip()
-    match = _CHORD_RE.match(raw)
+    authored = raw
+    if not raw:
+        return ParsedChord(
+            root_pc=-1,
+            quality="unknown",
+            raw=raw,
+            parseable=False,
+            authored_spelling=authored,
+        )
+
+    bass_pc: int | None = None
+    body = raw
+    slash = _SLASH_BASS_RE.match(raw)
+    if slash:
+        body = slash.group(1).strip()
+        bass_token = slash.group(2).replace("♯", "#").replace("♭", "b")
+        bass_pc = _note_token_to_pc(bass_token)
+
+    match = _CHORD_RE.match(body)
     if not match:
-        return ParsedChord(root_pc=-1, quality="unknown", raw=raw, parseable=False)
-    letter, accidental, quality_raw, _tail = match.groups()
-    name = f"{letter.upper()}{accidental or ''}"
-    if accidental == "b":
-        name = f"{letter.upper()}B"
-    elif accidental == "#":
-        name = f"{letter.upper()}#"
-    else:
-        name = letter.upper()
-    pc = _NOTE_NAME_TO_PC.get(name)
-    if pc is None and accidental == "b":
-        pc = _NOTE_NAME_TO_PC.get(f"{letter.upper()}B")
+        return ParsedChord(
+            root_pc=-1,
+            quality="unknown",
+            raw=raw,
+            parseable=False,
+            authored_spelling=authored,
+            bass_pc=bass_pc,
+            unknown_suffix=body or None,
+        )
+
+    letter, accidental, quality_raw, tail = match.groups()
+    pc = _note_token_to_pc(f"{letter}{accidental or ''}")
     if pc is None:
-        return ParsedChord(root_pc=-1, quality="unknown", raw=raw, parseable=False)
+        return ParsedChord(
+            root_pc=-1,
+            quality="unknown",
+            raw=raw,
+            parseable=False,
+            authored_spelling=authored,
+            bass_pc=bass_pc,
+            unknown_suffix=body,
+        )
+
     quality = _normalize_quality(quality_raw or "")
-    return ParsedChord(root_pc=pc, quality=quality, raw=raw, parseable=True)
+    alterations, extensions, remainder = _parse_chord_tail(tail or "")
+    unknown_suffix = remainder.strip() or None
+    # Unknown suffixes stay authored metadata; chord remains parseable from root/quality.
+    pitch_classes = _chord_pitch_classes(pc, quality, alterations=alterations, bass_pc=bass_pc)
+    return ParsedChord(
+        root_pc=pc,
+        quality=quality,
+        raw=raw,
+        parseable=True,
+        authored_spelling=authored,
+        bass_pc=bass_pc,
+        extensions=tuple(extensions),
+        alterations=tuple(alterations),
+        unknown_suffix=unknown_suffix,
+        pitch_classes=frozenset(pitch_classes),
+    )
+
+
+def _note_token_to_pc(token: str) -> int | None:
+    text = token.strip().replace("♯", "#").replace("♭", "b")
+    if not text:
+        return None
+    letter = text[0].upper()
+    accidental = text[1:] if len(text) > 1 else ""
+    if accidental == "b":
+        lookup = f"{letter}B"
+    elif accidental == "#":
+        lookup = f"{letter}#"
+    elif accidental == "":
+        lookup = letter
+    else:
+        return None
+    return _NOTE_NAME_TO_PC.get(lookup)
+
+
+def _parse_chord_tail(tail: str) -> tuple[list[str], list[str], str]:
+    text = tail.strip()
+    if not text:
+        return [], [], ""
+    alterations = [token.lower() for token in _ALTERATION_TOKEN_RE.findall(text)]
+    extensions = [token.lower() for token in _EXTENSION_TOKEN_RE.findall(text)]
+    remainder = text
+    for token in alterations + extensions:
+        remainder = re.sub(re.escape(token), " ", remainder, flags=re.I)
+    remainder = re.sub(r"[(),\s]+", " ", remainder).strip()
+    return alterations, extensions, remainder
+
+
+def _chord_pitch_classes(
+    root_pc: int,
+    quality: str,
+    *,
+    alterations: Sequence[str] = (),
+    bass_pc: int | None = None,
+) -> set[int]:
+    intervals = {
+        "maj": (0, 4, 7),
+        "min": (0, 3, 7),
+        "dom7": (0, 4, 7, 10),
+        "maj7": (0, 4, 7, 11),
+        "min7": (0, 3, 7, 10),
+        "min7b5": (0, 3, 6, 10),
+        "dim": (0, 3, 6),
+        "dim7": (0, 3, 6, 9),
+        "aug": (0, 4, 8),
+        "sus": (0, 5, 7),
+    }.get(quality, (0, 4, 7))
+    pcs = {(root_pc + interval) % 12 for interval in intervals}
+    for alteration in alterations:
+        token = alteration.lower()
+        if token in {"b9", "#9", "b5", "#5", "b13", "#11", "11", "13", "9"}:
+            # Represent common tensions as pitch-class color without inventing voicing.
+            mapping = {
+                "b9": 1,
+                "9": 2,
+                "#9": 3,
+                "b5": 6,
+                "#5": 8,
+                "#11": 6,
+                "11": 5,
+                "13": 9,
+                "b13": 8,
+            }
+            pcs.add((root_pc + mapping[token]) % 12)
+    if bass_pc is not None:
+        pcs.add(bass_pc % 12)
+    return pcs
 
 
 def analyze_composition_tonality(
@@ -252,9 +379,23 @@ def analyze_composition_tonality(
 
     unparseable = 0
     harmony_count = 0
+    from app.services.composition_timeline import compile_timeline
+
+    timeline = None
+    try:
+        timeline = compile_timeline(composition)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        timeline = None
     for item in composition.harmony:
         chord_symbol = item.chord if hasattr(item, "chord") else item.get("chord")
-        bar = item.bar if hasattr(item, "bar") else item.get("bar")
+        if hasattr(item, "start_tick"):
+            bar = timeline.bar_at_tick(int(item.start_tick)) if timeline is not None else 1
+        elif hasattr(item, "bar"):
+            bar = item.bar
+        else:
+            bar = item.get("bar")
+            if bar is None and item.get("start_tick") is not None and timeline is not None:
+                bar = timeline.bar_at_tick(int(item["start_tick"]))
         chord = parse_chord_symbol(str(chord_symbol))
         if not chord.parseable:
             unparseable += 1
@@ -514,17 +655,21 @@ def _normalize_quality(raw: str) -> str:
         return "min"
     if text in {"7"}:
         return "dom7"
-    if text in {"maj7", "maj9"}:
+    if text in {"maj7", "maj9", "maj13"}:
         return "maj7"
     if text in {"m7", "min7", "m9", "min9"}:
         return "min7"
-    if text in {"dim", "dim7"}:
+    if text in {"m7b5", "min7b5", "halfdim"}:
+        return "min7b5"
+    if text == "dim7":
+        return "dim7"
+    if text == "dim":
         return "dim"
     if text in {"aug"}:
         return "aug"
     if text.startswith("sus"):
         return "sus"
-    if text in {"6", "9"}:
+    if text in {"6", "9", "11", "13", "add9", "add2"}:
         return "maj"
     return text or "maj"
 
@@ -1035,8 +1180,11 @@ def _harmony_evidence_for_bars(
 ) -> list[tuple[ParsedChord, float]]:
     evidence: list[tuple[ParsedChord, float]] = []
     boundary_bars = {section.start_bar for section in composition.sections}
+    from app.services.composition_timeline import compile_timeline
+
+    timeline = compile_timeline(composition)
     for item in composition.harmony:
-        bar = item.bar
+        bar = timeline.bar_at_tick(int(item.start_tick))
         if bar < start_bar or bar >= end_bar_exclusive:
             continue
         chord = parse_chord_symbol(item.chord)

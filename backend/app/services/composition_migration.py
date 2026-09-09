@@ -49,6 +49,22 @@ def _stable_hash(payload: Any) -> str:
 
 def _project_v2_onto_v1_fields(composition: CompositionV2) -> dict[str, Any]:
     """Project migrated V2 back onto the V1 field set for ordered equality checks."""
+    from app.composition_schemas import compile_bar_boundaries
+    from app.services.composition_harmony_spans import project_spans_to_legacy_change_points
+
+    boundaries = compile_bar_boundaries(
+        time_signature=composition.time_signature,
+        ticks_per_quarter=composition.ticks_per_quarter,
+        bar_count=composition.bar_count,
+        duration_ticks=composition.duration_ticks,
+        time_signature_changes=composition.time_signature_changes,
+    )
+    legacy_harmony = project_spans_to_legacy_change_points(
+        composition.harmony,
+        boundaries=boundaries,
+        duration_ticks=composition.duration_ticks,
+        bar_count=composition.bar_count,
+    )
     return {
         "schema_version": COMPOSITION_SCHEMA_VERSION_V1,
         "tempo": composition.tempo,
@@ -95,7 +111,7 @@ def _project_v2_onto_v1_fields(composition: CompositionV2) -> dict[str, Any]:
             }
             for track in composition.tracks
         ],
-        "harmony": [item.model_dump(mode="json") for item in composition.harmony],
+        "harmony": legacy_harmony,
     }
 
 

@@ -342,10 +342,19 @@ export function analysisRelevantProjection(composition) {
       start_tick: section.start_tick,
       duration_ticks: section.duration_ticks,
     })),
-    harmony: (composition.harmony || []).map((item) => ({
-      bar: item.bar,
-      chord: item.chord,
-    })),
+    harmony: (composition.harmony || []).map((item) => {
+      if (item && item.start_tick != null) {
+        return {
+          start_tick: item.start_tick,
+          duration_ticks: item.duration_ticks,
+          chord: item.chord,
+        };
+      }
+      return {
+        bar: item?.bar,
+        chord: item?.chord,
+      };
+    }),
     tracks: (composition.tracks || []).map((track) => ({
       id: track.id,
       name: track.name,

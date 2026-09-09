@@ -67,7 +67,12 @@ def analysis_relevant_projection(composition: CompositionV2) -> dict[str, Any]:
             for section in composition.sections
         ],
         "harmony": [
-            {"bar": item.bar, "chord": item.chord} for item in composition.harmony
+            {
+                "start_tick": item.start_tick,
+                "duration_ticks": item.duration_ticks,
+                "chord": item.chord,
+            }
+            for item in composition.harmony
         ],
         "tracks": [
             {

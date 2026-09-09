@@ -145,11 +145,25 @@ def _bounded_prompt_context(
     harmony_summary: list[dict[str, Any]] = []
     if section is not None:
         section_end = section.start_bar + section.bar_count - 1
-        for item in composition.harmony:
-            if section.start_bar <= item.bar <= section_end:
-                harmony_summary.append({"bar": item.bar, "chord": item.chord})
-                if len(harmony_summary) >= 8:
-                    break
+        from app.services.composition_harmony_spans import (
+            harmony_change_points_by_bar,
+        )
+        from app.services.composition_timeline import compile_timeline
+
+        timeline = compile_timeline(composition)
+        by_bar = harmony_change_points_by_bar(
+            composition.harmony,
+            boundaries=timeline.bar_boundaries,
+            duration_ticks=timeline.duration_ticks,
+            bar_count=timeline.bar_count,
+        )
+        for bar in range(section.start_bar, section_end + 1):
+            chord = by_bar.get(bar)
+            if chord is None:
+                continue
+            harmony_summary.append({"bar": bar, "chord": chord})
+            if len(harmony_summary) >= 8:
+                break
 
     return {
         "tempo": composition.tempo,

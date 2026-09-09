@@ -22,6 +22,9 @@ def test_parse_key_and_chords():
     assert key.mode == "minor"
     assert parse_chord_symbol("C#7").quality == "dom7"
     assert parse_chord_symbol("Am").root_pc == 9
+    slash = parse_chord_symbol("D7/F#")
+    assert slash.bass_pc == 6
+    assert slash.quality == "dom7"
 
 
 def test_a_minor_progression_contradicts_f_sharp_minor_request():

@@ -579,11 +579,21 @@ def _build_draft_prompt(
             }
         )
 
-    harmony_in_region = [
-        item.model_dump(mode="json")
-        for item in composition.harmony
-        if selection.start_bar <= item.bar <= selection.end_bar
-    ]
+    harmony_in_region = []
+    from app.services.composition_harmony_spans import harmony_change_points_by_bar
+    from app.services.composition_timeline import compile_timeline
+
+    timeline = compile_timeline(composition)
+    by_bar = harmony_change_points_by_bar(
+        composition.harmony,
+        boundaries=timeline.bar_boundaries,
+        duration_ticks=timeline.duration_ticks,
+        bar_count=timeline.bar_count,
+    )
+    for bar in range(selection.start_bar, selection.end_bar + 1):
+        chord = by_bar.get(bar)
+        if chord is not None:
+            harmony_in_region.append({"bar": bar, "chord": chord})
 
     contract = {
         "schema_version": "composition.v2",

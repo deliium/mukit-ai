@@ -587,6 +587,43 @@ class CompositionRegionReplacementPatch(BaseModel):
                     "replace_tracks must only target declared target_track_ids",
                 )
                 raise ValueError("replace_tracks must only include target_track_ids")
+            missing_replace_ids = sorted(set(self.target_track_ids) - set(replace_ids))
+            if missing_replace_ids:
+                _log_validation_failure(
+                    self.__class__.__name__,
+                    "replace_tracks",
+                    missing_replace_ids,
+                    "every target_track_id requires an explicit replace_tracks entry",
+                )
+                raise ValueError(
+                    "every target_track_id requires an explicit replace_tracks entry "
+                    "(use an empty events list to clear the region)"
+                )
+
+        if self.harmony_patch is not None:
+            for index, item in enumerate(self.harmony_patch):
+                payload = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+                has_bar = "bar" in payload
+                has_span = "start_tick" in payload and "duration_ticks" in payload
+                if self.schema_version == "composition.v2":
+                    if has_bar or not has_span:
+                        _log_validation_failure(
+                            self.__class__.__name__,
+                            "harmony_patch",
+                            {"index": index},
+                            "composition.v2 harmony_patch requires explicit tick spans",
+                        )
+                        raise ValueError(
+                            "composition.v2 harmony_patch items must use start_tick/duration_ticks/chord"
+                        )
+                elif has_span and not has_bar:
+                    _log_validation_failure(
+                        self.__class__.__name__,
+                        "harmony_patch",
+                        {"index": index},
+                        "composition.v1 harmony_patch requires bar/chord items",
+                    )
+                    raise ValueError("composition.v1 harmony_patch items must use bar/chord")
 
         added_ids = [track.id for track in self.added_tracks]
         duplicate_added_ids = sorted({track_id for track_id in added_ids if added_ids.count(track_id) > 1})

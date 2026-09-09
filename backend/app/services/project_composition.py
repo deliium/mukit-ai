@@ -107,6 +107,7 @@ def normalize_project_composition(
             "migration_path": migration_path,
             "previous_schema_version": previous,
             "schema_version": composition.schema_version,
+            "harmony_span_count": len(composition.harmony),
             "rewritten": rewritten,
             "track_count": len(composition.tracks),
             "event_count": sum(len(track.events) for track in composition.tracks),

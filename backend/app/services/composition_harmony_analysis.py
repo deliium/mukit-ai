@@ -925,11 +925,11 @@ def _compare_declared_harmony(
         return "not_applicable"
 
     scope = context.resolved_scope
-    relevant = [
-        item
-        for item in declared
-        if scope.start_bar <= item.bar < scope.end_bar_exclusive
-    ]
+    relevant = []
+    for item in declared:
+        start_bar = context.timeline.bar_at_tick(int(item.start_tick))
+        if scope.start_bar <= start_bar < scope.end_bar_exclusive:
+            relevant.append((item, start_bar))
     if not relevant:
         return "not_applicable"
 
@@ -939,13 +939,13 @@ def _compare_declared_harmony(
     conflicts = 0
     insufficient = 0
 
-    for item in relevant:
+    for item, _start_bar in relevant:
         parsed = parse_chord_symbol(item.chord)
         if not parsed.parseable:
             unparseable += 1
             continue
-        bar_start = context.timeline.bar_start_tick(item.bar)
-        bar_end = context.timeline.bar_end_tick(item.bar)
+        bar_start = int(item.start_tick)
+        bar_end = bar_start + int(item.duration_ticks)
         overlapping = [
             span
             for span in spans
@@ -959,7 +959,7 @@ def _compare_declared_harmony(
             insufficient += 1
             continue
 
-        # Duration-weighted majority inferred chord in the bar.
+        # Duration-weighted majority inferred chord overlapping the declared span.
         best_span = max(
             overlapping,
             key=lambda span: (
