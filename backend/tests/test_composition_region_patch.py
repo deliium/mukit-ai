@@ -596,3 +596,94 @@ def test_boundary_crossing_tie_chain_is_rejected():
     with pytest.raises(CompositionRegionPatchError) as exc_info:
         apply_region_replacement_patch(composition, patch, selection=selection)
     assert exc_info.value.code == "boundary_crossing_tie_chain"
+
+
+def test_region_patch_reconciles_motif_references_and_preserves_unaffected_definitions():
+    from app.composition_schemas import CompositionV2, MOTIF_RECONCILE_WARNING_OCCURRENCE_PRUNED
+    from tests.test_composition_v2_schema import _motif_definition, _motif_source_events, _motif_track, minimal_v2
+
+    composition = CompositionV2.model_validate(
+        minimal_v2(
+            bar_count=4,
+            duration_ticks=7680,
+            sections=[
+                {
+                    "id": "verse",
+                    "type": "verse",
+                    "start_bar": 1,
+                    "bar_count": 2,
+                    "start_tick": 0,
+                    "duration_ticks": 3840,
+                },
+                {
+                    "id": "chorus",
+                    "type": "chorus",
+                    "start_bar": 3,
+                    "bar_count": 2,
+                    "start_tick": 3840,
+                    "duration_ticks": 3840,
+                },
+            ],
+            tracks=[
+                _motif_track(events=_motif_source_events()),
+                _motif_track(
+                    id="melody-2",
+                    name="Melody 2",
+                    events=[
+                        {"type": "note", "pitch": "A4", "start_tick": 3840, "duration_ticks": 480, "velocity": 80, "id": "m1"},
+                        {"type": "note", "pitch": "B4", "start_tick": 4320, "duration_ticks": 480, "velocity": 80, "id": "m2"},
+                        {"type": "note", "pitch": "C5", "start_tick": 4800, "duration_ticks": 480, "velocity": 80, "id": "m3"},
+                    ],
+                ),
+            ],
+            motifs=[
+                _motif_definition(),
+                {
+                    "id": "motif-b",
+                    "label": "Motif B",
+                    "occurrences": [
+                        {
+                            "id": "occ-b",
+                            "track_id": "melody-2",
+                            "event_ids": ["m1", "m2", "m3"],
+                            "relationship": "original",
+                        }
+                    ],
+                },
+            ],
+        )
+    )
+    unaffected_motif = next(item for item in composition.motifs if item.id == "motif-b")
+    selection = CompositionEditSelection(start_bar=1, end_bar=1, track_ids=["melody-1"])
+    patch = CompositionRegionReplacementPatch(
+        schema_version="composition.v2",
+        start_bar=1,
+        end_bar=1,
+        target_track_ids=["melody-1"],
+        replace_tracks=[
+            CompositionRegionTrackReplacement(
+                track_id="melody-1",
+                events=[
+                    {
+                        "type": "note",
+                        "pitch": "G4",
+                        "start_tick": 0,
+                        "duration_ticks": 480,
+                        "velocity": 90,
+                        "id": "patch-note",
+                        "articulations": [],
+                        "tie": None,
+                    }
+                ],
+            )
+        ],
+    )
+
+    result = apply_region_replacement_patch(composition, patch, selection=selection)
+
+    assert MOTIF_RECONCILE_WARNING_OCCURRENCE_PRUNED in result.warnings
+    assert all(item.id != "motif-a" for item in result.composition.motifs)
+    preserved = next(item for item in result.composition.motifs if item.id == "motif-b")
+    assert canonical_json_dumps(preserved.model_dump(mode="json")) == canonical_json_dumps(
+        unaffected_motif.model_dump(mode="json")
+    )

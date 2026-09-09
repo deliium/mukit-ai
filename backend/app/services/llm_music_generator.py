@@ -2332,9 +2332,17 @@ def _selected_model(request: LLMMusicGenerationRequest, provider: LLMProviderSet
 
 
 def _sanitized_prompt(request: LLMMusicGenerationRequest) -> dict[str, Any]:
+    """Log-safe prompt summary — never include instruction text content."""
     data = request.prompt.model_dump()
-    if data.get("instructions"):
-        data["instructions"] = str(data["instructions"])[:200]
+    raw_instructions = data.get("instructions")
+    if raw_instructions:
+        text = str(raw_instructions)
+        data["instructions"] = None
+        data["has_instructions"] = True
+        data["instructions_length"] = len(text.strip())
+    else:
+        data["has_instructions"] = False
+        data["instructions_length"] = 0
     return data
 
 

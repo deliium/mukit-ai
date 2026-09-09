@@ -115,7 +115,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
 
 ### Phase 2: Motif Application API and AI Variants
 
-- [ ] **Task 4: Define typed motif-application API contracts and a thin FastAPI router.** (depends on Tasks 1 and 3)
+- [x] **Task 4: Define typed motif-application API contracts and a thin FastAPI router.** (depends on Tasks 1 and 3)
   - Add `backend/app/motif_schemas.py` for source/destination selectors, operation enum and parameters, variation strength, LLM selection for creative operations, bounded operation diagnostics, and response DTOs.
   - Validate that motif/source occurrence exists, destination section and track agree with composition bounds, destination is pitched, operation parameters are mutually consistent, and LLM selection is required only for creative operations.
   - Add `backend/app/routers/motifs.py` with `POST /motifs/apply`; include it from `backend/app/main.py`. Keep all musical logic in services and map domain errors to sanitized 422/502/503 responses following existing LLM route conventions.
@@ -125,7 +125,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
   - Logging: INFO operation start/completion with motif ID, source/destination IDs, operation, provider/model, event counts, and outcome; DEBUG validation/score stages; WARN stable domain codes; ERROR type/code only. Never log instructions, note arrays, or compositions.
   - Files: `backend/app/motif_schemas.py`, `backend/app/routers/motifs.py`, `backend/app/main.py`, and route/schema tests.
 
-- [ ] **Task 5: Orchestrate atomic destination replacement and motif-reference reconciliation.** (depends on Tasks 1, 3, and 4)
+- [x] **Task 5: Orchestrate atomic destination replacement and motif-reference reconciliation.** (depends on Tasks 1, 3, and 4)
   - Create `backend/app/services/composition_motif_editor.py` to resolve the canonical source, calculate target ticks through the compiled variable-meter timeline, invoke transformations, and apply an immutable event-level replacement.
   - Reuse `composition_region_patch.py` preservation checks where possible, but avoid replacing an entire bar when only the realized motif span is targeted. Reject target notes/ties that cross replacement boundaries and preserve all events/metadata outside the exact destination span.
   - Append the new occurrence only after destination event IDs are final. Reconcile existing motif occurrences affected by destination replacement and include bounded warning codes in the result.
@@ -135,7 +135,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
   - Logging: DEBUG resolved bounds, affected occurrence IDs, and preservation checkpoints; INFO applied/pruned occurrence counts; WARN reconciliation codes; ERROR failed invariant/code without note payloads.
   - Files: `backend/app/services/composition_motif_editor.py`, `backend/app/services/composition_region_patch.py`, and tests.
 
-- [ ] **Task 6: Add bounded LangGraph drafting/repair for creative motif operations and fake-provider parity.** (depends on Tasks 3–5)
+- [x] **Task 6: Add bounded LangGraph drafting/repair for creative motif operations and fake-provider parity.** (depends on Tasks 3–5)
   - Create `backend/app/services/llm_motif_editor.py` with `draft_variation -> validate_variation -> repair_variation -> apply_variation` flow for rhythmic variation, melodic variation, answer, and counterphrase.
   - Prompt with compact relative motif cells, target harmony/section/track range, operation, strength-derived mutation budgets, and output schema. Do not include unrelated composition events or full analysis reports.
   - Validate model proposals through the deterministic transform/similarity services. Route parse failures and identity/range failures through separate bounded retry accounting consistent with existing generation/edit services.
@@ -147,7 +147,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
 
 ### Phase 3: Frontend Authoring, State, and Usage UI
 
-- [ ] **Task 7: Add frontend motif extraction, validation, API client, and derived-usage helpers.** (depends on Tasks 1, 2, and 4)
+- [x] **Task 7: Add frontend motif extraction, validation, API client, and derived-usage helpers.** (depends on Tasks 1, 2, and 4)
   - Add pure helpers in `frontend/src/utils/compositionMotifs.js` for validating a 3–32-note, one-track, one/two-bar selection; collecting selected event IDs in canonical order; resolving section/bar/tick labels; naming `Motif A`, `Motif B`, etc.; reconciling controlled note edits; and projecting canonical plus detected usages for display.
   - Extend `frontend/src/utils/pianoRollSelection.js` with neutral motif source/destination range helpers that use the compiled variable-meter timeline and reject ranges over two bars rather than silently truncating.
   - Add `applyMotif` to `frontend/src/api/musicApi.js`, validate the typed response and canonical V2 composition, and normalize backend errors using existing API conventions.

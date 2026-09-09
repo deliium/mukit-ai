@@ -136,3 +136,65 @@ def test_analysis_route_omits_fixture_sentinels_from_logs_and_errors(caplog):
         assert pitch not in bad.text
     assert '"events"' not in bad.text
     assert composition["schema_version"] and '"tracks"' not in bad.text
+
+
+def test_motif_apply_fake_mode_omits_secrets_and_event_arrays(monkeypatch, caplog):
+    from tests.test_composition_v2_schema import _motif_definition, _motif_track, minimal_v2
+
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-motif-must-never-leak-abcdefghij")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    composition = minimal_v2(
+        bar_count=4,
+        duration_ticks=7680,
+        sections=[
+            {
+                "id": "verse",
+                "type": "verse",
+                "start_bar": 1,
+                "bar_count": 2,
+                "start_tick": 0,
+                "duration_ticks": 3840,
+            },
+            {
+                "id": "chorus",
+                "type": "chorus",
+                "start_bar": 3,
+                "bar_count": 2,
+                "start_tick": 3840,
+                "duration_ticks": 3840,
+            },
+        ],
+        tracks=[_motif_track()],
+        motifs=[_motif_definition()],
+    )
+    body = {
+        "composition": composition,
+        "source": {"motif_id": "motif-a", "occurrence_id": "occ-orig"},
+        "destination": {"section_id": "chorus", "track_id": "melody-1", "start_bar": 3},
+        "operation": "melodic_variation",
+        "parameters": {},
+        "variation_strength": 0.5,
+        "selection": {"provider": "fake", "model": "fake-deterministic"},
+    }
+
+    client = TestClient(app)
+    with caplog.at_level("DEBUG"):
+        response = client.post("/motifs/apply", json=body)
+
+    assert response.status_code == 200, response.text
+    assert_no_secret_leakage(response.json(), context="POST /motifs/apply")
+    assert "sk-motif-must-never-leak" not in response.text
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "sk-motif-must-never-leak" not in joined
+    assert '"events": [' not in joined
+    assert "C4, D4, E4" not in joined
+    motifs = response.json()["composition"]["motifs"]
+    assert "events" not in str(motifs)
+    for motif in motifs:
+        assert "notes" not in motif
+        for occurrence in motif["occurrences"]:
+            assert "notes" not in occurrence
+            assert "events" not in occurrence
+            assert "pitch" not in occurrence

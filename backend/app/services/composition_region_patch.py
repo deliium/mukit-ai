@@ -10,7 +10,12 @@ from typing import Any, Iterable
 
 from pydantic import ValidationError
 
-from ..composition_schemas import CompositionV1, CompositionV2
+from ..composition_schemas import (
+    CompositionV1,
+    CompositionV2,
+    CompositionV2MotifDefinition,
+    reconcile_motifs_for_removed_event_ids,
+)
 from ..schemas import (
     Composition,
     CompositionEditSelection,
@@ -472,6 +477,47 @@ def compare_preserved_regions(
     return result
 
 
+def _assert_unaffected_motif_definitions_preserved(
+    original_motifs: list[CompositionV2MotifDefinition],
+    reconciled_motifs: list[CompositionV2MotifDefinition],
+    removed_event_ids: set[str],
+) -> None:
+    """Ensure motif definitions with no removed references remain byte-for-byte."""
+    if not removed_event_ids:
+        if canonical_json_dumps([item.model_dump(mode="json") for item in original_motifs]) != (
+            canonical_json_dumps([item.model_dump(mode="json") for item in reconciled_motifs])
+        ):
+            raise CompositionRegionPatchError(
+                "Region patch unexpectedly mutated motif metadata",
+                code="preserved_region_mutated",
+                context={"field": "motifs"},
+            )
+        return
+
+    reconciled_by_id = {item.id: item for item in reconciled_motifs}
+    for motif in original_motifs:
+        affected = any(
+            removed_event_ids.intersection(occurrence.event_ids) for occurrence in motif.occurrences
+        )
+        if affected:
+            continue
+        reconciled = reconciled_by_id.get(motif.id)
+        if reconciled is None:
+            raise CompositionRegionPatchError(
+                "Region patch removed an unaffected motif definition",
+                code="preserved_region_mutated",
+                context={"motif_id": motif.id},
+            )
+        original_json = canonical_json_dumps(motif.model_dump(mode="json"))
+        reconciled_json = canonical_json_dumps(reconciled.model_dump(mode="json"))
+        if original_json != reconciled_json:
+            raise CompositionRegionPatchError(
+                "Region patch mutated an unaffected motif definition",
+                code="preserved_region_mutated",
+                context={"motif_id": motif.id},
+            )
+
+
 def _validate_patch_boundaries(
     composition: CompositionLike,
     patch: CompositionRegionReplacementPatch,
@@ -685,6 +731,22 @@ def apply_region_replacement_patch(
         else patch.target_track_ids
     )
     target_track_ids = resolve_target_track_ids(composition, requested_targets)
+    target_set = set(target_track_ids)
+    removed_event_ids: set[str] = set()
+    if isinstance(composition, CompositionV2):
+        for track in composition.tracks:
+            if track.id not in target_set:
+                continue
+            for event in track.events:
+                if event_in_region(event, bounds) and event.id:
+                    removed_event_ids.add(event.id)
+        logger.debug(
+            "Collected motif reconciliation candidates for region patch",
+            extra={
+                "removed_event_id_count": len(removed_event_ids),
+                "motif_count": len(composition.motifs),
+            },
+        )
     reject_boundary_crossing_content(composition, bounds, target_track_ids)
     replaced_event_count = _validate_replacement_events(patch.replace_tracks, bounds, target_track_ids)
     _validate_added_tracks(composition, patch.added_tracks, allow_added_tracks=allow_added_tracks)
@@ -726,6 +788,34 @@ def apply_region_replacement_patch(
         bounds,
         allow_harmony_changes=allow_harmony_changes,
     )
+
+    motif_reconcile_warnings: list[str] = []
+    if isinstance(composition, CompositionV2) and composition.motifs:
+        reconcile = reconcile_motifs_for_removed_event_ids(composition.motifs, removed_event_ids)
+        _assert_unaffected_motif_definitions_preserved(
+            composition.motifs,
+            reconcile.motifs,
+            removed_event_ids,
+        )
+        for warning in reconcile.warnings:
+            logger.warning(
+                "Motif reference reconciled after region patch",
+                extra={
+                    "code": warning.code,
+                    "motif_id": warning.motif_id,
+                    "occurrence_id": warning.occurrence_id,
+                },
+            )
+        motif_reconcile_warnings = [item.code for item in reconcile.warnings]
+        updated_data["motifs"] = [item.model_dump(mode="json") for item in reconcile.motifs]
+        logger.info(
+            "Region patch motif reconciliation completed",
+            extra={
+                "motif_count_before": len(composition.motifs),
+                "motif_count_after": len(reconcile.motifs),
+                "pruned_warning_count": len(motif_reconcile_warnings),
+            },
+        )
 
     try:
         if (
@@ -819,7 +909,7 @@ def apply_region_replacement_patch(
         total_in_region_events=replaced_event_count,
         total_outside_region_events=preserved_event_count,
     )
-    warnings = list(patch.warnings) + integrity_warnings
+    warnings = list(patch.warnings) + motif_reconcile_warnings + integrity_warnings
     logger.info(
         "Applied composition region replacement patch",
         extra={

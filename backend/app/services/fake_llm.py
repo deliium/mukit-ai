@@ -1,8 +1,8 @@
-"""Deterministic fake LLM provider for credit-free generate and region edit.
+"""Deterministic fake LLM provider for credit-free generate, region edit, and motif variation.
 
 Enabled via ``LLM_FAKE_MODE=1`` (and/or provider id ``fake``). Never opens
 network sockets to OpenAI/DeepSeek. Responses are fixture-backed Composition V1
-documents and ``replace_region`` patches.
+documents, ``replace_region`` patches, and constrained motif proposals.
 """
 
 from __future__ import annotations
@@ -385,13 +385,139 @@ def _shifted_pitch_for_track(role: str, bar: int) -> str:
     return pitches[(bar - 1) % len(pitches)]
 
 
+async def draft_fake_motif_variation(
+    *,
+    operation: str,
+    source_notes,
+    composition: CompositionV2,
+    destination,
+    id_seed: str,
+    variation_strength: float,
+    provider: LLMProviderSettings,
+):
+    """Build deterministic constrained motif proposals and realize via production path."""
+    from app.services.composition_motif_transform import (
+        AnswerCounterphraseProposal,
+        MelodicVariationProposal,
+        RhythmicVariationProposal,
+        realize_melodic_variation,
+        realize_rhythmic_variation,
+        validate_answer_or_counterphrase,
+    )
+    from app.services.llm_motif_editor import CreativeMotifDraftOutcome
+
+    _maybe_inject_malformed("motif")
+    strength = max(0.0, min(1.0, float(variation_strength)))
+    note_count = len(source_notes)
+    grid = max(1, composition.ticks_per_quarter // 4)
+    nudge = max(1, grid // 4)
+    logger.info(
+        "Fake LLM motif variation started",
+        extra={
+            "provider": provider.provider,
+            "model": provider.model,
+            "operation": operation,
+            "variation_strength": strength,
+            "source_note_count": note_count,
+            "destination_track_id": destination.track.id,
+        },
+    )
+
+    if operation == "rhythmic_variation":
+        onset = [0]
+        durations: list[int] = []
+        for index, note in enumerate(source_notes):
+            if index > 0:
+                delta = nudge if index % 2 else -nudge
+                onset.append(max(0, note.relative_start_tick + delta))
+            durations.append(max(grid, note.duration_ticks + (nudge if index % 2 else -nudge // 2)))
+        for index in range(1, len(onset)):
+            onset[index] = max(onset[index], onset[index - 1])
+        proposal = RhythmicVariationProposal(
+            note_count=note_count,
+            onset_delta_ticks=onset,
+            duration_ticks=durations,
+        )
+        transform_result = realize_rhythmic_variation(
+            source_notes,
+            proposal,
+            composition=composition,
+            destination=destination,
+            id_seed=id_seed,
+            variation_strength=strength,
+        )
+    elif operation == "melodic_variation":
+        pattern = [0, 1, 0, -1]
+        offsets = [pattern[index % len(pattern)] for index in range(note_count)]
+        proposal = MelodicVariationProposal(note_count=note_count, pitch_semitone_offsets=offsets)
+        transform_result = realize_melodic_variation(
+            source_notes,
+            proposal,
+            composition=composition,
+            destination=destination,
+            id_seed=id_seed,
+            variation_strength=strength,
+        )
+    elif operation in {"answer", "counterphrase"}:
+        pattern = [0, 1, 0, -1] if operation == "answer" else [0, -1, 1, 0]
+        offsets = [pattern[index % len(pattern)] for index in range(note_count)]
+        mild_onset = None
+        mild_duration = None
+        if strength >= 0.4:
+            mild_onset = [0]
+            mild_duration = []
+            for index, note in enumerate(source_notes):
+                if index > 0:
+                    mild_onset.append(max(0, note.relative_start_tick + (nudge if index % 2 else 0)))
+                mild_duration.append(max(grid, note.duration_ticks))
+            for index in range(1, len(mild_onset)):
+                mild_onset[index] = max(mild_onset[index], mild_onset[index - 1])
+        proposal = AnswerCounterphraseProposal(
+            note_count=note_count,
+            pitch_semitone_offsets=offsets,
+            onset_delta_ticks=mild_onset,
+            duration_ticks=mild_duration,
+        )
+        transform_result = validate_answer_or_counterphrase(
+            source_notes,
+            proposal,
+            operation=operation,  # type: ignore[arg-type]
+            composition=composition,
+            destination=destination,
+            id_seed=id_seed,
+            variation_strength=strength,
+        )
+    else:
+        raise FakeLLMError(f"Unsupported fake motif operation: {operation}")
+
+    warnings = [
+        "Fake LLM mode: applied deterministic motif variation (no API credits used).",
+        *transform_result.warning_codes,
+    ]
+    logger.info(
+        "Fake LLM motif variation completed",
+        extra={
+            "provider": provider.provider,
+            "model": provider.model,
+            "operation": operation,
+            "created_event_count": len(transform_result.events),
+            "identity_score": transform_result.verification.components.combined_score,
+        },
+    )
+    return CreativeMotifDraftOutcome(
+        transform_result=transform_result,
+        warnings=tuple(warnings),
+        provider=provider,
+    )
+
+
 def _maybe_inject_malformed(stage: str) -> None:
     """Optionally raise InvalidLLMOutputError for safety tests (no network)."""
     # Local import avoids circular import at module load with llm_music_generator.
     from .llm_music_generator import InvalidLLMOutputError
 
     raw = os.environ.get(FAKE_MALFORMED_ENV, "").strip().lower()
-    if raw in {"1", "true", "yes", "generate", "edit", "all"}:
+    if raw in {"1", "true", "yes", "generate", "edit", "motif", "all"}:
         if raw in {"1", "true", "yes", "all"} or raw == stage:
             logger.warning(
                 "Fake LLM injecting malformed output for tests",
