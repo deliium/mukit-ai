@@ -114,6 +114,17 @@ def test_fake_generate_returns_canonical_notes(fake_env):
     assert response.music.bar_count == fixture.bar_count
     assert response.music.tempo_changes == []
     assert all(event.articulations == [] for track in response.music.tracks for event in track.events)
+    assert response.music.motifs
+    motif = response.music.motifs[0]
+    assert motif.label == "Motif A"
+    assert any(occ.relationship == "original" for occ in motif.occurrences)
+    transpose = next(occ for occ in motif.occurrences if occ.relationship == "transpose")
+    event_ids = {event.id for track in response.music.tracks for event in track.events if event.id}
+    assert all(event_id in event_ids for event_id in transpose.event_ids)
+    assert response.validation is not None
+    assert response.validation.thematic
+    assert response.validation.thematic[0].operation == "transpose"
+    assert response.validation.thematic[0].identity_score == 1.0
 
 
 def test_fake_generate_expressive_v2_fixture(fake_env):

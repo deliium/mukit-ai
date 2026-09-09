@@ -76,6 +76,21 @@ def _events_every_bar(pitch: str, bars: int = 16, velocity: int = 80, staff: str
     return events
 
 
+def _seed_bar_events(pitch_base: str = "A4") -> list[dict]:
+    """At least 3 notes inside the first bar for theme seed extraction."""
+    pitches = [pitch_base, "B4", "C5", "E5"]
+    return [
+        {
+            "pitch": pitches[index],
+            "start_tick": index * TICKS,
+            "duration_ticks": TICKS,
+            "velocity": 80,
+            "staff": "treble",
+        }
+        for index in range(4)
+    ]
+
+
 def _stage_payloads(
     *,
     omit_melody: bool = False,
@@ -84,6 +99,7 @@ def _stage_payloads(
     overflow_melody: bool = False,
     slight_overflow_melody: bool = False,
     duplicate_track_ids: bool = False,
+    theme_enabled: bool = True,
 ) -> dict[str, str]:
     form = {
         "tempo": 80,
@@ -105,6 +121,31 @@ def _stage_payloads(
             {"bar": 13, "chord": "Am", "section_type": "outro", "cadence": "authentic"},
         ]
     }
+    if theme_enabled:
+        theme = {
+            "enabled": True,
+            "motif_id": "motif-a",
+            "motif_label": "Motif A",
+            "seed": {
+                "section_index": 0,
+                "track_role": "melody",
+                "start_bar_offset": 0,
+                "bar_span": 1,
+            },
+            "deployments": [
+                {
+                    "id": "dep-1",
+                    "target_section_index": 2,
+                    "target_track_role": "melody",
+                    "start_bar_offset": 0,
+                    "operation": "transpose",
+                    "parameters": {"transpose_semitones": 5},
+                }
+            ],
+        }
+    else:
+        theme = {"enabled": False, "no_theme_reason": "test_disabled"}
+
     melody_events = [] if omit_melody else _events_every_bar("A4", staff="treble")
     if bad_first_melody:
         melody_events = _events_every_bar("A4", bars=2, staff="treble")
@@ -148,13 +189,16 @@ def _stage_payloads(
             "staff": "treble",
             "events": melody_events,
         },
-        "motif_context": {
-            "motif_ids": ["m1"],
-            "interval_cells": ["0,+2,-1"],
-            "rhythm_cells": ["1,1,2"],
-            "section_notes": ["intro states motif"],
-            "handoff": "sequence into outro",
-        },
+    }
+    melody_seed = {
+        "track": {
+            "id": "melody-1",
+            "name": "Piano Melody",
+            "instrument": "piano",
+            "role": "melody",
+            "staff": "treble",
+            "events": [] if omit_melody else _seed_bar_events(),
+        }
     }
     bass = {
         "track": {
@@ -194,7 +238,9 @@ def _stage_payloads(
     return {
         "plan_form": json.dumps(form),
         "plan_harmony": json.dumps(harmony),
+        "plan_themes": json.dumps(theme),
         "compose_melody": json.dumps(melody),
+        "compose_melody_seed": json.dumps(melody_seed),
         "compose_bass": json.dumps(bass),
         "compose_accompaniment": json.dumps(accompaniment),
     }
@@ -211,25 +257,21 @@ def _install_stage_mock(
     calls: list[str] = []
     melody_attempts = {"count": 0}
     accompaniment_attempts = {"count": 0}
+    captured_prompts: list[str] = []
 
     async def fake_invoke(state, prompt: str) -> str:
         stage = state.get("current_stage") or state.get("repair_target") or "plan_form"
-        # During stage execution current_stage may still be previous; infer from prompt markers.
-        for name in (
-            "plan_form",
-            "plan_harmony",
-            "compose_melody",
-            "compose_bass",
-            "compose_accompaniment",
-        ):
-            if f"Composer stage" in prompt:
-                break
-        # Prefer explicit stage from _run_json_stage which sets logging before invoke with state's current_stage.
-        # _run_json_stage does not set current_stage before invoke; detect via prompt content.
+        captured_prompts.append(prompt)
         if "planning musical form" in prompt:
             stage = "plan_form"
         elif "harmonic progression metadata" in prompt:
             stage = "plan_harmony"
+        elif "planning thematic development" in prompt:
+            stage = "plan_themes"
+        elif "composing ONLY the theme seed" in prompt:
+            stage = "compose_melody_seed"
+        elif "remaining melody sections AFTER an immutable theme seed" in prompt:
+            stage = "compose_melody_continuation"
         elif "primary melody track" in prompt:
             stage = "compose_melody"
         elif "composing the bass track" in prompt:
@@ -248,11 +290,11 @@ def _install_stage_mock(
             if index >= len(accompaniment_sequence):
                 return accompaniment_sequence[-1]
             return accompaniment_sequence[index]
-        if stage == "compose_melody" and fail_melody_once:
-            # When combined with accompaniment parse failure, inject sparse melody only on the
-            # restarted graph so integrity repair still has budget left.
+        if stage == "compose_melody_seed":
+            return payloads["compose_melody_seed"]
+        if stage in {"compose_melody", "compose_melody_continuation"} and fail_melody_once:
             if fail_accompaniment_parse_once and accompaniment_attempts["count"] == 0:
-                return payloads[stage]
+                return payloads["compose_melody"]
             melody_attempts["count"] += 1
             if melody_attempts["count"] == 1:
                 return json.dumps(
@@ -264,13 +306,17 @@ def _install_stage_mock(
                             "role": "melody",
                             "events": _events_every_bar("A4", bars=2),
                         },
-                        "motif_context": {},
                     }
                 )
-            return _stage_payloads()["compose_melody"]
+            return payloads["compose_melody"]
+        if stage == "compose_melody_continuation":
+            return payloads["compose_melody"]
+        if stage == "plan_themes":
+            return payloads["plan_themes"]
         return payloads[stage]
 
     monkeypatch.setattr(llm_music_generator, "_invoke_chat", fake_invoke)
+    fake_invoke.captured_prompts = captured_prompts  # type: ignore[attr-defined]
     return calls
 
 
@@ -352,15 +398,123 @@ def test_staged_generation_acceptance_shape(monkeypatch, caplog):
     assert any(track.instrument == "strings" for track in music.tracks)
     assert all(len(track.events) > 0 for track in music.tracks if track.role in {"melody", "bass", "harmony"})
     assert music.harmony
-    assert calls[:5] == [
+    assert calls[:6] == [
         "plan_form",
         "plan_harmony",
-        "compose_melody",
+        "plan_themes",
+        "compose_melody_seed",
+        "compose_melody_continuation",
         "compose_bass",
-        "compose_accompaniment",
     ]
+    assert "compose_accompaniment" in calls
     assert "Composer stage started" in caplog.text
     assert "Building staged LLM composition generation graph" in caplog.text
+    assert music.motifs
+    motif = music.motifs[0]
+    assert motif.label == "Motif A"
+    assert any(occ.relationship == "original" for occ in motif.occurrences)
+    assert any(occ.relationship == "transpose" for occ in motif.occurrences)
+    # All motif event refs resolve to playable track events.
+    event_ids = {event.id for track in music.tracks for event in track.events if event.id}
+    for occ in motif.occurrences:
+        assert all(event_id in event_ids for event_id in occ.event_ids)
+    # Instruction content must never appear in logs.
+    assert "quiet opening, stronger middle, resolved ending" not in caplog.text
+
+
+def test_theme_plan_prompt_includes_bounded_instructions(monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG)
+    payloads = _stage_payloads()
+    calls = _install_stage_mock(monkeypatch, payloads)
+    secret_instruction = "invert the opening motif in the bridge quietly"
+    music, _warnings, _provider, validation = asyncio.run(
+        generate_music_json(_request(instructions=secret_instruction), _settings())
+    )
+    assert music.schema_version == "composition.v2"
+    assert "plan_themes" in calls
+    # Prompts received the instruction text, but logs must not.
+    invoke = llm_music_generator._invoke_chat
+    prompts = getattr(invoke, "captured_prompts", [])
+    assert any(secret_instruction in prompt for prompt in prompts)
+    assert secret_instruction not in caplog.text
+    assert validation is not None
+    assert validation.thematic
+    assert validation.thematic[0].operation == "transpose"
+    assert validation.thematic[0].status == "realized"
+
+
+def test_theme_plan_disabled_for_single_section(monkeypatch):
+    payloads = _stage_payloads(theme_enabled=False)
+    form = json.loads(payloads["plan_form"])
+    form["bar_count"] = 8
+    form["sections"] = [{"type": "verse", "start_bar": 1, "bar_count": 8, "intensity": "steady"}]
+    payloads["plan_form"] = json.dumps(form)
+    payloads["plan_themes"] = json.dumps({"enabled": False, "no_theme_reason": "single_section_form"})
+    # Adjust events to 8 bars
+    melody = json.loads(payloads["compose_melody"])
+    melody["track"]["events"] = _events_every_bar("A4", bars=8, staff="treble")
+    payloads["compose_melody"] = json.dumps(melody)
+    payloads["compose_melody_seed"] = json.dumps(
+        {
+            "track": {
+                "id": "melody-1",
+                "name": "Melody",
+                "instrument": "piano",
+                "role": "melody",
+                "events": _seed_bar_events(),
+            }
+        }
+    )
+    bass = json.loads(payloads["compose_bass"])
+    bass["track"]["events"] = _events_every_bar("A2", bars=8, velocity=84)
+    payloads["compose_bass"] = json.dumps(bass)
+    accompaniment = json.loads(payloads["compose_accompaniment"])
+    for track in accompaniment["tracks"]:
+        track["events"] = _events_every_bar("E4", bars=8, velocity=60)
+    payloads["compose_accompaniment"] = json.dumps(accompaniment)
+
+    _install_stage_mock(monkeypatch, payloads)
+    request = _request(
+        duration_bars=8,
+        sections=[{"type": "verse", "bars": 8}],
+        instructions=None,
+    )
+    music, _warnings, _provider, _validation = asyncio.run(generate_music_json(request, _settings()))
+    assert music.bar_count == 8
+    assert music.motifs == []
+
+
+def test_thematic_repair_preserves_unrelated_valid_sections(monkeypatch, caplog):
+    """Theme identity failure should route to compose_melody without wiping form/harmony."""
+    caplog.set_level(logging.INFO)
+    payloads = _stage_payloads()
+    # Force creative deployment that will fail identity on empty target region.
+    theme = json.loads(payloads["plan_themes"])
+    theme["deployments"] = [
+        {
+            "id": "dep-creative-1",
+            "target_section_index": 2,
+            "operation": "melodic_variation",
+            "parameters": {},
+            "variation_strength": 0.2,
+        }
+    ]
+    payloads["plan_themes"] = json.dumps(theme)
+    # Continuation leaves outro empty so creative verification fails.
+    melody = json.loads(payloads["compose_melody"])
+    melody["track"]["events"] = [
+        event for event in melody["track"]["events"] if event["start_tick"] < 12 * BAR_TICKS
+    ]
+    payloads["compose_melody"] = json.dumps(melody)
+
+    calls = _install_stage_mock(monkeypatch, payloads)
+    request = LLMMusicGenerationRequest.model_validate(
+        {**_request().model_dump(), "options": {"max_retries": 0}}
+    )
+    with pytest.raises(InvalidLLMOutputError):
+        asyncio.run(generate_music_json(request, _settings()))
+    assert "plan_themes" in calls
+    assert "Resolved theme plan" in caplog.text or "Theme realization" in caplog.text
 
 
 def test_staged_generation_preserves_model_override(monkeypatch):
@@ -412,7 +566,8 @@ def test_staged_generation_oversized_request_rejected():
 
 def test_staged_generation_repairs_sparse_melody(monkeypatch, caplog):
     caplog.set_level(logging.WARNING)
-    payloads = _stage_payloads()
+    # Disable themes so sparse-melody repair still targets the classic melody stage.
+    payloads = _stage_payloads(theme_enabled=False)
     _install_stage_mock(monkeypatch, payloads, fail_melody_once=True)
     music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
     assert music.schema_version == "composition.v2"
@@ -423,7 +578,7 @@ def test_staged_generation_repairs_sparse_melody(monkeypatch, caplog):
 def test_stage_parse_retry_preserves_integrity_repair_budget(monkeypatch, caplog):
     """Accompaniment parse failure must not burn the integrity repair retry_count."""
     caplog.set_level(logging.INFO)
-    payloads = _stage_payloads()
+    payloads = _stage_payloads(theme_enabled=False)
     _install_stage_mock(
         monkeypatch,
         payloads,
@@ -442,7 +597,7 @@ def test_stage_parse_retry_preserves_integrity_repair_budget(monkeypatch, caplog
 
 
 def test_staged_generation_repair_exhaustion(monkeypatch):
-    payloads = _stage_payloads(omit_melody=True)
+    payloads = _stage_payloads(omit_melody=True, theme_enabled=False)
     _install_stage_mock(monkeypatch, payloads)
     request = LLMMusicGenerationRequest.model_validate(
         {**_request().model_dump(), "options": {"max_retries": 0}}
@@ -470,7 +625,7 @@ def test_api_oversized_request_returns_422():
 
 def test_api_invalid_output_returns_actionable_502(monkeypatch):
     client = TestClient(app)
-    payloads = _stage_payloads(omit_melody=True)
+    payloads = _stage_payloads(omit_melody=True, theme_enabled=False)
     _install_stage_mock(monkeypatch, payloads)
 
     async def fake_generate_async(request, settings=None):
@@ -545,7 +700,8 @@ def test_invalid_draft_pitch_is_not_provider_failure(monkeypatch, caplog):
 
 def test_assemble_clamps_slightly_overflowing_events(monkeypatch, caplog):
     caplog.set_level(logging.INFO)
-    payloads = _stage_payloads(slight_overflow_melody=True)
+    # Disable thematic realization so the intentional overflow reaches assemble unchanged.
+    payloads = _stage_payloads(slight_overflow_melody=True, theme_enabled=False)
     _install_stage_mock(monkeypatch, payloads)
     music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
     melody = next(track for track in music.tracks if track.role == "melody")
@@ -560,7 +716,7 @@ def test_assemble_clamps_slightly_overflowing_events(monkeypatch, caplog):
 
 def test_past_end_only_melody_is_not_provider_failure(monkeypatch, caplog):
     caplog.set_level(logging.ERROR)
-    payloads = _stage_payloads(overflow_melody=True)
+    payloads = _stage_payloads(overflow_melody=True, theme_enabled=False)
     _install_stage_mock(monkeypatch, payloads)
     request = LLMMusicGenerationRequest.model_validate(
         {**_request().model_dump(), "options": {"max_retries": 0}}
@@ -631,7 +787,6 @@ def _fs_minor_payloads(*, a_minor_content: bool = True, bars: int = 20) -> dict[
             "role": "melody",
             "events": _events_every_bar(melody_pitch, bars=bars),
         },
-        "motif_context": {"motif_ids": ["m1"]},
     }
     bass = {
         "track": {
@@ -654,10 +809,36 @@ def _fs_minor_payloads(*, a_minor_content: bool = True, bars: int = 20) -> dict[
         ],
         "skipped": [],
     }
+    theme = {
+        "enabled": True,
+        "motif_id": "motif-a",
+        "motif_label": "Motif A",
+        "seed": {"section_index": 0, "track_role": "melody", "start_bar_offset": 0, "bar_span": 1},
+        "deployments": [
+            {
+                "id": "dep-1",
+                "target_section_index": 2,
+                "operation": "transpose",
+                "parameters": {"transpose_semitones": 5},
+            }
+        ],
+    }
     return {
         "plan_form": json.dumps(form),
         "plan_harmony": json.dumps(harmony),
+        "plan_themes": json.dumps(theme),
         "compose_melody": json.dumps(melody),
+        "compose_melody_seed": json.dumps(
+            {
+                "track": {
+                    "id": "melody-1",
+                    "name": "Melody",
+                    "instrument": "piano",
+                    "role": "melody",
+                    "events": _seed_bar_events(melody_pitch),
+                }
+            }
+        ),
         "compose_bass": json.dumps(bass),
         "compose_accompaniment": json.dumps(accompaniment),
     }
@@ -713,9 +894,16 @@ def test_f_sharp_minor_recovers_after_targeted_repair(monkeypatch, caplog):
         if "harmonic progression metadata" in prompt:
             stage_hits["plan_harmony"] += 1
             return bad["plan_harmony"] if stage_hits["plan_harmony"] == 1 else good["plan_harmony"]
-        if "primary melody track" in prompt:
+        if "planning thematic development" in prompt:
+            stage_hits.setdefault("plan_themes", 0)
+            stage_hits["plan_themes"] += 1
+            return good["plan_themes"]
+        if "composing ONLY the theme seed" in prompt:
             stage_hits["compose_melody"] += 1
-            return bad["compose_melody"] if stage_hits["compose_melody"] == 1 else good["compose_melody"]
+            return bad["compose_melody_seed"] if stage_hits["compose_melody"] == 1 else good["compose_melody_seed"]
+        if "remaining melody sections AFTER an immutable theme seed" in prompt or "primary melody track" in prompt:
+            stage_hits["compose_melody"] += 1
+            return bad["compose_melody"] if stage_hits["compose_melody"] <= 2 else good["compose_melody"]
         if "composing the bass track" in prompt:
             stage_hits["compose_bass"] += 1
             return bad["compose_bass"] if stage_hits["compose_bass"] == 1 else good["compose_bass"]

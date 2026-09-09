@@ -377,6 +377,16 @@ class InstrumentationReport(BaseModel):
     suspicious_duplicates: list[SuspiciousDuplicateGroupReport] = Field(default_factory=list)
 
 
+class ThematicRecurrenceOutcome(BaseModel):
+    """Bounded thematic relationship outcome — no event payloads."""
+
+    deployment_id: str = Field(..., min_length=1, max_length=80)
+    operation: str = Field(..., min_length=1, max_length=64)
+    identity_score: float | None = None
+    status: Literal["realized", "verified", "skipped", "failed"] = "skipped"
+    diagnostic_code: str | None = Field(default=None, max_length=80)
+
+
 class GenerationValidationReport(BaseModel):
     """Structured generation constraint validation outcome."""
 
@@ -388,6 +398,7 @@ class GenerationValidationReport(BaseModel):
     tonality: dict[str, Any] | None = None
     instrumentation: InstrumentationReport | None = None
     repair_actions: list[GenerationRepairAction] = Field(default_factory=list)
+    thematic: list[ThematicRecurrenceOutcome] = Field(default_factory=list)
 
     @property
     def ok(self) -> bool:

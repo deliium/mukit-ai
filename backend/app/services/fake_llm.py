@@ -188,6 +188,15 @@ async def generate_fake_music_json(
             + ", ".join(codes)
         )
 
+    music, theme_report, theme_warnings = _apply_fake_thematic_recurrence(
+        music,
+        request=request,
+        constraints=active_constraints,
+    )
+    warnings.extend(theme_warnings)
+    if theme_report is not None:
+        report = theme_report
+
     event_count = sum(len(track.events) for track in music.tracks)
     logger.info(
         "Fake LLM music generation completed",
@@ -199,6 +208,7 @@ async def generate_fake_music_json(
             "event_count": event_count,
             "warning_count": len(warnings),
             "validation_status": report.status,
+            "motif_count": len(music.motifs),
         },
     )
     logger.debug(
@@ -214,9 +224,215 @@ async def generate_fake_music_json(
             ),
             "track_ids": [track.id for track in music.tracks],
             "constraint_error_count": len(report.errors),
+            "motif_count": len(music.motifs),
         },
     )
     return music, warnings, provider, report
+
+
+def _apply_fake_thematic_recurrence(
+    music: CompositionV2,
+    *,
+    request: LLMMusicGenerationRequest,
+    constraints: GenerationConstraints,
+) -> tuple[CompositionV2, GenerationValidationReport | None, list[str]]:
+    """Inject Motif A seed + deterministic mechanical recurrence via production transforms."""
+    from app.composition_schemas import (
+        MOTIF_MIN_EVENT_REFS,
+        CompositionV2MotifDefinition,
+        CompositionV2MotifOccurrence,
+        CompositionV2MotifTransformProvenance,
+    )
+    from app.schemas import ThematicRecurrenceOutcome
+    from app.services.composition_motif_transform import (
+        MotifDestinationSpec,
+        MotifTransformError,
+        extract_relative_motif,
+        transform_transpose,
+    )
+    from app.services.generation_constraints import validate_generation_constraints
+
+    warnings: list[str] = []
+    instructions = (request.prompt.instructions or "").strip().lower()
+    wants_theme = any(
+        token in instructions for token in ("motif", "theme", "transpose", "invert", "recurring")
+    )
+    # Multi-section fixtures always demonstrate intentional recurrence unless single-section.
+    if len(music.sections) < 2:
+        logger.debug(
+            "Fake thematic recurrence skipped",
+            extra={"reason": "single_section", "section_count": len(music.sections)},
+        )
+        return music, None, warnings
+
+    melody = next(
+        (track for track in music.tracks if track.role in {"melody", "lead"} and not track.is_drum),
+        None,
+    )
+    if melody is None or len(melody.events) < MOTIF_MIN_EVENT_REFS:
+        logger.warning(
+            "Fake thematic recurrence unsupported",
+            extra={"code": "theme_source_empty", "has_melody": melody is not None},
+        )
+        return music, None, warnings
+
+    # Ensure stable event IDs on the melody track.
+    used_ids = {event.id for track in music.tracks for event in track.events if event.id}
+    updated_tracks = []
+    for track in music.tracks:
+        if track.id != melody.id:
+            updated_tracks.append(track)
+            continue
+        events = []
+        for index, event in enumerate(track.events):
+            event_id = event.id
+            if not event_id:
+                event_id = f"fake-mel-{index:04d}"
+                suffix = 2
+                while event_id in used_ids:
+                    event_id = f"fake-mel-{index:04d}-{suffix}"
+                    suffix += 1
+                used_ids.add(event_id)
+                event = event.model_copy(update={"id": event_id})
+            events.append(event)
+        melody = track.model_copy(update={"events": events})
+        updated_tracks.append(melody)
+    music = music.model_copy(update={"tracks": updated_tracks})
+    melody = next(track for track in music.tracks if track.id == melody.id)
+
+    seed_section = music.sections[0]
+    seed_start = seed_section.start_tick
+    seed_end = seed_section.start_tick + seed_section.duration_ticks
+    seed_events = [
+        event
+        for event in melody.events
+        if event.start_tick >= seed_start and event.start_tick < seed_end and event.id
+    ]
+    seed_events = sorted(seed_events, key=lambda item: (item.start_tick, item.duration_ticks, item.id or ""))
+    if len(seed_events) < MOTIF_MIN_EVENT_REFS:
+        # Fall back to first N melody events.
+        seed_events = sorted(melody.events, key=lambda item: (item.start_tick, item.id or ""))[:4]
+    seed_events = seed_events[:8]
+    if len(seed_events) < MOTIF_MIN_EVENT_REFS:
+        logger.warning(
+            "Fake thematic recurrence skipped",
+            extra={"code": "theme_source_empty", "seed_count": len(seed_events)},
+        )
+        return music, None, warnings
+
+    seed_ids = [event.id for event in seed_events if event.id]
+    target_section = music.sections[min(len(music.sections) - 1, 1 if len(music.sections) > 1 else 0)]
+    if target_section.id == seed_section.id and len(music.sections) > 1:
+        target_section = music.sections[-1]
+    target_start = target_section.start_tick
+    transpose_semitones = 5
+
+    logger.debug(
+        "Fake thematic recurrence started",
+        extra={
+            "scenario": "transpose_recurrence",
+            "seed_event_count": len(seed_ids),
+            "operation": "transpose",
+            "wants_theme_instructions": wants_theme,
+            "target_section_start_bar": target_section.start_bar,
+        },
+    )
+
+    try:
+        extracted = extract_relative_motif(music, track_id=melody.id, event_ids=seed_ids)
+        destination = MotifDestinationSpec(
+            track=melody,
+            start_tick=target_start,
+            duration_limit=music.duration_ticks,
+            anchor_midi=extracted.anchor_midi,
+            existing_event_ids=frozenset(seed_ids),
+            allow_overlap=True,
+        )
+        transform_result = transform_transpose(
+            extracted.notes,
+            semitones=transpose_semitones,
+            composition=music,
+            destination=destination,
+            id_seed="fake-theme-a",
+        )
+    except MotifTransformError as exc:
+        logger.warning(
+            "Fake thematic recurrence failed",
+            extra={"code": getattr(exc, "code", "theme_transform_mismatch")},
+        )
+        warnings.append("Fake LLM could not apply thematic recurrence; returned fixture notes only.")
+        return music, None, warnings
+
+    span_end = target_start + transform_result.span_ticks
+    kept = [
+        event
+        for event in melody.events
+        if not (
+            event.id not in seed_ids
+            and event.start_tick < span_end
+            and (event.start_tick + event.duration_ticks) > target_start
+        )
+    ]
+    new_events = list(transform_result.events)
+    merged = sorted(
+        [*kept, *new_events],
+        key=lambda item: (item.start_tick, item.duration_ticks, item.id or ""),
+    )
+    updated_melody = melody.model_copy(update={"events": merged})
+    tracks = [updated_melody if track.id == melody.id else track for track in music.tracks]
+    created_ids = [event.id for event in new_events if event.id]
+    motif = CompositionV2MotifDefinition(
+        id="motif-a",
+        label="Motif A",
+        occurrences=[
+            CompositionV2MotifOccurrence(
+                id="motif-a-original",
+                track_id=melody.id,
+                event_ids=seed_ids,
+                relationship="original",
+            ),
+            CompositionV2MotifOccurrence(
+                id="motif-a-dep-transpose-1",
+                track_id=melody.id,
+                event_ids=created_ids,
+                relationship="transpose",
+                transform=CompositionV2MotifTransformProvenance(
+                    operation="transpose",
+                    transpose_semitones=transpose_semitones,
+                ),
+            ),
+        ],
+    )
+    music = music.model_copy(update={"tracks": tracks, "motifs": [motif]})
+    score = transform_result.verification.components.combined_score
+    logger.info(
+        "Fake LLM deterministic thematic recurrence applied",
+        extra={
+            "motif_id": motif.id,
+            "operation": "transpose",
+            "identity_score": score,
+            "created_event_count": len(created_ids),
+            "seed_event_count": len(seed_ids),
+        },
+    )
+    warnings.append(
+        "Fake LLM mode: applied deterministic Motif A transpose recurrence via production transforms."
+    )
+
+    report = validate_generation_constraints(music, constraints)
+    report = report.model_copy(
+        update={
+            "thematic": [
+                ThematicRecurrenceOutcome(
+                    deployment_id="dep-transpose-1",
+                    operation="transpose",
+                    identity_score=score,
+                    status="realized",
+                )
+            ]
+        }
+    )
+    return music, report, warnings
 
 
 async def edit_fake_composition_region(

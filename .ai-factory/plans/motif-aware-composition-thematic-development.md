@@ -179,7 +179,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
 
 ### Phase 4: Thematic LangGraph Generation
 
-- [ ] **Task 10: Replace ephemeral motif prose with a bounded structured theme plan.** (depends on Tasks 1 and 3)
+- [x] **Task 10: Replace ephemeral motif prose with a bounded structured theme plan.** (depends on Tasks 1 and 3)
   - Replace or evolve `ComposerMotifContext` in `backend/app/services/composition_planner.py` into explicit seed, relative-cell, section deployment, target role/track, operation, parameters, and strength models with strict list/string/event bounds.
   - Add a `plan_themes` node after harmony planning in `backend/app/services/llm_music_generator.py`. The node must choose a valid seed section and at least one later recurrence when the form has multiple suitable sections, while allowing an explicit no-theme result for unsuitable requests.
   - Pass bounded user `prompt.instructions` content into form/theme planning so requests such as “invert the opening motif in the bridge” actually reach the provider. Preserve hard constraints as immutable authority.
@@ -189,7 +189,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
   - Logging: DEBUG stage, section index/ID, deployment counts, prompt lengths, and constraint presence; INFO planned theme/target totals; WARN truncation/repair codes; ERROR schema/provider type only. Never log theme pitch/rhythm cells or instruction text.
   - Files: `backend/app/services/composition_planner.py`, `backend/app/services/llm_music_generator.py`, `backend/app/services/generation_constraints.py`, and staged-composer tests.
 
-- [ ] **Task 11: Realize, assemble, and validate intentional thematic recurrences during generation.** (depends on Tasks 3 and 10)
+- [x] **Task 11: Realize, assemble, and validate intentional thematic recurrences during generation.** (depends on Tasks 3 and 10)
   - Add a `realize_themes` graph stage after all needed track drafts exist and before canonical assembly. Use deterministic transforms for mechanical deployments and constrained LLM section drafts for creative deployments.
   - Ensure every generated seed/deployment note has a stable unique event ID before assembly. Build canonical motif definitions/occurrences from those final IDs only after all clamping/normalization decisions are complete.
   - Extend `backend/app/services/generation_constraints.py` and `composition_validator.py` with thematic diagnostics such as `theme_source_empty`, `theme_target_missing`, `theme_transform_mismatch`, `theme_identity_below_threshold`, `theme_target_out_of_bounds`, and `theme_plan_truncated`.
@@ -199,7 +199,7 @@ Let a user select a one- or two-bar melody, save it as a named motif such as `Mo
   - Logging: DEBUG deployment/validation summaries and repair routing; INFO realized/verified recurrence counts and scores; WARN diagnostic codes; ERROR exhausted stage/code. Never log event arrays, cells, or raw provider output.
   - Files: `backend/app/services/llm_music_generator.py`, `generation_constraints.py`, `composition_validator.py`, schema/report models, and `backend/tests/test_llm_staged_composer.py`.
 
-- [ ] **Task 12: Make fake generation and mocked AI coverage prove thematic recurrence.** (depends on Tasks 6, 10, and 11)
+- [x] **Task 12: Make fake generation and mocked AI coverage prove thematic recurrence.** (depends on Tasks 6, 10, and 11)
   - Update `backend/app/services/fake_llm.py` and/or add a motif-aware V2 fixture so fake generation creates a seed and deterministic varied recurrence through production transform/assembly code, not a hand-authored symbolic claim.
   - Add exact fixture vectors asserting the target occurrence is related to `Motif A`, references real destination event IDs, has the expected identity score/operation, and remains audible through the normal event path.
   - Extend route tests for generation/edit responses and fake provider behavior. Add mocked real-provider tests that return structured theme plans and section drafts, including repair and failure paths.

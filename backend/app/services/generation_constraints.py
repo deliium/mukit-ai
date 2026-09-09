@@ -86,6 +86,7 @@ class GenerationConstraints:
     genre: str
     complexity: str
     has_instructions: bool
+    instructions_length: int = 0
 
     @property
     def key_resolved(self) -> bool:
@@ -173,6 +174,8 @@ def build_generation_constraints(
     sections_user_specified = bool(prompt.sections)
     sections = sections_from_prompt(prompt.sections) if sections_user_specified else None
     families = collect_instrument_families(prompt.instruments)
+    instructions_text = prompt.instructions.strip() if prompt.instructions else ""
+    has_instructions = bool(instructions_text)
 
     constraints = GenerationConstraints(
         key=prompt.key,
@@ -189,7 +192,8 @@ def build_generation_constraints(
         mood=prompt.mood,
         genre=prompt.genre,
         complexity=prompt.complexity,
-        has_instructions=bool(prompt.instructions and prompt.instructions.strip()),
+        has_instructions=has_instructions,
+        instructions_length=len(instructions_text),
     )
     logger.debug(
         "Built generation constraint snapshot",
@@ -197,6 +201,8 @@ def build_generation_constraints(
             **constraints.hard_summary(),
             "key_source": "user" if key_user_specified else "form_pending",
             "sections_source": "user" if sections_user_specified else "form_pending",
+            "has_instructions": has_instructions,
+            "instructions_length": constraints.instructions_length,
         },
     )
     logger.info(
@@ -352,8 +358,16 @@ def prompt_parameters_hard_block(constraints: GenerationConstraints) -> dict[str
             "genre": constraints.genre,
             "complexity": constraints.complexity,
             "has_instructions": constraints.has_instructions,
+            "instructions_length": constraints.instructions_length,
         },
     }
+
+
+def bounded_user_instructions_for_prompt(request: LLMMusicGenerationRequest) -> str | None:
+    """Project bounded instructions into form/theme prompts. Never log the returned text."""
+    from .composition_planner import bounded_instructions_for_prompt
+
+    return bounded_instructions_for_prompt(request.prompt.instructions)
 
 
 def missing_required_families(

@@ -17,8 +17,9 @@ from ..schemas import (
     GenerationValidationReport,
     LLMMusicGenerationRequest,
     NoteEvent,
+    ThematicRecurrenceOutcome,
 )
-from ..composition_schemas import COMPOSITION_SCHEMA_VERSION_V2
+from ..composition_schemas import COMPOSITION_SCHEMA_VERSION_V2, CompositionV2MotifDefinition
 from .composition_normalizer import (
     CompositionNormalizationError,
     INSTRUMENT_PROGRAMS,
@@ -28,7 +29,7 @@ from .composition_planner import (
     ComposerFormPlan,
     ComposerFormSection,
     ComposerHarmonyPlan,
-    ComposerMotifContext,
+    ComposerThemePlan,
     ComposerTrackDraft,
     OversizedLLMGenerationRequestError,
     ValidationDiagnostic,
@@ -36,7 +37,23 @@ from .composition_planner import (
     enforce_llm_generation_bounds,
     summarize_diagnostics,
     summarize_form_plan,
+    summarize_theme_plan,
     summarize_track_draft,
+)
+from .composition_theme import (
+    THEME_DIAGNOSTIC_CODES,
+    THEME_IDENTITY_BELOW_THRESHOLD,
+    THEME_SOURCE_EMPTY,
+    THEME_TARGET_MISSING,
+    THEME_TARGET_OUT_OF_BOUNDS,
+    assign_draft_event_ids,
+    default_theme_plan_for_form,
+    empty_theme_plan,
+    extract_seed_relative_cell,
+    realize_theme_plan,
+    thematic_report_payload,
+    theme_plan_prompt_projection,
+    validate_theme_plan_against_form,
 )
 from .composition_timing import bar_duration_ticks, derive_section_boundaries
 from .composition_validator import validate_composition_integrity
@@ -45,6 +62,7 @@ from ..analysis_schemas import CompositionAnalysisError
 from .generation_constraints import (
     DUPLICATE_INSTRUMENT_ROLE_CODE,
     GenerationConstraints,
+    bounded_user_instructions_for_prompt,
     build_generation_constraints,
     diagnostics_from_validation_report,
     freeze_form_resolved_fields,
@@ -65,9 +83,11 @@ logger = logging.getLogger(__name__)
 COMPOSER_STAGES = (
     "plan_form",
     "plan_harmony",
+    "plan_themes",
     "compose_melody",
     "compose_bass",
     "compose_accompaniment",
+    "realize_themes",
     "assemble_composition",
     "normalize_composition",
     "validate_composition",
@@ -130,10 +150,12 @@ class _GenerationState(TypedDict, total=False):
     warnings: list[str]
     form_plan: ComposerFormPlan
     harmony_plan: ComposerHarmonyPlan
-    motif_context: ComposerMotifContext
+    theme_plan: ComposerThemePlan
     melody_draft: ComposerTrackDraft
     bass_draft: ComposerTrackDraft
     accompaniment_drafts: list[ComposerTrackDraft]
+    theme_motifs: list[CompositionV2MotifDefinition]
+    theme_outcomes: list[dict[str, Any]]
     validation_diagnostics: list[ValidationDiagnostic]
     validation_report: GenerationValidationReport
     validation_ok: bool
@@ -347,9 +369,11 @@ def _build_generation_graph():
     workflow = StateGraph(_GenerationState)
     workflow.add_node("plan_form", _plan_form)
     workflow.add_node("plan_harmony", _plan_harmony)
+    workflow.add_node("plan_themes", _plan_themes)
     workflow.add_node("compose_melody", _compose_melody)
     workflow.add_node("compose_bass", _compose_bass)
     workflow.add_node("compose_accompaniment", _compose_accompaniment)
+    workflow.add_node("realize_themes", _realize_themes)
     workflow.add_node("assemble_composition", _assemble_composition)
     workflow.add_node("normalize_composition", _normalize_composition)
     workflow.add_node("validate_composition", _validate_composition)
@@ -357,10 +381,12 @@ def _build_generation_graph():
 
     workflow.set_entry_point("plan_form")
     workflow.add_edge("plan_form", "plan_harmony")
-    workflow.add_edge("plan_harmony", "compose_melody")
+    workflow.add_edge("plan_harmony", "plan_themes")
+    workflow.add_edge("plan_themes", "compose_melody")
     workflow.add_edge("compose_melody", "compose_bass")
     workflow.add_edge("compose_bass", "compose_accompaniment")
-    workflow.add_edge("compose_accompaniment", "assemble_composition")
+    workflow.add_edge("compose_accompaniment", "realize_themes")
+    workflow.add_edge("realize_themes", "assemble_composition")
     workflow.add_edge("assemble_composition", "normalize_composition")
     workflow.add_edge("normalize_composition", "validate_composition")
     workflow.add_conditional_edges(
@@ -378,9 +404,11 @@ def _build_generation_graph():
         {
             "plan_form": "plan_form",
             "plan_harmony": "plan_harmony",
+            "plan_themes": "plan_themes",
             "compose_melody": "compose_melody",
             "compose_bass": "compose_bass",
             "compose_accompaniment": "compose_accompaniment",
+            "realize_themes": "realize_themes",
             "assemble_composition": "assemble_composition",
             "normalize_composition": "normalize_composition",
             "validate_composition": "validate_composition",
@@ -418,9 +446,11 @@ def _route_after_repair(state: _GenerationState) -> str:
     if target in {
         "plan_form",
         "plan_harmony",
+        "plan_themes",
         "compose_melody",
         "compose_bass",
         "compose_accompaniment",
+        "realize_themes",
         "assemble_composition",
         "normalize_composition",
         "validate_composition",
@@ -449,7 +479,33 @@ async def _plan_harmony(state: _GenerationState) -> _GenerationState:
     )
 
 
+async def _plan_themes(state: _GenerationState) -> _GenerationState:
+    return await _run_json_stage(
+        state,
+        stage="plan_themes",
+        prompt=_build_theme_prompt(state),
+        parser=_parse_theme_plan,
+        on_success=_after_theme_plan,
+    )
+
+
 async def _compose_melody(state: _GenerationState) -> _GenerationState:
+    theme = state.get("theme_plan")
+    if theme is not None and theme.enabled and theme.seed is not None:
+        seed_state = await _run_json_stage(
+            state,
+            stage="compose_melody",
+            prompt=_build_melody_seed_prompt(state),
+            parser=_parse_melody_seed_stage,
+            on_success=_after_melody_seed_stage,
+        )
+        return await _run_json_stage(
+            seed_state,
+            stage="compose_melody",
+            prompt=_build_melody_continuation_prompt(seed_state),
+            parser=_parse_melody_continuation_stage,
+            on_success=_after_melody_continuation_stage,
+        )
     return await _run_json_stage(
         state,
         stage="compose_melody",
@@ -457,6 +513,89 @@ async def _compose_melody(state: _GenerationState) -> _GenerationState:
         parser=_parse_melody_stage,
         on_success=_after_melody_stage,
     )
+
+
+def _realize_themes(state: _GenerationState) -> _GenerationState:
+    stage = "realize_themes"
+    logger.info(
+        "Composer stage started",
+        extra=_stage_log_extra(state, stage, attempt=state.get("retry_count", 0)),
+    )
+    form = state.get("form_plan")
+    melody = state.get("melody_draft")
+    theme = state.get("theme_plan") or empty_theme_plan(reason="missing_theme_plan")
+    if form is None or melody is None:
+        diagnostic = ValidationDiagnostic(
+            code=THEME_SOURCE_EMPTY,
+            message="Cannot realize themes without form and melody drafts",
+            severity="error",
+            context={"stage": stage},
+        )
+        return {
+            **state,
+            "validation_ok": False,
+            "validation_diagnostics": [diagnostic],
+            "failed_stage": stage,
+            "current_stage": stage,
+            "theme_motifs": [],
+            "theme_outcomes": [],
+        }
+
+    result = realize_theme_plan(
+        theme_plan=theme,
+        melody_draft=melody,
+        form=form,
+        ticks_per_quarter=DEFAULT_TICKS_PER_QUARTER,
+    )
+    error_diagnostics = [item for item in result.diagnostics if item.severity == "error"]
+    if error_diagnostics:
+        # Route plan failures to plan_themes; creative identity to melody; else realize_themes.
+        codes = {item.code for item in error_diagnostics}
+        if codes & {THEME_SOURCE_EMPTY, THEME_TARGET_MISSING, THEME_TARGET_OUT_OF_BOUNDS}:
+            failed_stage = "plan_themes"
+        elif THEME_IDENTITY_BELOW_THRESHOLD in codes:
+            failed_stage = "compose_melody"
+        else:
+            failed_stage = "realize_themes"
+        logger.warning(
+            "Theme realization produced diagnostics",
+            extra={
+                "codes": sorted(codes),
+                "failed_stage": failed_stage,
+                "outcome_count": len(result.outcomes),
+            },
+        )
+        return {
+            **state,
+            "melody_draft": result.melody_draft,
+            "theme_plan": result.theme_plan,
+            "theme_motifs": list(result.motifs),
+            "theme_outcomes": thematic_report_payload(result.outcomes),
+            "validation_ok": False,
+            "validation_diagnostics": list(result.diagnostics),
+            "failed_stage": failed_stage,
+            "current_stage": stage,
+        }
+
+    logger.info(
+        "Composer stage completed",
+        extra={
+            **_stage_log_extra(state, stage, attempt=state.get("retry_count", 0)),
+            "realized_count": sum(
+                1 for item in result.outcomes if item.status in {"realized", "verified"}
+            ),
+            "motif_count": len(result.motifs),
+        },
+    )
+    return {
+        **state,
+        "melody_draft": result.melody_draft,
+        "theme_plan": result.theme_plan,
+        "theme_motifs": list(result.motifs),
+        "theme_outcomes": thematic_report_payload(result.outcomes),
+        "current_stage": stage,
+        "failed_stage": "",
+    }
 
 
 async def _compose_bass(state: _GenerationState) -> _GenerationState:
@@ -646,6 +785,7 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
         harmony_items = [
             CompositionV2HarmonyItem(bar=event.bar, chord=event.chord) for event in harmony.events
         ]
+        theme_motifs = list(state.get("theme_motifs") or [])
         composition = CompositionV2(
             schema_version=COMPOSITION_SCHEMA_VERSION_V2,
             tempo=locked_tempo,
@@ -661,6 +801,7 @@ def _assemble_composition(state: _GenerationState) -> _GenerationState:
             time_signature_changes=[],
             key_changes=[],
             markers=[],
+            motifs=theme_motifs,
         )
     except (ValidationError, ValueError) as exc:
         failed_stage = _infer_assemble_failed_stage(
@@ -883,7 +1024,13 @@ def _validate_composition(state: _GenerationState) -> _GenerationState:
         item
         for item in (state.get("validation_diagnostics") or [])
         if item.severity == "error"
-        and item.code in {"constraint_normalization_rewrite", "normalization_failed", "schema_invalid"}
+        and item.code
+        in {
+            "constraint_normalization_rewrite",
+            "normalization_failed",
+            "schema_invalid",
+            *THEME_DIAGNOSTIC_CODES,
+        }
     ]
     if prior:
         diagnostics = [*prior, *diagnostics]
@@ -905,6 +1052,23 @@ def _validate_composition(state: _GenerationState) -> _GenerationState:
             extra={
                 "repair_action_count": len(repair_actions),
                 "targets": [action.target for action in repair_actions],
+            },
+        )
+
+    theme_outcomes_raw = list(state.get("theme_outcomes") or [])
+    if constraint_report is not None and theme_outcomes_raw:
+        thematic = [
+            ThematicRecurrenceOutcome.model_validate(item)
+            if not isinstance(item, ThematicRecurrenceOutcome)
+            else item
+            for item in theme_outcomes_raw
+        ]
+        constraint_report = constraint_report.model_copy(update={"thematic": thematic})
+        logger.debug(
+            "Attached thematic outcomes to validation report",
+            extra={
+                "thematic_count": len(thematic),
+                "statuses": [item.status for item in thematic],
             },
         )
 
@@ -947,9 +1111,11 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
     if repair_target not in {
         "plan_form",
         "plan_harmony",
+        "plan_themes",
         "compose_melody",
         "compose_bass",
         "compose_accompaniment",
+        "realize_themes",
         "assemble_composition",
         "normalize_composition",
         "validate_composition",
@@ -964,23 +1130,37 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
     if repair_target == "plan_form":
         cleared.pop("form_plan", None)
         cleared.pop("harmony_plan", None)
+        cleared.pop("theme_plan", None)
         cleared.pop("melody_draft", None)
         cleared.pop("bass_draft", None)
         cleared.pop("accompaniment_drafts", None)
-        cleared.pop("motif_context", None)
+        cleared.pop("theme_motifs", None)
+        cleared.pop("theme_outcomes", None)
         cleared.pop("music", None)
     elif repair_target == "plan_harmony":
         cleared.pop("harmony_plan", None)
+        cleared.pop("theme_plan", None)
         cleared.pop("melody_draft", None)
         cleared.pop("bass_draft", None)
         cleared.pop("accompaniment_drafts", None)
-        cleared.pop("motif_context", None)
+        cleared.pop("theme_motifs", None)
+        cleared.pop("theme_outcomes", None)
+        cleared.pop("music", None)
+    elif repair_target == "plan_themes":
+        cleared.pop("theme_plan", None)
+        cleared.pop("melody_draft", None)
+        cleared.pop("bass_draft", None)
+        cleared.pop("accompaniment_drafts", None)
+        cleared.pop("theme_motifs", None)
+        cleared.pop("theme_outcomes", None)
         cleared.pop("music", None)
     elif repair_target == "compose_melody":
+        # Preserve theme_plan; regenerate only melody and dependents.
         cleared.pop("melody_draft", None)
         cleared.pop("bass_draft", None)
         cleared.pop("accompaniment_drafts", None)
-        cleared.pop("motif_context", None)
+        cleared.pop("theme_motifs", None)
+        cleared.pop("theme_outcomes", None)
         cleared.pop("music", None)
     elif repair_target == "compose_bass":
         cleared.pop("bass_draft", None)
@@ -988,6 +1168,10 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
         cleared.pop("music", None)
     elif repair_target == "compose_accompaniment":
         cleared.pop("accompaniment_drafts", None)
+        cleared.pop("music", None)
+    elif repair_target == "realize_themes":
+        cleared.pop("theme_motifs", None)
+        cleared.pop("theme_outcomes", None)
         cleared.pop("music", None)
     elif repair_target in {"assemble_composition", "normalize_composition"}:
         cleared.pop("music", None)
@@ -1348,33 +1532,192 @@ def _after_harmony_plan(
     return {**state, "harmony_plan": harmony, "parsed_json": parsed, "validation_diagnostics": diagnostics}
 
 
+def _parse_theme_plan(parsed: dict[str, Any], state: _GenerationState) -> ComposerThemePlan:
+    if "theme_plan" in parsed and isinstance(parsed["theme_plan"], dict):
+        parsed = parsed["theme_plan"]
+    try:
+        return ComposerThemePlan.model_validate(parsed)
+    except ValidationError:
+        if parsed.get("enabled") is False or parsed.get("no_theme"):
+            return empty_theme_plan(reason=str(parsed.get("no_theme_reason") or "provider_disabled"))
+        raise
+
+
+def _after_theme_plan(
+    state: _GenerationState, plan: ComposerThemePlan, parsed: dict[str, Any]
+) -> _GenerationState:
+    form = state.get("form_plan")
+    diagnostics = list(state.get("validation_diagnostics") or [])
+    if form is None:
+        raise InvalidLLMOutputError("plan_themes requires a resolved form plan")
+
+    if not plan.enabled and len(form.sections) >= 2:
+        if not plan.no_theme_reason or plan.no_theme_reason in {"", "none", "provider_disabled"}:
+            plan = default_theme_plan_for_form(form)
+
+    corrected, plan_diagnostics = validate_theme_plan_against_form(plan, form)
+    diagnostics.extend(plan_diagnostics)
+    logger.info(
+        "Resolved theme plan",
+        extra={
+            **summarize_theme_plan(corrected),
+            "instructions_length": state["constraints"].instructions_length,
+        },
+    )
+    logger.debug(
+        "Theme plan stage summary",
+        extra={
+            "enabled": corrected.enabled,
+            "deployment_count": len(corrected.deployments),
+            "truncated": corrected.truncated,
+            "has_instructions": state["constraints"].has_instructions,
+            "instructions_length": state["constraints"].instructions_length,
+        },
+    )
+    return {
+        **state,
+        "theme_plan": corrected,
+        "parsed_json": parsed,
+        "validation_diagnostics": diagnostics,
+    }
+
+
 def _parse_melody_stage(parsed: dict[str, Any], state: _GenerationState) -> dict[str, Any]:
     track_data = parsed.get("track") or parsed
-    motif_data = parsed.get("motif_context") or {}
     track = ComposerTrackDraft.model_validate(track_data)
     if track.role not in {"melody", "lead"}:
         track = track.model_copy(update={"role": "melody"})
-    motif = ComposerMotifContext.model_validate(motif_data)
-    return {"track": track, "motif_context": motif}
+    return {"track": track}
 
 
 def _after_melody_stage(state: _GenerationState, payload: dict[str, Any], parsed: dict[str, Any]) -> _GenerationState:
     track: ComposerTrackDraft = payload["track"]
-    motif: ComposerMotifContext = payload["motif_context"]
+    track = assign_draft_event_ids(track, id_prefix="gen-mel")
     if not track.events:
         logger.warning("Melody stage produced empty events", extra={"track_id": track.id})
     logger.info(
         "Resolved melody draft",
         extra={
             **summarize_track_draft(track),
-            "motif_ids": motif.motif_ids,
             "covered_bars_estimate": _estimate_covered_bars(track, state.get("form_plan")),
+            "theme": summarize_theme_plan(state.get("theme_plan")),
         },
     )
     return {
         **state,
         "melody_draft": track,
-        "motif_context": motif,
+        "parsed_json": parsed,
+    }
+
+
+def _parse_melody_seed_stage(parsed: dict[str, Any], state: _GenerationState) -> dict[str, Any]:
+    return _parse_melody_stage(parsed, state)
+
+
+def _after_melody_seed_stage(
+    state: _GenerationState, payload: dict[str, Any], parsed: dict[str, Any]
+) -> _GenerationState:
+    track: ComposerTrackDraft = payload["track"]
+    track = assign_draft_event_ids(track, id_prefix="gen-seed")
+    theme = state.get("theme_plan")
+    form = state.get("form_plan")
+    if theme is None or not theme.enabled or theme.seed is None or form is None:
+        raise InvalidLLMOutputError("Melody seed stage requires an enabled theme plan")
+    try:
+        cells, seed_ids = extract_seed_relative_cell(
+            track,
+            form=form,
+            seed=theme.seed,
+            ticks_per_quarter=DEFAULT_TICKS_PER_QUARTER,
+        )
+    except Exception as exc:
+        raise InvalidLLMOutputError(f"Theme seed extraction failed: {str(exc)[:200]}") from exc
+    frozen_seed = theme.seed.model_copy(
+        update={
+            "relative_cell": cells,
+            "seed_event_ids": seed_ids,
+            "prior_section_handoff": "seed stated; continue with planned deployments",
+        }
+    )
+    frozen_theme = theme.model_copy(update={"seed": frozen_seed})
+    logger.info(
+        "Resolved melody seed cell",
+        extra={
+            "seed_event_count": len(seed_ids),
+            "relative_cell_count": len(cells),
+            "seed_section_index": frozen_seed.section_index,
+        },
+    )
+    return {
+        **state,
+        "melody_draft": track,
+        "theme_plan": frozen_theme,
+        "parsed_json": parsed,
+    }
+
+
+def _parse_melody_continuation_stage(parsed: dict[str, Any], state: _GenerationState) -> dict[str, Any]:
+    return _parse_melody_stage(parsed, state)
+
+
+def _after_melody_continuation_stage(
+    state: _GenerationState, payload: dict[str, Any], parsed: dict[str, Any]
+) -> _GenerationState:
+    from .composition_theme import section_tick_bounds
+
+    continuation: ComposerTrackDraft = payload["track"]
+    seed_draft = state.get("melody_draft")
+    theme = state.get("theme_plan")
+    form = state.get("form_plan")
+    if seed_draft is None or theme is None or theme.seed is None or form is None:
+        raise InvalidLLMOutputError("Melody continuation requires seed draft and theme plan")
+
+    seed_ids = set(theme.seed.seed_event_ids)
+    seed_events = [event for event in seed_draft.events if event.id in seed_ids]
+    start_tick, end_tick = section_tick_bounds(
+        form,
+        theme.seed.section_index,
+        ticks_per_quarter=DEFAULT_TICKS_PER_QUARTER,
+        start_bar_offset=theme.seed.start_bar_offset,
+        bar_span=theme.seed.bar_span,
+    )
+    later_events = [
+        event
+        for event in continuation.events
+        if event.start_tick < start_tick or event.start_tick >= end_tick
+    ]
+    merged = sorted(
+        [*seed_events, *later_events],
+        key=lambda item: (item.start_tick, item.duration_ticks, item.id or ""),
+    )
+    track = continuation.model_copy(update={"events": merged, "id": seed_draft.id or continuation.id})
+    track = assign_draft_event_ids(track, id_prefix="gen-mel")
+    try:
+        cells, seed_ids_list = extract_seed_relative_cell(
+            track,
+            form=form,
+            seed=theme.seed,
+            ticks_per_quarter=DEFAULT_TICKS_PER_QUARTER,
+        )
+        frozen_seed = theme.seed.model_copy(
+            update={"relative_cell": cells, "seed_event_ids": seed_ids_list}
+        )
+        frozen_theme = theme.model_copy(update={"seed": frozen_seed})
+    except Exception:
+        frozen_theme = theme
+
+    logger.info(
+        "Resolved melody continuation with immutable seed",
+        extra={
+            **summarize_track_draft(track),
+            "seed_event_count": len(frozen_theme.seed.seed_event_ids) if frozen_theme.seed else 0,
+            "covered_bars_estimate": _estimate_covered_bars(track, form),
+        },
+    )
+    return {
+        **state,
+        "melody_draft": track,
+        "theme_plan": frozen_theme,
         "parsed_json": parsed,
     }
 
@@ -1693,6 +2036,7 @@ def _build_form_prompt(state: _GenerationState) -> str:
     constraints = state["constraints"]
     hard_block = prompt_parameters_hard_block(constraints)
     sections = [section.model_dump() for section in prompt.sections]
+    instructions = bounded_user_instructions_for_prompt(request)
     key_rule = (
         f'- key MUST be exactly "{constraints.key}" (immutable hard constraint)'
         if constraints.key_user_specified and constraints.key
@@ -1702,6 +2046,11 @@ def _build_form_prompt(state: _GenerationState) -> str:
         f"- sections MUST match this exact sequence and bar counts: {json.dumps(hard_block['hard']['sections'])}"
         if constraints.sections_user_specified
         else f"- sections must be contiguous from start_bar=1 and sum exactly to bar_count={constraints.duration_bars}"
+    )
+    instructions_block = (
+        f"- user instructions (bounded): {json.dumps(instructions, ensure_ascii=True)}"
+        if instructions
+        else f"- freeform instructions present: {constraints.has_instructions} (length={constraints.instructions_length})"
     )
     return f"""
 You are planning musical form for a composition.v2 generator.
@@ -1735,9 +2084,74 @@ Rules:
 - instrumentation MUST cover required families {list(constraints.required_instrument_families)}; melody/bass/accompaniment roles are assigned in later stages
 - do NOT invent unrequested instrument families unless allow_extra_instrument_families is true
 - soft preferences: genre={prompt.genre}, mood={prompt.mood}, complexity={prompt.complexity}
-- freeform instructions present: {constraints.has_instructions}
+{instructions_block}
 - requested sections hint: {json.dumps(sections) if sections else "design coherent structure totaling duration_bars"}
 - requested instruments: {", ".join(prompt.instruments)}
+""".strip()
+
+
+def _build_theme_prompt(state: _GenerationState) -> str:
+    form = state["form_plan"]
+    request = state["request"]
+    constraints = state["constraints"]
+    hard_block = prompt_parameters_hard_block(constraints)
+    instructions = bounded_user_instructions_for_prompt(request)
+    section_summary = [
+        {
+            "index": index,
+            "type": section.type,
+            "start_bar": section.start_bar,
+            "bar_count": section.bar_count,
+        }
+        for index, section in enumerate(form.sections)
+    ]
+    instructions_block = (
+        f"User instructions (bounded):\n{json.dumps(instructions, ensure_ascii=True)}\n"
+        if instructions
+        else "User instructions: none\n"
+    )
+    return f"""
+You are planning thematic development for composition.v2 generation.
+IMMUTABLE HARD CONSTRAINTS:
+{json.dumps(hard_block["hard"], ensure_ascii=True)}
+Form sections (0-based indexes):
+{json.dumps(section_summary, ensure_ascii=True)}
+{instructions_block}
+Return JSON only:
+{{
+  "enabled": true,
+  "motif_id": "motif-a",
+  "motif_label": "Motif A",
+  "seed": {{
+    "section_index": 0,
+    "track_role": "melody",
+    "start_bar_offset": 0,
+    "bar_span": 1
+  }},
+  "deployments": [
+    {{
+      "id": "dep-1",
+      "target_section_index": 2,
+      "target_track_role": "melody",
+      "start_bar_offset": 0,
+      "operation": "transpose",
+      "parameters": {{"transpose_semitones": 5}},
+      "variation_strength": null
+    }}
+  ],
+  "truncated": false,
+  "no_theme_reason": null
+}}
+
+Rules:
+- if the form has only one section or thematic recurrence is unsuitable, return enabled=false with no_theme_reason
+- when enabled, choose a seed section and at least one later recurrence target
+- mechanical operations: repeat, transpose, inversion, augmentation, diminution, sequence
+- creative operations: rhythmic_variation, melodic_variation, answer, counterphrase (require variation_strength 0..1)
+- do not invent note events; relative cells are filled after melody seed composition
+- honor user instructions about motif/theme when present (e.g. invert opening motif in the bridge)
+- max {4} deployments; set truncated=true if you would exceed the bound
+- soft preferences: genre={request.prompt.genre}, mood={request.prompt.mood}, complexity={request.prompt.complexity}
 """.strip()
 
 
@@ -1781,6 +2195,7 @@ def _build_melody_prompt(state: _GenerationState) -> str:
     ticks = DEFAULT_TICKS_PER_QUARTER
     bar_ticks = bar_duration_ticks(form.time_signature, ticks)
     locked_key = constraints.key or form.key
+    theme_ctx = theme_plan_prompt_projection(state.get("theme_plan"))
     return f"""
 You are composing the primary melody track in canonical tick timing.
 IMMUTABLE HARD CONSTRAINTS:
@@ -1789,6 +2204,8 @@ Form:
 {json.dumps(form.model_dump(), ensure_ascii=True)}
 Harmony events:
 {json.dumps([event.model_dump() for event in harmony.events[:48]], ensure_ascii=True)}
+Theme plan (compact):
+{json.dumps(theme_ctx, ensure_ascii=True)}
 
 Return JSON only:
 {{
@@ -1801,13 +2218,6 @@ Return JSON only:
     "events": [
       {{"pitch": "A4", "start_tick": 0, "duration_ticks": {ticks}, "velocity": 78, "staff": "treble"}}
     ]
-  }},
-  "motif_context": {{
-    "motif_ids": ["m1"],
-    "interval_cells": ["0,+2,-1"],
-    "rhythm_cells": ["1,1,2"],
-    "section_notes": ["intro states motif", "verse develops motif"],
-    "handoff": "repeat motif with sequence into outro"
   }}
 }}
 
@@ -1815,11 +2225,106 @@ Rules:
 - ticks_per_quarter={ticks}; one bar = {bar_ticks} ticks for {form.time_signature}
 - events must stay within 0..{form.bar_count * bar_ticks - 1} start and not exceed composition end
 - include enough melody notes for immediate playback across sections (at least ~1 event per bar on average)
-- carry and develop motifs across sections using motif_context
+- when a theme plan is enabled, state the seed clearly in the seed section (at least 3 notes in the seed bar span)
 - melody pitch range commonly C4-C6 unless instrument requires otherwise
 - tonal center MUST remain {locked_key}; chromatic passing tones are allowed
 - instrument MUST use a requested family from {list(constraints.required_instrument_families)}: {", ".join(request.prompt.instruments)}
 - complexity={request.prompt.complexity}
+""".strip()
+
+
+def _build_melody_seed_prompt(state: _GenerationState) -> str:
+    form = state["form_plan"]
+    harmony = state["harmony_plan"]
+    theme = state["theme_plan"]
+    request = state["request"]
+    constraints = state["constraints"]
+    hard_block = prompt_parameters_hard_block(constraints)
+    ticks = DEFAULT_TICKS_PER_QUARTER
+    bar_ticks = bar_duration_ticks(form.time_signature, ticks)
+    locked_key = constraints.key or form.key
+    seed = theme.seed
+    assert seed is not None
+    section = form.sections[seed.section_index]
+    seed_start_bar = section.start_bar + seed.start_bar_offset
+    seed_end_bar = seed_start_bar + seed.bar_span - 1
+    return f"""
+You are composing ONLY the theme seed for the primary melody track.
+IMMUTABLE HARD CONSTRAINTS:
+{json.dumps(hard_block["hard"], ensure_ascii=True)}
+Form:
+{json.dumps(form.model_dump(), ensure_ascii=True)}
+Harmony events:
+{json.dumps([event.model_dump() for event in harmony.events[:48]], ensure_ascii=True)}
+Seed placement: section_index={seed.section_index} ({section.type}), bars {seed_start_bar}..{seed_end_bar}
+
+Return JSON only with a melody track whose events cover the seed bars (minimum 3 notes, maximum 32):
+{{
+  "track": {{
+    "id": "melody-1",
+    "name": "Melody",
+    "instrument": "piano",
+    "role": "melody",
+    "staff": "treble",
+    "events": [
+      {{"pitch": "A4", "start_tick": {(seed_start_bar - 1) * bar_ticks}, "duration_ticks": {ticks}, "velocity": 78, "staff": "treble"}}
+    ]
+  }}
+}}
+
+Rules:
+- compose the seed first; do not write later-section material yet
+- ticks_per_quarter={ticks}; one bar = {bar_ticks} ticks
+- keep events inside the seed bar span
+- tonal center MUST remain {locked_key}
+- instrument from {list(constraints.required_instrument_families)}
+""".strip()
+
+
+def _build_melody_continuation_prompt(state: _GenerationState) -> str:
+    form = state["form_plan"]
+    harmony = state["harmony_plan"]
+    theme = state["theme_plan"]
+    request = state["request"]
+    constraints = state["constraints"]
+    hard_block = prompt_parameters_hard_block(constraints)
+    ticks = DEFAULT_TICKS_PER_QUARTER
+    bar_ticks = bar_duration_ticks(form.time_signature, ticks)
+    locked_key = constraints.key or form.key
+    theme_ctx = theme_plan_prompt_projection(theme)
+    return f"""
+You are composing the remaining melody sections AFTER an immutable theme seed.
+IMMUTABLE HARD CONSTRAINTS:
+{json.dumps(hard_block["hard"], ensure_ascii=True)}
+Form:
+{json.dumps(form.model_dump(), ensure_ascii=True)}
+Harmony events:
+{json.dumps([event.model_dump() for event in harmony.events[:48]], ensure_ascii=True)}
+Immutable theme seed / plan:
+{json.dumps(theme_ctx, ensure_ascii=True)}
+
+Return JSON only for the full melody track (seed bars may be omitted or repeated identically; later sections required):
+{{
+  "track": {{
+    "id": "melody-1",
+    "name": "Melody",
+    "instrument": "piano",
+    "role": "melody",
+    "staff": "treble",
+    "events": [
+      {{"pitch": "A4", "start_tick": 0, "duration_ticks": {ticks}, "velocity": 78, "staff": "treble"}}
+    ]
+  }}
+}}
+
+Rules:
+- do NOT alter the immutable relative_cell of the seed; treat it as fixed thematic identity
+- for mechanical deployments, leave target regions sparse or clearly related; deterministic realization may overwrite them
+- for creative deployments (rhythmic_variation, melodic_variation, answer, counterphrase), write recognizable variants in the target section
+- cover non-seed sections with playable notes (~1 event per bar)
+- ticks_per_quarter={ticks}; bar length={bar_ticks}; duration ticks={form.bar_count * bar_ticks}
+- tonal center MUST remain {locked_key}
+- instruments: {", ".join(request.prompt.instruments)}
 """.strip()
 
 
@@ -1832,6 +2337,7 @@ def _build_bass_prompt(state: _GenerationState) -> str:
     ticks = DEFAULT_TICKS_PER_QUARTER
     bar_ticks = bar_duration_ticks(form.time_signature, ticks)
     melody_summary = summarize_track_draft(melody)
+    theme_ctx = theme_plan_prompt_projection(state.get("theme_plan"))
     locked_key = constraints.key or form.key
     return f"""
 You are composing the bass track in canonical tick timing.
@@ -1843,6 +2349,8 @@ Harmony:
 {json.dumps([event.model_dump() for event in harmony.events[:48]], ensure_ascii=True)}
 Melody summary:
 {json.dumps(melody_summary, ensure_ascii=True)}
+Theme plan (compact; do not invent melody notes from theme metadata):
+{json.dumps({k: theme_ctx[k] for k in ("enabled", "motif_id", "deployments") if k in theme_ctx}, ensure_ascii=True)}
 
 Return JSON only:
 {{
@@ -1871,7 +2379,7 @@ Rules:
 def _build_accompaniment_prompt(state: _GenerationState) -> str:
     form = state["form_plan"]
     harmony = state["harmony_plan"]
-    motif = state.get("motif_context") or ComposerMotifContext()
+    theme_ctx = theme_plan_prompt_projection(state.get("theme_plan"))
     request = state["request"]
     constraints = state["constraints"]
     hard_block = prompt_parameters_hard_block(constraints)
@@ -1915,8 +2423,8 @@ Form:
 {json.dumps(form.model_dump(), ensure_ascii=True)}
 Harmony:
 {json.dumps([event.model_dump() for event in harmony.events[:48]], ensure_ascii=True)}
-Motif context:
-{json.dumps(motif.model_dump(), ensure_ascii=True)}
+Theme plan (compact context only; do not synthesize notes from harmony metadata):
+{json.dumps(theme_ctx, ensure_ascii=True)}
 Requested instruments: {", ".join(request.prompt.instruments)}
 Required sound sources: {list(constraints.required_instrument_families)}
 Reserved track IDs already used by melody/bass (do not reuse): {", ".join(reserved_ids) if reserved_ids else "none"}
@@ -2207,6 +2715,12 @@ def _infer_failed_stage(errors: list[ValidationDiagnostic]) -> str:
         return "compose_accompaniment"
     if "sparse_harmony" in codes:
         return "plan_harmony"
+    if codes & THEME_DIAGNOSTIC_CODES:
+        if codes & {THEME_SOURCE_EMPTY, THEME_TARGET_MISSING, THEME_TARGET_OUT_OF_BOUNDS}:
+            return "plan_themes"
+        if THEME_IDENTITY_BELOW_THRESHOLD in codes:
+            return "compose_melody"
+        return "realize_themes"
     if "bar_overflow" in codes or "event_out_of_range" in codes:
         if "melody" in role_haystack or "lead" in role_haystack:
             return "compose_melody"
@@ -2275,7 +2789,7 @@ def _stage_state_summary(state: _GenerationState) -> dict[str, Any]:
         "stage_retry_count": state.get("stage_retry_count", 0),
         "form": summarize_form_plan(state.get("form_plan")),
         "harmony_event_count": len((state.get("harmony_plan").events if state.get("harmony_plan") else []) or []),
-        "motif_ids": list((state.get("motif_context").motif_ids if state.get("motif_context") else []) or []),
+        "theme": summarize_theme_plan(state.get("theme_plan")),
         "melody": summarize_track_draft(state.get("melody_draft")),
         "bass": summarize_track_draft(state.get("bass_draft")),
         "accompaniment_count": len(accompaniment),

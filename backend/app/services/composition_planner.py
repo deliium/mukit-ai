@@ -153,12 +153,176 @@ class ComposerHarmonyPlan(BaseModel):
     events: list[ComposerHarmonyEvent] = Field(default_factory=list)
 
 
-class ComposerMotifContext(BaseModel):
-    motif_ids: list[str] = Field(default_factory=list)
-    interval_cells: list[str] = Field(default_factory=list)
-    rhythm_cells: list[str] = Field(default_factory=list)
-    section_notes: list[str] = Field(default_factory=list)
-    handoff: str | None = Field(default=None, max_length=400)
+# Bounded freeform instructions projected into form/theme prompts (never logged as content).
+THEME_INSTRUCTIONS_PROMPT_CHARS = 500
+THEME_MAX_DEPLOYMENTS = 4
+THEME_MAX_RELATIVE_NOTES = 32
+THEME_MAX_SECTION_HANDOFF_CHARS = 240
+
+ThemeOperation = Literal[
+    "repeat",
+    "transpose",
+    "rhythmic_variation",
+    "melodic_variation",
+    "inversion",
+    "augmentation",
+    "diminution",
+    "sequence",
+    "answer",
+    "counterphrase",
+]
+
+MECHANICAL_THEME_OPERATIONS: frozenset[str] = frozenset(
+    {"repeat", "transpose", "inversion", "augmentation", "diminution", "sequence"}
+)
+CREATIVE_THEME_OPERATIONS: frozenset[str] = frozenset(
+    {"rhythmic_variation", "melodic_variation", "answer", "counterphrase"}
+)
+
+
+class ComposerThemeRelativeNote(BaseModel):
+    """Immutable relative motif cell — never a playable placeholder."""
+
+    relative_start_tick: int = Field(..., ge=0)
+    duration_ticks: int = Field(..., gt=0)
+    pitch_semitone_offset: int = Field(..., ge=-48, le=48)
+    velocity: int = Field(default=80, ge=1, le=127)
+
+
+class ComposerThemeParameters(BaseModel):
+    transpose_semitones: int | None = Field(default=None, ge=-48, le=48)
+    inversion_axis_pitch: str | None = Field(default=None, min_length=2, max_length=5)
+    time_scale_numerator: int | None = Field(default=None, ge=1, le=8)
+    time_scale_denominator: int | None = Field(default=None, ge=1, le=8)
+    sequence_steps: int | None = Field(default=None, ge=1, le=16)
+    sequence_interval_semitones: int | None = Field(default=None, ge=-24, le=24)
+    sequence_step_ticks: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_time_scale_pair(self) -> ComposerThemeParameters:
+        has_num = self.time_scale_numerator is not None
+        has_den = self.time_scale_denominator is not None
+        if has_num != has_den:
+            raise ValueError("time_scale_numerator and time_scale_denominator must be set together")
+        return self
+
+
+class ComposerThemeDeployment(BaseModel):
+    id: str = Field(..., min_length=1, max_length=80)
+    target_section_index: int = Field(..., ge=0)
+    target_track_role: Literal["melody", "lead", "countermelody"] = "melody"
+    start_bar_offset: int = Field(default=0, ge=0)
+    operation: ThemeOperation
+    parameters: ComposerThemeParameters = Field(default_factory=ComposerThemeParameters)
+    variation_strength: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @field_validator("id")
+    @classmethod
+    def validate_deployment_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("deployment id must not be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_operation_params(self) -> ComposerThemeDeployment:
+        op = self.operation
+        params = self.parameters
+        if op in MECHANICAL_THEME_OPERATIONS and self.variation_strength is not None:
+            raise ValueError("variation_strength is not applicable for mechanical theme operations")
+        if op in CREATIVE_THEME_OPERATIONS and self.variation_strength is None:
+            self.variation_strength = 0.5
+        if op == "transpose" and params.transpose_semitones is None:
+            raise ValueError("transpose requires transpose_semitones")
+        if op in {"augmentation", "diminution"} and (
+            params.time_scale_numerator is None or params.time_scale_denominator is None
+        ):
+            raise ValueError(f"{op} requires time_scale_numerator and time_scale_denominator")
+        if op == "sequence" and (
+            params.sequence_steps is None
+            or params.sequence_interval_semitones is None
+            or params.sequence_step_ticks is None
+        ):
+            raise ValueError("sequence requires steps, interval, and step_ticks")
+        return self
+
+
+class ComposerThemeSeedSpec(BaseModel):
+    section_index: int = Field(..., ge=0)
+    track_role: Literal["melody", "lead"] = "melody"
+    start_bar_offset: int = Field(default=0, ge=0)
+    bar_span: int = Field(default=1, ge=1, le=2)
+    # Filled after melody seed composition; immutable for later stages.
+    relative_cell: list[ComposerThemeRelativeNote] = Field(
+        default_factory=list,
+        max_length=THEME_MAX_RELATIVE_NOTES,
+    )
+    seed_event_ids: list[str] = Field(default_factory=list, max_length=THEME_MAX_RELATIVE_NOTES)
+    prior_section_handoff: str | None = Field(default=None, max_length=THEME_MAX_SECTION_HANDOFF_CHARS)
+
+
+class ComposerThemePlan(BaseModel):
+    """Bounded structured theme plan replacing free-form ComposerMotifContext."""
+
+    enabled: bool = False
+    motif_id: str = Field(default="motif-a", min_length=1, max_length=80)
+    motif_label: str = Field(default="Motif A", min_length=1, max_length=120)
+    seed: ComposerThemeSeedSpec | None = None
+    deployments: list[ComposerThemeDeployment] = Field(
+        default_factory=list,
+        max_length=THEME_MAX_DEPLOYMENTS,
+    )
+    truncated: bool = False
+    no_theme_reason: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_plan_consistency(self) -> ComposerThemePlan:
+        if not self.enabled:
+            return self
+        if self.seed is None:
+            raise ValueError("enabled theme plan requires a seed")
+        if not self.deployments:
+            raise ValueError("enabled theme plan requires at least one deployment")
+        dep_ids = [item.id for item in self.deployments]
+        if len(dep_ids) != len(set(dep_ids)):
+            raise ValueError("theme deployment ids must be unique")
+        return self
+
+
+# Back-compat alias for any residual imports during staged migration.
+ComposerMotifContext = ComposerThemePlan
+
+
+def bounded_instructions_for_prompt(instructions: str | None) -> str | None:
+    """Return truncated instructions for provider prompts; callers must not log the text."""
+    if instructions is None:
+        return None
+    text = " ".join(instructions.strip().split())
+    if not text:
+        return None
+    if len(text) <= THEME_INSTRUCTIONS_PROMPT_CHARS:
+        return text
+    return text[: THEME_INSTRUCTIONS_PROMPT_CHARS - 1] + "…"
+
+
+def summarize_theme_plan(plan: ComposerThemePlan | None) -> dict[str, Any]:
+    """Sanitized theme-plan summary — never includes relative cells or instruction text."""
+    if plan is None:
+        return {"present": False, "enabled": False}
+    seed = plan.seed
+    return {
+        "present": True,
+        "enabled": plan.enabled,
+        "motif_id": plan.motif_id if plan.enabled else None,
+        "deployment_count": len(plan.deployments),
+        "deployment_operations": [item.operation for item in plan.deployments],
+        "seed_section_index": seed.section_index if seed else None,
+        "seed_bar_span": seed.bar_span if seed else None,
+        "relative_cell_count": len(seed.relative_cell) if seed else 0,
+        "seed_event_id_count": len(seed.seed_event_ids) if seed else 0,
+        "truncated": plan.truncated,
+        "no_theme_reason": plan.no_theme_reason,
+    }
 
 
 class ComposerDraftNote(BaseModel):
