@@ -83,7 +83,7 @@ Each candidate response includes:
 
 ### Phase 1: Domain Contract and Deterministic Core
 
-- [ ] Task 1: Define strict development request, draft, candidate, assertion, summary, and error contracts, plus full edit fingerprints.
+- [x] Task 1: Define strict development request, draft, candidate, assertion, summary, and error contracts, plus full edit fingerprints.
   - Files: create `backend/app/composition_development_schemas.py` and `backend/app/services/composition_edit_fingerprint.py`; update schema re-exports only if existing import conventions require it; add `backend/tests/test_composition_development_schemas.py` and `backend/tests/test_composition_edit_fingerprint.py`.
   - Deliverable: implement the operation, intent, strength, source selection, output bars, target section, candidate-count, provider selection, and options DTOs described above. Enforce operation-specific combinations, request/candidate count and text bounds, unique candidate IDs, bounded warnings/assertions, and strict extra-field rejection.
   - Deliverable: define versioned canonical full-document serialization and SHA-256 profiles for source and candidate edit concurrency. Include every persisted Composition V2 field, preserve array order, sort object keys, use ASCII compact JSON, and expose a short prefix helper for logs.
@@ -92,7 +92,7 @@ Each candidate response includes:
   - Logging requirements: DEBUG only for fingerprint profile/version, short fingerprint prefix, encoded byte count, and bounded composition counts. Log schema validation failures by stable code/field and counts; never log source/candidate JSON, instructions, or events.
   - Dependencies: none.
 
-- [ ] Task 2: Build bounded, deterministic source-context extraction and identity/seam evaluation.
+- [x] Task 2: Build bounded, deterministic source-context extraction and identity/seam evaluation.
   - Files: create `backend/app/services/composition_development_context.py` and `backend/app/services/composition_development_identity.py`; add `backend/tests/test_composition_development_context.py` and `backend/tests/test_composition_development_identity.py`; reuse `composition_timeline.py`, `composition_analysis.py`, `composition_analysis_context.py`, and motif/role/repetition helpers without persisting analysis.
   - Deliverable: resolve source section or bars, append seam, active tempo/meter/key, recent harmony, prior/next section relationships, motif exemplars with relative notes, track role/instrument/register summaries, rhythmic/onset/density character, cadence/seam notes, and a clamped advisory analysis projection. Use compiled bar boundaries for mixed meter.
   - Deliverable: define versioned strength profiles and stable diagnostics for motif/identity anchors, register/rhythm/density divergence, harmonic continuity, seam gaps/leaps, missing track drafts, and restart-like openings. Classify checks as required errors or advisory warnings by strength.
@@ -101,7 +101,7 @@ Each candidate response includes:
   - Logging requirements: INFO for operation, resolved bar/tick scope, strength, intent, source counts, and context truncation status; DEBUG for metric names/rounded scores and diagnostic codes only. Never log pitches, relative-note arrays, full analysis, or prompt text.
   - Dependencies: Task 1.
 
-- [ ] Task 3: Implement deterministic append and variation draft realization with exact preservation gates.
+- [x] Task 3: Implement deterministic append and variation draft realization with exact preservation gates.
   - Files: create `backend/app/services/composition_development_patch.py`; update `backend/app/services/composition_region_patch.py` only to extract genuinely reusable public helpers without weakening existing behavior; add `backend/tests/test_composition_development_patch.py` and focused regressions to `backend/tests/test_composition_region_patch.py` if shared code changes.
   - Deliverable: validate provider drafts relative to output scope, translate relative ticks to absolute ticks, allocate deterministic collision-safe IDs, preserve track topology/metadata, append or replace events, extend sections/duration/bar count, append allowed key/meter/tempo/harmony/motif metadata at canonical boundaries, reconcile motif references, and construct strict V2.
   - Deliverable: compare the full source against the result under operation-specific preservation profiles before and after `CompositionV2.model_validate` and canonical integrity validation. Return machine-readable per-track changes, preservation assertions, and resolved ranges.
