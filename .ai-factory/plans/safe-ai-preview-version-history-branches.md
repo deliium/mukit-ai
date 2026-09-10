@@ -245,21 +245,21 @@ Extend project detail/save contracts with:
 
 ### Phase 2: History API and Current-Project Safety
 
-- [ ] **Task 4: Expose revision and branch APIs and extend project open/save responses.**
+- [x] **Task 4: Expose revision and branch APIs and extend project open/save responses.**
   - Deliverables: Add metadata list/detail/name, durable commit, restore, and branch endpoints; map not-found/validation/conflict/domain errors to sanitized `404`/`409`/`422`; return active branch/head/working fields from create/open/patch/duplicate; require working preconditions for draft autosave and stronger head/source preconditions for durable commands; preserve rename behavior without full-row writes; add OpenAPI contracts.
   - Files: `backend/app/routers/projects.py`, `backend/app/project_schemas.py`, `backend/app/project_history_schemas.py`, `backend/app/main.py` only if router registration changes.
   - Tests: Extend `backend/tests/test_project_routes.py`, `backend/tests/test_openapi_v2.py`, and `backend/tests/test_project_persistence_acceptance.py` for every endpoint, pagination, naming, branch checkout, Apply-as-branch payload, restore-as-new-revision, stale `409`, V2-only detail, no secret acceptance, and no full documents in list/conflict responses.
   - Logging: INFO route lifecycle with project/branch/revision IDs and status; DEBUG pagination counts and revision-created flag; WARN sanitized domain code for 4xx; ERROR unexpected type only. Never log request bodies, snapshot JSON, instructions, or secret-like fields.
   - Dependencies: Tasks 1-3.
 
-- [ ] **Task 5: Add frontend history API methods and preserve structured conflicts.**
+- [x] **Task 5: Add frontend history API methods and preserve structured conflicts.**
   - Deliverables: Add list/get/name/commit/restore revision and list/create/rename/checkout branch clients; extend draft PATCH with active-branch/working-version/source preconditions; preserve safe structured `409` details in a typed-by-convention API error while retaining current messages for other endpoints; URL-encode all IDs and pagination values.
   - Files: `frontend/src/api/projectApi.js`, `frontend/src/api/projectApi.test.js`.
   - Tests: Verify exact methods/paths/payloads, pagination, encoded IDs, lazy detail response, secret-free conflict parsing, and malformed error fallback.
   - Logging: DEBUG method/path, IDs, status, and request purpose only; WARN safe HTTP status/code; never log bodies, compositions, instruction text, authorization, or Axios config headers.
   - Dependencies: Task 4.
 
-- [ ] **Task 6: Make Zustand autosave branch/head-aware and navigation-safe.**
+- [x] **Task 6: Make Zustand autosave branch/head-aware and navigation-safe.**
   - Deliverables: Track active branch, durable head, working version/fingerprint, and local `compositionRevision` separately. Autosave persists only the active branch draft with compare-and-swap preconditions; explicit Save promotes a checkpoint. Stop retrying on `409` and show Reload/Save as branch choices. Internal navigation/project or branch switch awaits draft flush or offers Save/Discard/Cancel. Browser `beforeunload` warns when dirty/in-flight because async unload persistence is not guaranteed; do not claim otherwise. Invalidate all asynchronous responses by captured project/branch IDs and fix generation/direct-AI-edit stale guards while touching this lifecycle.
   - Files: `frontend/src/store/musicStore.js`, `frontend/src/utils/projectPersistRevision.js`, `frontend/src/components/ProjectComposerBar.jsx`, `frontend/src/App.jsx` or a focused unload/navigation hook if needed.
   - Tests: Extend `frontend/src/store/musicStore.project.test.js`; add draft-versus-checkpoint semantics, conflict, rename/autosave overlap, delayed stale response, project/branch switch, pending timer flush, in-flight save, Reload/Save-as-branch resolution, and unload warning behavior. Confirm previews alone never autosave or create revisions and no UI claims an unconfirmed unload save succeeded.

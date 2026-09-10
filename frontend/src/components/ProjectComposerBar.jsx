@@ -60,15 +60,18 @@ const STATUS_STYLES = {
   saving: { bg: '#dbeafe', color: '#1e40af', label: 'Saving…' },
   unsaved: { bg: '#fef3c7', color: '#92400e', label: 'Unsaved' },
   error: { bg: '#fee2e2', color: '#991b1b', label: 'Save error' },
+  conflict: { bg: '#ffedd5', color: '#9a3412', label: 'Conflict' },
 };
 
 const ProjectComposerBar = () => {
   const currentProjectId = useMusicStore((state) => state.currentProjectId);
   const currentProjectName = useMusicStore((state) => state.currentProjectName);
+  const activeBranchName = useMusicStore((state) => state.activeBranchName);
   const saveStatus = useMusicStore((state) => state.saveStatus);
   const saveError = useMusicStore((state) => state.saveError);
   const goHome = useMusicStore((state) => state.goHome);
   const saveCurrentProject = useMusicStore((state) => state.saveCurrentProject);
+  const reloadCurrentProject = useMusicStore((state) => state.reloadCurrentProject);
   const renameCurrentProject = useMusicStore((state) => state.renameCurrentProject);
   const [nameDraft, setNameDraft] = React.useState(currentProjectName);
 
@@ -111,12 +114,28 @@ const ProjectComposerBar = () => {
             }
           }}
         />
+        {activeBranchName ? (
+          <Chip $bg="#e0e7ff" $color="#3730a3">{activeBranchName}</Chip>
+        ) : null}
         <Chip $bg={status.bg} $color={status.color}>{status.label}</Chip>
-        {saveStatus === 'error' && saveError && (
+        {(saveStatus === 'error' || saveStatus === 'conflict') && saveError && (
           <span style={{ color: '#991b1b', fontSize: '0.85rem' }}>{saveError}</span>
         )}
       </Group>
       <Group>
+        {saveStatus === 'conflict' ? (
+          <Button
+            type="button"
+            $secondary
+            data-testid="reload-project"
+            onClick={() => {
+              console.debug('[ProjectComposerBar] Reload after conflict', { projectId: currentProjectId });
+              reloadCurrentProject().catch(() => {});
+            }}
+          >
+            Reload
+          </Button>
+        ) : null}
         <Button
           type="button"
           data-testid="save-project"

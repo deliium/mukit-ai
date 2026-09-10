@@ -46,6 +46,47 @@ def test_openapi_project_detail_returns_composition_v2():
     composition = detail["properties"]["composition"]
     ref = composition.get("$ref") or composition.get("anyOf", [{}])[0].get("$ref", "")
     assert ref.endswith("/CompositionV2") or "CompositionV2" in json.dumps(composition)
+    for field in (
+        "active_branch_id",
+        "active_branch_name",
+        "current_revision_id",
+        "current_revision_sequence",
+        "working_version",
+        "working_fingerprint",
+    ):
+        assert field in detail["properties"]
+
+
+def test_openapi_project_history_endpoints_and_contracts():
+    schema = app.openapi()
+    paths = schema["paths"]
+    assert "/projects/{project_id}/revisions" in paths
+    assert "/projects/{project_id}/revisions/{revision_id}" in paths
+    assert "/projects/{project_id}/revisions/{revision_id}/restore" in paths
+    assert "/projects/{project_id}/branches" in paths
+    assert "/projects/{project_id}/branches/apply-as-branch" in paths
+    assert "/projects/{project_id}/branches/{branch_id}/checkout" in paths
+
+    list_item = _component("RevisionListItem")
+    assert "composition" not in list_item["properties"]
+    assert "has_user_instruction" in list_item["properties"]
+    assert "user_instruction" not in list_item["properties"]
+
+    detail = _component("RevisionDetailResponse")
+    composition = detail["properties"]["composition"]
+    serialized = json.dumps(composition)
+    assert "CompositionV2" in serialized
+
+    conflict = _component("ProjectRevisionConflictBody")
+    assert conflict["properties"]["code"]["const"] == "project_revision_conflict"
+    assert "composition" not in conflict["properties"]
+
+    durable = _component("DurableCommandResponse")
+    assert "revision_created" in durable["properties"]
+    assert "working_fingerprint" in durable["properties"]
+    patch = _component("ProjectPatchRequest")
+    assert "expected_working_version" in patch["properties"]
+    assert "expected_source_fingerprint" in patch["properties"]
 
 
 def test_openapi_import_endpoints_and_response_contract():

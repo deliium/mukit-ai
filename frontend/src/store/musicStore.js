@@ -20,6 +20,8 @@ import {
 } from '../api/musicApi.js';
 import { createAppLogger } from '../utils/appLogger.js';
 import {
+  ProjectRevisionConflictError,
+  commitRevision as commitRevisionRequest,
   createProject as createProjectRequest,
   deleteProject as deleteProjectRequest,
   duplicateProject as duplicateProjectRequest,
@@ -323,6 +325,67 @@ function isManualSaveReason(reason) {
   return reason === 'manual' || reason === 'manual-force';
 }
 
+function historyStateFromProject(project) {
+  if (!project || typeof project !== 'object') {
+    return {
+      activeBranchId: null,
+      activeBranchName: null,
+      currentRevisionId: null,
+      currentRevisionSequence: null,
+      workingVersion: null,
+      workingFingerprint: null,
+    };
+  }
+  return {
+    activeBranchId: project.active_branch_id ?? null,
+    activeBranchName: project.active_branch_name ?? null,
+    currentRevisionId: project.current_revision_id ?? null,
+    currentRevisionSequence: project.current_revision_sequence ?? null,
+    workingVersion: project.working_version ?? null,
+    workingFingerprint: project.working_fingerprint ?? null,
+  };
+}
+
+function historyStateFromDurable(result) {
+  if (!result || typeof result !== 'object') {
+    return historyStateFromProject(null);
+  }
+  return {
+    activeBranchId: result.active_branch_id ?? null,
+    activeBranchName: result.active_branch_name ?? null,
+    currentRevisionId: result.current_revision_id ?? null,
+    currentRevisionSequence: result.current_revision_sequence ?? null,
+    workingVersion: result.working_version ?? null,
+    workingFingerprint: result.working_fingerprint ?? null,
+  };
+}
+
+function projectIsDirtyForUnload(state) {
+  if (!state?.currentProjectId) {
+    return false;
+  }
+  if (state.saveStatus === 'saving' || state.saveStatus === 'unsaved' || state.saveStatus === 'conflict') {
+    return true;
+  }
+  const persistRevision = projectPersistRevisionKey(state.editedMusicJson, state.generationMeta);
+  return persistRevision !== state.lastSavedPersistRevision;
+}
+
+export { projectIsDirtyForUnload };
+
+async function flushProjectDraft(get, { reason = 'navigation-flush' } = {}) {
+  const state = get();
+  if (!state.currentProjectId) {
+    return null;
+  }
+  cancelAutosaveTimer();
+  const persistRevision = projectPersistRevisionKey(state.editedMusicJson, state.generationMeta);
+  if (persistRevision === state.lastSavedPersistRevision && state.saveStatus !== 'unsaved') {
+    return null;
+  }
+  return get().saveCurrentProject({ reason });
+}
+
 let autosaveTimer = null;
 let autosaveRequestSeq = 0;
 
@@ -448,6 +511,13 @@ export const useMusicStore = create((set, get) => ({
   activeView: 'home',
   currentProjectId: null,
   currentProjectName: '',
+  activeBranchId: null,
+  activeBranchName: null,
+  currentRevisionId: null,
+  currentRevisionSequence: null,
+  workingVersion: null,
+  workingFingerprint: null,
+  saveConflict: null,
   projectList: [],
   projectListStatus: 'idle',
   saveStatus: 'saved',
@@ -3191,10 +3261,38 @@ export const useMusicStore = create((set, get) => ({
   },
 
   goHome: async () => {
-    console.info('[musicStore] View transition', { activeView: 'home', projectId: get().currentProjectId });
+    const projectId = get().currentProjectId;
+    console.info('[musicStore] View transition', { activeView: 'home', projectId });
+    try {
+      await flushProjectDraft(get, { reason: 'go-home-flush' });
+    } catch (error) {
+      if (error instanceof ProjectRevisionConflictError) {
+        console.warn('[musicStore] Home navigation blocked by save conflict', {
+          projectId,
+          code: error.code,
+        });
+        return;
+      }
+      console.warn('[musicStore] Home flush failed; continuing to home', {
+        projectId,
+        status: error.status || null,
+      });
+    }
     cancelAutosaveTimer();
     set({ activeView: 'home' });
     await get().loadProjectList();
+  },
+
+  reloadCurrentProject: async () => {
+    const projectId = get().currentProjectId;
+    if (!projectId) {
+      return null;
+    }
+    console.info('[musicStore] Reloading current project after conflict', { projectId });
+    cancelAutosaveTimer();
+    const project = await getProjectRequest(projectId);
+    hydrateProject(set, get, project, { openComposer: true, markSaved: true });
+    return project;
   },
 
   loadProjectList: async () => {
@@ -3229,6 +3327,26 @@ export const useMusicStore = create((set, get) => ({
 
   openProject: async (projectId) => {
     console.info('[musicStore] Opening project', { projectId });
+    const currentId = get().currentProjectId;
+    if (currentId && currentId !== projectId) {
+      try {
+        await flushProjectDraft(get, { reason: 'project-switch-flush' });
+      } catch (error) {
+        if (error instanceof ProjectRevisionConflictError) {
+          console.warn('[musicStore] Project switch blocked by save conflict', {
+            fromProjectId: currentId,
+            toProjectId: projectId,
+            code: error.code,
+          });
+          throw error;
+        }
+        console.warn('[musicStore] Project switch flush failed; continuing open', {
+          fromProjectId: currentId,
+          toProjectId: projectId,
+          status: error.status || null,
+        });
+      }
+    }
     try {
       const project = await getProjectRequest(projectId);
       hydrateProject(set, get, project, { openComposer: true, markSaved: true });
@@ -3325,6 +3443,13 @@ export const useMusicStore = create((set, get) => ({
         set({
           currentProjectId: null,
           currentProjectName: '',
+          activeBranchId: null,
+          activeBranchName: null,
+          currentRevisionId: null,
+          currentRevisionSequence: null,
+          workingVersion: null,
+          workingFingerprint: null,
+          saveConflict: null,
           activeView: 'home',
           generatedMusicJson: null,
           editedMusicJson: null,
@@ -3361,6 +3486,7 @@ export const useMusicStore = create((set, get) => ({
   saveCurrentProject: async ({ reason = 'manual' } = {}) => {
     const state = get();
     const projectId = state.currentProjectId;
+    const branchId = state.activeBranchId;
     const hasGenerationMeta = Boolean(state.generationMeta);
     const generationForSave = hasGenerationMeta
       ? {
@@ -3372,6 +3498,7 @@ export const useMusicStore = create((set, get) => ({
     const persistRevisionAtStart = projectPersistRevisionKey(state.editedMusicJson, generationForSave);
     const fingerprintDirty = persistRevisionAtStart !== state.lastSavedPersistRevision;
     const eventCount = countEvents(state.editedMusicJson);
+    const manual = isManualSaveReason(reason);
 
     if (!projectId) {
       console.debug('[FIX] Save skipped; no open project', {
@@ -3379,7 +3506,7 @@ export const useMusicStore = create((set, get) => ({
         fingerprintDirty,
         eventCount,
       });
-      if (isManualSaveReason(reason)) {
+      if (manual) {
         set({
           saveStatus: 'error',
           saveError: 'No project open to save',
@@ -3402,8 +3529,8 @@ export const useMusicStore = create((set, get) => ({
       return null;
     }
 
-    // Autosave stays gated on persist fingerprint; manual Save always PATCHes.
-    if (!fingerprintDirty && !isManualSaveReason(reason)) {
+    // Autosave stays gated on persist fingerprint; manual Save always commits/PATCHes.
+    if (!fingerprintDirty && !manual) {
       console.debug('[FIX] Save skipped; persist fingerprint clean', {
         reason,
         projectId,
@@ -3411,27 +3538,25 @@ export const useMusicStore = create((set, get) => ({
         eventCount,
         persistRevision: persistRevisionAtStart.slice(0, 48),
       });
-      set({ saveStatus: 'saved', saveError: '' });
+      set({ saveStatus: 'saved', saveError: '', saveConflict: null });
       return null;
     }
 
     console.debug('[FIX] Save starting', {
       reason,
       projectId,
+      branchId,
       fingerprintDirty,
       eventCount,
       persistRevision: persistRevisionAtStart.slice(0, 48),
+      workingVersion: state.workingVersion,
     });
 
     const requestId = ++autosaveRequestSeq;
     const composition = state.editedMusicJson;
-    const payload = {
-      composition: composition || undefined,
-      clear_composition: !composition,
-      ...(hasGenerationMeta
-        ? { generation: generationForSave }
-        : { clear_generation: true }),
-    };
+    const captureBranchId = branchId;
+    const captureWorkingVersion = state.workingVersion;
+    const captureFingerprint = state.workingFingerprint;
 
     console.info('[musicStore] Saving project', {
       reason,
@@ -3444,32 +3569,75 @@ export const useMusicStore = create((set, get) => ({
       clearGeneration: !hasGenerationMeta,
       promptGenre: generationForSave?.prompt?.genre || null,
       promptMood: generationForSave?.prompt?.mood || null,
-    });
-    console.debug('[FIX] Save generation payload', {
-      reason,
-      projectId,
-      hasGenerationMeta,
-      promptGenre: generationForSave?.prompt?.genre || null,
-      promptMood: generationForSave?.prompt?.mood || null,
-      promptKeyLength: String(generationForSave?.prompt?.key || '').length,
+      mode: manual ? 'draft-then-checkpoint' : 'draft-autosave',
+      workingVersion: captureWorkingVersion,
     });
     console.debug('[musicStore] Save status transition', { from: state.saveStatus, to: 'saving', reason });
-    set({ saveStatus: 'saving', saveError: '' });
+    set({ saveStatus: 'saving', saveError: '', saveConflict: null });
 
     try {
-      const project = await patchProjectRequest(projectId, payload);
+      let projectOrDurable;
+      const hasCas = Boolean(
+        captureBranchId
+        && captureWorkingVersion != null
+        && captureFingerprint,
+      );
+      const draftPayload = {
+        composition: composition || undefined,
+        clear_composition: !composition,
+        ...(hasGenerationMeta
+          ? { generation: generationForSave }
+          : { clear_generation: true }),
+      };
+      if (hasCas) {
+        draftPayload.branch_id = captureBranchId;
+        draftPayload.expected_active_branch_id = captureBranchId;
+        draftPayload.expected_working_version = captureWorkingVersion;
+        draftPayload.expected_source_fingerprint = captureFingerprint;
+      }
+
+      // Draft autosave (and the draft half of explicit Save) always PATCHes.
+      const draftResult = await patchProjectRequest(projectId, draftPayload);
+      let historyFields = historyStateFromProject(draftResult);
+      projectOrDurable = draftResult;
+
+      if (manual && historyFields.activeBranchId && historyFields.currentRevisionId != null
+        && historyFields.workingVersion != null && historyFields.workingFingerprint) {
+        projectOrDurable = await commitRevisionRequest(projectId, {
+          branch_id: historyFields.activeBranchId,
+          expected_active_branch_id: historyFields.activeBranchId,
+          expected_working_version: historyFields.workingVersion,
+          expected_head_revision_id: historyFields.currentRevisionId,
+          expected_source_fingerprint: historyFields.workingFingerprint,
+          composition: composition || undefined,
+          clear_composition: !composition,
+          operation_type: 'manual-checkpoint',
+        });
+        historyFields = historyStateFromDurable(projectOrDurable);
+      }
+
       if (requestId !== autosaveRequestSeq) {
-        console.warn('[musicStore] Ignoring stale save response', { requestId, latest: autosaveRequestSeq });
-        return project;
+        console.warn('[musicStore] Ignoring stale save response', {
+          requestId,
+          latest: autosaveRequestSeq,
+          projectId,
+          branchId: captureBranchId,
+        });
+        return projectOrDurable;
       }
-      const stillCurrent = get().currentProjectId === projectId;
+      const stillCurrent = get().currentProjectId === projectId
+        && (!captureBranchId || get().activeBranchId === captureBranchId);
       if (!stillCurrent) {
-        console.warn('[musicStore] Save completed after project closed', { projectId, requestId });
-        return project;
+        console.warn('[musicStore] Save completed after project/branch closed', {
+          projectId,
+          requestId,
+          branchId: captureBranchId,
+        });
+        return projectOrDurable;
       }
-      // Keep in-memory generationMeta aligned with what we just persisted.
+
       set({ generationMeta: generationForSave });
-      const currentPersistRevision = projectPersistRevisionKey(get().editedMusicJson, get().generationMeta);
+      const currentPersistRevision = projectPersistRevisionKey(get().editedMusicJson, generationForSave);
       if (currentPersistRevision !== persistRevisionAtStart) {
         console.debug('[FIX] Save completed but newer persist fingerprint exists', {
           projectId,
@@ -3478,37 +3646,51 @@ export const useMusicStore = create((set, get) => ({
           eventCount: countEvents(get().editedMusicJson),
         });
         set({
+          ...historyFields,
           lastSavedPersistRevision: persistRevisionAtStart,
           saveStatus: 'unsaved',
           saveError: '',
+          saveConflict: null,
+          currentProjectName: draftResult.name || get().currentProjectName,
         });
         scheduleAutosave(set, get);
-        return project;
+        return projectOrDurable;
       }
       console.info('[musicStore] Project saved', {
         reason,
         projectId,
         eventCount,
-      });
-      console.debug('[FIX] Save success', {
-        reason,
-        projectId,
-        eventCount,
-        persistRevision: persistRevisionAtStart.slice(0, 48),
-        promptGenre: generationForSave?.prompt?.genre || null,
-        promptMood: generationForSave?.prompt?.mood || null,
+        revisionCreated: Boolean(projectOrDurable.revision_created),
       });
       console.debug('[musicStore] Save status transition', { from: 'saving', to: 'saved', reason });
       set({
+        ...historyFields,
         lastSavedPersistRevision: persistRevisionAtStart,
         saveStatus: 'saved',
         saveError: '',
-        currentProjectName: project.name || get().currentProjectName,
+        saveConflict: null,
+        currentProjectName: draftResult.name || projectOrDurable.name || get().currentProjectName,
       });
-      return project;
+      return projectOrDurable;
     } catch (error) {
       if (requestId !== autosaveRequestSeq) {
         return null;
+      }
+      if (error instanceof ProjectRevisionConflictError) {
+        console.warn('[musicStore] Project save conflict; stopping autosave retries', {
+          reason,
+          projectId,
+          code: error.code,
+          expectedWorkingVersion: error.conflict?.expected_working_version ?? null,
+          currentWorkingVersion: error.conflict?.current_working_version ?? null,
+        });
+        cancelAutosaveTimer();
+        set({
+          saveStatus: 'conflict',
+          saveError: 'Project changed elsewhere. Reload or save as a new branch.',
+          saveConflict: error.conflict,
+        });
+        throw error;
       }
       console.error('[FIX] Save failed', {
         reason,
@@ -3524,7 +3706,7 @@ export const useMusicStore = create((set, get) => ({
         status: error.status,
       });
       console.debug('[musicStore] Save status transition', { from: 'saving', to: 'error', reason });
-      set({ saveStatus: 'error', saveError: error.message });
+      set({ saveStatus: 'error', saveError: error.message, saveConflict: null });
       throw error;
     }
   },
@@ -5889,6 +6071,13 @@ function scheduleAutosave(set, get) {
     console.debug('[musicStore] Autosave skipped; no open project');
     return;
   }
+  if (state.saveStatus === 'conflict') {
+    console.warn('[musicStore] Autosave skipped; unresolved revision conflict', {
+      projectId: state.currentProjectId,
+      code: state.saveConflict?.code || 'project_revision_conflict',
+    });
+    return;
+  }
   const persistRevision = projectPersistRevisionKey(state.editedMusicJson, state.generationMeta);
   if (persistRevision === state.lastSavedPersistRevision) {
     console.debug('[FIX] Autosave skipped; persist fingerprint clean', {
@@ -5901,6 +6090,8 @@ function scheduleAutosave(set, get) {
   cancelAutosaveTimer();
   console.debug('[musicStore] Autosave debounce scheduled', {
     projectId: state.currentProjectId,
+    branchId: state.activeBranchId,
+    workingVersion: state.workingVersion,
     delayMs: AUTOSAVE_DEBOUNCE_MS,
     persistRevision: persistRevision.slice(0, 48),
   });
@@ -5908,6 +6099,7 @@ function scheduleAutosave(set, get) {
     autosaveTimer = null;
     console.debug('[musicStore] Autosave debounce fired', {
       projectId: get().currentProjectId,
+      branchId: get().activeBranchId,
     });
     get().saveCurrentProject({ reason: 'autosave' }).catch(() => {
       // error already recorded on saveStatus
@@ -5958,9 +6150,12 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
   cancelAutosaveTimer();
   cancelAnalysisLifecycle();
   const prev = get();
+  const historyFields = historyStateFromProject(project);
   set({
     currentProjectId: project.id,
     currentProjectName: project.name,
+    ...historyFields,
+    saveConflict: null,
     activeView: openComposer ? 'composer' : get().activeView,
     generatedMusicJson: composition,
     editedMusicJson: composition,

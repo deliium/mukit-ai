@@ -52,6 +52,13 @@ function resetProjectState(overrides = {}) {
     activeView: 'home',
     currentProjectId: null,
     currentProjectName: '',
+    activeBranchId: null,
+    activeBranchName: null,
+    currentRevisionId: null,
+    currentRevisionSequence: null,
+    workingVersion: null,
+    workingFingerprint: null,
+    saveConflict: null,
     projectList: [],
     projectListStatus: 'idle',
     saveStatus: 'saved',
@@ -81,6 +88,26 @@ function resetProjectState(overrides = {}) {
     },
     ...overrides,
   });
+}
+
+function historyProjectPayload(overrides = {}) {
+  return {
+    id: 'p1',
+    name: 'Opened',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-02T00:00:00Z',
+    composition: structuredClone(COMPOSITION),
+    generation_provider: null,
+    generation_model: null,
+    generation_prompt: null,
+    active_branch_id: 'b1',
+    active_branch_name: 'Original',
+    current_revision_id: 'r1',
+    current_revision_sequence: 1,
+    working_version: 0,
+    working_fingerprint: 'composition.snapshot.v1:abcdef0123456789',
+    ...overrides,
+  };
 }
 
 test('open project hydrates composition and generation metadata without keys', async (t) => {
@@ -801,4 +828,204 @@ test('createImportedProject creates project after successful parse with null gen
   assert.equal(state.importStatus, 'success');
   assert.equal(state.saveStatus, 'saved');
   assert.equal(state.musicXml, '<score-partwise/>');
+});
+
+test('open project hydrates branch/head working fields', async (t) => {
+  const restore = installAxiosStub(async () => ({
+    data: historyProjectPayload({ active_branch_name: 'Original' }),
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config: {},
+  }));
+  t.after(restore);
+
+  resetProjectState();
+  await useMusicStore.getState().openProject('p1');
+  const state = useMusicStore.getState();
+  assert.equal(state.activeBranchId, 'b1');
+  assert.equal(state.activeBranchName, 'Original');
+  assert.equal(state.currentRevisionId, 'r1');
+  assert.equal(state.workingVersion, 0);
+  assert.equal(state.workingFingerprint, 'composition.snapshot.v1:abcdef0123456789');
+});
+
+test('autosave patch includes CAS preconditions and updates working version', async (t) => {
+  const patchPayloads = [];
+  let workingVersion = 0;
+  const restore = installAxiosStub(async (config) => {
+    const method = String(config.method || 'get').toLowerCase();
+    const url = String(config.url || '');
+    if (method === 'patch') {
+      const payload = patchPayload(config);
+      patchPayloads.push(payload);
+      workingVersion += 1;
+      return {
+        data: historyProjectPayload({
+          working_version: workingVersion,
+          working_fingerprint: 'composition.snapshot.v1:nextfingerprint01',
+          composition: payload.composition,
+        }),
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    if (method === 'get' && url === '/projects/p1') {
+      return {
+        data: historyProjectPayload(),
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
+  });
+  t.after(restore);
+
+  resetProjectState();
+  await useMusicStore.getState().openProject('p1');
+  useMusicStore.getState().createNote('piano-1', {
+    pitch: 'E4',
+    start_tick: 480,
+    duration_ticks: 240,
+  });
+  await useMusicStore.getState().saveCurrentProject({ reason: 'autosave' });
+  assert.equal(patchPayloads.length, 1);
+  assert.equal(patchPayloads[0].branch_id, 'b1');
+  assert.equal(patchPayloads[0].expected_active_branch_id, 'b1');
+  assert.equal(patchPayloads[0].expected_working_version, 0);
+  assert.equal(patchPayloads[0].expected_source_fingerprint, 'composition.snapshot.v1:abcdef0123456789');
+  assert.equal(useMusicStore.getState().workingVersion, 1);
+  assert.equal(useMusicStore.getState().saveStatus, 'saved');
+});
+
+test('manual save drafts then promotes durable checkpoint', async (t) => {
+  const calls = [];
+  let workingVersion = 0;
+  const restore = installAxiosStub(async (config) => {
+    const method = String(config.method || 'get').toLowerCase();
+    const url = String(config.url || '');
+    if (method === 'get' && url === '/projects/p1') {
+      return {
+        data: historyProjectPayload(),
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    if (method === 'patch') {
+      workingVersion += 1;
+      calls.push(['patch', patchPayload(config)]);
+      return {
+        data: historyProjectPayload({
+          working_version: workingVersion,
+          working_fingerprint: 'composition.snapshot.v1:draftfingerprint01',
+        }),
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    if (method === 'post' && url.endsWith('/revisions')) {
+      calls.push(['commit', patchPayload(config)]);
+      return {
+        data: {
+          project_id: 'p1',
+          active_branch_id: 'b1',
+          active_branch_name: 'Original',
+          current_revision_id: 'r2',
+          current_revision_sequence: 2,
+          working_version: workingVersion,
+          working_fingerprint: 'composition.snapshot.v1:draftfingerprint01',
+          composition: structuredClone(COMPOSITION),
+          revision_created: true,
+          created_revision_ids: ['r2'],
+          operation_type: 'manual-checkpoint',
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
+  });
+  t.after(restore);
+
+  resetProjectState();
+  await useMusicStore.getState().openProject('p1');
+  await useMusicStore.getState().saveCurrentProject({ reason: 'manual-force' });
+  assert.deepEqual(calls.map((item) => item[0]), ['patch', 'commit']);
+  assert.equal(calls[1][1].operation_type, 'manual-checkpoint');
+  assert.equal(useMusicStore.getState().currentRevisionId, 'r2');
+  assert.equal(useMusicStore.getState().saveStatus, 'saved');
+});
+
+test('save conflict stops autosave retries and records bounded detail', async (t) => {
+  const restore = installAxiosStub(async (config) => {
+    const method = String(config.method || 'get').toLowerCase();
+    const url = String(config.url || '');
+    if (method === 'get' && url === '/projects/p1') {
+      return {
+        data: historyProjectPayload(),
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    if (method === 'patch') {
+      const error = new Error('conflict');
+      error.response = {
+        status: 409,
+        data: {
+          detail: {
+            code: 'project_revision_conflict',
+            project_id: 'p1',
+            expected_working_version: 0,
+            current_working_version: 3,
+            composition: { leak: true },
+          },
+        },
+      };
+      throw error;
+    }
+    return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
+  });
+  t.after(restore);
+
+  resetProjectState();
+  await useMusicStore.getState().openProject('p1');
+  useMusicStore.getState().createNote('piano-1', {
+    pitch: 'F4',
+    start_tick: 960,
+    duration_ticks: 240,
+  });
+  await assert.rejects(
+    () => useMusicStore.getState().saveCurrentProject({ reason: 'autosave' }),
+    (error) => error.name === 'ProjectRevisionConflictError',
+  );
+  const state = useMusicStore.getState();
+  assert.equal(state.saveStatus, 'conflict');
+  assert.equal(state.saveConflict.code, 'project_revision_conflict');
+  assert.equal(state.saveConflict.composition, undefined);
+  assert.equal(state.saveConflict.current_working_version, 3);
+
+  const timers = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, delay) => {
+    timers.push({ fn, delay });
+    return timers.length;
+  };
+  try {
+    useMusicStore.getState().scheduleAutosave();
+    assert.equal(timers.length, 0);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
 });

@@ -139,6 +139,50 @@ def _load_active_branch_name(conn: Any, project_id: str, branch_id: str) -> str:
     return row["name"] if row is not None else ORIGINAL_BRANCH_NAME
 
 
+def project_history_detail_fields(
+    project_id: str,
+    *,
+    db_path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Bounded history fields for project open/create/patch/duplicate responses."""
+    path = Path(db_path) if db_path is not None else get_project_db_path()
+    record = get_project(project_id, db_path=path)
+    if record.active_branch_id is None or record.current_revision_id is None:
+        return {
+            "active_branch_id": None,
+            "active_branch_name": None,
+            "current_revision_id": None,
+            "current_revision_sequence": None,
+            "working_version": None,
+            "working_fingerprint": None,
+        }
+    with get_connection(path) as conn:
+        branch = conn.execute(
+            """
+            SELECT id, name, working_version, working_fingerprint
+            FROM project_branches
+            WHERE project_id = ? AND id = ?
+            """,
+            (project_id, record.active_branch_id),
+        ).fetchone()
+        revision = conn.execute(
+            """
+            SELECT id, sequence
+            FROM project_revisions
+            WHERE project_id = ? AND id = ?
+            """,
+            (project_id, record.current_revision_id),
+        ).fetchone()
+    return {
+        "active_branch_id": record.active_branch_id,
+        "active_branch_name": branch["name"] if branch is not None else None,
+        "current_revision_id": record.current_revision_id,
+        "current_revision_sequence": int(revision["sequence"]) if revision is not None else None,
+        "working_version": int(branch["working_version"]) if branch is not None else None,
+        "working_fingerprint": branch["working_fingerprint"] if branch is not None else None,
+    }
+
+
 def list_revisions(
     project_id: str,
     *,
@@ -838,6 +882,7 @@ __all__ = [
     "list_branches",
     "list_revisions",
     "name_revision",
+    "project_history_detail_fields",
     "rename_branch",
     "restore_revision_command",
     "save_branch_draft",

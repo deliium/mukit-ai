@@ -184,3 +184,213 @@ def test_failed_migration_does_not_rewrite_stored_json(client, monkeypatch):
     assert opened.status_code == 422
     stored = store.get_project(created["id"]).composition_json
     assert json.loads(stored)["schema_version"] == "composition.v1"
+
+
+def _assert_history_fields(body: dict):
+    assert body["active_branch_id"]
+    assert body["active_branch_name"] == "Original"
+    assert body["current_revision_id"]
+    assert body["current_revision_sequence"] >= 1
+    assert body["working_version"] is not None
+    assert body["working_fingerprint"]
+
+
+def test_project_detail_includes_history_fields(client):
+    created = client.post("/projects", json={"name": "History Fields", "composition": minimal_v2()}).json()
+    _assert_history_fields(created)
+    opened = client.get(f"/projects/{created['id']}").json()
+    _assert_history_fields(opened)
+    duplicated = client.post(f"/projects/{created['id']}/duplicate").json()
+    _assert_history_fields(duplicated)
+    assert duplicated["active_branch_name"] == "Original"
+    assert duplicated["id"] != created["id"]
+
+
+def test_revision_and_branch_api_lifecycle(client):
+    created = client.post(
+        "/projects",
+        json={"name": "Versions", "composition": minimal_v2()},
+    ).json()
+    project_id = created["id"]
+    branch_id = created["active_branch_id"]
+    head_id = created["current_revision_id"]
+    working_version = created["working_version"]
+    fingerprint = created["working_fingerprint"]
+
+    listed = client.get(f"/projects/{project_id}/revisions")
+    assert listed.status_code == 200
+    assert len(listed.json()["revisions"]) >= 1
+    assert "composition" not in listed.json()["revisions"][0]
+    assert "user_instruction" not in listed.json()["revisions"][0]
+
+    page = client.get(f"/projects/{project_id}/revisions", params={"limit": 1})
+    assert page.status_code == 200
+    assert len(page.json()["revisions"]) == 1
+
+    detail = client.get(f"/projects/{project_id}/revisions/{head_id}")
+    assert detail.status_code == 200
+    assert detail.json()["revision"]["id"] == head_id
+    assert detail.json()["composition"]["schema_version"] == "composition.v2"
+
+    named = client.patch(
+        f"/projects/{project_id}/revisions/{head_id}",
+        json={"name": "Root keep"},
+    )
+    assert named.status_code == 200
+    assert named.json()["name"] == "Root keep"
+
+    edited = minimal_v2()
+    edited["tracks"][0]["events"] = [
+        {
+            "type": "note",
+            "pitch": "D4",
+            "start_tick": 0,
+            "duration_ticks": 480,
+            "velocity": 80,
+        }
+    ]
+    commit = client.post(
+        f"/projects/{project_id}/revisions",
+        json={
+            "branch_id": branch_id,
+            "expected_active_branch_id": branch_id,
+            "expected_working_version": working_version,
+            "expected_head_revision_id": head_id,
+            "expected_source_fingerprint": fingerprint,
+            "composition": edited,
+            "operation_type": "manual-checkpoint",
+            "name": "Checkpoint A",
+        },
+    )
+    assert commit.status_code == 200
+    body = commit.json()
+    assert body["revision_created"] is True
+    assert body["composition"]["tracks"][0]["events"][0]["pitch"] == "D4"
+    assert "api_key" not in commit.text
+
+    conflict = client.post(
+        f"/projects/{project_id}/revisions",
+        json={
+            "branch_id": branch_id,
+            "expected_active_branch_id": branch_id,
+            "expected_working_version": working_version,
+            "expected_head_revision_id": head_id,
+            "expected_source_fingerprint": fingerprint,
+            "composition": edited,
+            "operation_type": "manual-checkpoint",
+        },
+    )
+    assert conflict.status_code == 409
+    detail_409 = conflict.json()["detail"]
+    assert detail_409["code"] == "project_revision_conflict"
+    assert "composition" not in detail_409
+    assert "events" not in json.dumps(detail_409)
+
+    secret = client.post(
+        f"/projects/{project_id}/revisions",
+        json={
+            "branch_id": body["active_branch_id"],
+            "expected_active_branch_id": body["active_branch_id"],
+            "expected_working_version": body["working_version"],
+            "expected_head_revision_id": body["current_revision_id"],
+            "expected_source_fingerprint": body["working_fingerprint"],
+            "composition": edited,
+            "operation_type": "generate-apply",
+            "ai": {
+                "provider": "fake",
+                "user_instruction": "sk-abcdefghijklmnopqrstuvwxyz012345",
+            },
+        },
+    )
+    assert secret.status_code == 422
+
+    branches = client.get(f"/projects/{project_id}/branches")
+    assert branches.status_code == 200
+    assert any(item["is_active"] for item in branches.json()["branches"])
+
+    alt = client.post(
+        f"/projects/{project_id}/branches",
+        json={"name": "Alt Path", "from_revision_id": head_id},
+    )
+    assert alt.status_code == 201
+    assert alt.json()["name"] == "Alt Path"
+
+    renamed = client.patch(
+        f"/projects/{project_id}/branches/{alt.json()['id']}",
+        json={"name": "Alt Renamed"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Alt Renamed"
+
+    candidate = minimal_v2()
+    candidate["tempo"] = 110
+    apply_branch = client.post(
+        f"/projects/{project_id}/branches/apply-as-branch",
+        json={
+            "name": "Chorus B",
+            "source_branch_id": body["active_branch_id"],
+            "expected_active_branch_id": body["active_branch_id"],
+            "expected_working_version": body["working_version"],
+            "expected_head_revision_id": body["current_revision_id"],
+            "expected_source_fingerprint": body["working_fingerprint"],
+            "composition": candidate,
+            "operation_type": "development-apply",
+        },
+    )
+    assert apply_branch.status_code == 200
+    applied = apply_branch.json()
+    assert applied["active_branch_name"] == "Chorus B"
+    assert applied["composition"]["tempo"] == 110
+
+    # Original branch head should remain the pre-apply head.
+    listed_branches = client.get(f"/projects/{project_id}/branches").json()["branches"]
+    original = next(item for item in listed_branches if item["name"] == "Original")
+    assert original["head_revision_id"] == body["current_revision_id"]
+
+    checkout = client.post(
+        f"/projects/{project_id}/branches/{original['id']}/checkout",
+        json={
+            "expected_active_branch_id": applied["active_branch_id"],
+            "expected_working_version": applied["working_version"],
+            "expected_head_revision_id": applied["current_revision_id"],
+        },
+    )
+    assert checkout.status_code == 200
+    checked = checkout.json()
+    assert checked["active_branch_id"] == original["id"]
+    assert checked["composition"]["schema_version"] == "composition.v2"
+    _assert_history_fields({**checked, "active_branch_name": "Original"})
+
+    restored = client.post(
+        f"/projects/{project_id}/revisions/{head_id}/restore",
+        json={
+            "branch_id": checked["active_branch_id"],
+            "expected_active_branch_id": checked["active_branch_id"],
+            "expected_working_version": checked["working_version"],
+            "expected_head_revision_id": checked["current_revision_id"],
+        },
+    )
+    assert restored.status_code == 200
+    assert restored.json()["revision_created"] is True
+    assert restored.json()["operation_type"] == "revision-restore"
+
+
+def test_autosave_patch_cas_conflict(client):
+    created = client.post(
+        "/projects",
+        json={"name": "CAS", "composition": minimal_v2()},
+    ).json()
+    edited = minimal_v2()
+    edited["tempo"] = 130
+    conflict = client.patch(
+        f"/projects/{created['id']}",
+        json={
+            "composition": edited,
+            "branch_id": created["active_branch_id"],
+            "expected_active_branch_id": created["active_branch_id"],
+            "expected_working_version": created["working_version"] + 5,
+            "expected_source_fingerprint": created["working_fingerprint"],
+        },
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "project_revision_conflict"

@@ -4,7 +4,7 @@ import MusicGenerator from './components/MusicGenerator.jsx';
 import ProjectBrowser from './components/ProjectBrowser.jsx';
 import WorkspaceChrome from './components/WorkspaceChrome.jsx';
 import { getHealth, getLlmModels } from './api/musicApi.js';
-import { useMusicStore } from './store/musicStore.js';
+import { projectIsDirtyForUnload, useMusicStore } from './store/musicStore.js';
 
 const AppContainer = styled.div`
   min-height: 100vh;
@@ -64,6 +64,21 @@ function App() {
   useEffect(() => {
     console.debug('[App] Active view changed', { activeView });
   }, [activeView]);
+
+  useEffect(() => {
+    const onBeforeUnload = (event) => {
+      const dirty = projectIsDirtyForUnload(useMusicStore.getState());
+      if (!dirty) {
+        return undefined;
+      }
+      console.debug('[App] beforeunload warn; dirty or in-flight save');
+      event.preventDefault();
+      event.returnValue = '';
+      return '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
 
   return (
     <AppContainer>

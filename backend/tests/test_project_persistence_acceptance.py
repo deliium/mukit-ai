@@ -180,3 +180,29 @@ def test_duplicate_project_preserves_motif_metadata(project_db):
     loaded = json.loads(duplicated.composition_json)
     assert loaded["motifs"] == canonical["motifs"]
     assert loaded["tracks"][0]["events"] == canonical["tracks"][0]["events"]
+
+
+def test_create_save_reopen_preserves_history_pointers(project_db):
+    created = store.create_project(
+        "History Acceptance",
+        composition=minimal_v2(),
+        db_path=project_db,
+    )
+    assert created.active_branch_id
+    assert created.current_revision_id
+
+    edited = deepcopy(minimal_v2())
+    edited["tempo"] = 96
+    normalized = normalize_project_composition(edited, project_id=created.id)
+    canonical = normalized.composition.model_dump(mode="json")
+    store.update_project(
+        created.id,
+        composition=json.dumps(canonical, separators=(",", ":")),
+        db_path=project_db,
+    )
+
+    reset_database_initialization_cache()
+    reopened = store.get_project(created.id, db_path=project_db)
+    assert reopened.active_branch_id == created.active_branch_id
+    assert reopened.current_revision_id == created.current_revision_id
+    assert json.loads(reopened.composition_json)["tempo"] == 96
