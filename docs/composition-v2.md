@@ -2,7 +2,7 @@
 
 # Composition V2
 
-`composition.v2` is the **operational canonical** JSON contract for generation, editing, **MIDI/MusicXML import**, persistence, browser playback, and export. `composition.v1` remains an accepted **migration and parser compatibility** input only; API responses and stored projects normalize to V2. External music files convert **directly to V2** — they do not enter the legacy V1 parser path (see [import.md](import.md)).
+`composition.v2` is the **operational canonical** JSON contract for generation, editing, **MIDI/MusicXML import**, persistence, browser playback, and export. Project **revision history and branches** store V2 snapshots outside the document itself (see [project-persistence.md](project-persistence.md)); history metadata is never a V2 field. `composition.v1` remains an accepted **migration and parser compatibility** input only; API responses and stored projects normalize to V2. External music files convert **directly to V2** — they do not enter the legacy V1 parser path (see [import.md](import.md)).
 
 Playable pitches live **only** in `tracks[].events[]`. Timeline metadata, markers, harmony, and track expression direct deterministic **projections** — they never synthesize notes.
 

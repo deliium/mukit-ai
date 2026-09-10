@@ -22,7 +22,8 @@ Focused canonical coverage includes:
 - `backend/tests/test_llm_fake_provider.py` for fake generate/edit, fixture constraint gating (aliases, missing requirements, instrumentation report), `/llm/models`, malformed `502` without clobbering projects, and unsupported-instrument fixture export.
 - `backend/tests/test_instrument_identity.py` for sound-source normalization, requirement satisfaction, and duplicate-content classification.
 - `backend/tests/test_secret_hygiene.py` for `/ready`, `/llm/models`, project CRUD, and committed config secret leakage checks.
-- `backend/tests/test_docker_persistence_acceptance.py` opt-in Compose restart persistence (`RUN_DOCKER_ACCEPTANCE=1`).
+- `backend/tests/test_docker_persistence_acceptance.py` opt-in Compose restart persistence (`RUN_DOCKER_ACCEPTANCE=1`), including multi-branch + restore.
+- `backend/tests/test_project_history_routes.py` / `test_project_history_store.py` for revision/branch CAS, zlib dedupe, preview hygiene, and concurrent commits.
 - `backend/tests/test_composition_schema.py` for `composition.v1` validation, 4/4, 3/4, 6/8 timing, invalid pitches, velocities, durations, duplicate tracks, and section boundaries.
 - `backend/tests/test_composition_v2_schema.py` for strict V2 invariants: mixed meter, malformed ties, conflicting articulations, automation/pedal overlap, unknown fields/versions.
 - `backend/tests/test_composition_v2_migration.py` for V1→V2 note-sequence equality, source immutability, idempotence, and `v1_v2_migration_fidelity_failed`.
@@ -176,13 +177,13 @@ npm run test:e2e
 npm run test:e2e:ui
 ```
 
-Specs live in `frontend/e2e/` (`v1-user-journey`, `v1-upgrade-to-v2`, `v2-user-journey`, `v2-editor-workflow`, `import-user-journey`, persistence suites). Persistence reopen after Compose restart is opt-in:
+Specs live in `frontend/e2e/` (`v1-user-journey`, `v1-upgrade-to-v2`, `v2-user-journey`, `v2-editor-workflow`, `import-user-journey`, `project-version-history`, development/arrangement workflows, persistence suites). Persistence reopen after Compose restart is opt-in:
 
 ```bash
 RUN_PLAYWRIGHT_DOCKER_RESTART=1 npm run test:e2e -- e2e/v1-persistence.spec.js
 RUN_PLAYWRIGHT_DOCKER_RESTART=1 npm run test:e2e -- e2e/v2-persistence.spec.js
+npx playwright test e2e/project-version-history.spec.js
 ```
-
 Import journey (fixtures under `backend/tests/fixtures/import/`):
 
 ```bash

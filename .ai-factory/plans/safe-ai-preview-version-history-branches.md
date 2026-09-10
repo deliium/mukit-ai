@@ -320,14 +320,14 @@ Extend project detail/save contracts with:
 
 ### Phase 5: Acceptance, Resilience, and Documentation
 
-- [ ] **Task 13: Add backend persistence, concurrency, storage-efficiency, and restart acceptance coverage.**
+- [x] **Task 13: Add backend persistence, concurrency, storage-efficiency, and restart acceptance coverage.**
   - Deliverables: Build an end-to-end backend matrix for transactional migration/retry, bootstrap, revision/branch APIs, restore, active-head/draft materialization, free-text secret rejection, concurrent active-branch/working-version/head commands, and Docker restart. Add realistic large-composition measurements that assert zlib compression, content deduplication, autosave draft overwrite without revision explosion, and bounded metadata-list responses without brittle timing thresholds. Verify preview endpoints remain stateless and never write revisions.
   - Files: `backend/tests/test_project_history_store.py`, `backend/tests/test_project_history_routes.py` (new), `backend/tests/test_project_persistence_acceptance.py`, `backend/tests/test_docker_persistence_acceptance.py`, targeted preview route suites, `scripts/v1_docker_acceptance.sh` or a versioned replacement only if needed.
   - Tests: Run targeted pytest first, then the full backend suite. Include restart with multiple branches and a restore revision; ensure no provider API keys are required and no secrets/full compositions appear in captured logs.
   - Logging: Test INFO lifecycle/IDs and assert log hygiene; enable DEBUG only for bounded diagnostics; explicitly fail on API-key values, full user instructions, snapshot JSON fragments, and event-array leakage.
   - Dependencies: Tasks 1-4 and 10-12.
 
-- [ ] **Task 14: Add frontend unit and Playwright acceptance for three alternative choruses and original restoration.**
+- [x] **Task 14: Add frontend unit and Playwright acceptance for three alternative choruses and original restoration.**
   - Deliverables: Add the canonical acceptance journey: open a project on `Original`; request `vary_section` for chorus bars with `candidate_count=3`; verify all three candidates leave working JSON/revision/save/undo unchanged; compare and audition each; Reject one; Apply another as branch `Darker harmony` and verify the server-first persisted response; switch to `Original`; restart/reload and verify original chorus/history remain; switch back to `Darker harmony`; restore the original chorus revision as a new child; undo/redo restore; name an important revision. Add conflict, stale response, API failure atomicity, keyboard, and 390x844 coverage.
   - Files: `frontend/e2e/project-version-history.spec.js` (new), `frontend/e2e/helpers.js`, `frontend/src/store/musicStore.versionHistory.test.js`, existing Development/Arrangement workflow specs where shared assertions belong, `frontend/src/api/projectApi.test.js`.
   - Tests: Run `npm test`, lint, build, targeted Playwright with fake LLM, then full E2E as practical. Gate Docker restart consistently with existing `RUN_PLAYWRIGHT_DOCKER_RESTART=1`; assert project restart preserves revisions, branch names, active head, and original composition.
@@ -336,7 +336,7 @@ Extend project detail/save contracts with:
 
 <!-- Commit checkpoint: tasks 13-14 -->
 
-- [ ] **Task 15: Document preview safety, revision/branch semantics, recovery, APIs, and operational limits.**
+- [x] **Task 15: Document preview safety, revision/branch semantics, recovery, APIs, and operational limits.**
   - Deliverables: Update user and developer documentation through the mandatory docs checkpoint. Explain Preview/Compare/Audition/Apply/Reject/Undo, named versions, `Original` and alternative branches, restore-as-new-revision, autosave and branch checkout behavior, `409` recovery, snapshot-vs-patch decision, deduplication, lazy history loading, migration/backfill, restart/volume behavior, deferred branch deletion/merge/GC, and exact logging/security exclusions. Update structural maps for new modules and routes.
   - Files: `README.md`, `docs/project-persistence.md`, `docs/composition-development.md`, `docs/composition-arrangement.md`, `docs/composition-v2.md` only to clarify that history is outside V2, `docs/testing.md`, `docs/CODEBASE_MAP.md`, `.ai-factory/DESCRIPTION.md`, `.ai-factory/ARCHITECTURE.md`, `AGENTS.md` if project structure changes materially.
   - Tests: Validate documented commands and API examples against OpenAPI/tests; run link/path checks available in the repository and ensure docs never include real credentials or internal provider prompts.

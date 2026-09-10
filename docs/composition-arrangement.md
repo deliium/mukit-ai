@@ -2,7 +2,7 @@
 
 # Composition Arrangement
 
-Stateless multi-candidate instrumentation and texture redistribution over strict `composition.v2`. Preview returns 1–4 independently realized candidates; nothing mutates, dirties, autosaves, or persists until the client **Apply**s one verified candidate through the normal composition edit path. Previews are **session-only**; only the applied Composition V2 is stored in projects.
+Stateless multi-candidate instrumentation and texture redistribution over strict `composition.v2`. Preview returns 1–4 independently realized candidates; nothing mutates, dirties, autosaves, or persists until the client **Apply**s (or **Apply as new branch**) one verified candidate. Previews are **session-only** and never write project revisions; only the applied Composition V2 is stored.
 
 ## Summary
 
@@ -21,9 +21,9 @@ Stateless multi-candidate instrumentation and texture redistribution over strict
 1. Open the **Arrange** tab with a valid V2 composition.
 2. Load the instrument catalog (`GET /composition/arrangement/instruments`) — used for selectable targets and role vocabulary.
 3. Choose an operation, source/protected tracks, and explicit **before** / **after** part inventories.
-4. Preview — working `editedMusicJson`, history, dirty/autosave, analysis, and notation stay unchanged.
-5. Select / audition a candidate (transport may play the candidate; source composition unchanged).
-6. Apply — client rechecks edit-source + candidate + catalog fingerprints, topology vs manifest, and required assertions; one undo entry; dirty + autosave of applied V2 only.
+4. Preview — working `editedMusicJson`, durable revision head, dirty/autosave, analysis, and notation stay unchanged.
+5. Select / Compare / Audition / Reject — transport may play the candidate; source composition unchanged; Reject is session-only.
+6. Apply — open projects use server-first durable commit with CAS + fingerprints (or Apply-as-branch); one local undo entry after install. No-project sessions may apply locally only.
 7. Discard or regenerate when the source revision or catalog fingerprint changes (previews become stale).
 
 Preferred-range warnings (`questionable_range`) require explicit confirmation before Apply. Absolute range failures cannot be overridden.

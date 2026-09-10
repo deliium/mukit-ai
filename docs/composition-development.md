@@ -2,7 +2,7 @@
 
 # Composition Development
 
-Stateless multi-candidate continuation and variation over strict `composition.v2`. Preview returns 1–4 independently generated candidates; nothing is persisted until the client **Apply**s one candidate through the normal composition edit path.
+Stateless multi-candidate continuation and variation over strict `composition.v2`. Preview returns 1–4 independently generated candidates; nothing is persisted until the client **Apply**s (or **Apply as new branch**) one candidate. Preview never writes project revisions.
 
 ## Endpoint
 
@@ -36,9 +36,10 @@ Strength: `variation_strength` = `conservative` \| `balanced` \| `experimental` 
 
 ## Apply lifecycle (frontend)
 
-1. Preview — does not mutate `editedMusicJson`, history, dirty/autosave, analysis, or notation.
-2. Select / audition — transport may play the selected candidate; working composition unchanged.
-3. Apply — rechecks edit source + candidate fingerprints, requires assertions, one undo entry, dirty + autosave.
+1. Preview — does not mutate `editedMusicJson`, durable revision head, dirty/autosave, analysis, or notation.
+2. Select / Compare / Audition / Reject — Compare is structural (not a Git diff); audition plays the candidate; Reject removes one candidate session-only.
+3. Apply — for an open project, server-first durable commit (`development-apply`) with CAS + fingerprint checks; installs returned state with one local undo entry and suppressed autosave. **Apply as new branch** creates/activates a named branch while preserving the source branch head.
+4. No-project sessions may apply locally only (no persistent history).
 
 ## Seam policy
 
@@ -72,9 +73,12 @@ Includes `development_source_required`, `development_output_bars_required`, `dev
 
 Finished 16-bar A → request 8-bar continuation with 3 candidates → working piece unchanged → apply one candidate → canonical 24-bar result with exact original 16-bar prefix.
 
+Alternate: `vary_section` on chorus bars with three candidates → Reject one → Apply as branch `Darker harmony` → checkout `Original` after reload → restore as new child. See [Project persistence](project-persistence.md) and `e2e/project-version-history.spec.js`.
+
 ## See Also
 
 - [Composition V2](composition-v2.md) — canonical contract
+- [Project persistence](project-persistence.md) — revisions, branches, Apply-as-branch, restore
 - [Composition Arrangement](composition-arrangement.md) — instrumentation / texture redistribution preview
 - [Testing](testing.md) — pytest / Playwright commands
 - [Composition Analysis](composition-analysis.md) — advisory sidecar (not editable authority)

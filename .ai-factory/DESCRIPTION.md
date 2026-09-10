@@ -2,7 +2,7 @@
 
 ## Overview
 
-Full-stack LLM music composer that generates and edits canonical playable `composition.v2` JSON. A FastAPI backend orchestrates multi-stage LangChain/LangGraph composition, validation, secure MIDI/MusicXML import into V2, deterministic `composition.analysis.v1` musical analysis, harmony timeline editing and reharmonization preview, AI-assisted arrangement/orchestration preview, MusicXML/MIDI/WAV export, and SQLite project persistence. A React/Vite frontend provides prompt controls, import workflows, piano-roll and JSON editing, Analysis / Motifs / Harmony / Arrange / Develop tabs, OSMD notation, and Tone.js playback of the same canonical note events. `composition.v1` remains accepted migration/parser input.
+Full-stack LLM music composer that generates and edits canonical playable `composition.v2` JSON. A FastAPI backend orchestrates multi-stage LangChain/LangGraph composition, validation, secure MIDI/MusicXML import into V2, deterministic `composition.analysis.v1` musical analysis, harmony timeline editing and reharmonization preview, AI-assisted arrangement/orchestration preview, MusicXML/MIDI/WAV export, and SQLite project persistence with durable revision/branch history. A React/Vite frontend provides prompt controls, import workflows, piano-roll and JSON editing, Analysis / Motifs / Harmony / Arrange / Develop / Versions tabs, OSMD notation, and Tone.js playback of the same canonical note events. Substantial AI results stay preview-first until Apply. `composition.v1` remains accepted migration/parser input.
 
 ## Core Features
 
@@ -12,7 +12,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - Explicit harmony tick-span timeline with local add/replace/remove/move/resize; `POST /harmony/reharmonize/preview` for deterministic/AI candidates (apply is client-side, fingerprint-gated)
 - AI-assisted arrangement / orchestration via `GET /composition/arrangement/instruments` and `POST /composition/arrangement/preview` (ephemeral candidates; Apply commits V2 only; curated catalog not persisted as catalog IDs/ranges)
 - Partial region editing via LLM patch (`replace_region`) without regenerating the full score
-- Local project CRUD with SQLite persistence and debounced autosave
+- Local project CRUD with SQLite persistence, debounced autosave, immutable compressed snapshots, named branches, and restore-as-child revisions
 - Piano-roll and JSON editors sharing the same `editedMusicJson` Zustand state
 - Notation preview (MusicXML regenerated from V2) and browser playback (Tone.js) from `tracks[].events[]`
 - Deterministic export: MusicXML, MIDI, and server-side FluidSynth WAV

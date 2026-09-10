@@ -6,23 +6,24 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 
 - **LLM JSON Composition**: Generate structured music JSON with OpenAI or DeepSeek-compatible providers
 - **MIDI / MusicXML Import**: Upload `.mid`/`.midi`, `.musicxml`/`.xml`, or `.mxl` into strict `composition.v2` with session import warnings; no LLM required
-- **Local Project Persistence**: Create/open/rename/duplicate/delete projects backed by SQLite; debounced autosave keeps edited compositions across Docker restarts
+- **Local Project Persistence**: Create/open/rename/duplicate/delete projects backed by SQLite; debounced autosave keeps edited compositions across Docker restarts; durable revision history and named branches (`Original` + alternatives) support checkpoint, restore-as-child, and Apply-as-branch (details: [docs/project-persistence.md](docs/project-persistence.md))
 - **Prompt Controls**: Configure genre, mood, key, meter, tempo range, instruments, sections, complexity, duration, and freeform instructions
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
 - **Piano-Roll Editor**: Multi-note V2 editing on `tracks[].events[]` — box/range selection, clipboard, bulk transpose/velocity/quantize/length/humanize, articulations, dynamics, track hide/lock, edit cursor, bar/section navigation, zoom, play-from-cursor and selection loop; composition-level undo/redo shares `editedMusicJson` with the JSON editor
 - **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start, play-from-cursor, loop, piano-roll playback cursor)
 - **Composition Analysis**: Deterministic `composition.analysis.v1` sidecar for tonal context, inferred harmony, phrases/density, derived motif families, and stable warnings over current V2 (Analysis tab; optional bounded advisory context for LLM edit/repair — not persisted, not required for import/playback)
-- **Motif Authoring**: Mark a 1–2 bar pitched selection as a named motif, inspect usages, and apply mechanical or creative transforms via `POST /motifs/apply`; results are ordinary `tracks[].events[]` plus reference metadata (Motifs tab)
+- **Motif Authoring**: Mark a 1–2 bar pitched selection as a named motif, inspect usages, and apply mechanical or creative transforms via `POST /motifs/apply`; creative AI results stage as candidates until Apply; mechanical transforms remain direct undoable edits (Motifs tab)
 - **Harmony & Reharmonization**: Edit explicit V2 harmony tick spans on the Harmony tab; preview deterministic or AI reharmonization via `POST /harmony/reharmonize/preview` without dirtying the project until Apply (melody/accompaniment policies; events remain the only audible source)
-- **Composition Development**: Continue, add a named section, or vary a range via the Develop tab (`POST /composition/development/preview`); 1–4 ephemeral candidates with full edit fingerprints; Apply only commits (details: [docs/composition-development.md](docs/composition-development.md))
-- **Composition Arrangement**: Orchestrate selected tracks / piano-to-ensemble and related texture ops via the Arrange tab (`GET /composition/arrangement/instruments`, `POST /composition/arrangement/preview`); session-only candidates until Apply (details: [docs/composition-arrangement.md](docs/composition-arrangement.md))
+- **Composition Development**: Continue, add a named section, or vary a range via the Develop tab (`POST /composition/development/preview`); 1–4 ephemeral candidates with Compare/Reject/Audition; Apply or Apply-as-branch commits (details: [docs/composition-development.md](docs/composition-development.md))
+- **Composition Arrangement**: Orchestrate selected tracks / piano-to-ensemble and related texture ops via the Arrange tab (`GET /composition/arrangement/instruments`, `POST /composition/arrangement/preview`); session-only candidates until Apply / Apply-as-branch (details: [docs/composition-arrangement.md](docs/composition-arrangement.md))
+- **Safe AI Preview**: Full generation, AI region edit, and other substantial AI workflows keep candidates outside the canonical working composition until explicit Apply; Versions tab supports compare, audition, branch checkout, and restore
 - **Deterministic Export**: Download MusicXML, MIDI, and server-rendered WAV from the same canonical `tracks[].events[]`; export responses include projection status headers when approximations apply (motif metadata is intentionally omitted)
 
 ## 🏗️ Architecture
 
 - **Backend**: FastAPI with Python
 - **Frontend**: React with styled-components
-- **Persistence**: SQLite project store (`PROJECT_DB_PATH`) with numbered SQL migrations; Docker named volume `mukit_project_data`
+- **Persistence**: SQLite project store (`PROJECT_DB_PATH`) with numbered SQL migrations, zlib content-addressed composition snapshots, revisions/branches, and Docker named volume `mukit_project_data`
 - **Music Processing**: music21 library for MusicXML rendering
 - **LLM Orchestration**: LangChain/LangGraph with OpenAI-compatible chat providers
 - **Frontend State**: Zustand store for API status, LLM models, project browser/save status, generation output, piano-roll edit state, notation, playback transport state, per-track mute/solo/volume, and derived analysis report cache
