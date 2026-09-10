@@ -32,15 +32,29 @@ def test_migrations_apply_cleanly(project_db, caplog):
         }
 
     assert "001_create_projects" in versions
+    assert "002_create_composition_history" in versions
     assert "projects" in tables
+    assert "composition_snapshots" in tables
+    assert "project_revisions" in tables
+    assert "project_branches" in tables
     assert "schema_migrations" in tables
     assert "Project database ready" in caplog.text or "Database migration applied" in caplog.text
+
+
+def test_create_empty_project_initializes_original_branch(project_db):
+    created = store.create_project("Untitled", db_path=project_db)
+    assert created.active_branch_id is not None
+    assert created.current_revision_id is not None
+
+    reopened = store.get_project(created.id, db_path=project_db)
+    assert reopened.active_branch_id == created.active_branch_id
+    assert reopened.current_revision_id == created.current_revision_id
 
 
 def test_project_crud_duplicate_and_timestamps(project_db):
     created = store.create_project(
         "Song",
-        composition={"schema_version": "composition.v1", "tracks": [], "sections": []},
+        composition=None,
         generation_provider="openai",
         generation_model="gpt-4o-mini",
         generation_prompt={"genre": "jazz"},
@@ -51,25 +65,37 @@ def test_project_crud_duplicate_and_timestamps(project_db):
     assert created.generation_model == "gpt-4o-mini"
     assert json.loads(created.generation_prompt_json)["genre"] == "jazz"
     assert "api_key" not in (created.generation_prompt_json or "")
+    assert created.active_branch_id is not None
 
     listed = store.list_projects(db_path=project_db)
     assert len(listed) == 1
     assert listed[0].id == created.id
 
+    fixture = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "app"
+            / "fixtures"
+            / "composition_v2_expressive.json"
+        ).read_text(encoding="utf-8")
+    )
     updated = store.update_project(
         created.id,
         name="Song Renamed",
-        composition={"schema_version": "composition.v1", "tracks": [{"events": [1]}], "sections": []},
+        composition=fixture,
         db_path=project_db,
     )
     assert updated.name == "Song Renamed"
     assert updated.updated_at >= created.updated_at
+    assert updated.composition_json is not None
 
     duplicated = store.duplicate_project(created.id, db_path=project_db)
     assert duplicated.id != created.id
     assert duplicated.name.endswith(" (copy)")
     assert duplicated.composition_json == updated.composition_json
     assert duplicated.generation_provider == "openai"
+    assert duplicated.active_branch_id is not None
+    assert duplicated.active_branch_id != updated.active_branch_id
 
     store.delete_project(duplicated.id, db_path=project_db)
     with pytest.raises(store.ProjectNotFoundError):

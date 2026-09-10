@@ -31,7 +31,7 @@ mukit-ai/
 │   │   ├── import_schemas.py       # Import DTOs, issue/error codes
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── fixtures/        # Canonical composition JSON (V1 + V2 expressive) + arrangement_instruments.v1.json
-│   │   ├── db/              # SQLite connection + migrations
+│   │   ├── db/              # SQLite connection + migrations (001 projects, 002 composition history)
 │   │   └── schemas.py       # LLM models + composition re-exports
 │   └── tests/
 ├── frontend/                # React + Vite SPA
@@ -82,6 +82,13 @@ mukit-ai/
 | `backend/app/services/fake_llm.py` | Deterministic `LLM_FAKE_MODE` generate/edit/arrangement (incl. V2 expressive fixture) |
 | `backend/app/ready.py` | Logging/CORS helpers and readiness report |
 | `backend/app/routers/projects.py` | Project CRUD + autosave APIs |
+| `backend/app/services/project_store.py` | SQLite project CRUD |
+| `backend/app/services/project_history_store.py` | Snapshots, revisions, branches, CAS draft/commit/restore/checkout |
+| `backend/app/services/project_history.py` | Domain orchestration for revision/branch commands |
+| `backend/app/project_history_schemas.py` | Revision/branch DTOs, operation enum, conflict body |
+| `backend/app/services/composition_snapshot_encoding.py` | `composition.snapshot.v1` zlib content-addressed encoding |
+| `backend/app/services/composition_change_summary.py` | Null-aware affected bars/tracks + declared-scope enforcement |
+| `backend/app/services/persistence_secret_guard.py` | Forbidden secret fields/values before persistence |
 | `backend/run.py` / `uvicorn app.main:app` | Backend process entry |
 | `frontend/src/main.jsx` | Frontend bootstrap |
 | `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import + analysis + harmony + development + arrangement + editor selection/clipboard/loop) |

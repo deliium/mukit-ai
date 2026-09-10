@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,7 +24,69 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 """
 
+_CREATE_TRIGGER_HEAD = re.compile(r"CREATE\s+TRIGGER\b", re.IGNORECASE)
+_TRIGGER_END = re.compile(r"\bEND\s*;", re.IGNORECASE)
+
 _initialized_paths: set[str] = set()
+
+
+def split_sql_statements(script: str) -> list[str]:
+    """Split a SQL script into executable statements.
+
+    Handles ``CREATE TRIGGER ... BEGIN ... END;`` blocks that contain internal
+    semicolons. Line comments starting with ``--`` are stripped outside strings.
+    """
+    statements: list[str] = []
+    length = len(script)
+    index = 0
+
+    while index < length:
+        while index < length and script[index].isspace():
+            index += 1
+        if index >= length:
+            break
+
+        if script.startswith("--", index):
+            newline = script.find("\n", index)
+            index = length if newline < 0 else newline + 1
+            continue
+
+        trigger_match = _CREATE_TRIGGER_HEAD.match(script, index)
+        if trigger_match is not None:
+            end_match = _TRIGGER_END.search(script, trigger_match.end())
+            if end_match is None:
+                raise ValueError("Unterminated CREATE TRIGGER in migration SQL")
+            statement = script[index : end_match.end()].strip()
+            if statement:
+                statements.append(statement)
+            index = end_match.end()
+            continue
+
+        start = index
+        in_single = False
+        in_double = False
+        while index < length:
+            char = script[index]
+            if char == "'" and not in_double:
+                if in_single and index + 1 < length and script[index + 1] == "'":
+                    index += 2
+                    continue
+                in_single = not in_single
+            elif char == '"' and not in_single:
+                in_double = not in_double
+            elif char == ";" and not in_single and not in_double:
+                statement = script[start:index].strip()
+                if statement:
+                    statements.append(statement)
+                index += 1
+                break
+            index += 1
+        else:
+            statement = script[start:].strip()
+            if statement:
+                statements.append(statement)
+
+    return statements
 
 
 def get_project_db_path(env: Mapping[str, str] | None = None) -> Path:
@@ -162,8 +225,18 @@ def apply_migrations(
     conn: sqlite3.Connection,
     migrations_dir: Path | None = None,
 ) -> list[str]:
-    """Apply pending numbered SQL migrations; return versions applied this run."""
+    """Apply pending numbered SQL migrations; return versions applied this run.
+
+    Each migration's DDL statements and its ``schema_migrations`` registry insert
+    run in one explicit SQLite transaction so a mid-migration failure rolls back
+    cleanly and can be retried.
+    """
+    # Ensure the registry table exists outside per-migration transactions.
+    if conn.in_transaction:
+        conn.commit()
     conn.execute(_SCHEMA_MIGRATIONS_DDL)
+    conn.commit()
+
     already = {
         row["version"]
         for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
@@ -184,28 +257,54 @@ def apply_migrations(
             continue
 
         sql = migration_path.read_text(encoding="utf-8")
+        statements = split_sql_statements(sql)
         logger.info(
             "Applying database migration",
-            extra={"migration_version": version, "sql_length": len(sql)},
+            extra={
+                "migration_version": version,
+                "sql_length": len(sql),
+                "statement_count": len(statements),
+            },
         )
+        stage = "begin"
         try:
-            conn.executescript(sql)
+            if conn.in_transaction:
+                conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            for index, statement in enumerate(statements):
+                stage = f"statement:{index}"
+                logger.debug(
+                    "Executing migration statement",
+                    extra={
+                        "migration_version": version,
+                        "statement_index": index,
+                        "statement_length": len(statement),
+                    },
+                )
+                conn.execute(statement)
+            stage = "registry_insert"
             conn.execute(
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, datetime('now'))",
                 (version,),
             )
+            stage = "commit"
             conn.commit()
             applied_now.append(version)
             logger.info(
                 "Database migration applied",
-                extra={"migration_version": version},
+                extra={
+                    "migration_version": version,
+                    "statement_count": len(statements),
+                },
             )
         except Exception as exc:
-            conn.rollback()
+            if conn.in_transaction:
+                conn.rollback()
             logger.error(
                 "Database migration failed",
                 extra={
                     "migration_version": version,
+                    "migration_stage": stage,
                     "error_type": type(exc).__name__,
                     "error_detail": str(exc)[:300],
                 },

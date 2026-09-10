@@ -75,11 +75,13 @@ mukit-ai/
 │   │   │   ├── composition_midi.py
 │   │   │   ├── composition_wav.py
 │   │   │   ├── project_store.py         # SQLite persistence
+│   │   │   ├── project_history_store.py # Snapshots, revisions, branches, bootstrap
+│   │   │   ├── composition_snapshot_encoding.py  # composition.snapshot.v1 zlib encoding
 │   │   │   └── project_composition.py   # Project ↔ composition mapping
 │   │   ├── fixtures/               # composition.v1 + composition_v2_expressive + arrangement_instruments.v1.json
 │   │   └── db/                     # Shared infrastructure: connection + SQL migrations
 │   │       ├── connection.py
-│   │       └── migrations/
+│   │       └── migrations/         # 001_projects, 002_composition_history
 │   ├── tests/
 │   ├── requirements.txt
 │   └── Dockerfile

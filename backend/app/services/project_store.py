@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from ..db.connection import get_connection, get_project_db_path
+from .project_composition import ProjectCompositionError
+from .project_history_store import (
+    ensure_project_history,
+    rename_project_fields,
+    save_branch_draft,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +36,8 @@ class ProjectRecord:
     generation_prompt_json: str | None
     created_at: str
     updated_at: str
+    active_branch_id: str | None = None
+    current_revision_id: str | None = None
 
     @property
     def has_composition(self) -> bool:
@@ -92,7 +100,15 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+_PROJECT_COLUMNS = """
+    id, name, composition_json, generation_provider, generation_model,
+    generation_prompt_json, created_at, updated_at,
+    active_branch_id, current_revision_id
+"""
+
+
 def _row_to_record(row: sqlite3.Row) -> ProjectRecord:
+    keys = set(row.keys())
     return ProjectRecord(
         id=row["id"],
         name=row["name"],
@@ -102,6 +118,10 @@ def _row_to_record(row: sqlite3.Row) -> ProjectRecord:
         generation_prompt_json=row["generation_prompt_json"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        active_branch_id=row["active_branch_id"] if "active_branch_id" in keys else None,
+        current_revision_id=(
+            row["current_revision_id"] if "current_revision_id" in keys else None
+        ),
     )
 
 
@@ -134,9 +154,8 @@ def list_projects(db_path: Path | str | None = None) -> list[ProjectRecord]:
     try:
         with get_connection(path) as conn:
             rows = conn.execute(
-                """
-                SELECT id, name, composition_json, generation_provider, generation_model,
-                       generation_prompt_json, created_at, updated_at
+                f"""
+                SELECT {_PROJECT_COLUMNS}
                 FROM projects
                 ORDER BY updated_at DESC
                 """
@@ -184,8 +203,9 @@ def create_project(
                 """
                 INSERT INTO projects (
                     id, name, composition_json, generation_provider, generation_model,
-                    generation_prompt_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    generation_prompt_json, created_at, updated_at,
+                    active_branch_id, current_revision_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                 """,
                 (
                     new_id,
@@ -198,6 +218,31 @@ def create_project(
                     now,
                 ),
             )
+            history = None
+            try:
+                history = ensure_project_history(
+                    conn,
+                    new_id,
+                    operation_type="project-create",
+                    created_at=now,
+                )
+            except ProjectCompositionError:
+                logger.warning(
+                    "Project created without history; composition is not yet canonical",
+                    extra={
+                        "project_id": new_id,
+                        "code": "history_bootstrap_deferred",
+                    },
+                )
+            if history is not None:
+                logger.debug(
+                    "Project create history ready",
+                    extra={
+                        "project_id": new_id,
+                        "branch_id": history.active_branch_id,
+                        "revision_id": history.current_revision_id,
+                    },
+                )
         record = get_project(new_id, db_path=path)
         summary = record.composition_summary()
         logger.info(
@@ -205,6 +250,8 @@ def create_project(
             extra={
                 "project_id": record.id,
                 "name_length": len(record.name),
+                "active_branch_id": record.active_branch_id,
+                "current_revision_id": record.current_revision_id,
                 **summary,
             },
         )
@@ -231,21 +278,47 @@ def get_project(project_id: str, *, db_path: Path | str | None = None) -> Projec
     try:
         with get_connection(path) as conn:
             row = conn.execute(
-                """
-                SELECT id, name, composition_json, generation_provider, generation_model,
-                       generation_prompt_json, created_at, updated_at
+                f"""
+                SELECT {_PROJECT_COLUMNS}
                 FROM projects
                 WHERE id = ?
                 """,
                 (project_id,),
             ).fetchone()
-        if row is None:
-            logger.warning("Project not found", extra={"project_id": project_id})
-            raise ProjectNotFoundError(f"Project not found: {project_id}")
+            if row is None:
+                logger.warning("Project not found", extra={"project_id": project_id})
+                raise ProjectNotFoundError(f"Project not found: {project_id}")
+            if row["active_branch_id"] is None or row["current_revision_id"] is None:
+                try:
+                    ensure_project_history(conn, project_id, operation_type="migration")
+                except ProjectCompositionError:
+                    logger.warning(
+                        "Project open deferred history bootstrap; composition invalid",
+                        extra={
+                            "project_id": project_id,
+                            "code": "history_bootstrap_deferred",
+                        },
+                    )
+                else:
+                    row = conn.execute(
+                        f"""
+                        SELECT {_PROJECT_COLUMNS}
+                        FROM projects
+                        WHERE id = ?
+                        """,
+                        (project_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise ProjectNotFoundError(f"Project not found: {project_id}")
         record = _row_to_record(row)
         logger.debug(
             "Project fetched",
-            extra={"project_id": record.id, **record.composition_summary()},
+            extra={
+                "project_id": record.id,
+                "active_branch_id": record.active_branch_id,
+                "current_revision_id": record.current_revision_id,
+                **record.composition_summary(),
+            },
         )
         return record
     except ProjectNotFoundError:
@@ -272,83 +345,166 @@ def update_project(
     generation_model: str | None = None,
     generation_prompt: Any | None = None,
     clear_generation_meta: bool = False,
+    branch_id: str | None = None,
+    expected_active_branch_id: str | None = None,
+    expected_working_version: int | None = None,
+    expected_source_fingerprint: str | None = None,
     db_path: Path | str | None = None,
 ) -> ProjectRecord:
-    """Update rename and/or composition/generation fields; always bumps updated_at."""
+    """Atomically rename and/or autosave the active branch draft.
+
+    Rename updates only ``name``. Composition changes update the active branch
+    draft + materialized ``projects.composition_json`` without creating an
+    immutable revision. Optional CAS preconditions protect concurrent writers.
+    """
     path = Path(db_path) if db_path is not None else get_project_db_path()
-    existing = get_project(project_id, db_path=path)
+    composition_touched = clear_composition or composition is not None
+    generation_touched = (
+        clear_generation_meta
+        or generation_provider is not None
+        or generation_model is not None
+        or generation_prompt is not None
+    )
+    rename_only = name is not None and not composition_touched and not generation_touched
 
-    next_name = name if name is not None else existing.name
-    if clear_composition:
-        next_composition = None
-    elif composition is not None:
-        next_composition = _composition_payload_to_text(composition)
-    else:
-        next_composition = existing.composition_json
-
-    if clear_generation_meta:
-        next_provider = None
-        next_model = None
-        next_prompt = None
-    else:
-        next_provider = (
-            generation_provider
-            if generation_provider is not None
-            else existing.generation_provider
-        )
-        next_model = (
-            generation_model if generation_model is not None else existing.generation_model
-        )
-        if generation_prompt is not None:
-            next_prompt = _serialize_prompt_json(generation_prompt)
-        else:
-            next_prompt = existing.generation_prompt_json
-
-    now = _utc_now_iso()
     logger.info(
         "Updating project",
         extra={
             "project_id": project_id,
-            "name_length": len(next_name),
-            "has_composition": next_composition is not None,
-            "generation_provider": next_provider,
-            "generation_model": next_model,
-            "renamed": name is not None and name != existing.name,
+            "rename_only": rename_only,
+            "composition_touched": composition_touched,
+            "generation_touched": generation_touched,
+            "name_provided": name is not None,
         },
     )
     try:
         with get_connection(path) as conn:
-            conn.execute(
-                """
-                UPDATE projects
-                SET name = ?,
-                    composition_json = ?,
-                    generation_provider = ?,
-                    generation_model = ?,
-                    generation_prompt_json = ?,
-                    updated_at = ?
+            row = conn.execute(
+                f"""
+                SELECT {_PROJECT_COLUMNS}, generation_provider, generation_model,
+                       generation_prompt_json
+                FROM projects
                 WHERE id = ?
                 """,
-                (
-                    next_name,
-                    next_composition,
-                    next_provider,
-                    next_model,
-                    next_prompt,
-                    now,
+                (project_id,),
+            ).fetchone()
+            if row is None:
+                raise ProjectNotFoundError(f"Project not found: {project_id}")
+
+            if row["active_branch_id"] is None or row["current_revision_id"] is None:
+                try:
+                    ensure_project_history(conn, project_id, operation_type="migration")
+                except ProjectCompositionError:
+                    if composition_touched:
+                        raise
+                    logger.warning(
+                        "Project update without history; composition invalid",
+                        extra={
+                            "project_id": project_id,
+                            "code": "history_bootstrap_deferred",
+                        },
+                    )
+                row = conn.execute(
+                    f"""
+                    SELECT {_PROJECT_COLUMNS}, generation_provider, generation_model,
+                           generation_prompt_json
+                    FROM projects
+                    WHERE id = ?
+                    """,
+                    (project_id,),
+                ).fetchone()
+                if row is None:
+                    raise ProjectNotFoundError(f"Project not found: {project_id}")
+
+            if name is not None:
+                rename_project_fields(conn, project_id, name=name)
+
+            if composition_touched:
+                if row["active_branch_id"] is None:
+                    raise ProjectCompositionError(
+                        "Cannot autosave composition before history bootstrap succeeds"
+                    )
+                active_branch = row["active_branch_id"]
+                target_branch = branch_id or active_branch
+                expected_active = expected_active_branch_id or active_branch
+                if expected_working_version is None:
+                    version_row = conn.execute(
+                        "SELECT working_version FROM project_branches WHERE id = ?",
+                        (target_branch,),
+                    ).fetchone()
+                    if version_row is None:
+                        raise ProjectNotFoundError(
+                            f"Active branch not found for project: {project_id}"
+                        )
+                    expected_version = int(version_row["working_version"])
+                else:
+                    expected_version = expected_working_version
+                save_branch_draft(
+                    conn,
                     project_id,
-                ),
-            )
+                    branch_id=target_branch,
+                    expected_active_branch_id=expected_active,
+                    expected_working_version=expected_version,
+                    composition=None if clear_composition else composition,
+                    expected_source_fingerprint=expected_source_fingerprint,
+                    clear_composition=clear_composition,
+                )
+
+            if generation_touched:
+                if clear_generation_meta:
+                    next_provider = None
+                    next_model = None
+                    next_prompt = None
+                else:
+                    next_provider = (
+                        generation_provider
+                        if generation_provider is not None
+                        else row["generation_provider"]
+                    )
+                    next_model = (
+                        generation_model
+                        if generation_model is not None
+                        else row["generation_model"]
+                    )
+                    if generation_prompt is not None:
+                        next_prompt = _serialize_prompt_json(generation_prompt)
+                    else:
+                        next_prompt = row["generation_prompt_json"]
+                conn.execute(
+                    """
+                    UPDATE projects
+                    SET generation_provider = ?,
+                        generation_model = ?,
+                        generation_prompt_json = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        next_provider,
+                        next_model,
+                        next_prompt,
+                        _utc_now_iso(),
+                        project_id,
+                    ),
+                )
+            elif name is not None and not composition_touched:
+                # rename_project_fields already bumped updated_at
+                pass
+
         record = get_project(project_id, db_path=path)
         logger.info(
             "Project updated",
             extra={
                 "project_id": record.id,
                 "name_length": len(record.name),
+                "active_branch_id": record.active_branch_id,
+                "current_revision_id": record.current_revision_id,
                 **record.composition_summary(),
             },
         )
         return record
+    except ProjectNotFoundError:
+        raise
     except Exception as exc:
         logger.error(
             "Failed to update project",

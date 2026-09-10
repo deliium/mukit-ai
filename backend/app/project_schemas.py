@@ -8,9 +8,15 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from .schemas import CompositionV1, CompositionV2, LLMPromptParameters
+from .services.persistence_secret_guard import (
+    assert_no_secret_fields,
+    assert_payload_has_no_secret_values,
+    contains_forbidden_secret_fields,
+)
 
 logger = logging.getLogger(__name__)
 
+# Back-compat re-export for existing imports/tests.
 FORBIDDEN_SECRET_FIELD_NAMES = {
     "api_key",
     "apikey",
@@ -24,19 +30,7 @@ FORBIDDEN_SECRET_FIELD_NAMES = {
 
 
 def _contains_forbidden_secret_fields(payload: Any, *, path: str = "") -> list[str]:
-    """Return dotted paths of API-key-like fields found in a nested payload."""
-    found: list[str] = []
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            key_path = f"{path}.{key}" if path else str(key)
-            normalized = str(key).strip().lower().replace("-", "_")
-            if normalized in FORBIDDEN_SECRET_FIELD_NAMES or normalized.endswith("_api_key"):
-                found.append(key_path)
-            found.extend(_contains_forbidden_secret_fields(value, path=key_path))
-    elif isinstance(payload, list):
-        for index, item in enumerate(payload):
-            found.extend(_contains_forbidden_secret_fields(item, path=f"{path}[{index}]"))
-    return found
+    return contains_forbidden_secret_fields(payload, path=path)
 
 
 class ProjectGenerationMeta(BaseModel):
@@ -48,16 +42,8 @@ class ProjectGenerationMeta(BaseModel):
     @classmethod
     def reject_secret_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            secrets = _contains_forbidden_secret_fields(data)
-            if secrets:
-                logger.warning(
-                    "Rejected generation meta containing secret-like fields",
-                    extra={"secret_field_count": len(secrets)},
-                )
-                raise ValueError(
-                    "Generation metadata must not include API keys or secret fields "
-                    f"(found: {', '.join(secrets[:5])})"
-                )
+            assert_no_secret_fields(data, context="generation_meta")
+            assert_payload_has_no_secret_values(data, context="generation_meta")
         return data
 
 
@@ -70,16 +56,11 @@ class ProjectCreateRequest(BaseModel):
     @classmethod
     def reject_secret_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            secrets = _contains_forbidden_secret_fields(data)
-            if secrets:
-                logger.warning(
-                    "Rejected project create payload containing secret-like fields",
-                    extra={"secret_field_count": len(secrets)},
-                )
-                raise ValueError(
-                    "Project payloads must not include API keys or secret fields "
-                    f"(found: {', '.join(secrets[:5])})"
-                )
+            assert_no_secret_fields(data, context="project_create")
+            # Scan generation/prompt text only; composition note payloads are musical.
+            generation = data.get("generation")
+            if generation is not None:
+                assert_payload_has_no_secret_values(generation, context="project_create.generation")
         return data
 
 
@@ -89,21 +70,19 @@ class ProjectPatchRequest(BaseModel):
     generation: ProjectGenerationMeta | None = None
     clear_composition: bool = False
     clear_generation: bool = False
+    branch_id: str | None = Field(default=None, min_length=1, max_length=80)
+    expected_active_branch_id: str | None = Field(default=None, min_length=1, max_length=80)
+    expected_working_version: int | None = Field(default=None, ge=0)
+    expected_source_fingerprint: str | None = Field(default=None, min_length=16, max_length=128)
 
     @model_validator(mode="before")
     @classmethod
     def reject_secret_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            secrets = _contains_forbidden_secret_fields(data)
-            if secrets:
-                logger.warning(
-                    "Rejected project patch payload containing secret-like fields",
-                    extra={"secret_field_count": len(secrets)},
-                )
-                raise ValueError(
-                    "Project payloads must not include API keys or secret fields "
-                    f"(found: {', '.join(secrets[:5])})"
-                )
+            assert_no_secret_fields(data, context="project_patch")
+            generation = data.get("generation")
+            if generation is not None:
+                assert_payload_has_no_secret_values(generation, context="project_patch.generation")
         return data
 
     @model_validator(mode="after")
@@ -145,6 +124,12 @@ class ProjectDetailResponse(BaseModel):
     generation_prompt: dict[str, Any] | None = None
     composition_migrated: bool = False
     migration_path: str | None = None
+    active_branch_id: str | None = None
+    active_branch_name: str | None = None
+    current_revision_id: str | None = None
+    current_revision_sequence: int | None = None
+    working_version: int | None = None
+    working_fingerprint: str | None = None
 
 
 class ProjectDuplicateResponse(ProjectDetailResponse):
