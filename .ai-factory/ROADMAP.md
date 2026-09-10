@@ -21,6 +21,7 @@
 - [x] **Interactive harmony and reharmonization** — Editable V2 harmony tick spans, Harmony tab, previewed deterministic/AI reharmonize that only mutates notes on explicit apply
 - [x] **Context-aware composition development** — Continue / add / vary sections with multi-candidate `POST /composition/development/preview`; fingerprint-gated apply preserves existing material until explicit selection
 - [x] **AI-assisted arrangement / orchestration** — Previewed instrumentation/texture redistributions over selected tracks (`POST /composition/arrangement/preview`); melody/harmony preservation until explicit Apply
+- [x] **Upgrade V2 music editing workflow** — Canonical multi-note selection/clipboard/transforms, edit cursor navigation, play-from-cursor and selection loops, viewport culling, and large-score editor acceptance
 
 ## Completed
 
@@ -43,3 +44,4 @@
 | Interactive harmony and reharmonization | 2026-09-09 |
 | Context-aware composition development | 2026-09-09 |
 | AI-assisted arrangement / orchestration | 2026-09-10 |
+| Upgrade V2 music editing workflow | 2026-09-10 |

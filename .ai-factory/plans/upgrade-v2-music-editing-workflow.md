@@ -9,8 +9,8 @@ Created: 2026-09-10
 - Docs: yes
 
 ## Roadmap Linkage
-Milestone: "none"
-Rationale: Skipped by user because the roadmap has no open milestone for this editor upgrade.
+Milestone: "Upgrade V2 music editing workflow"
+Rationale: Added to `.ai-factory/ROADMAP.md` after implementation (was skipped at plan time because no open milestone existed).
 
 ## Scope And Decisions
 - `editedMusicJson` remains the only editable composition and every committed musical change produces a validated canonical `composition.v2`; no editor-owned composition clone or parallel note model is introduced.
