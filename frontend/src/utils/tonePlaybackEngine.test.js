@@ -3,10 +3,19 @@ import test from 'node:test';
 
 import { createPlaybackEngine } from './tonePlaybackEngine.js';
 import { compilePlaybackSchedule } from './playbackEvents.js';
+import {
+  deriveLoopRangeFromSelection,
+  normalizePlaybackLoop,
+  reconcilePlaybackLoop,
+} from './playbackLoop.js';
+import { ticksToPlaybackSeconds } from './playbackPosition.js';
 import { readFileSync } from 'node:fs';
 
 const expressiveFixturePath = new URL('./fixtures/composition_v2_expressive.json', import.meta.url);
 const EXPRESSIVE_FIXTURE = JSON.parse(readFileSync(expressiveFixturePath, 'utf8'));
+
+const timelineFixturePath = new URL('./fixtures/timeline_mixed_meter_tempo.json', import.meta.url);
+const TIMELINE_FIXTURE = JSON.parse(readFileSync(timelineFixturePath, 'utf8'));
 
 function createFakeTone() {
   const scheduled = [];
@@ -83,6 +92,7 @@ function createFakeTone() {
     start: async () => {
       state = 'started';
     },
+    now: () => 0,
     Gain: FakeGain,
     Panner: FakePanner,
     Synth: FakeSynth,
@@ -134,7 +144,11 @@ function createFakeTone() {
   };
 }
 
-test('schedules multi-track attack/release events and cleans up on stop/seek', async () => {
+function silentLogger() {
+  return { debug() {}, info() {}, warn() {}, error() {} };
+}
+
+test('schedules multi-track attack/release events including muted tracks', async () => {
   const Tone = createFakeTone();
   const logs = [];
   const logger = {
@@ -188,9 +202,12 @@ test('schedules multi-track attack/release events and cleans up on stop/seek', a
     },
   });
 
-  assert.equal(schedule.scheduledCount, 4);
+  // All tracks scheduled; mute is live uiGain (0), not schedule omission.
+  assert.equal(schedule.scheduledCount, 6);
   assert.equal(engine.getTrackNodeCount(), 2);
-  assert.equal(Tone.Transport._scheduled.length, 5);
+  assert.equal(engine.getTrackEffectiveGain('bass-1'), 0);
+  assert.ok(engine.getTrackEffectiveGain('piano-1') > 0);
+  assert.equal(Tone.Transport._scheduled.length, 7);
 
   await engine.start();
   assert.equal(Tone.Transport.state, 'started');
@@ -231,32 +248,49 @@ test('schedules multi-track attack/release events and cleans up on stop/seek', a
 
 test('applies mute/solo overrides without rebuilding composition data', () => {
   const Tone = createFakeTone();
-  const engine = createPlaybackEngine({ Tone, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+  const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
   engine.prepare({
     tempo: 120,
     tracks: [
       { id: 'a', instrument: 'piano', volume: 127 },
       { id: 'b', instrument: 'bass', volume: 127 },
     ],
-    events: [],
+    events: [
+      {
+        trackId: 'b',
+        pitch: 'C2',
+        position: 0,
+        stopPosition: 0.5,
+        velocity: 0.5,
+        velocityMidi: 64,
+      },
+    ],
+    trackOverrides: {
+      b: { muted: true, volumeMidi: 127 },
+    },
   });
+
+  assert.equal(engine.getTrackEffectiveGain('b'), 0);
+  assert.ok(engine.getScheduledEventCount() >= 2);
 
   engine.applyTrackOverrides({
-    a: { solo: true, volumeMidi: 127 },
-    b: { solo: false, volumeMidi: 127 },
+    a: { solo: false, volumeMidi: 127 },
+    b: { muted: false, volumeMidi: 127 },
   });
 
+  assert.ok(engine.getTrackEffectiveGain('b') > 0);
   assert.equal(engine.getTrackNodeCount(), 2);
   engine.dispose();
 });
 
 test('prepares compiled v2 schedule with trailing silence completion', () => {
   const Tone = createFakeTone();
-  const engine = createPlaybackEngine({ Tone, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+  const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
   const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
   const result = engine.prepare({
     tracks: EXPRESSIVE_FIXTURE.tracks,
     schedule,
+    composition: EXPRESSIVE_FIXTURE,
     tempo: EXPRESSIVE_FIXTURE.tempo,
   });
 
@@ -268,11 +302,12 @@ test('prepares compiled v2 schedule with trailing silence completion', () => {
 
 test('seek rebuilds schedule from current transport position', () => {
   const Tone = createFakeTone();
-  const engine = createPlaybackEngine({ Tone, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+  const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
   const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
   engine.prepare({
     tracks: EXPRESSIVE_FIXTURE.tracks,
     schedule,
+    composition: EXPRESSIVE_FIXTURE,
     tempo: EXPRESSIVE_FIXTURE.tempo,
   });
   const before = Tone.Transport._scheduled.length;
@@ -282,4 +317,141 @@ test('seek rebuilds schedule from current transport position', () => {
   assert.ok(Tone.Transport._scheduled.length > 0);
   assert.notEqual(before, Tone.Transport._scheduled.length);
   engine.dispose();
+});
+
+test('prepare honors nonzero startTick via timeline conversion', () => {
+  const Tone = createFakeTone();
+  const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
+  const schedule = compilePlaybackSchedule(TIMELINE_FIXTURE);
+  const startTick = 1920;
+  const expectedSeconds = ticksToPlaybackSeconds(startTick, { composition: TIMELINE_FIXTURE });
+
+  const result = engine.prepare({
+    tracks: TIMELINE_FIXTURE.tracks,
+    schedule,
+    composition: TIMELINE_FIXTURE,
+    tempo: TIMELINE_FIXTURE.tempo,
+    startTick,
+  });
+
+  assert.equal(Tone.Transport.position, expectedSeconds);
+  assert.ok(result.scheduledCount >= 0);
+  const earlyItems = schedule.items.filter((item) => item.time < expectedSeconds && item.kind !== 'controller');
+  const scheduledWhens = Tone.Transport._scheduled.filter((item) => !item.once).map((item) => item.when);
+  for (const item of earlyItems) {
+    assert.equal(scheduledWhens.includes(item.time), false);
+  }
+  engine.dispose();
+});
+
+test('loop wraps at exact endTick and reschedules from startTick', () => {
+  const Tone = createFakeTone();
+  const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
+  const composition = {
+    schema_version: 'composition.v2',
+    tempo: 120,
+    key: 'C major',
+    ticks_per_quarter: 480,
+    time_signature: '4/4',
+    bar_count: 1,
+    duration_ticks: 1920,
+    tracks: [
+      {
+        id: 't1',
+        instrument: 'piano',
+        volume: 100,
+        events: [
+          { type: 'note', id: 'n1', pitch: 'C4', start_tick: 0, duration_ticks: 240, velocity: 80 },
+          { type: 'note', id: 'n2', pitch: 'D4', start_tick: 480, duration_ticks: 240, velocity: 80 },
+          { type: 'note', id: 'n3', pitch: 'E4', start_tick: 960, duration_ticks: 240, velocity: 80 },
+        ],
+      },
+    ],
+  };
+  const schedule = compilePlaybackSchedule(composition);
+  const loopStart = 0;
+  const loopEnd = 960;
+  const loopEndSeconds = ticksToPlaybackSeconds(loopEnd, { composition });
+
+  engine.prepare({
+    tracks: composition.tracks,
+    schedule,
+    composition,
+    tempo: 120,
+    startTick: loopStart,
+    loop: { startTick: loopStart, endTick: loopEnd, enabled: true },
+  });
+
+  assert.equal(engine.getEndPositionSeconds(), loopEndSeconds);
+  assert.ok(!Tone.Transport._scheduled.some((item) => !item.once && item.when >= loopEndSeconds));
+
+  const endCallback = Tone.Transport._scheduled.find((item) => item.once);
+  assert.ok(endCallback);
+  const beforeCancelCount = Tone.Transport._cancelled.length;
+  endCallback.callback();
+  assert.ok(Tone.Transport._cancelled.length > beforeCancelCount);
+  assert.equal(Tone.Transport.position, ticksToPlaybackSeconds(loopStart, { composition }));
+  assert.equal(engine.getEndPositionSeconds(), loopEndSeconds);
+  assert.ok(engine.getScheduledEventCount() > 0);
+
+  engine.setLoop({ startTick: loopStart, endTick: loopEnd, enabled: false });
+  assert.equal(engine.getLoop()?.enabled, false);
+  assert.ok(engine.getEndPositionSeconds() >= loopEndSeconds);
+
+  engine.dispose();
+});
+
+test('setLoop while paused rebuilds window without clearing bounds', () => {
+  const Tone = createFakeTone();
+  const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
+  const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
+  engine.prepare({
+    tracks: EXPRESSIVE_FIXTURE.tracks,
+    schedule,
+    composition: EXPRESSIVE_FIXTURE,
+    tempo: EXPRESSIVE_FIXTURE.tempo,
+    loop: { startTick: 0, endTick: 1920, enabled: false },
+  });
+  engine.pause();
+  const result = engine.setLoop({ startTick: 480, endTick: 1920, enabled: true });
+  assert.ok(result);
+  assert.equal(engine.getLoop()?.startTick, 480);
+  assert.equal(engine.getLoop()?.enabled, true);
+  engine.dispose();
+});
+
+test('normalizePlaybackLoop clamps and rejects invalid ranges', () => {
+  assert.equal(normalizePlaybackLoop(null), null);
+  assert.equal(normalizePlaybackLoop({ startTick: 10, endTick: 10, enabled: true }), null);
+  assert.deepEqual(
+    normalizePlaybackLoop({ startTick: 0, endTick: 5000, enabled: true }, { duration_ticks: 1000 }),
+    { startTick: 0, endTick: 1000, enabled: true },
+  );
+  assert.equal(
+    reconcilePlaybackLoop({ startTick: 900, endTick: 950, enabled: true }, { duration_ticks: 800 }),
+    null,
+  );
+});
+
+test('deriveLoopRangeFromSelection prefers notes then bars', () => {
+  const fromNotes = deriveLoopRangeFromSelection({
+    composition: { duration_ticks: 4000 },
+    noteRange: { startTick: 100, endTick: 500 },
+    startBar: 1,
+    endBar: 2,
+  });
+  assert.equal(fromNotes.source, 'notes');
+  assert.equal(fromNotes.startTick, 100);
+
+  const fromBars = deriveLoopRangeFromSelection({
+    composition: { duration_ticks: 4000 },
+    noteRange: null,
+    startBar: 2,
+    endBar: 3,
+    barRangeResolver: () => ({ startTick: 1920, endTick: 3840 }),
+  });
+  assert.equal(fromBars.source, 'bars');
+  assert.equal(fromBars.startTick, 1920);
+
+  assert.equal(deriveLoopRangeFromSelection({ composition: { duration_ticks: 100 } }), null);
 });

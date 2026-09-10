@@ -82,3 +82,11 @@ test('ticksToPlaybackSeconds honors piecewise tempo map', () => {
   const seconds = ticksToPlaybackSeconds(1920, { composition: TIMELINE_FIXTURE });
   assert.equal(seconds, TIMELINE_FIXTURE.expectations.seconds_at_1920);
 });
+
+test('nonzero start tick converts consistently for play-from-cursor', () => {
+  const startTick = 1920;
+  const seconds = ticksToPlaybackSeconds(startTick, { composition: TIMELINE_FIXTURE });
+  const position = secondsToPlaybackPosition(seconds, { composition: TIMELINE_FIXTURE });
+  assert.equal(position.tick, startTick);
+  assert.equal(position.bar, 2);
+});

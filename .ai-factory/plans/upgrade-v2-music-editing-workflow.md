@@ -91,7 +91,7 @@ Rationale: Skipped by user because the roadmap has no open milestone for this ed
 
 ### Phase 3: Navigation, Cursor, Loop, And Playback
 
-- [ ] Task 7: Add zoom, scrolling, current-bar navigation, and section navigation around an explicit edit cursor. (depends on Task 4)
+- [x] Task 7: Add zoom, scrolling, current-bar navigation, and section navigation around an explicit edit cursor. (depends on Task 4)
   - Add canonical tick-based edit cursor and viewport request state/actions to `frontend/src/store/musicStore.js`, with pure conversions in `frontend/src/utils/compositionTimeline.js` or a focused `frontend/src/utils/editorNavigation.js`.
   - Support ruler/grid cursor placement, current-bar input plus previous/next bar, previous/next section, section dropdown, horizontal scrollbar, wheel/trackpad scrolling, Ctrl/Cmd+wheel zoom around the pointer, zoom in/out, zoom-to-selection, and zoom-to-fit.
   - Section navigation uses canonical V2 section tick/bar bounds, including unlabeled section types with generated display labels, and works with variable meter. Every navigation action clamps to `duration_ticks` and requests viewport scrolling without mutating the composition.
@@ -99,7 +99,7 @@ Rationale: Skipped by user because the roadmap has no open milestone for this ed
   - Add `frontend/src/utils/editorNavigation.test.js` plus store tests for cursor clamping, variable-meter bar jumps, section boundaries, zoom anchors, selection fit, and project/composition replacement.
   - Logging: DEBUG logs debounced navigation command, destination bar/section/tick, zoom, and viewport range; WARN logs malformed timeline/section targets. Do not log every scroll event.
 
-- [ ] Task 8: Support playback from cursor and looping the selected range. (depends on Tasks 5 and 7)
+- [x] Task 8: Support playback from cursor and looping the selected range. (depends on Tasks 5 and 7)
   - Extend `frontend/src/utils/tonePlaybackEngine.js` with explicit bounded start and loop-range semantics, including rescheduling completion behavior, controller state before the start tick, loop enable/disable while paused/playing, and correct cleanup on stop/source revision changes.
   - Ensure schedule rebuilding includes all tracks and relies on live effective gain for mute/solo so an initially muted track can be unmuted during playback without missing scheduled notes; preserve candidate audition behavior and do not persist transport state in Composition V2.
   - Add transport actions/state in `frontend/src/store/musicStore.js` for cursor start and loop `{ startTick, endTick, enabled }`, deriving loop bounds from selected notes or active bar range and clearing/clamping stale ranges after composition edits/replacement.

@@ -44,6 +44,12 @@ import {
   createThrottledFn,
   filterNotesInViewport,
 } from '../utils/pianoRollViewport.js';
+import {
+  listSectionsForNavigation,
+  scrollLeftForCenterTick,
+  tickToBar,
+} from '../utils/editorNavigation.js';
+import { secondsToPlaybackPosition } from '../utils/playbackPosition.js';
 import { createAppLogger } from '../utils/appLogger.js';
 import PianoRollNoteLayer from './piano-roll/PianoRollNoteLayer.jsx';
 import PianoRollOverlayLayer from './piano-roll/PianoRollOverlayLayer.jsx';
@@ -57,10 +63,13 @@ const logViewportThrottled = createThrottledFn(500)((meta) => {
 });
 
 /**
- * Piano-roll empty-grid gestures (Task 5):
+ * Piano-roll empty-grid gestures (Task 5 / 7):
  * - Shift+drag → AI bar-range selection (existing)
  * - Alt+drag or Meta+drag → note box select across visible (non-hidden) tracks
+ * - Ctrl/Cmd+click → place edit cursor without creating a note
+ * - Click timeline ruler → place edit cursor
  * - Plain click → create note on the active track
+ * - Ctrl/Cmd+wheel → zoom around pointer
  */
 
 const CONTEXT_COLORS = ['#94a3b8', '#a78bfa', '#67e8f9', '#fbbf24', '#f472b6', '#86efac'];
@@ -209,6 +218,18 @@ const BarLabel = styled.div`
   z-index: 2;
 `;
 
+const TimelineRuler = styled.div`
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 18px;
+  z-index: 8;
+  cursor: pointer;
+  background: linear-gradient(to bottom, rgba(238, 242, 255, 0.95), rgba(238, 242, 255, 0.35));
+  border-bottom: 1px solid rgba(165, 180, 252, 0.55);
+`;
+
 const TimelineCue = styled.div`
   position: absolute;
   top: 18px;
@@ -263,12 +284,18 @@ const PianoRollEditor = () => {
   const lockedTrackIds = useMusicStore((state) => state.lockedTrackIds);
   const pianoRollSnap = useMusicStore((state) => state.pianoRollSnap);
   const pianoRollZoom = useMusicStore((state) => state.pianoRollZoom);
+  const editCursorTick = useMusicStore((state) => state.editCursorTick);
+  const viewportScrollRequest = useMusicStore((state) => state.viewportScrollRequest);
   const pianoRollNotationStatus = useMusicStore((state) => state.pianoRollNotationStatus);
   const pianoRollNotationError = useMusicStore((state) => state.pianoRollNotationError);
   const compositionEditUndoStack = useMusicStore((state) => state.compositionEditUndoStack);
   const compositionEditRedoStack = useMusicStore((state) => state.compositionEditRedoStack);
   const notationRevision = useMusicStore((state) => state.notationRevision);
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
+  const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
+  const playbackAutoFollow = useMusicStore((state) => state.playbackAutoFollow);
+  const setPlaybackAutoFollow = useMusicStore((state) => state.setPlaybackAutoFollow);
+  const togglePlaybackTransport = useMusicStore((state) => state.togglePlaybackTransport);
   const selectPianoRollTrack = useMusicStore((state) => state.selectPianoRollTrack);
   const setEditorSelection = useMusicStore((state) => state.setEditorSelection);
   const toggleEditorSelectionRef = useMusicStore((state) => state.toggleEditorSelectionRef);
@@ -284,12 +311,22 @@ const PianoRollEditor = () => {
   const nudgeSelectionBySnap = useMusicStore((state) => state.nudgeSelectionBySnap);
   const setPianoRollSnap = useMusicStore((state) => state.setPianoRollSnap);
   const setPianoRollZoom = useMusicStore((state) => state.setPianoRollZoom);
+  const setEditCursorTick = useMusicStore((state) => state.setEditCursorTick);
+  const gotoBar = useMusicStore((state) => state.gotoBar);
+  const gotoPrevBar = useMusicStore((state) => state.gotoPrevBar);
+  const gotoNextBar = useMusicStore((state) => state.gotoNextBar);
+  const gotoSection = useMusicStore((state) => state.gotoSection);
+  const gotoPrevSection = useMusicStore((state) => state.gotoPrevSection);
+  const gotoNextSection = useMusicStore((state) => state.gotoNextSection);
+  const zoomIn = useMusicStore((state) => state.zoomIn);
+  const zoomOut = useMusicStore((state) => state.zoomOut);
+  const zoomToFit = useMusicStore((state) => state.zoomToFit);
+  const zoomToSelection = useMusicStore((state) => state.zoomToSelection);
   const createNote = useMusicStore((state) => state.createNote);
   const applyTieChain = useMusicStore((state) => state.applyTieChain);
   const removeTieChain = useMusicStore((state) => state.removeTieChain);
   const undoCompositionEdit = useMusicStore((state) => state.undoCompositionEdit);
   const redoCompositionEdit = useMusicStore((state) => state.redoCompositionEdit);
-  const setPlaybackStatus = useMusicStore((state) => state.setPlaybackStatus);
   const refreshMusicXmlFromEditedComposition = useMusicStore(
     (state) => state.refreshMusicXmlFromEditedComposition,
   );
@@ -314,6 +351,9 @@ const PianoRollEditor = () => {
   const lastBarSelectLogRef = useRef(0);
   const scrollRafRef = useRef(0);
   const zoomAnchorPendingRef = useRef(null);
+  const userScrollSuppressFollowRef = useRef(false);
+  const followSuppressTimerRef = useRef(0);
+  const programmaticScrollRef = useRef(false);
   const [viewport, setViewport] = useState({
     scrollLeft: 0,
     scrollTop: 0,
@@ -560,6 +600,22 @@ const PianoRollEditor = () => {
     }
     measureViewport();
     const onScroll = () => {
+      // Manual scrolling should not fight auto-follow.
+      if (
+        !programmaticScrollRef.current
+        && playbackAutoFollow
+        && playbackStatus === 'playing'
+      ) {
+        userScrollSuppressFollowRef.current = true;
+        if (followSuppressTimerRef.current) {
+          clearTimeout(followSuppressTimerRef.current);
+        }
+        followSuppressTimerRef.current = setTimeout(() => {
+          userScrollSuppressFollowRef.current = false;
+          followSuppressTimerRef.current = 0;
+        }, 900);
+      }
+      programmaticScrollRef.current = false;
       if (scrollRafRef.current) {
         return;
       }
@@ -582,8 +638,134 @@ const PianoRollEditor = () => {
         cancelAnimationFrame(scrollRafRef.current);
         scrollRafRef.current = 0;
       }
+      if (followSuppressTimerRef.current) {
+        clearTimeout(followSuppressTimerRef.current);
+        followSuppressTimerRef.current = 0;
+      }
     };
-  }, [canonical, validation.valid, measureViewport, metrics?.totalWidth, metrics?.totalHeight]);
+  }, [
+    canonical,
+    validation.valid,
+    measureViewport,
+    metrics?.totalWidth,
+    metrics?.totalHeight,
+    playbackAutoFollow,
+    playbackStatus,
+  ]);
+
+  useEffect(() => {
+    const request = viewportScrollRequest;
+    const node = scrollRef.current;
+    if (!request || !node || !metrics) {
+      return undefined;
+    }
+    const frame = requestAnimationFrame(() => {
+      const duration = Number(editedMusicJson?.duration_ticks) || 0;
+      let nextLeft = request.scrollLeft;
+      if (nextLeft == null && request.centerTick != null) {
+        nextLeft = scrollLeftForCenterTick({
+          centerTick: request.centerTick,
+          pixelsPerTick: metrics.pixelsPerTick,
+          clientWidth: node.clientWidth,
+          durationTicks: duration,
+        }).scrollLeft;
+      }
+      if (nextLeft == null || !Number.isFinite(Number(nextLeft))) {
+        return;
+      }
+      programmaticScrollRef.current = true;
+      node.scrollLeft = Number(nextLeft);
+      measureViewport();
+      logger.debug('Applied viewport scroll request', {
+        requestId: request.id,
+        reason: request.reason,
+        scrollLeft: node.scrollLeft,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    viewportScrollRequest,
+    metrics,
+    editedMusicJson?.duration_ticks,
+    measureViewport,
+  ]);
+
+  // Optional auto-follow: keep playback cursor in view without fighting manual scroll.
+  useEffect(() => {
+    if (!playbackAutoFollow || playbackStatus !== 'playing' || !metrics || !scrollRef.current) {
+      return undefined;
+    }
+    if (userScrollSuppressFollowRef.current) {
+      return undefined;
+    }
+    const position = secondsToPlaybackPosition(playbackSeconds, {
+      tempo: editedMusicJson?.tempo,
+      ticksPerQuarter: editedMusicJson?.ticks_per_quarter,
+      timeSignature: editedMusicJson?.time_signature,
+      composition: editedMusicJson,
+    });
+    const cursorPx = position.tick * metrics.pixelsPerTick;
+    const node = scrollRef.current;
+    const margin = Math.max(48, node.clientWidth * 0.15);
+    const left = node.scrollLeft;
+    const right = left + node.clientWidth;
+    if (cursorPx >= left + margin && cursorPx <= right - margin) {
+      return undefined;
+    }
+    const duration = Number(editedMusicJson?.duration_ticks) || 0;
+    const nextLeft = scrollLeftForCenterTick({
+      centerTick: position.tick,
+      pixelsPerTick: metrics.pixelsPerTick,
+      clientWidth: node.clientWidth,
+      durationTicks: duration,
+    }).scrollLeft;
+    if (!Number.isFinite(nextLeft)) {
+      return undefined;
+    }
+    // Programmatic follow must not re-trigger the manual-scroll suppress window.
+    programmaticScrollRef.current = true;
+    node.scrollLeft = nextLeft;
+    measureViewport();
+    return undefined;
+  }, [
+    playbackAutoFollow,
+    playbackStatus,
+    playbackSeconds,
+    metrics,
+    editedMusicJson,
+    measureViewport,
+  ]);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) {
+      return undefined;
+    }
+    const onWheel = (event) => {
+      if (!(event.ctrlKey || event.metaKey)) {
+        return;
+      }
+      event.preventDefault();
+      const bounds = node.getBoundingClientRect();
+      const pointerX = event.clientX - bounds.left;
+      const oldPpt = metrics?.pixelsPerTick || pianoRollZoom;
+      const direction = event.deltaY < 0 ? 1 : -1;
+      const factor = direction > 0 ? 1.1 : 1 / 1.1;
+      const nextZoom = Math.min(0.25, Math.max(0.01, (pianoRollZoom || 0.05) * factor));
+      if (nextZoom === pianoRollZoom) {
+        return;
+      }
+      zoomAnchorPendingRef.current = {
+        scrollLeft: node.scrollLeft,
+        pointerX,
+        oldPixelsPerTick: oldPpt,
+      };
+      setPianoRollZoom(nextZoom);
+      logger.debug('Ctrl-wheel zoom', { zoom: nextZoom, pointerX: Math.round(pointerX) });
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
+  }, [metrics, pianoRollZoom, setPianoRollZoom]);
 
   useEffect(() => {
     const pending = zoomAnchorPendingRef.current;
@@ -826,12 +1008,47 @@ const PianoRollEditor = () => {
       }));
   }, [editedMusicJson, metrics, visibleTicks.startTick, visibleTicks.endTick]);
 
+  const navigationSections = useMemo(
+    () => listSectionsForNavigation(editedMusicJson),
+    [editedMusicJson],
+  );
+
+  const currentBar = useMemo(
+    () => tickToBar(editedMusicJson, editCursorTick) || 1,
+    [editedMusicJson, editCursorTick],
+  );
+
+  const currentSectionKey = useMemo(() => {
+    const tick = Number(editCursorTick) || 0;
+    const match = navigationSections.find((section) => (
+      tick >= section.startTick && tick < section.endTick
+    )) || navigationSections.find((section) => tick === section.endTick)
+      || navigationSections[0];
+    return match?.key || '';
+  }, [navigationSections, editCursorTick]);
+
+  const placeEditCursorAtClientX = useCallback((clientX, targetEl) => {
+    if (!metrics || !targetEl) {
+      return;
+    }
+    const bounds = targetEl.getBoundingClientRect();
+    const x = clientX - bounds.left;
+    const mapped = pixelToTick(x, metrics.pixelsPerTick);
+    const tick = setEditCursorTick(mapped.tick);
+    logger.debug('Edit cursor placed', {
+      tick,
+      bar: tickToBar(editedMusicJson, tick),
+    });
+  }, [metrics, setEditCursorTick, editedMusicJson]);
+
   const handleDeleteSelected = () => {
     const result = deleteSelection();
     if (!result?.ok) {
       logger.warn('Delete selection guarded', { code: result?.code || null });
     }
   };
+
+  const clientWidthForZoom = () => scrollRef.current?.clientWidth || viewport.clientWidth || 0;
 
   const handleZoomChange = useCallback((nextZoom) => {
     const node = scrollRef.current;
@@ -843,6 +1060,34 @@ const PianoRollEditor = () => {
     };
     setPianoRollZoom(nextZoom);
   }, [metrics, pianoRollZoom, setPianoRollZoom]);
+
+  const handleZoomIn = useCallback(() => {
+    const node = scrollRef.current;
+    zoomAnchorPendingRef.current = {
+      scrollLeft: node?.scrollLeft || 0,
+      pointerX: node ? node.clientWidth / 2 : 0,
+      oldPixelsPerTick: metrics?.pixelsPerTick || pianoRollZoom,
+    };
+    zoomIn();
+  }, [metrics, pianoRollZoom, zoomIn]);
+
+  const handleZoomOut = useCallback(() => {
+    const node = scrollRef.current;
+    zoomAnchorPendingRef.current = {
+      scrollLeft: node?.scrollLeft || 0,
+      pointerX: node ? node.clientWidth / 2 : 0,
+      oldPixelsPerTick: metrics?.pixelsPerTick || pianoRollZoom,
+    };
+    zoomOut();
+  }, [metrics, pianoRollZoom, zoomOut]);
+
+  const handleZoomToFit = useCallback(() => {
+    zoomToFit({ clientWidth: clientWidthForZoom() });
+  }, [zoomToFit, viewport.clientWidth]);
+
+  const handleZoomToSelection = useCallback(() => {
+    zoomToSelection({ clientWidth: clientWidthForZoom() });
+  }, [zoomToSelection, viewport.clientWidth]);
 
   const handleEditorShortcut = useCallback((event) => {
     const { command } = dispatchShortcutEvent(event, { allowTransport: true });
@@ -902,27 +1147,38 @@ const PianoRollEditor = () => {
         transposeSelection(-12);
         break;
       case SHORTCUT_COMMAND.TRANSPORT_TOGGLE:
-        if (playbackStatus === 'playing') {
-          setPlaybackStatus('paused');
-        } else if (playbackStatus === 'paused') {
-          setPlaybackStatus('playing');
-        } else {
-          setPlaybackStatus('playing');
-        }
+        togglePlaybackTransport();
         break;
       case SHORTCUT_COMMAND.ESCAPE:
         clearEditorSelection();
         setNoteBoxSelectRect(null);
         break;
+      case SHORTCUT_COMMAND.NAV_PREV_BAR:
+        gotoPrevBar();
+        break;
+      case SHORTCUT_COMMAND.NAV_NEXT_BAR:
+        gotoNextBar();
+        break;
+      case SHORTCUT_COMMAND.NAV_PREV_SECTION:
+        gotoPrevSection();
+        break;
+      case SHORTCUT_COMMAND.NAV_NEXT_SECTION:
+        gotoNextSection();
+        break;
       case SHORTCUT_COMMAND.ZOOM_IN:
-        handleZoomChange(Math.min(0.25, (pianoRollZoom || 0.05) * 1.25));
+        handleZoomIn();
         break;
       case SHORTCUT_COMMAND.ZOOM_OUT:
-        handleZoomChange(Math.max(0.01, (pianoRollZoom || 0.05) / 1.25));
+        handleZoomOut();
+        break;
+      case SHORTCUT_COMMAND.ZOOM_TO_FIT:
+        handleZoomToFit();
+        break;
+      case SHORTCUT_COMMAND.ZOOM_TO_SELECTION:
+        handleZoomToSelection();
         break;
       default:
-        // Navigation / zoom-fit commands are resolved for Task 7 handlers.
-        logger.debug('Shortcut deferred to later editor tasks', { command });
+        logger.debug('Unhandled editor shortcut', { command });
         break;
     }
   }, [
@@ -938,10 +1194,15 @@ const PianoRollEditor = () => {
     redoCompositionEdit,
     nudgeSelectionBySnap,
     transposeSelection,
-    playbackStatus,
-    setPlaybackStatus,
-    pianoRollZoom,
-    handleZoomChange,
+    togglePlaybackTransport,
+    gotoPrevBar,
+    gotoNextBar,
+    gotoPrevSection,
+    gotoNextSection,
+    handleZoomIn,
+    handleZoomOut,
+    handleZoomToFit,
+    handleZoomToSelection,
   ]);
 
   const handleKeyDown = (event) => {
@@ -984,6 +1245,13 @@ const PianoRollEditor = () => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - bounds.left;
     const y = event.clientY - bounds.top;
+
+    // Ctrl+click places the edit cursor without creating a note (Alt/Meta keep box-select).
+    if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+      event.preventDefault();
+      placeEditCursorAtClientX(event.clientX, event.currentTarget);
+      return;
+    }
 
     // Alt+drag or Meta+drag → note box select (Shift+drag remains AI bars).
     if (event.altKey || (event.metaKey && !event.shiftKey)) {
@@ -1369,6 +1637,70 @@ const PianoRollEditor = () => {
               ))}
             </Select>
           </ControlGroup>
+          <ControlGroup htmlFor="piano-roll-current-bar">
+            Bar
+            <NumberInput
+              id="piano-roll-current-bar"
+              data-testid="piano-roll-current-bar"
+              type="number"
+              min="1"
+              max={metrics.barCount || 1}
+              value={currentBar}
+              aria-label="Current edit-cursor bar"
+              onChange={(event) => {
+                const bar = Number(event.target.value);
+                if (Number.isInteger(bar)) {
+                  gotoBar(bar);
+                }
+              }}
+            />
+          </ControlGroup>
+          <Button
+            type="button"
+            data-testid="piano-roll-prev-bar"
+            onClick={() => gotoPrevBar()}
+            aria-label="Go to previous bar"
+          >
+            Prev bar
+          </Button>
+          <Button
+            type="button"
+            data-testid="piano-roll-next-bar"
+            onClick={() => gotoNextBar()}
+            aria-label="Go to next bar"
+          >
+            Next bar
+          </Button>
+          <ControlGroup htmlFor="piano-roll-section">
+            Section
+            <Select
+              id="piano-roll-section"
+              data-testid="piano-roll-section"
+              value={currentSectionKey}
+              aria-label="Go to section"
+              onChange={(event) => gotoSection(event.target.value)}
+            >
+              {navigationSections.map((section) => (
+                <option key={section.key} value={section.key}>{section.label}</option>
+              ))}
+            </Select>
+          </ControlGroup>
+          <Button
+            type="button"
+            data-testid="piano-roll-prev-section"
+            onClick={() => gotoPrevSection()}
+            aria-label="Go to previous section"
+          >
+            Prev section
+          </Button>
+          <Button
+            type="button"
+            data-testid="piano-roll-next-section"
+            onClick={() => gotoNextSection()}
+            aria-label="Go to next section"
+          >
+            Next section
+          </Button>
           <ControlGroup htmlFor="piano-roll-zoom">
             Zoom
             <Select
@@ -1383,6 +1715,39 @@ const PianoRollEditor = () => {
               <option value="0.18">Detail</option>
             </Select>
           </ControlGroup>
+          <Button
+            type="button"
+            data-testid="piano-roll-zoom-in"
+            onClick={handleZoomIn}
+            aria-label="Zoom in"
+          >
+            Zoom in
+          </Button>
+          <Button
+            type="button"
+            data-testid="piano-roll-zoom-out"
+            onClick={handleZoomOut}
+            aria-label="Zoom out"
+          >
+            Zoom out
+          </Button>
+          <Button
+            type="button"
+            data-testid="piano-roll-zoom-selection"
+            onClick={handleZoomToSelection}
+            disabled={!selectionStats.selectedCount}
+            aria-label="Zoom to selection"
+          >
+            Zoom selection
+          </Button>
+          <Button
+            type="button"
+            data-testid="piano-roll-zoom-fit"
+            onClick={handleZoomToFit}
+            aria-label="Zoom to fit composition"
+          >
+            Zoom fit
+          </Button>
           <Button type="button" data-testid="piano-roll-undo" onClick={() => undoCompositionEdit()} disabled={!compositionEditUndoStack.length} aria-label="Undo composition edit">
             Undo
           </Button>
@@ -1486,8 +1851,21 @@ const PianoRollEditor = () => {
       </Status>
       <Status>
         Scroll horizontally for longer pieces. Drag notes to move/transpose, use the right handle to resize,
-        click empty space to create, Shift+drag for AI bars, Alt+drag (or Meta+drag) for note box select.
+        click empty space to create, click the bar ruler or Ctrl+click to place the edit cursor,
+        Shift+drag for AI bars, Alt+drag (or Meta+drag) for note box select, Ctrl/Cmd+wheel to zoom.
         Viewport ~{viewport.clientWidth}px wide · showing {visibleNotes.length}/{allNoteGeoms.length} notes.
+        Edit cursor: tick {editCursorTick} (bar {currentBar}).
+        {' '}
+        <label>
+          <input
+            type="checkbox"
+            data-testid="playback-auto-follow"
+            checked={Boolean(playbackAutoFollow)}
+            onChange={(event) => setPlaybackAutoFollow(event.target.checked)}
+          />
+          {' '}
+          Auto-follow playback
+        </label>
         {selectionRect ? ` AI selection: bars ${selectionRect.startBar}-${selectionRect.endBar}.` : ''}
         {motifOverlays.usageRect
           ? ` Motif usage: bars ${motifOverlays.usageRect.startBar}-${motifOverlays.usageRect.endBar}.`
@@ -1526,6 +1904,15 @@ const PianoRollEditor = () => {
             onPointerDown={handleGridPointerDown}
             aria-label="Piano roll timeline grid"
           >
+            <TimelineRuler
+              data-testid="piano-roll-timeline-ruler"
+              aria-label="Timeline ruler — click to place edit cursor"
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                placeEditCursorAtClientX(event.clientX, event.currentTarget.parentElement);
+              }}
+            />
             {barLabels.map((label) => (
               <BarLabel key={label.bar} $left={label.left}>
                 Bar {label.bar}
@@ -1565,6 +1952,7 @@ const PianoRollEditor = () => {
               }
               dragPreview={dragPreview}
               noteBoxSelectRect={noteBoxSelectRect}
+              editCursorTick={editCursorTick}
             />
           </GridCanvas>
         </ScrollArea>

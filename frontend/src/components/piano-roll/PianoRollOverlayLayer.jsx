@@ -18,6 +18,31 @@ const PlaybackCursor = styled.div`
   z-index: 5;
 `;
 
+const EditCursor = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: ${(props) => props.$left}px;
+  width: 2px;
+  background: #0ea5e9;
+  box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.35);
+  pointer-events: none;
+  z-index: 4;
+`;
+
+const LoopOverlay = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: ${(props) => props.$left}px;
+  width: ${(props) => props.$width}px;
+  background: rgba(16, 185, 129, 0.1);
+  border-left: 2px solid rgba(5, 150, 105, 0.75);
+  border-right: 2px solid rgba(5, 150, 105, 0.75);
+  pointer-events: none;
+  z-index: 2;
+`;
+
 const SelectionOverlay = styled.div`
   position: absolute;
   top: 0;
@@ -74,7 +99,7 @@ const NoteBoxSelectOverlay = styled.div`
 `;
 
 /**
- * Transient overlays: AI/motif selection, note box-select marquee, playback cursor, drag ghost.
+ * Transient overlays: AI/motif selection, note box-select marquee, edit/playback cursors, drag ghost.
  * Subscribes to playbackSeconds so the note layer stays stable.
  *
  * Gesture scheme (documented for Task 5):
@@ -90,9 +115,11 @@ function PianoRollOverlayLayer({
   showMotifDestination,
   dragPreview,
   noteBoxSelectRect = null,
+  editCursorTick = null,
 }) {
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
   const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
+  const playbackLoop = useMusicStore((state) => state.playbackLoop);
   const lastCursorLogRef = useRef(0);
 
   const cursorTick = useMemo(() => {
@@ -107,6 +134,29 @@ function PianoRollOverlayLayer({
     });
     return position.tick;
   }, [composition, playbackStatus, playbackSeconds]);
+
+  const loopRect = useMemo(() => {
+    if (!playbackLoop?.enabled || !Number.isFinite(pixelsPerTick) || pixelsPerTick <= 0) {
+      return null;
+    }
+    const start = Number(playbackLoop.startTick);
+    const end = Number(playbackLoop.endTick);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      return null;
+    }
+    return {
+      left: Math.max(0, start) * pixelsPerTick,
+      width: Math.max(1, (end - start) * pixelsPerTick),
+    };
+  }, [playbackLoop, pixelsPerTick]);
+
+  const editCursorLeft = useMemo(() => {
+    const tick = Number(editCursorTick);
+    if (!Number.isFinite(tick) || !Number.isFinite(pixelsPerTick) || pixelsPerTick <= 0) {
+      return null;
+    }
+    return Math.max(0, tick) * pixelsPerTick;
+  }, [editCursorTick, pixelsPerTick]);
 
   useEffect(() => {
     if (cursorTick === null || !Number.isFinite(pixelsPerTick)) {
@@ -134,6 +184,13 @@ function PianoRollOverlayLayer({
 
   return (
     <div data-testid="piano-roll-overlay-layer" aria-hidden="true">
+      {loopRect && (
+        <LoopOverlay
+          data-testid="piano-roll-loop-overlay"
+          $left={loopRect.left}
+          $width={loopRect.width}
+        />
+      )}
       {selectionRect && (
         <SelectionOverlay
           data-testid="piano-roll-ai-selection-overlay"
@@ -172,6 +229,12 @@ function PianoRollOverlayLayer({
           $top={noteBoxSelectRect.top}
           $width={noteBoxSelectRect.width}
           $height={noteBoxSelectRect.height}
+        />
+      )}
+      {editCursorLeft != null && (
+        <EditCursor
+          data-testid="piano-roll-edit-cursor"
+          $left={editCursorLeft}
         />
       )}
       {cursorTick !== null && (

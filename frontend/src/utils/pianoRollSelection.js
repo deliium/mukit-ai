@@ -19,6 +19,10 @@ export function normalizeBarRange(startBar, endBar, barCount) {
     return { startBar: null, endBar: null, warning: 'bar_count must be a positive integer' };
   }
 
+  if (startBar == null || endBar == null) {
+    return { startBar: null, endBar: null, warning: 'start_bar and end_bar are required' };
+  }
+
   let start = Number(startBar);
   let end = Number(endBar);
   if (!Number.isFinite(start) || !Number.isFinite(end)) {

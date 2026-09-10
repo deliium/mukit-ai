@@ -75,6 +75,7 @@ function resetStore(composition = structuredClone(BASE)) {
     compositionEditUndoStack: [],
     compositionEditRedoStack: [],
     editCursorTick: 0,
+    viewportScrollRequest: null,
     aiEditStartBar: null,
     aiEditEndBar: null,
     aiEditTrackMode: 'current',
@@ -88,6 +89,9 @@ function resetStore(composition = structuredClone(BASE)) {
     playbackStatus: 'idle',
     playbackSeconds: 0,
     playbackBar: 1,
+    playbackLoop: null,
+    playbackAutoFollow: false,
+    playbackTransportIntent: null,
     uiError: '',
     warnings: [],
   });
@@ -882,3 +886,226 @@ test('articulation selection reports skipped tie-incompatible notes without part
   assert.deepEqual(events.find((event) => event.id === 't2').articulations, []);
   assert.equal(useMusicStore.getState().editorCommandFeedback?.skippedCount, 1);
 });
+
+test('setEditCursorTick clamps without creating history', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  const undoBefore = useMusicStore.getState().compositionEditUndoStack.length;
+  assert.equal(store.setEditCursorTick(960), 960);
+  assert.equal(useMusicStore.getState().editCursorTick, 960);
+  assert.equal(store.setEditCursorTick(999999), BASE.duration_ticks);
+  assert.equal(useMusicStore.getState().editCursorTick, BASE.duration_ticks);
+  assert.equal(store.setEditCursorTick(-20), 0);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, undoBefore);
+});
+
+test('bar and section navigation updates cursor and viewport request', () => {
+  resetStore();
+  const multi = structuredClone(BASE);
+  multi.bar_count = 8;
+  multi.duration_ticks = 8 * 1920;
+  multi.sections = [
+    {
+      id: 'intro',
+      type: 'intro',
+      start_bar: 1,
+      bar_count: 2,
+      start_tick: 0,
+      duration_ticks: 3840,
+    },
+    {
+      id: 'verse',
+      type: 'verse',
+      start_bar: 3,
+      bar_count: 6,
+      start_tick: 3840,
+      duration_ticks: 6 * 1920,
+    },
+  ];
+  multi.harmony = [{ bar: 1, chord: 'C' }];
+  useMusicStore.setState({
+    editedMusicJson: multi,
+    generatedMusicJson: multi,
+    editCursorTick: 0,
+  });
+
+  const store = useMusicStore.getState();
+  assert.equal(store.gotoNextBar(), 1920);
+  assert.equal(useMusicStore.getState().editCursorTick, 1920);
+  assert.ok(useMusicStore.getState().viewportScrollRequest?.id >= 1);
+  assert.equal(useMusicStore.getState().viewportScrollRequest.centerTick, 1920);
+
+  assert.equal(store.gotoBar(3), 3840);
+  assert.equal(store.gotoPrevBar(), 1920);
+
+  assert.equal(store.gotoSection('id:verse'), 3840);
+  assert.equal(store.gotoNextSection(), 3840);
+  assert.equal(store.gotoPrevSection(), 0);
+  assert.equal(store.gotoSection('missing'), null);
+});
+
+test('variable-meter bar navigation uses compiled starts', () => {
+  resetStore();
+  const variable = structuredClone(BASE);
+  variable.bar_count = 4;
+  variable.duration_ticks = 6720;
+  variable.time_signature_changes = [{ tick: 3840, time_signature: '3/4' }];
+  variable.sections = [{
+    type: 'intro',
+    start_bar: 1,
+    bar_count: 4,
+    start_tick: 0,
+    duration_ticks: 6720,
+  }];
+  variable.harmony = [{ bar: 1, chord: 'C' }];
+  useMusicStore.setState({
+    editedMusicJson: variable,
+    generatedMusicJson: variable,
+    editCursorTick: 0,
+  });
+  const store = useMusicStore.getState();
+  assert.equal(store.gotoBar(3), 3840);
+  assert.equal(store.gotoNextBar(), 5280);
+  assert.equal(store.gotoPrevBar(), 3840);
+});
+
+test('zoom fit and selection update zoom plus viewport request', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  store.setEditorSelection({
+    refs: [{ trackId: 'melody-1', eventId: 'n1' }],
+    primary: { trackId: 'melody-1', eventId: 'n1' },
+  });
+
+  const fitZoom = store.zoomToFit({ clientWidth: 400 });
+  assert.ok(fitZoom >= 0.01 && fitZoom <= 0.25);
+  assert.equal(useMusicStore.getState().pianoRollZoom, fitZoom);
+  assert.equal(useMusicStore.getState().viewportScrollRequest.reason, 'zoomToFit');
+
+  const selection = store.zoomToSelection({ clientWidth: 300 });
+  assert.ok(selection);
+  assert.equal(useMusicStore.getState().viewportScrollRequest.reason, 'zoomToSelection');
+  assert.ok(useMusicStore.getState().pianoRollZoom >= 0.01);
+
+  const beforeIn = useMusicStore.getState().pianoRollZoom;
+  store.zoomIn();
+  assert.ok(useMusicStore.getState().pianoRollZoom >= beforeIn);
+  store.zoomOut();
+});
+
+test('composition replacement clears viewport request and resets cursor', () => {
+  resetStore();
+  useMusicStore.setState({
+    editCursorTick: 1200,
+    viewportScrollRequest: { id: 9, scrollLeft: 40, centerTick: 1200, reason: 'gotoBar' },
+  });
+  useMusicStore.getState().completeGeneration({
+    music: structuredClone(BASE),
+    musicxml: '<score/>',
+    warnings: [],
+  });
+  const after = useMusicStore.getState();
+  assert.equal(after.editCursorTick, 0);
+  assert.equal(after.viewportScrollRequest, null);
+
+  useMusicStore.setState({
+    editCursorTick: 800,
+    viewportScrollRequest: { id: 10, scrollLeft: 10, centerTick: 800, reason: 'gotoBar' },
+  });
+  assert.equal(useMusicStore.getState().completeImport({
+    composition: structuredClone(BASE),
+    musicxml: '',
+  }), true);
+  const afterImport = useMusicStore.getState();
+  assert.equal(afterImport.editCursorTick, 0);
+  assert.equal(afterImport.viewportScrollRequest, null);
+});
+
+test('playFromCursor and loop selection transport actions', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  store.setEditCursorTick(960);
+  const intent = store.playFromCursor();
+  assert.equal(intent.type, 'play');
+  assert.equal(intent.startTick, 960);
+  assert.equal(useMusicStore.getState().playbackTransportIntent.startTick, 960);
+
+  store.setEditorSelection({
+    refs: [
+      { trackId: 'melody-1', eventId: 'n1' },
+      { trackId: 'melody-1', eventId: 'n2' },
+    ],
+  });
+  const loop = store.setLoopFromSelection();
+  assert.ok(loop);
+  assert.equal(loop.startTick, 0);
+  assert.equal(loop.endTick, 480);
+  assert.equal(loop.enabled, true);
+
+  store.setPlaybackLoopEnabled(false);
+  assert.equal(useMusicStore.getState().playbackLoop.enabled, false);
+  store.setPlaybackLoopEnabled(true);
+  assert.equal(useMusicStore.getState().playbackLoop.enabled, true);
+
+  store.clearEditorSelection();
+  store.setAiEditSelection({ startBar: 2, endBar: 2 });
+  const barLoop = store.setLoopFromSelection();
+  assert.ok(barLoop);
+  assert.equal(barLoop.startTick, 1920);
+  assert.equal(barLoop.endTick, 3840);
+
+  store.clearPlaybackLoop();
+  assert.equal(useMusicStore.getState().playbackLoop, null);
+  store.clearAiEditSelection();
+  store.clearEditorSelection();
+  assert.equal(store.setLoopFromSelection(), null);
+
+  useMusicStore.setState({ playbackStatus: 'playing' });
+  const pauseIntent = store.togglePlaybackTransport();
+  assert.equal(pauseIntent.type, 'pause');
+  useMusicStore.setState({ playbackStatus: 'paused' });
+  assert.equal(store.togglePlaybackTransport().type, 'resume');
+  useMusicStore.setState({ playbackStatus: 'idle' });
+  assert.equal(store.togglePlaybackTransport().type, 'play');
+  assert.equal(store.togglePlaybackTransport().startTick, null);
+});
+
+test('composition edits clamp or clear stale playback loops', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  store.setPlaybackLoop({ startTick: 0, endTick: 3000, enabled: true });
+  assert.equal(useMusicStore.getState().playbackLoop.endTick, 3000);
+
+  // Direct reconcile path used by transactions/replacements.
+  const clamped = store.setPlaybackLoop(
+    reconcileViaStore(store, { startTick: 0, endTick: 3000, enabled: true }, 1920),
+  );
+  assert.ok(clamped);
+  assert.equal(clamped.endTick, 1920);
+
+  assert.equal(
+    store.setPlaybackLoop(
+      reconcileViaStore(store, { startTick: 1800, endTick: 1900, enabled: true }, 1000),
+    ),
+    null,
+  );
+  assert.equal(useMusicStore.getState().playbackLoop, null);
+
+  store.setPlaybackLoop({ startTick: 0, endTick: 480, enabled: true });
+  store.completeGeneration({
+    music: structuredClone(BASE),
+    musicxml: '<score/>',
+    warnings: [],
+  });
+  assert.equal(useMusicStore.getState().playbackLoop, null);
+});
+
+function reconcileViaStore(store, loop, durationTicks) {
+  // Force clamp against a synthetic duration without needing a full valid rewrite.
+  const composition = {
+    ...useMusicStore.getState().editedMusicJson,
+    duration_ticks: durationTicks,
+  };
+  useMusicStore.setState({ editedMusicJson: composition });
+  return store.setPlaybackLoop(loop);
+}

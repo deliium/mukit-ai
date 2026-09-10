@@ -11,9 +11,12 @@ import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonVal
 import { audibleRevisionKey } from '../utils/compositionCanonical.js';
 import { findDevelopmentCandidateById } from '../utils/compositionCandidates.js';
 import { findArrangementCandidateById } from '../utils/compositionArrangementCandidates.js';
-import { secondsToPlaybackPosition } from '../utils/playbackPosition.js';
+import { secondsToPlaybackPosition, ticksToPlaybackSeconds } from '../utils/playbackPosition.js';
 import { createPlaybackEngine } from '../utils/tonePlaybackEngine.js';
+import { createAppLogger } from '../utils/appLogger.js';
 import TrackPlaybackControls from './TrackPlaybackControls.jsx';
+
+const logger = createAppLogger('PlaybackControls');
 
 const Controls = styled.div`
   display: flex;
@@ -71,10 +74,17 @@ const PlaybackControls = () => {
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
   const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
   const playbackBar = useMusicStore((state) => state.playbackBar);
+  const playbackLoop = useMusicStore((state) => state.playbackLoop);
+  const playbackTransportIntent = useMusicStore((state) => state.playbackTransportIntent);
+  const editCursorTick = useMusicStore((state) => state.editCursorTick);
   const trackControls = useMusicStore((state) => state.trackControls);
   const setPlaybackStatus = useMusicStore((state) => state.setPlaybackStatus);
   const setPlaybackPosition = useMusicStore((state) => state.setPlaybackPosition);
   const setUiError = useMusicStore((state) => state.setUiError);
+  const playFromCursor = useMusicStore((state) => state.playFromCursor);
+  const setLoopFromSelection = useMusicStore((state) => state.setLoopFromSelection);
+  const clearPlaybackLoop = useMusicStore((state) => state.clearPlaybackLoop);
+  const setPlaybackLoopEnabled = useMusicStore((state) => state.setPlaybackLoopEnabled);
   const toggleTrackMute = useMusicStore((state) => state.toggleTrackMute);
   const toggleTrackSolo = useMusicStore((state) => state.toggleTrackSolo);
   const setTrackVolume = useMusicStore((state) => state.setTrackVolume);
@@ -131,6 +141,9 @@ const PlaybackControls = () => {
   const legacySynthRef = useRef(null);
   const scheduledRevisionRef = useRef('');
   const positionTimerRef = useRef(null);
+  const lastTransportSeqRef = useRef(0);
+  const playbackStatusRef = useRef(playbackStatus);
+  playbackStatusRef.current = playbackStatus;
 
   useEffect(() => {
     if (!playbackComposition) {
@@ -151,7 +164,7 @@ const PlaybackControls = () => {
 
   useEffect(() => {
     if (!engineRef.current) {
-      engineRef.current = createPlaybackEngine({ Tone, logger: console });
+      engineRef.current = createPlaybackEngine({ Tone, logger });
     }
     return () => {
       clearPositionTimer(positionTimerRef);
@@ -173,7 +186,7 @@ const PlaybackControls = () => {
       return undefined;
     }
     if (playbackStatus === 'playing' || playbackStatus === 'paused' || playbackStatus === 'loading') {
-      console.info('[PlaybackControls] Active playback stopped because playback source changed', {
+      logger.info('Active playback stopped because playback source changed', {
         previousRevision: scheduledRevisionRef.current.slice(0, 48),
         currentRevision: String(playbackRevision).slice(0, 48),
         developmentAudition: developmentAuditionActive,
@@ -205,21 +218,33 @@ const PlaybackControls = () => {
     if (playbackStatus !== 'playing' && playbackStatus !== 'paused') {
       return undefined;
     }
-    console.debug('[PlaybackControls] Applying live track control overrides');
+    logger.debug('Applying live track control overrides');
     engineRef.current.applyTrackOverrides(activeTrackControls);
     return undefined;
   }, [activeTrackControls, playbackComposition, playbackStatus]);
 
-  const handlePlay = async () => {
+  // Sync loop enable/bounds into the running engine without restarting transport.
+  useEffect(() => {
+    if (!engineRef.current || !isCanonicalComposition(playbackComposition)) {
+      return undefined;
+    }
+    if (playbackStatus !== 'playing' && playbackStatus !== 'paused') {
+      return undefined;
+    }
+    engineRef.current.setLoop(playbackLoop);
+    return undefined;
+  }, [playbackLoop, playbackComposition, playbackStatus]);
+
+  const handlePlay = async ({ startTick = null } = {}) => {
     if (!playbackComposition) {
       setUiError('Generate or edit music JSON before playback.');
-      console.warn('[PlaybackControls] Play ignored; no composition loaded');
+      logger.warn('Play ignored; no composition loaded');
       return;
     }
 
     const validation = validateMusicJson(playbackComposition);
     if (!validation.valid && isCanonicalComposition(playbackComposition)) {
-      console.warn('[PlaybackControls] Rejected unsupported/invalid canonical playback JSON', {
+      logger.warn('Rejected unsupported/invalid canonical playback JSON', {
         message: validation.message,
       });
       setUiError(validation.message || 'Canonical composition JSON is invalid for playback.');
@@ -229,8 +254,10 @@ const PlaybackControls = () => {
 
     try {
       setPlaybackStatus('loading');
-      console.info('[PlaybackControls] User play action', {
+      logger.info('User play action', {
         path: isCanonicalComposition(playbackComposition) ? 'canonical' : 'legacy',
+        startTick: startTick == null ? null : Number(startTick),
+        loopEnabled: Boolean(playbackLoop?.enabled),
       });
       await Tone.start();
 
@@ -254,6 +281,8 @@ const PlaybackControls = () => {
           setPlaybackStatus,
           setPlaybackPosition,
           setUiError,
+          startTick,
+          loop: playbackLoop,
         });
         return;
       }
@@ -266,20 +295,23 @@ const PlaybackControls = () => {
         setPlaybackStatus,
         setPlaybackPosition,
         setUiError,
+        startTick,
       });
     } catch (error) {
-      console.error('[PlaybackControls] Audio initialization/playback failed', { message: error.message });
+      logger.error('Audio initialization/playback failed', { message: error.message });
       setUiError('Playback failed. Check browser audio permissions and generated JSON.');
       setPlaybackStatus('error');
     }
   };
 
   const handlePause = () => {
-    if (playbackStatus !== 'playing') {
-      console.warn('[PlaybackControls] Pause ignored because playback is not active', { playbackStatus });
+    if (playbackStatusRef.current !== 'playing') {
+      logger.warn('Pause ignored because playback is not active', {
+        playbackStatus: playbackStatusRef.current,
+      });
       return;
     }
-    console.info('[PlaybackControls] User pause action');
+    logger.info('User pause action');
     if (isCanonicalComposition(playbackComposition) && engineRef.current) {
       engineRef.current.pause();
     } else {
@@ -290,11 +322,13 @@ const PlaybackControls = () => {
   };
 
   const handleResume = async () => {
-    if (playbackStatus !== 'paused') {
-      console.warn('[PlaybackControls] Resume ignored because playback is not paused', { playbackStatus });
+    if (playbackStatusRef.current !== 'paused') {
+      logger.warn('Resume ignored because playback is not paused', {
+        playbackStatus: playbackStatusRef.current,
+      });
       return;
     }
-    console.info('[PlaybackControls] User resume action');
+    logger.info('User resume action');
     await Tone.start();
     if (isCanonicalComposition(playbackComposition) && engineRef.current) {
       engineRef.current.resume();
@@ -312,7 +346,7 @@ const PlaybackControls = () => {
   };
 
   const handleStop = () => {
-    console.info('[PlaybackControls] User stop action');
+    logger.info('User stop action');
     stopEverything({
       engineRef,
       legacySynthRef,
@@ -324,7 +358,7 @@ const PlaybackControls = () => {
   };
 
   const handleSeekToStart = () => {
-    console.info('[PlaybackControls] User seek-to-start action');
+    logger.info('User seek-to-start action');
     if (isCanonicalComposition(playbackComposition) && engineRef.current) {
       engineRef.current.seek(0);
     } else {
@@ -333,20 +367,69 @@ const PlaybackControls = () => {
     setPlaybackPosition({ seconds: 0, bar: 1 });
   };
 
+  // Consume store transport intents (Space, Play From Cursor, etc.).
+  useEffect(() => {
+    if (!playbackTransportIntent || !playbackTransportIntent.seq) {
+      return undefined;
+    }
+    if (playbackTransportIntent.seq === lastTransportSeqRef.current) {
+      return undefined;
+    }
+    lastTransportSeqRef.current = playbackTransportIntent.seq;
+    const { type, startTick } = playbackTransportIntent;
+    logger.debug('Consuming transport intent', {
+      type,
+      startTick: startTick ?? null,
+      seq: playbackTransportIntent.seq,
+    });
+
+    if (type === 'pause') {
+      handlePause();
+      return undefined;
+    }
+    if (type === 'resume') {
+      void handleResume();
+      return undefined;
+    }
+    if (type === 'stop') {
+      handleStop();
+      return undefined;
+    }
+    if (type === 'toggle') {
+      const status = playbackStatusRef.current;
+      if (status === 'playing') {
+        handlePause();
+      } else if (status === 'paused') {
+        void handleResume();
+      } else {
+        void handlePlay({ startTick: null });
+      }
+      return undefined;
+    }
+    // type === 'play' (ordinary or from cursor)
+    void handlePlay({ startTick });
+    return undefined;
+    // Intentional: only re-run when a new intent arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playbackTransportIntent]);
+
   const canonical = isCanonicalComposition(playbackComposition);
   const tracks = canonical && Array.isArray(playbackComposition?.tracks) ? playbackComposition.tracks : [];
+  const loopLabel = playbackLoop
+    ? `loop ${playbackLoop.startTick}–${playbackLoop.endTick}${playbackLoop.enabled ? '' : ' (off)'}`
+    : 'loop off';
 
   return (
     <div>
       <h4>Playback</h4>
       <Controls>
         {playbackStatus === 'paused' ? (
-          <Button type="button" onClick={handleResume}>Resume</Button>
+          <Button type="button" onClick={handleResume} data-testid="playback-resume">Resume</Button>
         ) : (
           <Button
             type="button"
             data-testid="playback-play"
-            onClick={handlePlay}
+            onClick={() => handlePlay({ startTick: null })}
             disabled={!playbackComposition || playbackStatus === 'loading'}
           >
             {playbackStatus === 'loading' ? 'Preparing Audio...' : 'Play'}
@@ -355,8 +438,18 @@ const PlaybackControls = () => {
         <Button
           type="button"
           $variant="secondary"
+          data-testid="playback-from-cursor"
+          onClick={() => playFromCursor()}
+          disabled={!playbackComposition || playbackStatus === 'loading'}
+        >
+          Play From Cursor
+        </Button>
+        <Button
+          type="button"
+          $variant="secondary"
           onClick={handlePause}
           disabled={playbackStatus !== 'playing'}
+          data-testid="playback-pause"
         >
           Pause
         </Button>
@@ -365,6 +458,7 @@ const PlaybackControls = () => {
           $variant="stop"
           onClick={handleStop}
           disabled={playbackStatus !== 'playing' && playbackStatus !== 'paused' && playbackStatus !== 'loading'}
+          data-testid="playback-stop"
         >
           Stop
         </Button>
@@ -373,8 +467,36 @@ const PlaybackControls = () => {
           $variant="secondary"
           onClick={handleSeekToStart}
           disabled={!playbackComposition}
+          data-testid="playback-seek-start"
         >
           Seek Start
+        </Button>
+        <Button
+          type="button"
+          $variant="secondary"
+          data-testid="playback-set-loop"
+          onClick={() => setLoopFromSelection()}
+          disabled={!playbackComposition}
+        >
+          Set Loop Selection
+        </Button>
+        <Button
+          type="button"
+          $variant="secondary"
+          data-testid="playback-toggle-loop"
+          onClick={() => setPlaybackLoopEnabled(!playbackLoop?.enabled)}
+          disabled={!playbackLoop}
+        >
+          {playbackLoop?.enabled ? 'Disable Loop' : 'Enable Loop'}
+        </Button>
+        <Button
+          type="button"
+          $variant="secondary"
+          data-testid="playback-clear-loop"
+          onClick={() => clearPlaybackLoop()}
+          disabled={!playbackLoop}
+        >
+          Clear Loop
         </Button>
       </Controls>
       <StatusRow data-testid="playback-status">
@@ -385,6 +507,10 @@ const PlaybackControls = () => {
           : developmentAuditionActive
             ? ' · auditioning candidate'
             : ''}
+        {' · '}
+        <span data-testid="playback-loop-status">{loopLabel}</span>
+        {' · '}
+        cursor tick {editCursorTick}
       </StatusRow>
       {canonical ? (
         <TrackPlaybackControls
@@ -396,7 +522,7 @@ const PlaybackControls = () => {
             ? 'Candidate mixer (ephemeral; does not change source track controls)'
             : 'Tracks / mixer (canonical composition.v2; mute/solo are UI-only)'}
           onMuteToggle={(trackId) => {
-            console.info('[PlaybackControls] User mute toggle', {
+            logger.info('User mute toggle', {
               trackId,
               arrangementAudition: arrangementCandidateAudition,
             });
@@ -407,7 +533,7 @@ const PlaybackControls = () => {
             toggleTrackMute(trackId);
           }}
           onSoloToggle={(trackId) => {
-            console.info('[PlaybackControls] User solo toggle', {
+            logger.info('User solo toggle', {
               trackId,
               arrangementAudition: arrangementCandidateAudition,
             });
@@ -418,7 +544,7 @@ const PlaybackControls = () => {
             toggleTrackSolo(trackId);
           }}
           onVolumeChange={(trackId, volumeMidi) => {
-            console.info('[PlaybackControls] User volume change', {
+            logger.info('User volume change', {
               trackId,
               volumeMidi,
               arrangementAudition: arrangementCandidateAudition,
@@ -447,13 +573,19 @@ async function startCanonicalPlayback({
   setPlaybackStatus,
   setPlaybackPosition,
   setUiError,
+  startTick = null,
+  loop = null,
 }) {
-  console.info('[PlaybackControls] Using canonical composition playback path');
+  logger.info('Using canonical composition playback path', {
+    startTick: startTick == null ? null : Number(startTick),
+    loopEnabled: Boolean(loop?.enabled),
+    revisionPrefix: audibleRevisionKey(playbackComposition).slice(0, 48),
+  });
   const schedule = compilePlaybackSchedule(playbackComposition);
-  console.debug('[PlaybackControls] Canonical schedule summary', schedule?.summary ?? {});
+  logger.debug('Canonical schedule summary', schedule?.summary ?? {});
 
   if (!schedule?.logicalNotes?.length) {
-    console.warn('[PlaybackControls] Canonical composition has no playable track events');
+    logger.warn('Canonical composition has no playable track events');
     setUiError('No playable note events found in the current composition.');
     setPlaybackStatus('error');
     return;
@@ -463,8 +595,11 @@ async function startCanonicalPlayback({
   engineRef.current.prepare({
     tracks: playbackComposition.tracks,
     schedule,
+    composition: playbackComposition,
     tempo: playbackComposition.tempo,
     trackOverrides: trackControls,
+    startTick: startTick == null ? null : Number(startTick),
+    loop,
     onComplete: () => {
       stopEverything({
         engineRef,
@@ -498,24 +633,33 @@ async function startLegacyPlayback({
   setPlaybackStatus,
   setPlaybackPosition,
   setUiError,
+  startTick = null,
 }) {
-  console.info('[PlaybackControls] Using legacy playback path');
+  logger.info('Using legacy playback path');
   const synth = new Tone.PolySynth(Tone.Synth).toDestination();
   legacySynthRef.current = synth;
   Tone.Transport.bpm.value = playbackComposition.tempo || 100;
   Tone.Transport.cancel();
-  Tone.Transport.position = 0;
+
+  const startSeconds = startTick == null
+    ? 0
+    : ticksToPlaybackSeconds(startTick, {
+      tempo: playbackComposition.tempo,
+      ticksPerQuarter: playbackComposition.ticks_per_quarter || 480,
+    });
+  Tone.Transport.position = startSeconds;
 
   const events = buildLegacyPlaybackEvents(playbackComposition, {
     frequencyToNote: (midi, unit) => Tone.Frequency(midi, unit).toNote(),
   });
-  console.debug('[PlaybackControls] Legacy schedule summary', {
+  logger.debug('Legacy schedule summary', {
     eventCount: events.length,
     tempo: playbackComposition.tempo,
+    startSeconds,
   });
 
   if (!events.length) {
-    console.warn('[PlaybackControls] Rejected harmony-only or unsupported legacy playback JSON');
+    logger.warn('Rejected harmony-only or unsupported legacy playback JSON');
     setUiError('No playable note events found in the current JSON.');
     setPlaybackStatus('error');
     disposeLegacySynth(legacySynthRef);
@@ -523,6 +667,9 @@ async function startLegacyPlayback({
   }
 
   events.forEach((event) => {
+    if (event.position < startSeconds) {
+      return;
+    }
     Tone.Transport.schedule((time) => {
       synth.triggerAttackRelease(event.notes, event.duration, time, event.velocity);
     }, event.position);
@@ -576,7 +723,7 @@ function stopEverything({
   if (!preserveStatus) {
     setPlaybackStatus('idle');
   }
-  console.debug('[PlaybackControls] Transport stopped', { transportState: Tone.Transport.state });
+  logger.debug('Transport stopped', { transportState: Tone.Transport.state });
 }
 
 function disposeLegacySynth(legacySynthRef) {
@@ -584,7 +731,7 @@ function disposeLegacySynth(legacySynthRef) {
     try {
       legacySynthRef.current.dispose();
     } catch (error) {
-      console.error('[PlaybackControls] Legacy synth dispose failed', { message: error.message });
+      logger.error('Legacy synth dispose failed', { message: error.message });
     }
     legacySynthRef.current = null;
   }
@@ -620,7 +767,7 @@ function startPositionTimer({
     const wholeSecond = Math.floor(position.seconds);
     if (wholeSecond !== lastLoggedSecond) {
       lastLoggedSecond = wholeSecond;
-      console.debug('[PlaybackControls] Playback position update', {
+      logger.debug('Playback position update', {
         seconds: Number(position.seconds.toFixed(3)),
         bar: position.bar,
       });

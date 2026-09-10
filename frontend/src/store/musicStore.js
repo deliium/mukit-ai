@@ -51,6 +51,7 @@ import {
   reconcileSelection,
   resolveNoteRefs,
   selectionSummary,
+  selectionTickRange,
   toIdSet,
   uniqueNoteRefs,
   visibleTracks,
@@ -117,6 +118,11 @@ import {
 } from '../utils/musicJsonValidation.js';
 import { compositionRevisionKey, notationRevisionKey } from '../utils/playbackPosition.js';
 import {
+  deriveLoopRangeFromSelection,
+  normalizePlaybackLoop,
+  reconcilePlaybackLoop,
+} from '../utils/playbackLoop.js';
+import {
   MAX_UNDO_HISTORY,
   SNAP_VALUES,
   applyTieChain as applyTrackTieChain,
@@ -135,8 +141,26 @@ import {
 import {
   defaultTargetTrackIds,
   normalizeBarRange,
+  selectedTickBoundaries,
 } from '../utils/pianoRollSelection.js';
 import { barStartTick, compileTimeline } from '../utils/compositionTimeline.js';
+import {
+  DEFAULT_NAV_MAX_ZOOM,
+  DEFAULT_NAV_MIN_ZOOM,
+  barToStartTick,
+  clampEditCursorTick,
+  fitCompositionZoom,
+  gotoNextBar as nextBarTick,
+  gotoNextSection as nextSectionTick,
+  gotoPrevBar as prevBarTick,
+  gotoPrevSection as prevSectionTick,
+  gotoSection as sectionStartTick,
+  listSectionsForNavigation,
+  scrollLeftForCenterTick,
+  selectionZoomWindow,
+  stepZoom,
+  tickToBar,
+} from '../utils/editorNavigation.js';
 import { projectPersistRevisionKey } from '../utils/projectPersistRevision.js';
 
 export const AUTOSAVE_DEBOUNCE_MS = 900;
@@ -219,6 +243,12 @@ export const ARRANGEMENT_AUDITION_CANDIDATE = 'candidate';
 
 const logger = createAppLogger('musicStore');
 const arrangementLogger = createAppLogger('musicStore.arrangement');
+
+let playbackTransportSeq = 0;
+function nextPlaybackTransportSeq() {
+  playbackTransportSeq += 1;
+  return playbackTransportSeq;
+}
 
 const initialDevelopmentControlsState = {
   developmentOperation: DEFAULT_DEVELOPMENT_OPERATION,
@@ -318,8 +348,31 @@ const initialPrompt = {
 };
 
 const DEFAULT_PIANO_ROLL_ZOOM = 0.05;
-const MIN_PIANO_ROLL_ZOOM = 0.01;
-const MAX_PIANO_ROLL_ZOOM = 0.25;
+const MIN_PIANO_ROLL_ZOOM = DEFAULT_NAV_MIN_ZOOM;
+const MAX_PIANO_ROLL_ZOOM = DEFAULT_NAV_MAX_ZOOM;
+const NAV_LOG_DEBOUNCE_MS = 200;
+let navLogTimer = null;
+let viewportScrollRequestSeq = 0;
+
+function logNavigationDebounced(payload) {
+  if (navLogTimer) {
+    clearTimeout(navLogTimer);
+  }
+  navLogTimer = setTimeout(() => {
+    navLogTimer = null;
+    logger.debug('Editor navigation', payload);
+  }, NAV_LOG_DEBOUNCE_MS);
+}
+
+function buildViewportScrollRequest({ scrollLeft = null, centerTick = null, reason = 'navigate' } = {}) {
+  viewportScrollRequestSeq += 1;
+  return {
+    id: viewportScrollRequestSeq,
+    scrollLeft: scrollLeft == null || !Number.isFinite(Number(scrollLeft)) ? null : Number(scrollLeft),
+    centerTick: centerTick == null || !Number.isFinite(Number(centerTick)) ? null : Number(centerTick),
+    reason: reason == null ? 'navigate' : String(reason),
+  };
+}
 
 export const useMusicStore = create((set, get) => ({
   apiStatus: 'checking',
@@ -335,6 +388,18 @@ export const useMusicStore = create((set, get) => ({
   playbackStatus: 'idle',
   playbackSeconds: 0,
   playbackBar: 1,
+  /**
+   * Ephemeral loop bounds for transport. Not a Composition V2 field.
+   * Shape: { startTick, endTick, enabled } | null
+   */
+  playbackLoop: null,
+  /** Optional auto-follow of playback cursor in the piano roll. */
+  playbackAutoFollow: false,
+  /**
+   * One-shot transport intent consumed by PlaybackControls.
+   * Shape: { seq, type: 'play'|'pause'|'resume'|'stop'|'toggle', startTick?: number|null }
+   */
+  playbackTransportIntent: null,
   trackControls: {},
   compositionRevision: 'empty',
   notationRevision: 'empty',
@@ -362,6 +427,11 @@ export const useMusicStore = create((set, get) => ({
   /** Last guarded editor command feedback for UI (code/message only). */
   editorCommandFeedback: null,
   editCursorTick: 0,
+  /**
+   * Ephemeral scroll request token for PianoRollEditor (not scrollLeft source of truth).
+   * Shape: { id, scrollLeft, centerTick, reason } | null
+   */
+  viewportScrollRequest: null,
   compositionEditUndoStack: [],
   compositionEditRedoStack: [],
 
@@ -507,6 +577,7 @@ export const useMusicStore = create((set, get) => ({
       pianoRollNotationStatus: 'idle',
       pianoRollNotationError: '',
       editCursorTick: 0,
+      viewportScrollRequest: null,
       compositionEditUndoStack: [],
       compositionEditRedoStack: [],
       generationMeta,
@@ -607,6 +678,7 @@ export const useMusicStore = create((set, get) => ({
       pianoRollNotationStatus: 'idle',
       pianoRollNotationError: '',
       editCursorTick: 0,
+      viewportScrollRequest: null,
       compositionEditUndoStack: [],
       compositionEditRedoStack: [],
       aiEditStartBar: null,
@@ -895,6 +967,7 @@ export const useMusicStore = create((set, get) => ({
         pianoRollNoteId: null,
         pianoRollNoteIds: [],
         editCursorTick: 0,
+        viewportScrollRequest: null,
         pianoRollEditStatus: 'idle',
         analysisSelectedSectionKey: recoverAnalysisSectionKey(music, state.analysisSelectedSectionKey),
         ...clearedMotifUiState(),
@@ -916,6 +989,7 @@ export const useMusicStore = create((set, get) => ({
       statePatch: {
         trackControls: buildDefaultTrackControls(music),
         editCursorTick: 0,
+        viewportScrollRequest: null,
         ...clearedMotifUiState(),
         ...clearedReharmonizePreviewState(),
         ...clearedDevelopmentPreviewState(),
@@ -2109,12 +2183,283 @@ export const useMusicStore = create((set, get) => ({
   setPianoRollZoom: (zoom) => {
     const value = Number(zoom);
     if (!Number.isFinite(value) || value < MIN_PIANO_ROLL_ZOOM || value > MAX_PIANO_ROLL_ZOOM) {
-      console.warn('[musicStore] Rejected invalid piano-roll zoom', { zoom });
+      logger.warn('Rejected invalid piano-roll zoom', { zoom });
       return;
     }
-    console.info('[musicStore] Piano-roll zoom changed', { zoom: value });
-    console.debug('[musicStore] Piano-roll pixels-per-tick', { pixelsPerTick: value });
+    logger.debug('Piano-roll zoom changed', { zoom: value, pixelsPerTick: value });
     set({ pianoRollZoom: value });
+  },
+
+  /**
+   * Set edit cursor tick without history. Clamped to composition duration.
+   */
+  setEditCursorTick: (tick) => {
+    const state = get();
+    const next = clampEditCursorTick(state.editedMusicJson, tick);
+    if (next === state.editCursorTick) {
+      return next;
+    }
+    set({ editCursorTick: next });
+    logNavigationDebounced({
+      command: 'setEditCursorTick',
+      tick: next,
+      bar: tickToBar(state.editedMusicJson, next),
+    });
+    return next;
+  },
+
+  requestViewportScroll: ({ scrollLeft = null, centerTick = null, reason = 'navigate' } = {}) => {
+    const request = buildViewportScrollRequest({ scrollLeft, centerTick, reason });
+    set({ viewportScrollRequest: request });
+    logNavigationDebounced({
+      command: 'requestViewportScroll',
+      reason: request.reason,
+      scrollLeft: request.scrollLeft,
+      centerTick: request.centerTick,
+      requestId: request.id,
+    });
+    return request;
+  },
+
+  gotoBar: (bar) => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    const startTick = barToStartTick(composition, Number(bar));
+    if (startTick == null) {
+      logger.warn('gotoBar malformed target', { bar });
+      return null;
+    }
+    const tick = clampEditCursorTick(composition, startTick);
+    const request = buildViewportScrollRequest({
+      centerTick: tick,
+      reason: 'gotoBar',
+    });
+    set({
+      editCursorTick: tick,
+      viewportScrollRequest: request,
+    });
+    logNavigationDebounced({
+      command: 'gotoBar',
+      bar: Number(bar),
+      tick,
+      requestId: request.id,
+    });
+    return tick;
+  },
+
+  gotoPrevBar: () => {
+    const state = get();
+    const tick = prevBarTick(state.editedMusicJson, state.editCursorTick);
+    const request = buildViewportScrollRequest({ centerTick: tick, reason: 'gotoPrevBar' });
+    set({ editCursorTick: tick, viewportScrollRequest: request });
+    logNavigationDebounced({
+      command: 'gotoPrevBar',
+      tick,
+      bar: tickToBar(state.editedMusicJson, tick),
+      requestId: request.id,
+    });
+    return tick;
+  },
+
+  gotoNextBar: () => {
+    const state = get();
+    const tick = nextBarTick(state.editedMusicJson, state.editCursorTick);
+    const request = buildViewportScrollRequest({ centerTick: tick, reason: 'gotoNextBar' });
+    set({ editCursorTick: tick, viewportScrollRequest: request });
+    logNavigationDebounced({
+      command: 'gotoNextBar',
+      tick,
+      bar: tickToBar(state.editedMusicJson, tick),
+      requestId: request.id,
+    });
+    return tick;
+  },
+
+  gotoSection: (sectionKey) => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    const sections = listSectionsForNavigation(composition);
+    const match = sections.find((section) => section.key === sectionKey)
+      || sections.find((section) => section.id != null && section.id === sectionKey);
+    if (!match) {
+      logger.warn('gotoSection malformed target', { sectionKey });
+      return null;
+    }
+    const tick = sectionStartTick(composition, match.key);
+    const request = buildViewportScrollRequest({ centerTick: tick, reason: 'gotoSection' });
+    set({ editCursorTick: tick, viewportScrollRequest: request });
+    logNavigationDebounced({
+      command: 'gotoSection',
+      sectionKey: match.key,
+      tick,
+      startBar: match.startBar,
+      requestId: request.id,
+    });
+    return tick;
+  },
+
+  gotoPrevSection: () => {
+    const state = get();
+    const tick = prevSectionTick(state.editedMusicJson, state.editCursorTick);
+    const request = buildViewportScrollRequest({ centerTick: tick, reason: 'gotoPrevSection' });
+    set({ editCursorTick: tick, viewportScrollRequest: request });
+    logNavigationDebounced({
+      command: 'gotoPrevSection',
+      tick,
+      bar: tickToBar(state.editedMusicJson, tick),
+      requestId: request.id,
+    });
+    return tick;
+  },
+
+  gotoNextSection: () => {
+    const state = get();
+    const tick = nextSectionTick(state.editedMusicJson, state.editCursorTick);
+    const request = buildViewportScrollRequest({ centerTick: tick, reason: 'gotoNextSection' });
+    set({ editCursorTick: tick, viewportScrollRequest: request });
+    logNavigationDebounced({
+      command: 'gotoNextSection',
+      tick,
+      bar: tickToBar(state.editedMusicJson, tick),
+      requestId: request.id,
+    });
+    return tick;
+  },
+
+  zoomIn: (options = {}) => {
+    const state = get();
+    const nextZoom = stepZoom(state.pianoRollZoom, 1, {
+      minZoom: MIN_PIANO_ROLL_ZOOM,
+      maxZoom: MAX_PIANO_ROLL_ZOOM,
+    });
+    const patch = { pianoRollZoom: nextZoom };
+    if (options.requestScroll) {
+      const centerTick = Number.isFinite(Number(options.centerTick))
+        ? Number(options.centerTick)
+        : state.editCursorTick;
+      patch.viewportScrollRequest = buildViewportScrollRequest({
+        centerTick,
+        reason: 'zoomIn',
+      });
+    }
+    set(patch);
+    logNavigationDebounced({
+      command: 'zoomIn',
+      zoom: nextZoom,
+      requestScroll: Boolean(options.requestScroll),
+    });
+    return nextZoom;
+  },
+
+  zoomOut: (options = {}) => {
+    const state = get();
+    const nextZoom = stepZoom(state.pianoRollZoom, -1, {
+      minZoom: MIN_PIANO_ROLL_ZOOM,
+      maxZoom: MAX_PIANO_ROLL_ZOOM,
+    });
+    const patch = { pianoRollZoom: nextZoom };
+    if (options.requestScroll) {
+      const centerTick = Number.isFinite(Number(options.centerTick))
+        ? Number(options.centerTick)
+        : state.editCursorTick;
+      patch.viewportScrollRequest = buildViewportScrollRequest({
+        centerTick,
+        reason: 'zoomOut',
+      });
+    }
+    set(patch);
+    logNavigationDebounced({
+      command: 'zoomOut',
+      zoom: nextZoom,
+      requestScroll: Boolean(options.requestScroll),
+    });
+    return nextZoom;
+  },
+
+  zoomToFit: (options = {}) => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    const duration = Number(composition?.duration_ticks) || 0;
+    const clientWidth = Math.max(0, Number(options.clientWidth) || 0);
+    const fitted = fitCompositionZoom({
+      durationTicks: duration,
+      clientWidth,
+      minZoom: MIN_PIANO_ROLL_ZOOM,
+      maxZoom: MAX_PIANO_ROLL_ZOOM,
+    });
+    const centerTick = Math.round(duration / 2);
+    const scroll = scrollLeftForCenterTick({
+      centerTick,
+      pixelsPerTick: fitted.pixelsPerTick,
+      clientWidth,
+      durationTicks: duration,
+    });
+    const request = buildViewportScrollRequest({
+      scrollLeft: scroll.scrollLeft,
+      centerTick,
+      reason: 'zoomToFit',
+    });
+    set({
+      pianoRollZoom: fitted.pixelsPerTick,
+      viewportScrollRequest: request,
+    });
+    logNavigationDebounced({
+      command: 'zoomToFit',
+      zoom: fitted.pixelsPerTick,
+      durationTicks: duration,
+      clientWidth,
+      requestId: request.id,
+    });
+    return fitted.pixelsPerTick;
+  },
+
+  zoomToSelection: (options = {}) => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    const refs = Array.isArray(options.refs) && options.refs.length
+      ? options.refs
+      : currentEditorRefs(state);
+    const clientWidth = Math.max(0, Number(options.clientWidth) || 0);
+    const windowed = selectionZoomWindow(composition, refs, {
+      pixelsPerTick: state.pianoRollZoom,
+      clientWidth,
+      paddingTicks: Number.isFinite(Number(options.paddingTicks))
+        ? Number(options.paddingTicks)
+        : undefined,
+      minZoom: MIN_PIANO_ROLL_ZOOM,
+      maxZoom: MAX_PIANO_ROLL_ZOOM,
+      adjustZoom: options.adjustZoom !== false,
+    });
+    if (!windowed.ok) {
+      logger.warn('zoomToSelection unavailable', { reason: windowed.reason || null });
+      return null;
+    }
+    const nextZoom = windowed.pixelsPerTick != null
+      ? windowed.pixelsPerTick
+      : state.pianoRollZoom;
+    const request = buildViewportScrollRequest({
+      scrollLeft: windowed.scrollLeft,
+      centerTick: windowed.centerTick,
+      reason: 'zoomToSelection',
+    });
+    set({
+      pianoRollZoom: nextZoom,
+      viewportScrollRequest: request,
+    });
+    logNavigationDebounced({
+      command: 'zoomToSelection',
+      zoom: nextZoom,
+      startTick: windowed.startTick,
+      endTick: windowed.endTick,
+      selectedCount: refs.length,
+      requestId: request.id,
+    });
+    return {
+      zoom: nextZoom,
+      scrollLeft: windowed.scrollLeft,
+      startTick: windowed.startTick,
+      endTick: windowed.endTick,
+    };
   },
 
   createNote: (trackId, noteDraft) => {
@@ -2307,6 +2652,7 @@ export const useMusicStore = create((set, get) => ({
       playbackStatus: 'idle',
       playbackSeconds: 0,
       playbackBar: 1,
+      playbackLoop: reconcilePlaybackLoop(state.playbackLoop, previous.editedMusicJson),
       analysisSelectedSectionKey: recoverAnalysisSectionKey(
         previous.editedMusicJson,
         state.analysisSelectedSectionKey,
@@ -2381,6 +2727,7 @@ export const useMusicStore = create((set, get) => ({
       playbackStatus: 'idle',
       playbackSeconds: 0,
       playbackBar: 1,
+      playbackLoop: reconcilePlaybackLoop(state.playbackLoop, next.editedMusicJson),
       analysisSelectedSectionKey: recoverAnalysisSectionKey(
         next.editedMusicJson,
         state.analysisSelectedSectionKey,
@@ -2637,7 +2984,7 @@ export const useMusicStore = create((set, get) => ({
   },
 
   setPlaybackStatus: (playbackStatus) => {
-    console.debug('[musicStore] Playback status changed', { playbackStatus });
+    logger.debug('Playback status changed', { playbackStatus });
     set({ playbackStatus });
   },
 
@@ -2646,6 +2993,150 @@ export const useMusicStore = create((set, get) => ({
       playbackSeconds: Number(seconds) || 0,
       playbackBar: Number(bar) || 1,
     });
+  },
+
+  setPlaybackAutoFollow: (enabled) => {
+    const next = Boolean(enabled);
+    logger.debug('Playback auto-follow', { enabled: next });
+    set({ playbackAutoFollow: next });
+  },
+
+  /**
+   * Ordinary Play / Play From Cursor / Space toggle.
+   * PlaybackControls consumes `playbackTransportIntent`.
+   */
+  requestPlaybackTransport: ({ type = 'play', startTick = null } = {}) => {
+    const seq = nextPlaybackTransportSeq();
+    const intent = {
+      seq,
+      type: String(type || 'play'),
+      startTick: startTick == null || !Number.isFinite(Number(startTick))
+        ? null
+        : Math.max(0, Math.round(Number(startTick))),
+    };
+    logger.info('Transport intent', {
+      type: intent.type,
+      startTick: intent.startTick,
+      seq: intent.seq,
+      loopEnabled: Boolean(get().playbackLoop?.enabled),
+    });
+    set({ playbackTransportIntent: intent });
+    return intent;
+  },
+
+  playFromCursor: () => {
+    const state = get();
+    const tick = clampEditCursorTick(state.editedMusicJson, state.editCursorTick);
+    return get().requestPlaybackTransport({ type: 'play', startTick: tick });
+  },
+
+  togglePlaybackTransport: () => {
+    const status = get().playbackStatus;
+    if (status === 'playing') {
+      return get().requestPlaybackTransport({ type: 'pause' });
+    }
+    if (status === 'paused') {
+      return get().requestPlaybackTransport({ type: 'resume' });
+    }
+    // Ordinary play: start at 0 (PlaybackControls stops/resets before prepare).
+    return get().requestPlaybackTransport({ type: 'play', startTick: null });
+  },
+
+  setLoopFromSelection: () => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    const noteRange = selectionTickRange(composition, state.editorSelectionRefs);
+    const derived = deriveLoopRangeFromSelection({
+      composition,
+      noteRange,
+      startBar: state.aiEditStartBar,
+      endBar: state.aiEditEndBar,
+      barRangeResolver: (startBar, endBar, comp) => selectedTickBoundaries(startBar, endBar, {
+        composition: comp,
+        timeSignature: comp?.time_signature,
+        ticksPerQuarter: comp?.ticks_per_quarter,
+        durationTicks: comp?.duration_ticks,
+      }),
+    });
+    if (!derived) {
+      logger.warn('Set loop from selection failed; no valid range', {
+        selectedCount: Array.isArray(state.editorSelectionRefs)
+          ? state.editorSelectionRefs.length
+          : 0,
+        aiEditStartBar: state.aiEditStartBar,
+        aiEditEndBar: state.aiEditEndBar,
+      });
+      set({ playbackLoop: null });
+      return null;
+    }
+    const loop = normalizePlaybackLoop({
+      startTick: derived.startTick,
+      endTick: derived.endTick,
+      enabled: true,
+    }, composition);
+    logger.info('Playback loop set from selection', {
+      startTick: loop?.startTick,
+      endTick: loop?.endTick,
+      source: derived.source,
+      enabled: true,
+    });
+    set({ playbackLoop: loop });
+    return loop;
+  },
+
+  clearPlaybackLoop: () => {
+    if (!get().playbackLoop) {
+      return;
+    }
+    logger.info('Playback loop cleared');
+    set({ playbackLoop: null });
+  },
+
+  setPlaybackLoopEnabled: (enabled) => {
+    const state = get();
+    const current = state.playbackLoop;
+    if (!current) {
+      logger.warn('Cannot enable playback loop; no bounds set');
+      return null;
+    }
+    const next = normalizePlaybackLoop({
+      ...current,
+      enabled: Boolean(enabled),
+    }, state.editedMusicJson);
+    if (!next) {
+      logger.warn('Playback loop became invalid while toggling enabled', {
+        startTick: current.startTick,
+        endTick: current.endTick,
+      });
+      set({ playbackLoop: null });
+      return null;
+    }
+    logger.info('Playback loop enabled changed', {
+      enabled: next.enabled,
+      startTick: next.startTick,
+      endTick: next.endTick,
+    });
+    set({ playbackLoop: next });
+    return next;
+  },
+
+  setPlaybackLoop: (loop) => {
+    const composition = get().editedMusicJson;
+    if (loop == null) {
+      set({ playbackLoop: null });
+      return null;
+    }
+    const next = normalizePlaybackLoop(loop, composition);
+    if (!next) {
+      logger.warn('Rejected invalid playback loop', {
+        startTick: loop?.startTick,
+        endTick: loop?.endTick,
+      });
+      set({ playbackLoop: null });
+      return null;
+    }
+    set({ playbackLoop: next });
+    return next;
   },
 
   syncTrackControlsFromComposition: (musicJson) => {
@@ -4953,19 +5444,6 @@ function snapshotCompositionEditState(state) {
   };
 }
 
-/**
- * Clamp the ephemeral edit cursor into [0, duration_ticks] without resetting to zero.
- */
-function clampEditCursorTick(composition, cursorTick) {
-  const raw = Number(cursorTick);
-  const tick = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
-  const duration = Number(composition?.duration_ticks);
-  if (!Number.isInteger(duration) || duration < 0) {
-    return tick;
-  }
-  return Math.min(tick, duration);
-}
-
 function currentEditorRefs(state) {
   if (Array.isArray(state.editorSelectionRefs) && state.editorSelectionRefs.length) {
     return uniqueNoteRefs(state.editorSelectionRefs);
@@ -5085,6 +5563,11 @@ function editorPrefsForCompositionReplace(state, composition) {
     editorSelectionAnchor: null,
     editorClipboard: null,
     editorCommandFeedback: null,
+    viewportScrollRequest: null,
+    // Transport/loop are ephemeral UI — clear on full composition replacement.
+    playbackLoop: null,
+    playbackTransportIntent: null,
+    playbackAutoFollow: Boolean(state.playbackAutoFollow),
   };
 }
 
@@ -5296,6 +5779,16 @@ function commitCompositionTransaction(set, get, {
       ? statePatch.lockedTrackIds
       : state.lockedTrackIds,
   );
+  const loopSource = Object.prototype.hasOwnProperty.call(statePatch, 'playbackLoop')
+    ? statePatch.playbackLoop
+    : state.playbackLoop;
+  const nextPlaybackLoop = reconcilePlaybackLoop(loopSource, nextComposition);
+  if (state.playbackLoop && !nextPlaybackLoop) {
+    logger.warn('Cleared stale playback loop after composition edit', {
+      previousStartTick: state.playbackLoop.startTick,
+      previousEndTick: state.playbackLoop.endTick,
+    });
+  }
 
   set({
     editedMusicJson: nextComposition,
@@ -5324,6 +5817,7 @@ function commitCompositionTransaction(set, get, {
     ...statePatch,
     hiddenTrackIds: nextHidden,
     lockedTrackIds: nextLocked,
+    playbackLoop: nextPlaybackLoop,
     // Re-apply clamped cursor after statePatch so ordinary edits do not reset to 0.
     editCursorTick: nextCursor,
   });
@@ -5494,6 +5988,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     pianoRollNotationStatus: 'idle',
     pianoRollNotationError: '',
     editCursorTick: 0,
+    viewportScrollRequest: null,
     compositionEditUndoStack: [],
     compositionEditRedoStack: [],
     uiError: '',
