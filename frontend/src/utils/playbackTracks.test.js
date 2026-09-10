@@ -5,9 +5,12 @@ import { setAppLogLevelForTests } from './appLogger.js';
 import {
   buildTrackPlaybackStates,
   isTrackAudible,
+  legacyVolumeMidiToTrimDb,
   midiVolumeToGain,
+  normalizeSessionTrackControls,
   resolveEffectiveTrackGains,
   selectInstrumentStrategy,
+  trimDbToGain,
 } from './playbackTracks.js';
 
 test('maps track volume and pan scalars', () => {
@@ -16,12 +19,33 @@ test('maps track volume and pan scalars', () => {
   assert.equal(midiVolumeToGain(64), 64 / 127);
 });
 
+test('session controls default to neutral trim and mute/solo', () => {
+  const session = normalizeSessionTrackControls({}, { volumeMidi: 100 });
+  assert.equal(session.trimDb, 0);
+  assert.equal(session.panOffset, 0);
+  assert.equal(session.muted, false);
+  assert.equal(session.solo, false);
+  assert.equal(session.reverbSend, 0);
+  assert.equal(trimDbToGain(0), 1);
+});
+
+test('legacy volumeMidi override at canonical volume yields trimDb 0', () => {
+  assert.ok(Math.abs(legacyVolumeMidiToTrimDb(100, 100)) < 1e-9);
+  const session = normalizeSessionTrackControls(
+    { volumeMidi: 100 },
+    { volumeMidi: 100 },
+  );
+  assert.ok(Math.abs(session.trimDb) < 1e-9);
+});
+
 test('selects instrument strategies including unsupported fallback', () => {
   assert.equal(selectInstrumentStrategy({ instrument: 'piano', midi_program: 0 }).id, 'piano_keyboard');
   assert.equal(selectInstrumentStrategy({ instrument: 'electric_bass', role: 'bass', midi_program: 33 }).id, 'bass');
   assert.equal(selectInstrumentStrategy({ instrument: 'strings', role: 'pad', midi_program: 48 }).id, 'strings_pad');
   assert.equal(selectInstrumentStrategy({ instrument: 'flute', role: 'melody', midi_program: 73 }).id, 'lead_synth');
   assert.equal(selectInstrumentStrategy({ instrument: 'acoustic_guitar', midi_program: 25 }).id, 'guitar_pluck');
+  assert.equal(selectInstrumentStrategy({ instrument: 'trumpet', midi_program: 56 }).id, 'brass');
+  assert.equal(selectInstrumentStrategy({ instrument: 'marimba', midi_program: 12 }).id, 'mallet');
   assert.equal(selectInstrumentStrategy({ instrument: 'drums', is_drum: true }).id, 'drums');
 
   const fallback = selectInstrumentStrategy({ instrument: 'theremin-of-destiny', midi_program: 120, role: 'fx' });
@@ -74,7 +98,7 @@ test('uses role only as fallback when instrument and program are absent', () => 
   assert.equal(roleFallback.fallback, true);
 });
 
-test('resolves mute and solo effective audible state', () => {
+test('resolves mute and solo effective audible state without squaring volume', () => {
   const states = buildTrackPlaybackStates([
     { id: 'a', instrument: 'piano', volume: 100 },
     { id: 'b', instrument: 'bass', volume: 80 },
@@ -91,7 +115,9 @@ test('resolves mute and solo effective audible state', () => {
 
   const effective = resolveEffectiveTrackGains(states);
   assert.equal(effective[0].effectiveGain, 0);
-  assert.equal(effective[1].effectiveGain, 80 / 127);
+  assert.equal(effective[1].effectiveGain, 1);
+  assert.equal(effective[1].gain, 80 / 127);
+  assert.equal(effective[1].combinedGain, 80 / 127);
   assert.equal(effective[2].effectiveGain, 0);
 });
 
@@ -106,21 +132,35 @@ test('mute alone silences a track when nothing is soloed', () => {
   assert.equal(effective[0].audible, false);
   assert.equal(effective[1].audible, true);
   assert.equal(effective[1].effectiveGain, 1);
+  assert.equal(effective[1].combinedGain, 1);
 });
 
-test('mute/solo effective gain stays independent from persisted track volume field', () => {
+test('default session trim keeps canonical volume as single gain authority', () => {
   const states = buildTrackPlaybackStates([
     { id: 'a', instrument: 'piano', volume: 64 },
     { id: 'b', instrument: 'bass', volume: 100 },
   ], {
-    a: { muted: false, volumeMidi: 127 },
-    b: { muted: false, volumeMidi: 127 },
+    a: { muted: false, volumeMidi: 64 },
+    b: { muted: false, volumeMidi: 100 },
   });
 
   const effective = resolveEffectiveTrackGains(states);
-  assert.equal(effective[0].volumeMidi, 127);
-  assert.notEqual(effective[0].volumeMidi, 64);
+  assert.equal(effective[0].volumeMidi, 64);
+  assert.ok(Math.abs(effective[0].trimDb) < 1e-9);
   assert.equal(effective[0].effectiveGain, 1);
+  assert.equal(effective[0].combinedGain, 64 / 127);
+});
+
+test('legacy volumeMidi fader above canonical becomes positive trim only', () => {
+  const states = buildTrackPlaybackStates([
+    { id: 'a', instrument: 'piano', volume: 64 },
+  ], {
+    a: { volumeMidi: 127 },
+  });
+  const effective = resolveEffectiveTrackGains(states);
+  assert.equal(effective[0].volumeMidi, 64);
+  assert.ok(effective[0].trimDb > 0);
+  assert.ok(Math.abs(effective[0].combinedGain - 1) < 1e-9);
 });
 
 test('playback diagnostics use controlled appLogger levels', () => {

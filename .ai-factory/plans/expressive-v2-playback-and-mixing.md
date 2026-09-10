@@ -49,7 +49,7 @@ The first shipped pack should be a deliberately small, size-budgeted derivative 
 
 ### Phase 1: Playback Contracts and Correctness
 
-- [ ] **Task 1: Define source identity, mixer semantics, and browser asset contracts.**
+- [x] **Task 1: Define source identity, mixer semantics, and browser asset contracts.**
   - Add stable `sourceKind`, `sourceId`, `sourceKey`, and mixer-scope output to `frontend/src/utils/playbackSource.js`; wire every existing audition source, including AI edit, motif, reharmonization, generation, development, arrangement, and version playback.
   - Define session controls as neutral browser overrides, for example `trimDb: 0`, `panOffset: 0`, `muted: false`, `solo: false`, and bounded `reverbSend`, while canonical `track.volume`, `track.pan`, `track.expression`, and automation retain their current authority. Remove the current default behavior that effectively squares canonical volume.
   - Add `frontend/src/utils/browserPlaybackAssets.js` with a versioned, allowlisted manifest schema, deterministic instrument/GM-program/role mapping, local same-origin URL resolution, digest/size/format limits, cache keys, fallback preset IDs, and provenance/license metadata validation. Do not permit arbitrary composition-provided URLs.
@@ -58,7 +58,7 @@ The first shipped pack should be a deliberately small, size-budgeted derivative 
   - Logging: use namespaced `VITE_LOG_LEVEL` logging; DEBUG only bounded source/preset IDs and mapping reasons, WARN unsupported mappings/invalid manifests, ERROR validation failures. Never log compositions, event arrays, sample bytes, full remote URLs with query strings, or license-file contents.
   - Dependencies: none.
 
-- [ ] **Task 2: Correct V2 performance scheduling before changing timbre.**
+- [x] **Task 2: Correct V2 performance scheduling before changing timbre.**
   - Give every logical note and attack/release item a stable identity so overlapping same-pitch notes release independently.
   - Fix sustain projection so a nominal note-off occurring during a pedal span is deferred to pedal-up, including notes attacked before pedal-down and exact half-open boundary cases.
   - Retain articulation gate/velocity transforms, tie collapse, dynamic/expression combination, release-before-attack ordering, harmony exclusion, and piecewise tempo conversion.
@@ -68,7 +68,7 @@ The first shipped pack should be a deliberately small, size-budgeted derivative 
   - Logging: keep compilation pure where practical and return a bounded summary; DEBUG schedule counts/duration/tempo-segment count at the orchestration boundary, WARN malformed optional expression data, never log pitches or events in bulk.
   - Dependencies: task 1 for note/instrument adapter contracts.
 
-- [ ] **Task 3: Make transport ownership and relocation smooth and race-safe.**
+- [x] **Task 3: Make transport ownership and relocation smooth and race-safe.**
   - Replace global `Tone.Transport.cancel()` cleanup with clearing only IDs owned by this engine; ensure legacy cleanup cannot cancel canonical events or future metronome/UI events.
   - Implement one relocation path for initial start tick, seek, pause/resume, loop wrap, and live loop changes: short click-free fade, release active voices, clear owned callbacks, restore controller state, reconstruct notes crossing the target, schedule remaining events, and fade in when playing.
   - Preserve the existing absolute-seconds tempo-map model rather than maintaining a second Tone tempo map. Store the authoritative playback tick/bar/tempo calculated against the actual auditioned composition so preview/version cursors are not reconverted through the working composition.

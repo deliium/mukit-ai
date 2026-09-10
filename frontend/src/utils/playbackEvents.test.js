@@ -9,6 +9,9 @@ import {
   buildCanonicalPlaybackEvents,
   compilePlaybackSchedule,
   combinedExpression,
+  controllerStateAtTick,
+  logicalNotesSoundingAtTick,
+  sustainReleaseTick,
 } from './playbackEvents.js';
 import { tickToSeconds, compileTimeline } from './compositionTimeline.js';
 
@@ -276,4 +279,120 @@ test('same-tick ordering places releases before attacks', () => {
   const atBoundary = schedule.items.filter((item) => item.tick === 480 && item.kind !== 'controller');
   assert.equal(atBoundary[0].kind, 'release');
   assert.equal(atBoundary[1].kind, 'attack');
+});
+
+test('assigns stable noteId so overlapping same-pitch notes are distinct', () => {
+  const schedule = compilePlaybackSchedule({
+    schema_version: 'composition.v2',
+    tempo: 120,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    bar_count: 1,
+    duration_ticks: 1920,
+    sections: [{ type: 'intro', start_bar: 1, bar_count: 1, start_tick: 0, duration_ticks: 1920 }],
+    tracks: [{
+      id: 't1',
+      instrument: 'piano',
+      role: 'melody',
+      midi_program: 0,
+      channel: 1,
+      volume: 100,
+      events: [
+        { pitch: 'C4', start_tick: 0, duration_ticks: 960, velocity: 80 },
+        { pitch: 'C4', start_tick: 240, duration_ticks: 960, velocity: 90 },
+      ],
+    }],
+    harmony: [],
+  });
+
+  assert.equal(schedule.logicalNotes.length, 2);
+  assert.notEqual(schedule.logicalNotes[0].noteId, schedule.logicalNotes[1].noteId);
+  const attacks = schedule.items.filter((item) => item.kind === 'attack');
+  const releases = schedule.items.filter((item) => item.kind === 'release');
+  assert.equal(new Set(attacks.map((item) => item.noteId)).size, 2);
+  assert.deepEqual(
+    attacks.map((item) => item.noteId).sort(),
+    releases.map((item) => item.noteId).sort(),
+  );
+  const sounding = logicalNotesSoundingAtTick(schedule, 300);
+  assert.equal(sounding.length, 2);
+});
+
+test('defers release when note-off falls in pedal even if attack was before pedal-down', () => {
+  assert.equal(sustainReleaseTick(0, 480, [{ start_tick: 240, duration_ticks: 720 }]), 960);
+  assert.equal(sustainReleaseTick(0, 240, [{ start_tick: 240, duration_ticks: 720 }]), 960);
+  // Half-open: note-off exactly at pedal end is not held.
+  assert.equal(sustainReleaseTick(0, 960, [{ start_tick: 240, duration_ticks: 720 }]), 960);
+  // Attack during pedal still held to pedal-up.
+  assert.equal(sustainReleaseTick(300, 400, [{ start_tick: 240, duration_ticks: 720 }]), 960);
+
+  const schedule = compilePlaybackSchedule({
+    schema_version: 'composition.v2',
+    tempo: 120,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    bar_count: 1,
+    duration_ticks: 1920,
+    sections: [{ type: 'intro', start_bar: 1, bar_count: 1, start_tick: 0, duration_ticks: 1920 }],
+    tracks: [{
+      id: 't1',
+      instrument: 'piano',
+      role: 'melody',
+      midi_program: 0,
+      channel: 1,
+      volume: 100,
+      sustain_pedals: [{ start_tick: 240, duration_ticks: 720 }],
+      events: [
+        { pitch: 'C4', start_tick: 0, duration_ticks: 480, velocity: 80 },
+      ],
+    }],
+    harmony: [],
+  });
+  assert.equal(schedule.logicalNotes[0].releaseTick, 960);
+});
+
+test('exposes linear controller segments and state-at-tick reconstruction', () => {
+  const schedule = compilePlaybackSchedule({
+    schema_version: 'composition.v2',
+    tempo: 120,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    bar_count: 1,
+    duration_ticks: 1920,
+    sections: [{ type: 'intro', start_bar: 1, bar_count: 1, start_tick: 0, duration_ticks: 1920 }],
+    tracks: [{
+      id: 't1',
+      instrument: 'piano',
+      role: 'melody',
+      midi_program: 0,
+      channel: 1,
+      volume: 64,
+      pan: 0,
+      expression: 127,
+      automation: [
+        {
+          parameter: 'volume',
+          interpolation: 'linear',
+          points: [
+            { tick: 0, value: 64 },
+            { tick: 480, value: 127 },
+          ],
+        },
+      ],
+      events: [
+        { pitch: 'C4', start_tick: 0, duration_ticks: 480, velocity: 80 },
+      ],
+    }],
+    harmony: [],
+  });
+
+  assert.ok(schedule.controllerSegments.some((segment) => (
+    segment.parameter === 'volume' && segment.interpolation === 'linear'
+  )));
+  const mid = controllerStateAtTick(schedule, 't1', 240);
+  assert.ok(mid.volume > 64 && mid.volume < 127);
+  assert.equal(schedule.summary.controllerSegmentCount > 0, true);
 });

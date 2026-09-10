@@ -8,13 +8,20 @@
 import { audibleRevisionKey } from './compositionCanonical.js';
 import {
   buildTrackPlaybackStates,
+  createTrackPlaybackState,
   midiPanToStereo,
   midiVolumeToGain,
   resolveEffectiveTrackGains,
 } from './playbackTracks.js';
-import { compilePlaybackSchedule } from './playbackEvents.js';
-import { ticksToPlaybackSeconds } from './playbackPosition.js';
-import { normalizePlaybackLoop } from './playbackLoop.js';
+import {
+  compilePlaybackSchedule,
+  controllerStateAtTick,
+  logicalNotesSoundingAtTick,
+} from './playbackEvents.js';
+import { secondsToPlaybackPosition, ticksToPlaybackSeconds } from './playbackPosition.js';
+import { clampSeekSecondsToLoop, normalizePlaybackLoop } from './playbackLoop.js';
+
+const RELOCATION_FADE_SECONDS = 0.02;
 
 export function createPlaybackEngine({ Tone, logger = console } = {}) {
   if (!Tone) {
@@ -35,6 +42,11 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
   /** Resolved loop window in seconds (null when disabled/invalid). */
   let currentLoopSeconds = null;
   let disposed = false;
+  let operationEpoch = 0;
+  let sessionId = 0;
+  let sourceKey = null;
+  let masterGain = null;
+  let relocating = false;
 
   function log(level, message, context = {}) {
     const method = typeof logger[level] === 'function' ? logger[level].bind(logger) : logger.log?.bind(logger);
@@ -43,8 +55,11 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     }
   }
 
-  function noteKey(trackId, pitch) {
-    return `${trackId}:${pitch}`;
+  function noteKey(item) {
+    if (item?.noteId) {
+      return String(item.noteId);
+    }
+    return `${item?.trackId}:${item?.pitch}`;
   }
 
   function revisionPrefix(composition = currentComposition) {
@@ -113,6 +128,42 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     return currentLoopSeconds;
   }
 
+  function beginOperation(reason = 'op') {
+    operationEpoch += 1;
+    const opId = operationEpoch;
+    log('debug', 'Begin operation', { opId, reason, sessionId });
+    return opId;
+  }
+
+  function isCurrentOperation(opId) {
+    return opId === operationEpoch && !disposed;
+  }
+
+  function ensureMasterGain() {
+    if (masterGain) {
+      return masterGain;
+    }
+    masterGain = new Tone.Gain(1);
+    masterGain.toDestination();
+    return masterGain;
+  }
+
+  function setMasterGainImmediate(value) {
+    const node = ensureMasterGain();
+    if (node.gain) {
+      node.gain.value = value;
+    }
+  }
+
+  function rampMasterGain(value, durationSeconds = RELOCATION_FADE_SECONDS) {
+    const node = ensureMasterGain();
+    if (node?.gain && typeof node.gain.linearRampTo === 'function') {
+      node.gain.linearRampTo(value, Math.max(0, durationSeconds));
+      return;
+    }
+    setMasterGainImmediate(value);
+  }
+
   function disposeTrackNodes() {
     const beforeCount = trackNodes.size;
     let disposedCount = 0;
@@ -137,18 +188,40 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     return disposedCount;
   }
 
-  function clearScheduledEvents() {
-    const beforeCount = scheduledEventIds.length + (endEventId == null ? 0 : 1);
-    try {
-      Tone.Transport.cancel();
-    } catch (error) {
-      log('warn', 'Transport.cancel anomaly during cleanup', { message: error?.message });
+  /**
+   * Clear only engine-owned Transport callbacks — never Tone.Transport.cancel().
+   * Does not release or clear activeNotes (caller decides).
+   */
+  function clearOwnedTransportEvents() {
+    const owned = [...scheduledEventIds];
+    if (endEventId != null) {
+      owned.push(endEventId);
     }
+    const beforeCount = owned.length;
+    owned.forEach((id) => {
+      try {
+        if (typeof Tone.Transport.clear === 'function') {
+          Tone.Transport.clear(id);
+        } else if (typeof Tone.Transport.cancel === 'function') {
+          Tone.Transport.cancel(id);
+        }
+      } catch (error) {
+        log('warn', 'Failed to clear owned transport event', {
+          eventId: id,
+          message: error?.message,
+        });
+      }
+    });
     scheduledEventIds = [];
     endEventId = null;
-    activeNotes = new Map();
-    log('debug', 'Cleared scheduled events', { clearedCount: beforeCount });
+    log('debug', 'Cleared owned scheduled events', { clearedCount: beforeCount, sessionId });
     return beforeCount;
+  }
+
+  function clearScheduledEvents() {
+    const cleared = clearOwnedTransportEvents();
+    activeNotes = new Map();
+    return cleared;
   }
 
   function releaseActiveNotes(time) {
@@ -159,7 +232,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
         return;
       }
       try {
-        scheduleRelease(node, { trackId: note.trackId, pitch: note.pitch }, time);
+        scheduleRelease(node, { trackId: note.trackId, pitch: note.pitch, noteId: note.noteId }, time);
       } catch (error) {
         log('error', 'Active note release failed', {
           trackId: note.trackId,
@@ -212,7 +285,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
         expressionGain.connect(volumeGain);
         volumeGain.connect(uiGain);
         uiGain.connect(panner);
-        panner.toDestination();
+        panner.connect(ensureMasterGain());
       } catch (error) {
         log('error', 'Track route creation failed', {
           trackId: state.trackId,
@@ -275,18 +348,23 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     } else if (node.synth.triggerAttackRelease) {
       node.synth.triggerAttackRelease(pitch, 3600, time, velocity);
     }
-    activeNotes.set(noteKey(item.trackId, pitch), { trackId: item.trackId, pitch, attackTime: item.time });
+    activeNotes.set(noteKey(item), {
+      trackId: item.trackId,
+      pitch,
+      noteId: item.noteId || null,
+      attackTime: item.time,
+    });
   }
 
   function scheduleRelease(node, item, time) {
-    const key = noteKey(item.trackId, item.pitch);
+    const key = noteKey(item);
     if (!activeNotes.has(key)) {
       return;
     }
     if (typeof time !== 'number' || !Number.isFinite(time)) {
       log('warn', '[FIX:tone-release] Skipping release with invalid time', {
         trackId: item.trackId,
-        pitch: item.pitch,
+        noteId: item.noteId || null,
         time,
       });
       activeNotes.delete(key);
@@ -331,18 +409,151 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
       }
       return;
     }
-    const wrapStart = loopWindow.startSeconds;
     log('info', 'Loop wrap', {
       startTick: loopWindow.startTick,
       endTick: loopWindow.endTick,
-      startSeconds: wrapStart,
+      startSeconds: loopWindow.startSeconds,
       endSeconds: loopWindow.endSeconds,
       revisionPrefix: revisionPrefix(),
+      sessionId,
     });
+    relocate({
+      targetSeconds: loopWindow.startSeconds,
+      reason: 'loop_wrap',
+      playing: Tone.Transport.state === 'started',
+    });
+  }
+
+  /**
+   * Single relocation path for start/seek/pause-resume window rebuild/loop wrap/live loop change.
+   */
+  function relocate({
+    targetSeconds = 0,
+    reason = 'relocate',
+    playing = false,
+    reconstructHeld = true,
+  } = {}) {
+    if (disposed || !currentSchedule) {
+      return { scheduledCount: 0, endPosition: 0, looping: false };
+    }
+    const opId = beginOperation(reason);
+    relocating = true;
+    let target = Math.max(0, Number(targetSeconds) || 0);
+    if (currentLoopSeconds?.enabled) {
+      const clamped = clampSeekSecondsToLoop(target, currentLoopSeconds);
+      if (clamped !== target) {
+        log('debug', 'Seek clamped into enabled loop', {
+          requested: target,
+          clamped,
+          loopStart: currentLoopSeconds.startSeconds,
+          loopEnd: currentLoopSeconds.endSeconds,
+          opId,
+        });
+        target = clamped;
+      }
+    }
+
+    log('debug', 'Relocate transport', {
+      reason,
+      target,
+      opId,
+      sessionId,
+      ownedEventCount: scheduledEventIds.length,
+      revisionPrefix: revisionPrefix(),
+    });
+
+    rampMasterGain(0, RELOCATION_FADE_SECONDS);
     releaseActiveNotes(Tone.now?.() ?? 0);
     clearScheduledEvents();
-    Tone.Transport.position = wrapStart;
-    scheduleFromTime(currentSchedule, wrapStart);
+    if (!isCurrentOperation(opId)) {
+      relocating = false;
+      log('warn', 'Stale relocate aborted after clear', { opId, sessionId });
+      return { scheduledCount: 0, endPosition: 0, looping: false };
+    }
+
+    Tone.Transport.position = target;
+    restoreControllerStateAtSeconds(target);
+    if (reconstructHeld) {
+      reconstructHeldNotesAtSeconds(target);
+    }
+    const summary = scheduleFromTime(currentSchedule, target);
+    if (playing || Tone.Transport.state === 'started') {
+      rampMasterGain(1, RELOCATION_FADE_SECONDS);
+    } else {
+      setMasterGainImmediate(1);
+    }
+    relocating = false;
+    return summary;
+  }
+
+  function secondsToTickOnAudition(seconds) {
+    if (!currentComposition) {
+      return 0;
+    }
+    const position = secondsToPlaybackPosition(seconds, {
+      composition: currentComposition,
+      tempo: currentComposition.tempo,
+      ticksPerQuarter: currentComposition.ticks_per_quarter,
+      timeSignature: currentComposition.time_signature,
+    });
+    return position.tick;
+  }
+
+  function restoreControllerStateAtSeconds(seconds) {
+    if (!currentSchedule) {
+      return;
+    }
+    const tick = secondsToTickOnAudition(seconds);
+    trackNodes.forEach((node, trackId) => {
+      const state = controllerStateAtTick(currentSchedule, trackId, tick);
+      applyControllerStateAtTime(node, {
+        parameter: 'volume',
+        value: state.volume,
+        time: seconds,
+        interpolation: 'step',
+      }, seconds);
+      applyControllerStateAtTime(node, {
+        parameter: 'pan',
+        value: state.pan,
+        time: seconds,
+        interpolation: 'step',
+      }, seconds);
+      applyControllerStateAtTime(node, {
+        parameter: 'expression',
+        value: state.expression,
+        time: seconds,
+        interpolation: 'step',
+      }, seconds);
+    });
+  }
+
+  function reconstructHeldNotesAtSeconds(seconds) {
+    if (!currentSchedule?.logicalNotes?.length) {
+      return 0;
+    }
+    const tick = secondsToTickOnAudition(seconds);
+    const held = logicalNotesSoundingAtTick(currentSchedule, tick);
+    held.forEach((note) => {
+      const node = trackNodes.get(note.trackId);
+      if (!node) {
+        return;
+      }
+      scheduleAttack(node, {
+        trackId: note.trackId,
+        pitch: note.pitch,
+        noteId: note.noteId,
+        velocity: note.velocity,
+        velocityMidi: note.velocityMidi,
+        time: seconds,
+      }, Tone.now?.() ?? 0);
+    });
+    log('debug', 'Reconstructed held notes', {
+      count: held.length,
+      tick,
+      seconds,
+      sessionId,
+    });
+    return held.length;
   }
 
   function scheduleFromTime(schedule, startSeconds = 0) {
@@ -446,7 +657,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
   }
 
   function scheduleEvents(eventsOrSchedule, { onComplete, startSeconds = 0 } = {}) {
-    clearScheduledEvents();
+    clearOwnedTransportEvents();
     currentOnComplete = onComplete;
 
     const schedule = Array.isArray(eventsOrSchedule)
@@ -480,19 +691,26 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
 
   function applyTrackOverrides(trackOverrides = {}) {
     currentTrackOverrides = { ...currentTrackOverrides, ...trackOverrides };
+    // Rebuild session-only UI gains from canonical track + overrides (no double volume).
     const states = resolveEffectiveTrackGains(
       Array.from(trackNodes.values()).map((node) => {
-        const override = trackOverrides[node.state.trackId] || {};
-        const volumeMidi = override.volumeMidi !== undefined
-          ? Number(override.volumeMidi)
-          : node.state.volumeMidi;
-        return {
-          ...node.state,
-          muted: override.muted !== undefined ? Boolean(override.muted) : node.state.muted,
-          solo: override.solo !== undefined ? Boolean(override.solo) : node.state.solo,
-          volumeMidi,
-          gain: midiVolumeToGain(volumeMidi),
+        const sourceTrack = (currentTracks || []).find(
+          (track) => String(track?.id ?? '') === node.state.trackId,
+        ) || {
+          id: node.state.trackId,
+          volume: node.state.volumeMidi,
+          pan: node.state.pan,
+          instrument: node.state.instrument,
+          role: node.state.role,
+          midi_program: node.state.midiProgram,
+          channel: node.state.channel,
+          is_drum: node.state.isDrum,
         };
+        const mergedOverrides = {
+          ...(currentTrackOverrides[node.state.trackId] || {}),
+          ...(trackOverrides[node.state.trackId] || {}),
+        };
+        return createTrackPlaybackState(sourceTrack, mergedOverrides);
       }),
     );
 
@@ -504,7 +722,11 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
       }
       node.state = state;
       if (node.uiGain?.gain) {
+        // Session mute/solo/trim only — canonical volume stays on volumeGain.
         node.uiGain.gain.value = state.effectiveGain;
+      }
+      if (node.panner?.pan && Number.isFinite(state.panStereo)) {
+        node.panner.pan.value = state.panStereo;
       }
     });
   }
@@ -520,10 +742,15 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     startSeconds = null,
     startTick = null,
     loop = null,
+    sourceKey: nextSourceKey = null,
   } = {}) {
     if (disposed) {
       throw new Error('Playback engine has been disposed');
     }
+
+    sessionId += 1;
+    const opId = beginOperation('prepare');
+    sourceKey = nextSourceKey != null ? String(nextSourceKey) : sourceKey;
 
     let resolvedSchedule = incomingSchedule;
     if (!resolvedSchedule && composition) {
@@ -534,6 +761,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
         items: events.flatMap((event) => ([
           {
             kind: 'attack',
+            noteId: event.noteId,
             time: event.position,
             trackId: event.trackId,
             pitch: event.pitch,
@@ -542,11 +770,13 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
           },
           {
             kind: 'release',
+            noteId: event.noteId,
             time: event.stopPosition,
             trackId: event.trackId,
             pitch: event.pitch,
           },
         ])),
+        logicalNotes: [],
         totalDurationSeconds: events.reduce(
           (max, event) => Math.max(max, Number(event.stopPosition) || 0),
           0,
@@ -561,12 +791,15 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
       syncLoopSeconds(currentLoop, currentComposition);
     }
 
-    const resolvedStart = resolveStartSeconds({
+    let resolvedStart = resolveStartSeconds({
       startSeconds,
       startTick,
       composition: currentComposition,
       tempo: tempo ?? composition?.tempo,
     });
+    if (currentLoopSeconds?.enabled) {
+      resolvedStart = clampSeekSecondsToLoop(resolvedStart, currentLoopSeconds);
+    }
 
     log('info', 'Preparing playback', {
       trackCount: Array.isArray(tracks) ? tracks.length : 0,
@@ -579,46 +812,85 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
       loopStartTick: currentLoop?.startTick ?? null,
       loopEndTick: currentLoop?.endTick ?? null,
       revisionPrefix: revisionPrefix(currentComposition),
+      sourceKey,
+      sessionId,
+      opId,
     });
 
     clearScheduledEvents();
+    ensureMasterGain();
+    setMasterGainImmediate(1);
     buildTrackRoutes(tracks || [], trackOverrides);
     if (Number.isFinite(tempo) && tempo > 0) {
       Tone.Transport.bpm.value = tempo;
     }
     currentOnComplete = onComplete;
+    currentSchedule = resolvedSchedule;
     Tone.Transport.position = resolvedStart;
+    if (!isCurrentOperation(opId)) {
+      log('warn', 'Stale prepare aborted', { opId, sessionId });
+      return { scheduledCount: 0, endPosition: 0, looping: false };
+    }
+    restoreControllerStateAtSeconds(resolvedStart);
+    reconstructHeldNotesAtSeconds(resolvedStart);
     return scheduleEvents(resolvedSchedule, { onComplete, startSeconds: resolvedStart });
   }
 
   async function start() {
+    const opId = beginOperation('start');
     try {
       await Tone.start();
+      if (!isCurrentOperation(opId)) {
+        log('warn', 'Stale Tone.start ignored', { opId, sessionId });
+        return Tone.Transport.state;
+      }
+      setMasterGainImmediate(1);
       Tone.Transport.start();
       log('info', 'Playback started', {
         transportState: Tone.Transport.state,
         position: Tone.Transport.seconds,
         loopEnabled: Boolean(currentLoopSeconds?.enabled),
         revisionPrefix: revisionPrefix(),
+        sourceKey,
+        sessionId,
+        opId,
       });
       return Tone.Transport.state;
     } catch (error) {
-      log('error', 'Playback start failed', { message: error?.message });
+      log('error', 'Playback start failed', { message: error?.message, opId, sessionId });
       throw error;
     }
   }
 
   function pause() {
     Tone.Transport.pause();
-    log('info', 'Playback paused', { transportState: Tone.Transport.state, position: Tone.Transport.seconds });
+    log('info', 'Playback paused', {
+      transportState: Tone.Transport.state,
+      position: Tone.Transport.seconds,
+      sessionId,
+    });
   }
 
   function resume() {
+    const pos = Math.max(0, Number(Tone.Transport.seconds) || 0);
+    relocate({
+      targetSeconds: pos,
+      reason: 'resume',
+      playing: true,
+      reconstructHeld: true,
+    });
     Tone.Transport.start();
-    log('info', 'Playback resumed', { transportState: Tone.Transport.state, position: Tone.Transport.seconds });
+    log('info', 'Playback resumed', {
+      transportState: Tone.Transport.state,
+      position: Tone.Transport.seconds,
+      sessionId,
+    });
   }
 
   function stop({ seekToStart = true } = {}) {
+    beginOperation('stop');
+    rampMasterGain(0, RELOCATION_FADE_SECONDS);
+    releaseActiveNotes(Tone.now?.() ?? 0);
     const cleared = clearScheduledEvents();
     try {
       Tone.Transport.stop();
@@ -637,6 +909,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     currentEndPosition = 0;
     // Keep loop tick bounds across stop; seconds re-resolve on next prepare.
     currentLoopSeconds = null;
+    setMasterGainImmediate(1);
     log('info', 'Playback stopped', {
       transportState: Tone.Transport.state,
       clearedEvents: cleared,
@@ -644,6 +917,8 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
       seekToStart,
       loopEnabled: Boolean(currentLoop?.enabled),
       revisionPrefix: 'cleared',
+      sourceKey,
+      sessionId,
     });
   }
 
@@ -652,14 +927,21 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
   }
 
   function seek(seconds = 0) {
-    const target = Math.max(0, Number(seconds) || 0);
-    clearScheduledEvents();
-    Tone.Transport.position = target;
-    if (currentSchedule && trackNodes.size > 0) {
-      scheduleFromTime(currentSchedule, target);
-    }
-    log('info', 'Seeked transport', { position: target, endPosition: currentEndPosition });
-    return target;
+    const playing = Tone.Transport.state === 'started';
+    const summary = relocate({
+      targetSeconds: seconds,
+      reason: 'seek',
+      playing,
+      reconstructHeld: true,
+    });
+    const position = Math.max(0, Number(Tone.Transport.seconds) || 0);
+    log('info', 'Seeked transport', {
+      position,
+      endPosition: currentEndPosition,
+      scheduledCount: summary.scheduledCount,
+      sessionId,
+    });
+    return position;
   }
 
   function seekToTick(tick = 0) {
@@ -676,7 +958,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     if (loop == null) {
       currentLoop = null;
       currentLoopSeconds = null;
-      log('info', 'Loop cleared', { revisionPrefix: revisionPrefix() });
+      log('info', 'Loop cleared', { revisionPrefix: revisionPrefix(), sessionId });
     } else {
       syncLoopSeconds(loop, currentComposition);
       if (!currentLoop) {
@@ -694,14 +976,19 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
           endSeconds: currentLoopSeconds?.endSeconds ?? null,
           revisionPrefix: revisionPrefix(),
           previousEnabled: previous?.enabled ?? false,
+          sessionId,
         });
       }
     }
 
     if (currentSchedule && trackNodes.size > 0) {
       const pos = Math.max(0, Number(Tone.Transport.seconds) || 0);
-      clearScheduledEvents();
-      return scheduleFromTime(currentSchedule, pos);
+      return relocate({
+        targetSeconds: pos,
+        reason: 'set_loop',
+        playing: Tone.Transport.state === 'started',
+        reconstructHeld: true,
+      });
     }
     return null;
   }
@@ -716,13 +1003,33 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     if (!currentSchedule || !currentTracks.length) {
       return null;
     }
-    clearScheduledEvents();
     buildTrackRoutes(currentTracks, currentTrackOverrides);
-    return scheduleFromTime(currentSchedule, Math.max(0, Number(startSeconds) || 0));
+    return relocate({
+      targetSeconds: Math.max(0, Number(startSeconds) || 0),
+      reason: 'rebuild',
+      playing: Tone.Transport.state === 'started',
+      reconstructHeld: true,
+    });
   }
 
   function getPositionSeconds() {
     return Number(Tone.Transport.seconds) || 0;
+  }
+
+  /**
+   * Authoritative position against the auditioned composition timeline.
+   */
+  function getPlaybackPosition() {
+    const seconds = getPositionSeconds();
+    if (!currentComposition) {
+      return { seconds, tick: 0, bar: 1 };
+    }
+    return secondsToPlaybackPosition(seconds, {
+      composition: currentComposition,
+      tempo: currentComposition.tempo,
+      ticksPerQuarter: currentComposition.ticks_per_quarter,
+      timeSignature: currentComposition.time_signature,
+    });
   }
 
   function getTransportState() {
@@ -746,10 +1053,42 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     return node?.uiGain?.gain?.value;
   }
 
+  function getSessionId() {
+    return sessionId;
+  }
+
+  function getOperationEpoch() {
+    return operationEpoch;
+  }
+
+  function getSourceKey() {
+    return sourceKey;
+  }
+
+  /**
+   * Physically stop when source identity or audible revision changes.
+   */
+  function invalidateSource({ nextSourceKey = null, reason = 'source_change' } = {}) {
+    log('info', 'Playback source invalidated', {
+      previousSourceKey: sourceKey,
+      nextSourceKey,
+      reason,
+      sessionId,
+    });
+    sourceKey = nextSourceKey != null ? String(nextSourceKey) : null;
+    stop({ seekToStart: true });
+  }
+
   function dispose() {
     stop({ seekToStart: true });
     currentLoop = null;
     currentLoopSeconds = null;
+    try {
+      masterGain?.dispose?.();
+    } catch (error) {
+      log('warn', 'Master gain dispose failed', { message: error?.message });
+    }
+    masterGain = null;
     disposed = true;
     log('debug', 'Playback engine disposed');
   }
@@ -768,11 +1107,16 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     rebuildSchedule,
     applyTrackOverrides,
     getPositionSeconds,
+    getPlaybackPosition,
     getTransportState,
     getScheduledEventCount,
     getTrackNodeCount,
     getEndPositionSeconds,
     getTrackEffectiveGain,
+    getSessionId,
+    getOperationEpoch,
+    getSourceKey,
+    invalidateSource,
     dispose,
   };
 }

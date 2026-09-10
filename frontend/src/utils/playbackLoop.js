@@ -8,6 +8,31 @@
  */
 
 /**
+ * When a loop is enabled, seeks outside [start, end) relocate to loop start.
+ * Half-open: endSeconds is exclusive.
+ *
+ * @param {number} seconds
+ * @param {{ startSeconds: number, endSeconds: number, enabled?: boolean }|null} loopSeconds
+ * @returns {number}
+ */
+export function clampSeekSecondsToLoop(seconds, loopSeconds) {
+  const target = Math.max(0, Number(seconds) || 0);
+  if (
+    !loopSeconds
+    || loopSeconds.enabled === false
+    || !Number.isFinite(loopSeconds.startSeconds)
+    || !Number.isFinite(loopSeconds.endSeconds)
+    || !(loopSeconds.endSeconds > loopSeconds.startSeconds)
+  ) {
+    return target;
+  }
+  if (target < loopSeconds.startSeconds || target >= loopSeconds.endSeconds) {
+    return loopSeconds.startSeconds;
+  }
+  return target;
+}
+
+/**
  * Normalize a playback loop against composition duration.
  * Returns null when the range is missing or endTick <= startTick.
  *

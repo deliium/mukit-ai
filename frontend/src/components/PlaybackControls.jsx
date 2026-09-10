@@ -78,6 +78,12 @@ const PlaybackControls = () => {
   const versionAuditionTrackControls = useMusicStore((state) => state.versionAuditionTrackControls);
   const generationAuditionActive = useMusicStore((state) => state.generationAuditionActive);
   const generationCandidate = useMusicStore((state) => state.generationCandidate);
+  const aiEditAuditionActive = useMusicStore((state) => state.aiEditAuditionActive);
+  const aiEditCandidate = useMusicStore((state) => state.aiEditCandidate);
+  const motifAuditionActive = useMusicStore((state) => state.motifAuditionActive);
+  const motifCandidate = useMusicStore((state) => state.motifCandidate);
+  const reharmonizeAuditionActive = useMusicStore((state) => state.reharmonizeAuditionActive);
+  const reharmonizeCandidate = useMusicStore((state) => state.reharmonizeCandidate);
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
   const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
   const playbackBar = useMusicStore((state) => state.playbackBar);
@@ -119,6 +125,12 @@ const PlaybackControls = () => {
       arrangementSelectedCandidateId,
       generationAuditionActive,
       generationCandidate,
+      aiEditAuditionActive,
+      aiEditCandidate,
+      motifAuditionActive,
+      motifCandidate,
+      reharmonizeAuditionActive,
+      reharmonizeCandidate,
       versionAuditionActive,
       versionSelectedRevisionId,
       versionRevisionDetails,
@@ -132,6 +144,8 @@ const PlaybackControls = () => {
       arrangementCandidateMode: ARRANGEMENT_AUDITION_CANDIDATE,
     },
   ), [
+    aiEditAuditionActive,
+    aiEditCandidate,
     arrangementAuditionMode,
     arrangementCandidates,
     arrangementSelectedCandidateId,
@@ -141,12 +155,18 @@ const PlaybackControls = () => {
     editedMusicJson,
     generationAuditionActive,
     generationCandidate,
+    motifAuditionActive,
+    motifCandidate,
+    reharmonizeAuditionActive,
+    reharmonizeCandidate,
     versionAuditionActive,
     versionRevisionDetails,
     versionSelectedRevisionId,
   ]);
   const playbackComposition = playbackResolved.composition;
   const playbackSource = playbackResolved.source;
+  const playbackSourceKey = playbackResolved.sourceKey;
+  const playbackMixerScope = playbackResolved.mixerScope;
   const versionAudition = playbackSource === 'version';
 
   const activeTrackControls = arrangementCandidateAudition
@@ -214,26 +234,35 @@ const PlaybackControls = () => {
     if (scheduledRevisionRef.current === playbackRevision) {
       return undefined;
     }
-    if (playbackStatus === 'playing' || playbackStatus === 'paused' || playbackStatus === 'loading') {
-      logger.info('Active playback stopped because playback source changed', {
-        previousRevision: scheduledRevisionRef.current.slice(0, 48),
-        currentRevision: String(playbackRevision).slice(0, 48),
-        developmentAudition: developmentAuditionActive,
-        arrangementAudition: arrangementCandidateAudition,
-      });
-      stopEverything({
-        engineRef,
-        legacySynthRef,
-        positionTimerRef,
-        scheduledRevisionRef,
-        setPlaybackStatus,
-        setPlaybackPosition,
+    // Physically stop whenever audible revision / source identity changes,
+    // regardless of the Zustand status string.
+    logger.info('Active playback stopped because playback source changed', {
+      previousRevision: scheduledRevisionRef.current.slice(0, 48),
+      currentRevision: String(playbackRevision).slice(0, 48),
+      sourceKey: playbackSourceKey,
+      mixerScope: playbackMixerScope,
+      developmentAudition: developmentAuditionActive,
+      arrangementAudition: arrangementCandidateAudition,
+    });
+    if (engineRef.current?.invalidateSource) {
+      engineRef.current.invalidateSource({
+        nextSourceKey: playbackSourceKey,
+        reason: 'source_or_revision_change',
       });
     }
+    stopEverything({
+      engineRef,
+      legacySynthRef,
+      positionTimerRef,
+      scheduledRevisionRef,
+      setPlaybackStatus,
+      setPlaybackPosition,
+    });
     return undefined;
   }, [
     playbackRevision,
-    playbackStatus,
+    playbackSourceKey,
+    playbackMixerScope,
     developmentAuditionActive,
     arrangementCandidateAudition,
     setPlaybackPosition,
@@ -312,6 +341,7 @@ const PlaybackControls = () => {
           setUiError,
           startTick,
           loop: playbackLoop,
+          sourceKey: playbackSourceKey,
         });
         return;
       }
@@ -533,13 +563,19 @@ const PlaybackControls = () => {
         {canonical ? ' · composition.v2' : playbackComposition ? ' · legacy' : ''}
         {arrangementCandidateAudition
           ? ' · auditioning arrangement candidate'
-          : playbackSource === 'generation'
-            ? ' · auditioning generation candidate'
-            : versionAudition
-              ? ' · auditioning version'
-              : developmentAuditionActive
-                ? ' · auditioning candidate'
-                : ''}
+          : playbackResolved.sourceKind === 'ai_edit'
+            ? ' · auditioning AI edit'
+            : playbackResolved.sourceKind === 'motif'
+              ? ' · auditioning motif'
+              : playbackResolved.sourceKind === 'reharmonize'
+                ? ' · auditioning reharmonize'
+                : playbackSource === 'generation'
+                  ? ' · auditioning generation candidate'
+                  : versionAudition
+                    ? ' · auditioning version'
+                    : developmentAuditionActive
+                      ? ' · auditioning candidate'
+                      : ''}
         {' · '}
         <span data-testid="playback-loop-status">{loopLabel}</span>
         {' · '}
@@ -633,11 +669,13 @@ async function startCanonicalPlayback({
   setUiError,
   startTick = null,
   loop = null,
+  sourceKey = null,
 }) {
   logger.info('Using canonical composition playback path', {
     startTick: startTick == null ? null : Number(startTick),
     loopEnabled: Boolean(loop?.enabled),
     revisionPrefix: audibleRevisionKey(playbackComposition).slice(0, 48),
+    sourceKey,
   });
   const schedule = compilePlaybackSchedule(playbackComposition);
   logger.debug('Canonical schedule summary', schedule?.summary ?? {});
@@ -658,6 +696,7 @@ async function startCanonicalPlayback({
     trackOverrides: trackControls,
     startTick: startTick == null ? null : Number(startTick),
     loop,
+    sourceKey,
     onComplete: () => {
       stopEverything({
         engineRef,
@@ -812,15 +851,20 @@ function startPositionTimer({
   clearPositionTimer(positionTimerRef);
   let lastLoggedSecond = -1;
   positionTimerRef.current = setInterval(() => {
-    const seconds = isCanonical && engineRef.current
-      ? engineRef.current.getPositionSeconds()
-      : Number(Tone.Transport.seconds) || 0;
-    const position = secondsToPlaybackPosition(seconds, {
-      tempo: playbackComposition?.tempo,
-      ticksPerQuarter: playbackComposition?.ticks_per_quarter,
-      timeSignature: playbackComposition?.time_signature,
-      composition: playbackComposition,
-    });
+    let position;
+    if (isCanonical && engineRef.current?.getPlaybackPosition) {
+      position = engineRef.current.getPlaybackPosition();
+    } else {
+      const seconds = isCanonical && engineRef.current
+        ? engineRef.current.getPositionSeconds()
+        : Number(Tone.Transport.seconds) || 0;
+      position = secondsToPlaybackPosition(seconds, {
+        tempo: playbackComposition?.tempo,
+        ticksPerQuarter: playbackComposition?.ticks_per_quarter,
+        timeSignature: playbackComposition?.time_signature,
+        composition: playbackComposition,
+      });
+    }
     setPlaybackPosition({ seconds: position.seconds, bar: position.bar });
     const wholeSecond = Math.floor(position.seconds);
     if (wholeSecond !== lastLoggedSecond) {

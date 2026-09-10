@@ -4,6 +4,7 @@ import test from 'node:test';
 import { createPlaybackEngine } from './tonePlaybackEngine.js';
 import { compilePlaybackSchedule } from './playbackEvents.js';
 import {
+  clampSeekSecondsToLoop,
   deriveLoopRangeFromSelection,
   normalizePlaybackLoop,
   reconcilePlaybackLoop,
@@ -125,9 +126,20 @@ function createFakeTone() {
         scheduled.push({ id, callback, when, once: true });
         return id;
       },
-      cancel() {
-        cancelled.push(scheduled.length);
-        scheduled.length = 0;
+      cancel(eventId) {
+        if (eventId == null) {
+          cancelled.push(scheduled.length);
+          scheduled.length = 0;
+          return;
+        }
+        const index = scheduled.findIndex((item) => item.id === eventId);
+        if (index >= 0) {
+          scheduled.splice(index, 1);
+          cancelled.push(1);
+        }
+      },
+      clear(eventId) {
+        this.cancel(eventId);
       },
       start() {
         state = 'started';
@@ -431,6 +443,57 @@ test('normalizePlaybackLoop clamps and rejects invalid ranges', () => {
     reconcilePlaybackLoop({ startTick: 900, endTick: 950, enabled: true }, { duration_ticks: 800 }),
     null,
   );
+});
+
+test('clampSeekSecondsToLoop relocates outside enabled window to loop start', () => {
+  const loop = { startSeconds: 1, endSeconds: 3, enabled: true };
+  assert.equal(clampSeekSecondsToLoop(0.5, loop), 1);
+  assert.equal(clampSeekSecondsToLoop(3, loop), 1);
+  assert.equal(clampSeekSecondsToLoop(2, loop), 2);
+  assert.equal(clampSeekSecondsToLoop(2, { ...loop, enabled: false }), 2);
+});
+
+test('seek outside enabled loop relocates to loop start and reconstructs held notes', () => {
+  const Tone = createFakeTone();
+  const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
+  const composition = {
+    schema_version: 'composition.v2',
+    tempo: 120,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    bar_count: 1,
+    duration_ticks: 1920,
+    sections: [{ type: 'intro', start_bar: 1, bar_count: 1, start_tick: 0, duration_ticks: 1920 }],
+    tracks: [{
+      id: 't1',
+      instrument: 'piano',
+      role: 'melody',
+      midi_program: 0,
+      channel: 1,
+      volume: 100,
+      events: [
+        { pitch: 'C4', start_tick: 0, duration_ticks: 960, velocity: 80 },
+        { pitch: 'E4', start_tick: 480, duration_ticks: 480, velocity: 80 },
+      ],
+    }],
+    harmony: [],
+  };
+  const schedule = compilePlaybackSchedule(composition);
+  engine.prepare({
+    tracks: composition.tracks,
+    schedule,
+    composition,
+    tempo: 120,
+    loop: { startTick: 0, endTick: 960, enabled: true },
+    sourceKey: 'working',
+  });
+  const loopEndSeconds = ticksToPlaybackSeconds(960, { composition });
+  const position = engine.seek(loopEndSeconds + 0.5);
+  assert.equal(position, 0);
+  assert.ok(engine.getSessionId() >= 1);
+  assert.equal(engine.getSourceKey(), 'working');
+  engine.dispose();
 });
 
 test('deriveLoopRangeFromSelection prefers notes then bars', () => {

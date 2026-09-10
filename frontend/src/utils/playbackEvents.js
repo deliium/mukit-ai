@@ -1,14 +1,19 @@
 /**
  * Compile deterministic Tone.js playback schedules from composition.v2 documents.
  * Preserves tick timing, tie collapse, articulation, expression, sustain, and piecewise tempo.
+ * Logical notes and attack/release items carry stable noteId values so overlapping
+ * same-pitch voices can release independently.
  */
 
+import { createAppLogger } from './appLogger.js';
 import {
   compileTimeline,
   roundHalfAwayFromZero,
   tickToSeconds,
   totalDurationSeconds,
 } from './compositionTimeline.js';
+
+const logger = createAppLogger('playbackEvents');
 
 const DYNAMIC_LEVEL_TO_EXPRESSION = {
   ppp: 32,
@@ -66,7 +71,7 @@ export function combinedExpression(laneValue, dynamicValue) {
  */
 export function compilePlaybackSchedule(musicJson) {
   if (!Array.isArray(musicJson?.tracks)) {
-    console.warn('[playbackEvents] Playback compile rejected because tracks is not an array', {
+    logger.warn('Playback compile rejected because tracks is not an array', {
       schemaVersion: musicJson?.schema_version,
     });
     return null;
@@ -74,7 +79,7 @@ export function compilePlaybackSchedule(musicJson) {
 
   const timeline = compileTimeline(musicJson);
   if (!timeline) {
-    console.warn('[playbackEvents] Playback compile rejected because timeline is invalid', {
+    logger.warn('Playback compile rejected because timeline is invalid', {
       schemaVersion: musicJson?.schema_version,
     });
     return null;
@@ -83,18 +88,23 @@ export function compilePlaybackSchedule(musicJson) {
   const durationSeconds = totalDurationSeconds(timeline);
   const items = [];
   const logicalNotes = [];
+  const controllerSegments = [];
   let attackCount = 0;
   let releaseCount = 0;
   let controllerCount = 0;
   let skippedNotes = 0;
+  let noteSeq = 0;
 
   musicJson.tracks.forEach((track, trackIndex) => {
     const trackMeta = extractTrackMeta(track, trackIndex);
     const sustainPedals = Array.isArray(track?.sustain_pedals) ? track.sustain_pedals : [];
-    const controllerItems = compileTrackControllers(track, timeline);
-    controllerItems.forEach((item) => {
+    const compiledControllers = compileTrackControllers(track, timeline, trackMeta.trackId);
+    compiledControllers.items.forEach((item) => {
       items.push({ ...item, ...trackMeta });
       controllerCount += 1;
+    });
+    compiledControllers.segments.forEach((segment) => {
+      controllerSegments.push({ ...segment, ...trackMeta });
     });
 
     const collapsed = collapseTieChains(track);
@@ -108,18 +118,27 @@ export function compilePlaybackSchedule(musicJson) {
       const releaseSeconds = tickToSeconds(timeline, releaseTick);
       if (attackSeconds == null || releaseSeconds == null || releaseSeconds <= attackSeconds) {
         skippedNotes += 1;
+        logger.warn('Skipped malformed optional note timing', {
+          trackId: trackMeta.trackId,
+          startTick: note.start_tick,
+          releaseTick,
+        });
         return;
       }
 
       const expressionMidi = expressionAtTick(track, timeline, note.start_tick);
       const velocity = velocityMidi / 127;
+      noteSeq += 1;
+      const noteId = buildLogicalNoteId(trackMeta.trackId, noteSeq, note.start_tick, note.pitch);
 
       const noteItem = {
         ...trackMeta,
+        noteId,
         pitch: note.pitch,
         notes: [note.pitch],
         startTick: note.start_tick,
         durationTicks: gateTicks,
+        nominalEndTick: noteEndTick,
         releaseTick,
         velocityMidi,
         velocity,
@@ -133,6 +152,7 @@ export function compilePlaybackSchedule(musicJson) {
       logicalNotes.push(noteItem);
       items.push({
         kind: 'attack',
+        noteId,
         time: attackSeconds,
         tick: note.start_tick,
         trackId: trackMeta.trackId,
@@ -142,6 +162,7 @@ export function compilePlaybackSchedule(musicJson) {
       });
       items.push({
         kind: 'release',
+        noteId,
         time: releaseSeconds,
         tick: releaseTick,
         trackId: trackMeta.trackId,
@@ -154,32 +175,118 @@ export function compilePlaybackSchedule(musicJson) {
 
   sortScheduleItems(items);
   const sortedLogicalNotes = sortLogicalNotes(logicalNotes);
+  sortControllerSegments(controllerSegments);
 
   const schedule = {
     timeline,
     totalDurationSeconds: durationSeconds,
     items,
     logicalNotes: sortedLogicalNotes,
+    controllerSegments,
     summary: {
       schemaVersion: musicJson.schema_version,
       trackCount: musicJson.tracks.length,
       attackCount,
       releaseCount,
       controllerCount,
+      controllerSegmentCount: controllerSegments.length,
       logicalNoteCount: logicalNotes.length,
       skippedNotes,
+      tempoSegmentCount: 1 + (Array.isArray(timeline?.tempoChanges) ? timeline.tempoChanges.length : 0),
       totalDurationSeconds: durationSeconds,
     },
   };
 
-  console.debug('[playbackEvents] Playback schedule compiled', schedule.summary);
+  logger.debug('Playback schedule compiled', schedule.summary);
   if (!logicalNotes.length) {
-    console.warn('[playbackEvents] Composition has no playable track events', {
+    logger.warn('Composition has no playable track events', {
       trackCount: musicJson.tracks.length,
     });
   }
 
   return schedule;
+}
+
+/**
+ * Stable logical-note identity used by attack/release pairing.
+ * @param {string} trackId
+ * @param {number} seq
+ * @param {number} startTick
+ * @param {string} pitch
+ * @returns {string}
+ */
+export function buildLogicalNoteId(trackId, seq, startTick, pitch) {
+  return `${String(trackId)}#${Number(seq)}@${Number(startTick)}:${String(pitch || '')}`;
+}
+
+/**
+ * Logical notes sounding at a half-open tick (attack <= tick < release).
+ * @param {object} schedule
+ * @param {number} tick
+ * @returns {object[]}
+ */
+export function logicalNotesSoundingAtTick(schedule, tick) {
+  const t = Number(tick);
+  if (!schedule?.logicalNotes || !Number.isFinite(t)) {
+    return [];
+  }
+  return schedule.logicalNotes.filter((note) => (
+    Number(note.startTick) <= t && t < Number(note.releaseTick)
+  ));
+}
+
+/**
+ * Controller values at a tick for one track (volume / pan / expression).
+ * Prefers bounded segments for linear ramps; falls back to step samples.
+ * @param {object} schedule
+ * @param {string} trackId
+ * @param {number} tick
+ * @returns {{ volume: number, pan: number, expression: number }}
+ */
+export function controllerStateAtTick(schedule, trackId, tick) {
+  const id = String(trackId || '');
+  const t = Number(tick);
+  const defaults = { volume: 100, pan: 0, expression: 127 };
+  if (!schedule || !Number.isFinite(t)) {
+    return defaults;
+  }
+
+  const state = { ...defaults };
+  const segments = (schedule.controllerSegments || []).filter((segment) => segment.trackId === id);
+  ['volume', 'pan', 'expression'].forEach((parameter) => {
+    const match = segments
+      .filter((segment) => segment.parameter === parameter && segment.startTick <= t && t <= segment.endTick)
+      .sort((left, right) => left.startTick - right.startTick)
+      .at(-1);
+    if (match) {
+      state[parameter] = valueOnControllerSegment(match, t);
+      return;
+    }
+    const samples = (schedule.items || [])
+      .filter((item) => (
+        item.kind === 'controller'
+        && item.trackId === id
+        && item.parameter === parameter
+        && Number(item.tick) <= t
+      ))
+      .sort((left, right) => left.tick - right.tick);
+    if (samples.length) {
+      state[parameter] = samples[samples.length - 1].value;
+    }
+  });
+  return state;
+}
+
+function valueOnControllerSegment(segment, tick) {
+  if (segment.interpolation !== 'linear' || segment.endTick <= segment.startTick) {
+    return segment.startValue;
+  }
+  const ratio = (tick - segment.startTick) / (segment.endTick - segment.startTick);
+  const value = segment.startValue + ratio * (segment.endValue - segment.startValue);
+  if (segment.parameter === 'pan') {
+    return clampMidi(roundHalfAwayFromZero(value), -64, 63, 0);
+  }
+  return clampMidi(roundHalfAwayFromZero(value), 0, 127, segment.startValue);
 }
 
 /** Back-compat helper returning logical note events sorted by attack time. */
@@ -288,57 +395,87 @@ function normalizeCollapsedNote(event) {
   };
 }
 
-function sustainReleaseTick(attackTick, noteEndTick, sustainPedals) {
+/**
+ * Project sustain-pedal hold onto a nominal note-off.
+ * Half-open pedal spans [start, end): a note-off at `end` is not held.
+ * Notes attacked before pedal-down are held when their nominal off falls in the span.
+ */
+export function sustainReleaseTick(attackTick, noteEndTick, sustainPedals) {
   let releaseTick = noteEndTick;
+  if (!Array.isArray(sustainPedals) || !sustainPedals.length) {
+    return releaseTick;
+  }
   for (const pedal of sustainPedals) {
-    const start = Number(pedal.start_tick);
-    const end = start + Number(pedal.duration_ticks);
-    if (attackTick >= start && attackTick < end) {
+    const start = Number(pedal?.start_tick);
+    const duration = Number(pedal?.duration_ticks);
+    const end = start + duration;
+    if (!Number.isFinite(start) || !Number.isFinite(duration) || duration <= 0 || !Number.isFinite(end)) {
+      continue;
+    }
+    const attackDuringPedal = attackTick >= start && attackTick < end;
+    const noteOffDuringPedal = noteEndTick >= start && noteEndTick < end;
+    if (attackDuringPedal || noteOffDuringPedal) {
       releaseTick = Math.max(releaseTick, end);
     }
   }
   return releaseTick;
 }
 
-function compileTrackControllers(track, timeline) {
+function compileTrackControllers(track, timeline, trackId) {
   const interval = automationSampleInterval(timeline.ticksPerQuarter);
   const items = [];
+  const segments = [];
 
-  const volumeEvents = compileAutomationLane({
+  const volume = compileAutomationWithSegments({
     staticValue: normalizeTrackVolume(track?.volume),
     lane: findAutomationLane(track, 'volume'),
     interval,
+    parameter: 'volume',
+    timeline,
+    clamp: (value) => clampMidi(value, 0, 127, 100),
   });
-  const panEvents = compileAutomationLane({
+  const pan = compileAutomationWithSegments({
     staticValue: normalizePan(track?.pan),
     lane: findAutomationLane(track, 'pan'),
     interval,
+    parameter: 'pan',
+    timeline,
+    clamp: (value) => clampMidi(value, -64, 63, 0),
   });
-  const expressionLaneEvents = compileAutomationLane({
+  const expressionLane = compileAutomationWithSegments({
     staticValue: clampMidi(track?.expression, 0, 127, 127),
     lane: findAutomationLane(track, 'expression'),
     interval,
+    parameter: 'expression',
+    timeline,
+    clamp: (value) => clampMidi(value, 0, 127, 127),
   });
-  const expressionEvents = compileDynamicExpressionEvents(track, expressionLaneEvents);
+  const expressionEvents = compileDynamicExpressionEvents(track, expressionLane.points);
+  const expressionSegments = buildStepSegmentsFromPoints(
+    expressionEvents,
+    'expression',
+    timeline,
+    (value) => clampMidi(value, 0, 127, 127),
+  );
 
-  volumeEvents.forEach(([tick, value]) => {
+  volume.points.forEach(([tick, value]) => {
     items.push({
       kind: 'controller',
       parameter: 'volume',
       tick,
       time: tickToSeconds(timeline, tick),
       value: clampMidi(value, 0, 127, 100),
-      interpolation: 'step',
+      interpolation: volume.interpolation,
     });
   });
-  panEvents.forEach(([tick, value]) => {
+  pan.points.forEach(([tick, value]) => {
     items.push({
       kind: 'controller',
       parameter: 'pan',
       tick,
       time: tickToSeconds(timeline, tick),
       value: clampMidi(value, -64, 63, 0),
-      interpolation: 'step',
+      interpolation: pan.interpolation,
     });
   });
   expressionEvents.forEach(([tick, value]) => {
@@ -352,7 +489,91 @@ function compileTrackControllers(track, timeline) {
     });
   });
 
-  return items.filter((item) => item.time != null);
+  segments.push(...volume.segments, ...pan.segments, ...expressionSegments);
+
+  return {
+    trackId,
+    items: items.filter((item) => item.time != null),
+    segments: segments.filter((segment) => segment.startTime != null && segment.endTime != null),
+  };
+}
+
+function compileAutomationWithSegments({
+  staticValue,
+  lane,
+  interval,
+  parameter,
+  timeline,
+  clamp,
+}) {
+  const interpolation = lane?.interpolation === 'linear' ? 'linear' : 'step';
+  const points = compileAutomationLane({ staticValue, lane, interval });
+  const segments = interpolation === 'linear' && lane?.points?.length
+    ? buildLinearSegmentsFromLane(staticValue, lane, timeline, parameter, clamp)
+    : buildStepSegmentsFromPoints(points, parameter, timeline, clamp);
+  return { points, segments, interpolation };
+}
+
+function buildLinearSegmentsFromLane(staticValue, lane, timeline, parameter, clamp) {
+  const points = [[0, staticValue], ...lane.points.map((point) => [Number(point.tick), Number(point.value)])]
+    .filter(([tick, value]) => Number.isFinite(tick) && Number.isFinite(value))
+    .sort((left, right) => left[0] - right[0]);
+  const segments = [];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const [startTick, startValue] = points[index];
+    const [endTick, endValue] = points[index + 1];
+    if (endTick <= startTick) {
+      continue;
+    }
+    segments.push({
+      parameter,
+      startTick,
+      endTick,
+      startValue: clamp(startValue),
+      endValue: clamp(endValue),
+      interpolation: 'linear',
+      startTime: tickToSeconds(timeline, startTick),
+      endTime: tickToSeconds(timeline, endTick),
+    });
+  }
+  return segments;
+}
+
+function buildStepSegmentsFromPoints(points, parameter, timeline, clamp) {
+  if (!points.length) {
+    return [];
+  }
+  const segments = [];
+  for (let index = 0; index < points.length; index += 1) {
+    const [startTick, startValue] = points[index];
+    const endTick = index < points.length - 1
+      ? points[index + 1][0]
+      : startTick;
+    segments.push({
+      parameter,
+      startTick,
+      endTick: Math.max(endTick, startTick),
+      startValue: clamp(startValue),
+      endValue: clamp(startValue),
+      interpolation: 'step',
+      startTime: tickToSeconds(timeline, startTick),
+      endTime: tickToSeconds(timeline, Math.max(endTick, startTick)),
+    });
+  }
+  return segments;
+}
+
+function sortControllerSegments(segments) {
+  segments.sort((left, right) => {
+    if (left.startTick !== right.startTick) {
+      return left.startTick - right.startTick;
+    }
+    const trackCompare = String(left.trackId).localeCompare(String(right.trackId));
+    if (trackCompare !== 0) {
+      return trackCompare;
+    }
+    return String(left.parameter).localeCompare(String(right.parameter));
+  });
 }
 
 function findAutomationLane(track, parameter) {
@@ -501,6 +722,10 @@ function sortScheduleItems(items) {
     const trackCompare = String(left.trackId).localeCompare(String(right.trackId));
     if (trackCompare !== 0) {
       return trackCompare;
+    }
+    const noteIdCompare = String(left.noteId || '').localeCompare(String(right.noteId || ''));
+    if (noteIdCompare !== 0) {
+      return noteIdCompare;
     }
     return String(left.pitch || '').localeCompare(String(right.pitch || ''));
   });
