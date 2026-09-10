@@ -63,7 +63,6 @@ import {
   analysisWarningCodes,
   buildAnalysisRequestKey,
   buildAnalysisRequestScope,
-  compositionSourceFingerprint,
   deriveAnalysisFreshness,
   fingerprintLogPrefix,
   normalizeAnalysisScopeKind,
@@ -4102,6 +4101,106 @@ export const useMusicStore = create((set, get) => ({
     return project;
   },
 
+  /**
+   * Conflict recovery: preserve the local draft by forking it onto a new branch
+   * using fresh server CAS tokens (without discarding local composition).
+   */
+  saveConflictAsNewBranch: async (branchName) => {
+    const state = get();
+    const projectId = state.currentProjectId;
+    const name = String(branchName || '').trim();
+    const localComposition = state.editedMusicJson;
+    if (!projectId || !name) {
+      console.warn('[FIX:conflict-branch] saveConflictAsNewBranch ignored', {
+        hasProject: Boolean(projectId),
+        nameLength: name.length,
+      });
+      return null;
+    }
+    console.info('[FIX:conflict-branch] Saving conflict draft as new branch', {
+      projectId,
+      nameLength: name.length,
+      saveStatus: state.saveStatus,
+    });
+    cancelAutosaveTimer();
+    try {
+      const project = await getProjectRequest(projectId);
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      const historyFields = historyStateFromProject(project);
+      set({
+        ...historyFields,
+        saveConflict: null,
+      });
+      if (
+        !historyFields.activeBranchId
+        || historyFields.workingVersion == null
+        || !historyFields.currentRevisionId
+        || !historyFields.workingFingerprint
+      ) {
+        set({
+          saveStatus: 'error',
+          saveError: 'Missing branch CAS fields after conflict refresh',
+        });
+        return null;
+      }
+      const durable = await applyAsBranchRequest(projectId, {
+        name,
+        source_branch_id: historyFields.activeBranchId,
+        expected_active_branch_id: historyFields.activeBranchId,
+        expected_working_version: historyFields.workingVersion,
+        expected_head_revision_id: historyFields.currentRevisionId,
+        expected_source_fingerprint: historyFields.workingFingerprint,
+        composition: localComposition,
+        operation_type: 'manual-checkpoint',
+      });
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: true,
+        markSaved: true,
+        action: 'conflict-save-as-branch',
+      });
+      set({
+        saveStatus: 'saved',
+        saveError: '',
+        saveConflict: null,
+        ...clearedVersionHistoryState(),
+      });
+      console.info('[FIX:conflict-branch] Conflict draft saved as new branch', {
+        projectId,
+        branchId: durable?.active_branch_id,
+      });
+      await get().loadVersionBranches();
+      await get().loadVersionRevisions({ reset: true });
+      return durable;
+    } catch (error) {
+      if (error instanceof ProjectRevisionConflictError) {
+        console.warn('[FIX:conflict-branch] Save-as-branch still conflicted', {
+          projectId,
+          code: error.code,
+        });
+        set({
+          saveStatus: 'conflict',
+          saveError: 'Project changed elsewhere. Reload or save as a new branch.',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      console.error('[FIX:conflict-branch] Save-as-branch failed', {
+        projectId,
+        status: error.status || null,
+      });
+      set({
+        saveStatus: 'error',
+        saveError: error.message || 'Failed to save as new branch',
+      });
+      throw error;
+    }
+  },
+
   loadProjectList: async () => {
     console.debug('[musicStore] Loading project list');
     set({ projectListStatus: 'loading' });
@@ -6777,6 +6876,10 @@ export const useMusicStore = create((set, get) => ({
     const declaredRanges = Number.isInteger(outputRange.start_bar) && Number.isInteger(outputRange.end_bar)
       ? [{ start_bar: outputRange.start_bar, end_bar: outputRange.end_bar }]
       : [];
+    // Development already verifies edit fingerprints + outside-range preservation before
+    // Apply. Do not send a tight declared_scope here: fake/real drafts may rewrite
+    // harmony/section metadata whose derived bar spans fall outside the vary window and
+    // would falsely trip server scope_escape_bars while event preservation still holds.
     const aiPayload = {
       provider: normalizeAiProvider(state.developmentProvider || state.selectedProvider),
       model: state.developmentModel || state.selectedModel || null,
@@ -6791,6 +6894,7 @@ export const useMusicStore = create((set, get) => ({
       candidateIdSuffix: candidate.candidate_id.slice(-8),
       editSourcePrefix: editFingerprintLogPrefix(verification.localSourceFingerprint),
       barCount: prepared.bar_count,
+      outputRange: declaredRanges[0] || null,
       asNewBranch: Boolean(asNewBranch),
       durable: Boolean(state.currentProjectId),
     });
@@ -6845,7 +6949,6 @@ export const useMusicStore = create((set, get) => ({
           expected_source_fingerprint: state.workingFingerprint,
           composition: prepared,
           operation_type: 'development-apply',
-          declared_scope: { ranges: declaredRanges, track_ids: [] },
           ai: aiPayload,
         });
       } else {
@@ -6858,7 +6961,6 @@ export const useMusicStore = create((set, get) => ({
           composition: prepared,
           operation_type: 'development-apply',
           checkpoint_dirty_draft: true,
-          declared_scope: { ranges: declaredRanges, track_ids: [] },
           ai: aiPayload,
         });
       }

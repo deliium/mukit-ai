@@ -1412,3 +1412,40 @@ test('empty harmony and motifs survive apply; selected track removal recovers pi
   assert.equal(useMusicStore.getState().pianoRollNoteId, null);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks.some((item) => item.id === 'harmony-1'), false);
 });
+
+test('rejectArrangementCandidate removes one candidate without mutating working JSON', async (t) => {
+  const source = arrangementSource();
+  const candidateA = await buildCandidate(source, { candidateId: 'arr-cand-aaaa1111' });
+  const candidateB = await buildCandidate(source, {
+    candidateId: 'arr-cand-bbbb2222',
+    mutate: (composition) => {
+      const bass = composition.tracks.find((item) => item.id === 'bass-1');
+      bass.instrument = 'contrabass';
+      bass.midi_program = 43;
+      bass.name = 'Contrabass';
+    },
+  });
+  const restore = installAxiosStub(async (config) => ({
+    data: await previewResponse(source, [candidateA, candidateB]),
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config,
+  }));
+  t.after(restore);
+  resetStore(source);
+  useMusicStore.getState().setArrangementControls({ candidateCount: 2 });
+  const before = structuredClone(useMusicStore.getState().editedMusicJson);
+  assert.equal(await useMusicStore.getState().startArrangementPreview(), true);
+  assert.equal(useMusicStore.getState().arrangementCandidates.length, 2);
+  useMusicStore.getState().selectArrangementCandidate(candidateA.candidate_id);
+  const compare = useMusicStore.getState().refreshArrangementComparison();
+  assert.ok(compare);
+  assert.equal(typeof compare.identical, 'boolean');
+  assert.ok(useMusicStore.getState().arrangementCompareResult);
+  assert.equal(useMusicStore.getState().rejectArrangementCandidate(candidateA.candidate_id), true);
+  assert.equal(useMusicStore.getState().arrangementCandidates.length, 1);
+  assert.equal(useMusicStore.getState().arrangementSelectedCandidateId, candidateB.candidate_id);
+  assert.equal(useMusicStore.getState().arrangementCompareResult, null);
+  assert.deepEqual(useMusicStore.getState().editedMusicJson, before);
+});

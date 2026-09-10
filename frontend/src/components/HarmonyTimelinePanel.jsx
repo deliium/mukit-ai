@@ -414,6 +414,8 @@ const HarmonyTimelinePanel = () => {
   const reharmonizeError = useMusicStore((state) => state.reharmonizeError);
   const reharmonizeWarnings = useMusicStore((state) => state.reharmonizeWarnings);
   const reharmonizeCandidate = useMusicStore((state) => state.reharmonizeCandidate);
+  const reharmonizeAuditionActive = useMusicStore((state) => state.reharmonizeAuditionActive);
+  const reharmonizeCompareResult = useMusicStore((state) => state.reharmonizeCompareResult);
   const reharmonizeHarmonyChanges = useMusicStore((state) => state.reharmonizeHarmonyChanges);
   const reharmonizeTrackChanges = useMusicStore((state) => state.reharmonizeTrackChanges);
   const reharmonizePreservation = useMusicStore((state) => state.reharmonizePreservation);
@@ -435,6 +437,7 @@ const HarmonyTimelinePanel = () => {
   const reharmonizeBaseRevision = useMusicStore((state) => state.reharmonizeBaseRevision);
   const selectedProvider = useMusicStore((state) => state.selectedProvider);
   const selectedModel = useMusicStore((state) => state.selectedModel);
+  const currentProjectId = useMusicStore((state) => state.currentProjectId);
 
   const [barStartDraft, setBarStartDraft] = useState('');
   const [barEndDraft, setBarEndDraft] = useState('');
@@ -446,6 +449,8 @@ const HarmonyTimelinePanel = () => {
   const [confirmClearReplace, setConfirmClearReplace] = useState(false);
   const [confirmApplyEvents, setConfirmApplyEvents] = useState(false);
   const [localError, setLocalError] = useState('');
+  const [branchNameDraft, setBranchNameDraft] = useState('');
+  const [applyBusy, setApplyBusy] = useState(false);
 
   const scrollRef = useRef(null);
   const dragRef = useRef(null);
@@ -877,11 +882,39 @@ const HarmonyTimelinePanel = () => {
     });
     useMusicStore.getState().discardReharmonizePreview();
     setConfirmApplyEvents(false);
+    setBranchNameDraft('');
   };
 
-  const onApply = async () => {
-    if (applyDisabledReason) {
+  const onReject = () => {
+    console.info('[FIX:harmony-ui] Reject reharmonize candidate', {
+      status: reharmonizeStatus,
+      changeCount: (reharmonizeHarmonyChanges || []).length,
+    });
+    useMusicStore.getState().rejectReharmonizePreview();
+    setConfirmApplyEvents(false);
+    setBranchNameDraft('');
+  };
+
+  const onCompare = () => {
+    if (!reharmonizeCandidate) {
+      return;
+    }
+    console.debug('[FIX:harmony-ui] Compare reharmonize candidate');
+    useMusicStore.getState().refreshReharmonizeComparison();
+  };
+
+  const onToggleAudition = () => {
+    const next = !reharmonizeAuditionActive;
+    console.info('[FIX:harmony-ui] Toggle reharmonize audition', { active: next });
+    useMusicStore.getState().setReharmonizeAuditionActive(next);
+  };
+
+  const onApply = async ({ asNewBranch = false } = {}) => {
+    if (applyDisabledReason || applyBusy) {
       console.debug('[HarmonyTimelinePanel] Apply disabled', { reason: applyDisabledReason });
+      return;
+    }
+    if (asNewBranch && !branchNameDraft.trim()) {
       return;
     }
     if (trackEventsChanged && !confirmApplyEvents) {
@@ -890,17 +923,33 @@ const HarmonyTimelinePanel = () => {
         changedTrackCount: (reharmonizeTrackChanges || []).filter(
           (item) => Number(item.events_changed) > 0,
         ).length,
+        asNewBranch: Boolean(asNewBranch),
       });
       return;
     }
     setConfirmApplyEvents(false);
-    console.info('[HarmonyTimelinePanel] Applying preview', {
+    setApplyBusy(true);
+    console.info('[FIX:harmony-ui] Applying reharmonize preview', {
       operation: reharmonizeOperation,
       contentPolicy: reharmonizeContentPolicy,
       changeCount: (reharmonizeHarmonyChanges || []).length,
       trackChangeCount: (reharmonizeTrackChanges || []).length,
+      asNewBranch: Boolean(asNewBranch),
     });
-    await useMusicStore.getState().applyReharmonizePreview();
+    try {
+      await useMusicStore.getState().applyReharmonizePreview(
+        asNewBranch
+          ? { asNewBranch: true, branchName: branchNameDraft.trim() }
+          : {},
+      );
+      if (asNewBranch) {
+        setBranchNameDraft('');
+      }
+    } catch {
+      // store records reharmonizeError / conflict
+    } finally {
+      setApplyBusy(false);
+    }
   };
 
   if (!composition) {
@@ -1528,23 +1577,90 @@ const HarmonyTimelinePanel = () => {
         <ButtonRow>
           <Button
             type="button"
+            $secondary
+            data-testid="harmony-audition-btn"
+            disabled={!reharmonizeCandidate || applyBusy}
+            aria-pressed={reharmonizeAuditionActive}
+            onClick={onToggleAudition}
+          >
+            {reharmonizeAuditionActive ? 'Stop audition' : 'Audition candidate'}
+          </Button>
+          <Button
+            type="button"
+            $secondary
+            data-testid="harmony-compare-btn"
+            disabled={!reharmonizeCandidate || applyBusy}
+            onClick={onCompare}
+          >
+            Compare
+          </Button>
+          <Button
+            type="button"
             data-testid="harmony-apply-btn"
-            disabled={Boolean(applyDisabledReason)}
+            disabled={Boolean(applyDisabledReason) || applyBusy}
             title={applyDisabledReason || ''}
-            onClick={onApply}
+            onClick={() => onApply()}
           >
             {confirmApplyEvents ? 'Confirm apply' : 'Apply'}
           </Button>
           <Button
             type="button"
             $secondary
+            data-testid="harmony-reject-btn"
+            disabled={!reharmonizeCandidate || applyBusy}
+            onClick={onReject}
+          >
+            Reject
+          </Button>
+          <Button
+            type="button"
+            $secondary
             data-testid="harmony-discard-btn"
-            disabled={reharmonizeStatus === 'idle' && !reharmonizeCandidate}
+            disabled={(reharmonizeStatus === 'idle' && !reharmonizeCandidate) || applyBusy}
             onClick={onDiscard}
           >
             Discard
           </Button>
         </ButtonRow>
+        {reharmonizeCompareResult ? (
+          <Hint data-testid="harmony-compare-summary">
+            Compare vs working:{' '}
+            {reharmonizeCompareResult.identical ? 'identical' : 'differences'}
+            {' · '}
+            +{reharmonizeCompareResult.events?.added || 0}
+            {' / -'}
+            {reharmonizeCompareResult.events?.removed || 0}
+            {' / ~'}
+            {reharmonizeCompareResult.events?.changed || 0}
+          </Hint>
+        ) : null}
+        {reharmonizeAuditionActive ? (
+          <Hint data-testid="harmony-audition-active">
+            Transport plays the reharmonize candidate. Working composition is unchanged until Apply.
+          </Hint>
+        ) : null}
+        {currentProjectId ? (
+          <ButtonRow>
+            <Input
+              aria-label="Apply reharmonize as new branch name"
+              data-testid="harmony-branch-name"
+              placeholder="New branch name"
+              value={branchNameDraft}
+              disabled={applyBusy}
+              onChange={(event) => setBranchNameDraft(event.target.value)}
+              style={{ flex: '1 1 160px', marginBottom: 0 }}
+            />
+            <Button
+              type="button"
+              data-testid="harmony-apply-as-branch-btn"
+              disabled={Boolean(applyDisabledReason) || applyBusy || !branchNameDraft.trim()}
+              title={applyDisabledReason || ''}
+              onClick={() => onApply({ asNewBranch: true })}
+            >
+              Apply as new branch
+            </Button>
+          </ButtonRow>
+        ) : null}
         {applyDisabledReason && reharmonizeStatus !== 'idle' ? (
           <Hint>{applyDisabledReason}</Hint>
         ) : null}

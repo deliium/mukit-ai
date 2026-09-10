@@ -1105,3 +1105,108 @@ test('save conflict stops autosave retries and records bounded detail', async (t
     globalThis.setTimeout = originalSetTimeout;
   }
 });
+
+test('saveConflictAsNewBranch refreshes CAS then forks local draft', async (t) => {
+  let applyPayload = null;
+  let getCount = 0;
+  const restore = installAxiosStub(async (config) => {
+    const method = String(config.method || 'get').toLowerCase();
+    const url = String(config.url || '');
+    if (method === 'get' && url === '/projects/p1') {
+      getCount += 1;
+      if (getCount === 1) {
+        return {
+          data: historyProjectPayload(),
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config,
+        };
+      }
+      return {
+        data: historyProjectPayload({
+          working_version: 3,
+          current_revision_id: 'r-server',
+          working_fingerprint: 'composition.snapshot.v1:serverfresh0001',
+        }),
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    if (method === 'post' && url === '/projects/p1/branches/apply-as-branch') {
+      applyPayload = patchPayload(config);
+      return {
+        data: {
+          ...historyProjectPayload({
+            active_branch_id: 'b-fork',
+            active_branch_name: 'Conflict fork',
+            current_revision_id: 'r-fork',
+            current_revision_sequence: 4,
+            working_version: 0,
+            working_fingerprint: 'composition.snapshot.v1:forked000000001',
+            composition: applyPayload?.composition || structuredClone(COMPOSITION),
+          }),
+          revision_created: true,
+          revision_id: 'r-fork',
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    if (method === 'get' && url === '/projects/p1/branches') {
+      return {
+        data: { branches: [], active_branch_id: 'b-fork' },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    if (method === 'get' && url.startsWith('/projects/p1/revisions')) {
+      return {
+        data: { revisions: [], next_before_sequence: null },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
+  });
+  t.after(restore);
+
+  resetProjectState();
+  await useMusicStore.getState().openProject('p1');
+  useMusicStore.getState().createNote('piano-1', {
+    pitch: 'G4',
+    start_tick: 480,
+    duration_ticks: 240,
+  });
+  const localBefore = structuredClone(useMusicStore.getState().editedMusicJson);
+  useMusicStore.setState({
+    saveStatus: 'conflict',
+    saveError: 'Project changed elsewhere. Reload or save as a new branch.',
+    saveConflict: { code: 'project_revision_conflict', current_working_version: 3 },
+  });
+
+  const durable = await useMusicStore.getState().saveConflictAsNewBranch('Conflict fork');
+  assert.ok(durable);
+  assert.equal(applyPayload?.name, 'Conflict fork');
+  assert.equal(applyPayload?.expected_working_version, 3);
+  assert.equal(applyPayload?.expected_head_revision_id, 'r-server');
+  assert.equal(applyPayload?.expected_source_fingerprint, 'composition.snapshot.v1:serverfresh0001');
+  assert.equal(applyPayload?.operation_type, 'manual-checkpoint');
+  assert.equal(applyPayload?.composition?.tracks?.[0]?.events?.some((e) => e.pitch === 'G4'), true);
+  assert.equal(useMusicStore.getState().saveStatus, 'saved');
+  assert.equal(useMusicStore.getState().saveConflict, null);
+  assert.equal(useMusicStore.getState().activeBranchId, 'b-fork');
+  assert.equal(
+    useMusicStore.getState().editedMusicJson.tracks[0].events.some((e) => e.pitch === 'G4'),
+    true,
+  );
+  assert.equal(localBefore.tracks[0].events.some((e) => e.pitch === 'G4'), true);
+});

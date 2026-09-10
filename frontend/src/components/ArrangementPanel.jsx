@@ -526,6 +526,8 @@ const ArrangementPanel = () => {
   const radioName = `arrangement-candidate-${reactId}`;
   const [confirmApply, setConfirmApply] = useState(false);
   const [expandedCandidateId, setExpandedCandidateId] = useState(null);
+  const [branchNameDraft, setBranchNameDraft] = useState('');
+  const [applyBusy, setApplyBusy] = useState(false);
 
   const composition = useMusicStore((state) => state.editedMusicJson);
   const selectedProvider = useMusicStore((state) => state.selectedProvider);
@@ -559,8 +561,10 @@ const ArrangementPanel = () => {
   const rejectedAttempts = useMusicStore((state) => state.arrangementRejectedAttempts);
   const selectedCandidateId = useMusicStore((state) => state.arrangementSelectedCandidateId);
   const auditionMode = useMusicStore((state) => state.arrangementAuditionMode);
+  const arrangementCompareResult = useMusicStore((state) => state.arrangementCompareResult);
   const arrangementProvider = useMusicStore((state) => state.arrangementProvider);
   const arrangementModel = useMusicStore((state) => state.arrangementModel);
+  const currentProjectId = useMusicStore((state) => state.currentProjectId);
 
   const setArrangementControls = useMusicStore((state) => state.setArrangementControls);
   const loadArrangementCatalog = useMusicStore((state) => state.loadArrangementCatalog);
@@ -568,6 +572,8 @@ const ArrangementPanel = () => {
   const selectArrangementCandidate = useMusicStore((state) => state.selectArrangementCandidate);
   const setArrangementAuditionMode = useMusicStore((state) => state.setArrangementAuditionMode);
   const discardArrangementCandidates = useMusicStore((state) => state.discardArrangementCandidates);
+  const rejectArrangementCandidate = useMusicStore((state) => state.rejectArrangementCandidate);
+  const refreshArrangementComparison = useMusicStore((state) => state.refreshArrangementComparison);
   const applySelectedArrangementCandidate = useMusicStore(
     (state) => state.applySelectedArrangementCandidate,
   );
@@ -770,6 +776,7 @@ const ArrangementPanel = () => {
 
   const handleDiscard = () => {
     setConfirmApply(false);
+    setBranchNameDraft('');
     panelLogger.info('Arrangement discard from UI', {
       operation,
       candidateCount: candidates.length,
@@ -777,8 +784,30 @@ const ArrangementPanel = () => {
     discardArrangementCandidates();
   };
 
+  const handleRejectSelected = () => {
+    if (!selectedCandidate) {
+      return;
+    }
+    setConfirmApply(false);
+    console.info('[FIX:arrange-ui] Reject arrangement candidate', {
+      candidateIdSuffix: selectedCandidate.candidate_id.slice(-8),
+      remaining: Math.max(0, candidates.length - 1),
+    });
+    rejectArrangementCandidate(selectedCandidate.candidate_id);
+  };
+
+  const handleCompareSelected = () => {
+    if (!selectedCandidate) {
+      return;
+    }
+    console.debug('[FIX:arrange-ui] Compare arrangement candidate', {
+      candidateIdSuffix: selectedCandidate.candidate_id.slice(-8),
+    });
+    refreshArrangementComparison();
+  };
+
   const handleApplyClick = async () => {
-    if (!canApply || !selectedCandidate) {
+    if (!canApply || !selectedCandidate || applyBusy) {
       return;
     }
     if (!confirmApply) {
@@ -791,14 +820,44 @@ const ArrangementPanel = () => {
       });
       return;
     }
+    setApplyBusy(true);
     panelLogger.info('Arrangement apply confirmed', {
       operation,
       candidateIdSuffix: selectedCandidate.candidate_id.slice(-8),
       status: 'apply',
     });
-    const ok = await applySelectedArrangementCandidate();
-    if (ok) {
-      setConfirmApply(false);
+    try {
+      const ok = await applySelectedArrangementCandidate();
+      if (ok) {
+        setConfirmApply(false);
+      }
+    } finally {
+      setApplyBusy(false);
+    }
+  };
+
+  const handleApplyAsBranch = async () => {
+    if (!canApply || !selectedCandidate || applyBusy || !branchNameDraft.trim()) {
+      return;
+    }
+    setApplyBusy(true);
+    console.info('[FIX:arrange-ui] Apply arrangement as new branch', {
+      candidateIdSuffix: selectedCandidate.candidate_id.slice(-8),
+      nameLength: branchNameDraft.trim().length,
+    });
+    try {
+      const ok = await applySelectedArrangementCandidate({
+        asNewBranch: true,
+        branchName: branchNameDraft.trim(),
+      });
+      if (ok) {
+        setConfirmApply(false);
+        setBranchNameDraft('');
+      }
+    } catch {
+      // store records arrangementError / conflict
+    } finally {
+      setApplyBusy(false);
     }
   };
 
@@ -1568,6 +1627,7 @@ const ArrangementPanel = () => {
               data-testid="arrange-play-source"
               onClick={handlePlaySource}
               aria-pressed={auditionMode === ARRANGEMENT_AUDITION_SOURCE}
+              disabled={applyBusy}
             >
               Play source
             </Button>
@@ -1575,7 +1635,7 @@ const ArrangementPanel = () => {
               type="button"
               $variant="secondary"
               data-testid="arrange-audition"
-              disabled={!selectedCandidate || stale || status !== 'ready'}
+              disabled={!selectedCandidate || stale || status !== 'ready' || applyBusy}
               onClick={handleAuditionCandidate}
               aria-pressed={auditionMode === ARRANGEMENT_AUDITION_CANDIDATE}
             >
@@ -1585,13 +1645,69 @@ const ArrangementPanel = () => {
             </Button>
             <Button
               type="button"
+              $variant="secondary"
+              data-testid="arrange-compare"
+              disabled={!selectedCandidate || applyBusy}
+              onClick={handleCompareSelected}
+            >
+              Compare
+            </Button>
+            <Button
+              type="button"
               data-testid="arrange-apply"
-              disabled={!canApply}
+              disabled={!canApply || applyBusy}
               onClick={handleApplyClick}
             >
               {confirmApply ? 'Confirm apply selected' : 'Apply selected'}
             </Button>
+            <Button
+              type="button"
+              $variant="secondary"
+              data-testid="arrange-reject"
+              disabled={!selectedCandidate || applyBusy}
+              onClick={handleRejectSelected}
+            >
+              Reject
+            </Button>
           </ButtonRow>
+          {arrangementCompareResult ? (
+            <Hint data-testid="arrange-compare-summary">
+              Compare vs working:{' '}
+              {arrangementCompareResult.identical ? 'identical' : 'differences'}
+              {' · '}
+              +{arrangementCompareResult.events?.added || 0}
+              {' / -'}
+              {arrangementCompareResult.events?.removed || 0}
+              {' / ~'}
+              {arrangementCompareResult.events?.changed || 0}
+            </Hint>
+          ) : null}
+          {currentProjectId ? (
+            <ButtonRow>
+              <input
+                aria-label="Apply arrangement as new branch name"
+                data-testid="arrange-branch-name"
+                placeholder="New branch name"
+                value={branchNameDraft}
+                disabled={applyBusy}
+                onChange={(event) => setBranchNameDraft(event.target.value)}
+                style={{
+                  flex: '1 1 160px',
+                  padding: '8px 10px',
+                  border: '1px solid #c7d2fe',
+                  borderRadius: 6,
+                }}
+              />
+              <Button
+                type="button"
+                data-testid="arrange-apply-as-branch"
+                disabled={!canApply || applyBusy || !branchNameDraft.trim()}
+                onClick={handleApplyAsBranch}
+              >
+                Apply as new branch
+              </Button>
+            </ButtonRow>
+          ) : null}
           {auditionMode === ARRANGEMENT_AUDITION_CANDIDATE ? (
             <Hint data-testid="arrange-audition-active">
               Transport plays the selected candidate. Working composition is unchanged until Apply.

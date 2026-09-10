@@ -72,12 +72,22 @@ const ProjectComposerBar = () => {
   const goHome = useMusicStore((state) => state.goHome);
   const saveCurrentProject = useMusicStore((state) => state.saveCurrentProject);
   const reloadCurrentProject = useMusicStore((state) => state.reloadCurrentProject);
+  const saveConflictAsNewBranch = useMusicStore((state) => state.saveConflictAsNewBranch);
   const renameCurrentProject = useMusicStore((state) => state.renameCurrentProject);
   const [nameDraft, setNameDraft] = React.useState(currentProjectName);
+  const [conflictBranchName, setConflictBranchName] = React.useState('');
+  const [conflictBusy, setConflictBusy] = React.useState(false);
 
   React.useEffect(() => {
     setNameDraft(currentProjectName);
   }, [currentProjectName]);
+
+  React.useEffect(() => {
+    if (saveStatus !== 'conflict') {
+      setConflictBranchName('');
+      setConflictBusy(false);
+    }
+  }, [saveStatus]);
 
   if (!currentProjectId) {
     return null;
@@ -90,6 +100,26 @@ const ProjectComposerBar = () => {
       composerTabRequest: 'versions',
       composerTabRequestSeq: (state.composerTabRequestSeq || 0) + 1,
     }));
+  };
+
+  const onSaveAsBranch = async () => {
+    const name = conflictBranchName.trim();
+    if (!name || conflictBusy) {
+      return;
+    }
+    setConflictBusy(true);
+    console.info('[FIX:conflict-branch] ProjectComposerBar save as branch', {
+      projectId: currentProjectId,
+      nameLength: name.length,
+    });
+    try {
+      await saveConflictAsNewBranch(name);
+      setConflictBranchName('');
+    } catch {
+      // store records saveError / conflict
+    } finally {
+      setConflictBusy(false);
+    }
   };
 
   return (
@@ -131,17 +161,37 @@ const ProjectComposerBar = () => {
       </Group>
       <Group>
         {saveStatus === 'conflict' ? (
-          <Button
-            type="button"
-            $secondary
-            data-testid="reload-project"
-            onClick={() => {
-              console.debug('[ProjectComposerBar] Reload after conflict', { projectId: currentProjectId });
-              reloadCurrentProject().catch(() => {});
-            }}
-          >
-            Reload
-          </Button>
+          <>
+            <Button
+              type="button"
+              $secondary
+              data-testid="reload-project"
+              disabled={conflictBusy}
+              onClick={() => {
+                console.debug('[ProjectComposerBar] Reload after conflict', { projectId: currentProjectId });
+                reloadCurrentProject().catch(() => {});
+              }}
+            >
+              Reload
+            </Button>
+            <NameInput
+              value={conflictBranchName}
+              aria-label="Save conflict as new branch name"
+              data-testid="conflict-branch-name"
+              placeholder="New branch name"
+              disabled={conflictBusy}
+              onChange={(event) => setConflictBranchName(event.target.value)}
+              style={{ minWidth: 140 }}
+            />
+            <Button
+              type="button"
+              data-testid="save-conflict-as-branch"
+              disabled={conflictBusy || !conflictBranchName.trim()}
+              onClick={onSaveAsBranch}
+            >
+              Save as branch
+            </Button>
+          </>
         ) : null}
         <Button
           type="button"
@@ -154,7 +204,7 @@ const ProjectComposerBar = () => {
         <Button
           type="button"
           data-testid="save-project"
-          disabled={saveStatus === 'saving'}
+          disabled={saveStatus === 'saving' || saveStatus === 'conflict'}
           onClick={() => {
             console.debug('[ProjectComposerBar] Manual save', { projectId: currentProjectId });
             saveCurrentProject({ reason: 'manual-force' }).catch(() => {});

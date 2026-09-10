@@ -25,6 +25,7 @@ export default [
         window: 'readonly',
         Blob: 'readonly',
         URL: 'readonly',
+        URLSearchParams: 'readonly',
         ResizeObserver: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',

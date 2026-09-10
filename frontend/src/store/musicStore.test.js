@@ -510,6 +510,70 @@ test('reharmonize preview does not dirty composition; apply preserves melody and
   assert.deepEqual(useMusicStore.getState().editedMusicJson, composition);
 });
 
+test('reharmonize reject and compare leave working composition unchanged', async (t) => {
+  const composition = sixteenBarComposition();
+  const revision = 'rev-reject-compare';
+  resetStore(composition);
+  useMusicStore.setState({
+    compositionRevision: revision,
+    saveStatus: 'saved',
+    harmonySelectionStartBar: 9,
+    harmonySelectionEndBar: 12,
+    reharmonizeTargetTrackIds: ['bass', 'accompaniment'],
+    reharmonizeContentPolicy: 'preserve_melody_adapt_harmony',
+    reharmonizeEngine: 'deterministic',
+  });
+  const { compositionEditFingerprint } = await import('../utils/compositionCandidates.js');
+  const candidate = structuredClone(composition);
+  candidate.harmony[8] = {
+    start_tick: 8 * BAR,
+    duration_ticks: BAR,
+    chord: 'E7(b9)',
+  };
+  const baseFingerprint = await compositionEditFingerprint(composition);
+  const proposalFingerprint = await compositionEditFingerprint(candidate);
+  const previousAdapter = axios.defaults.adapter;
+  axios.defaults.adapter = async () => ({
+    data: {
+      base_fingerprint: baseFingerprint,
+      proposal_fingerprint: proposalFingerprint,
+      composition: candidate,
+      harmony_changes: [{ kind: 'replaced', start_tick: 8 * BAR, duration_ticks: 4 * BAR, chord: 'E7(b9)' }],
+      track_changes: [],
+      preservation: [{ assertion: 'melody_events_exact', status: 'ok' }],
+      compatibility: { status: 'compatible', findings: [] },
+      provider: 'deterministic',
+      model: null,
+      warnings: [],
+      start_tick: 8 * BAR,
+      end_tick: 12 * BAR,
+      active_key: 'C major',
+      recommended_target_track_ids: ['bass', 'accompaniment'],
+    },
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config: {},
+  });
+  t.after(() => {
+    axios.defaults.adapter = previousAdapter;
+  });
+
+  assert.equal(await useMusicStore.getState().startReharmonizePreview(), true);
+  const before = structuredClone(useMusicStore.getState().editedMusicJson);
+  const compare = useMusicStore.getState().refreshReharmonizeComparison();
+  assert.ok(compare);
+  assert.equal(compare.identical, false);
+  assert.ok(useMusicStore.getState().reharmonizeCompareResult);
+  assert.equal(useMusicStore.getState().setReharmonizeAuditionActive(true), true);
+  assert.equal(useMusicStore.getState().reharmonizeAuditionActive, true);
+  assert.equal(useMusicStore.getState().rejectReharmonizePreview(), true);
+  assert.equal(useMusicStore.getState().reharmonizeCandidate, null);
+  assert.equal(useMusicStore.getState().reharmonizeCompareResult, null);
+  assert.equal(useMusicStore.getState().reharmonizeAuditionActive, false);
+  assert.deepEqual(useMusicStore.getState().editedMusicJson, before);
+});
+
 test('harmony timeline edits create one undo entry and preserve note events', () => {
   const composition = sixteenBarComposition();
   const eventsBefore = structuredClone(composition.tracks.map((track) => track.events));
