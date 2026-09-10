@@ -9,8 +9,8 @@ Created: 2026-09-10
 - Docs: yes
 
 ## Roadmap Linkage
-Milestone: "Safe AI experimentation and versioning"
-Rationale: Extend local project persistence and every substantial AI workflow so experimentation is preview-first, recoverable, comparable, and durable across restarts. Added to `.ai-factory/ROADMAP.md` via `$aif-roadmap` sync with `plans/`.
+Milestone: "Safe AI experimentation and versioning" (completed 2026-09-10)
+Rationale: Extend local project persistence and every substantial AI workflow so experimentation is preview-first, recoverable, comparable, and durable across restarts. Marked complete in `.ai-factory/ROADMAP.md` via `$aif-roadmap` sync with `plans/` (all 15 tasks done; history APIs + Versions UI present).
 
 ## Goal
 
