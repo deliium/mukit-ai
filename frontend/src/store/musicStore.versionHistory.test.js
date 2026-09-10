@@ -278,7 +278,7 @@ test('selectVersionRevision lazy-loads detail and compare stays non-mutating', a
   assert.equal(state.versionCompareResult.identical, false);
 });
 
-test('version audition does not mutate working composition and uses isolated mixer', async (t) => {
+test('version audition does not mutate working composition and uses isolated mixer', async () => {
   resetState({
     versionSelectedRevisionId: 'r0',
     versionRevisionDetails: {

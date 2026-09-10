@@ -98,6 +98,81 @@ BEFORE=$(curl -fsS "${BACKEND_URL}/projects/${PROJECT_ID}")
 BEFORE_HASH=$(python3 -c 'import json,sys,hashlib; c=json.load(sys.stdin)["composition"]; print(hashlib.sha256(json.dumps(c,sort_keys=True).encode()).hexdigest())' <<<"${BEFORE}")
 log "Pre-restart composition sha256=${BEFORE_HASH}"
 
+log "Creating durable checkpoint + Darker harmony branch before restart"
+BEFORE_FILE=$(mktemp)
+printf '%s' "${BEFORE}" >"${BEFORE_FILE}"
+HISTORY_STATE=$(
+  BACKEND_URL="${BACKEND_URL}" PROJECT_ID="${PROJECT_ID}" PROJECT_JSON="${BEFORE_FILE}" python3 <<'PY'
+import json, os, urllib.error, urllib.request
+
+backend = os.environ["BACKEND_URL"].rstrip("/")
+project_id = os.environ["PROJECT_ID"]
+with open(os.environ["PROJECT_JSON"], encoding="utf-8") as handle:
+    project = json.load(handle)
+
+def request(method: str, path: str, payload: dict | None = None) -> dict:
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{backend}{path}",
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"} if payload is not None else {},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"{method} {path} failed: {exc.code} {body[:800]}") from exc
+
+composition = dict(project["composition"])
+composition["tempo"] = int(composition.get("tempo") or 100) + 1
+checkpoint = request(
+    "POST",
+    f"/projects/{project_id}/revisions",
+    {
+        "branch_id": project["active_branch_id"],
+        "expected_active_branch_id": project["active_branch_id"],
+        "expected_working_version": project["working_version"],
+        "expected_head_revision_id": project["current_revision_id"],
+        "expected_source_fingerprint": project["working_fingerprint"],
+        "composition": composition,
+        "operation_type": "manual-checkpoint",
+        "name": "Docker checkpoint",
+    },
+)
+
+alt = dict(composition)
+alt["tempo"] = 90
+branched = request(
+    "POST",
+    f"/projects/{project_id}/branches/apply-as-branch",
+    {
+        "name": "Darker harmony",
+        "source_branch_id": checkpoint["active_branch_id"],
+        "expected_active_branch_id": checkpoint["active_branch_id"],
+        "expected_working_version": checkpoint["working_version"],
+        "expected_head_revision_id": checkpoint["current_revision_id"],
+        "expected_source_fingerprint": checkpoint["working_fingerprint"],
+        "composition": alt,
+        "operation_type": "development-apply",
+    },
+)
+
+print(json.dumps({
+    "root_revision_id": project["current_revision_id"],
+    "active_branch_name": branched["active_branch_name"],
+    "tempo": branched["composition"]["tempo"],
+}))
+PY
+)
+rm -f "${BEFORE_FILE}"
+HISTORY_BRANCH=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["active_branch_name"])' <<<"${HISTORY_STATE}")
+HISTORY_TEMPO=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tempo"])' <<<"${HISTORY_STATE}")
+ROOT_REV=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["root_revision_id"])' <<<"${HISTORY_STATE}")
+[[ "${HISTORY_BRANCH}" == "Darker harmony" ]] || fail "Expected active branch Darker harmony, got ${HISTORY_BRANCH}"
+[[ "${HISTORY_TEMPO}" == "90" ]] || fail "Expected branched tempo 90, got ${HISTORY_TEMPO}"
+
 log "Restarting containers (named volume retained)"
 "${COMPOSE[@]}" restart
 # Give healthchecks time after restart
@@ -106,8 +181,72 @@ wait_http "${BACKEND_URL}/health" "backend-after-restart" 45
 wait_http "${BACKEND_URL}/ready" "backend-ready-after-restart" 45
 
 AFTER=$(curl -fsS "${BACKEND_URL}/projects/${PROJECT_ID}")
-AFTER_HASH=$(python3 -c 'import json,sys,hashlib; c=json.load(sys.stdin)["composition"]; print(hashlib.sha256(json.dumps(c,sort_keys=True).encode()).hexdigest())' <<<"${AFTER}")
-log "Post-restart composition sha256=${AFTER_HASH}"
+AFTER_BRANCH=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["active_branch_name"])' <<<"${AFTER}")
+AFTER_TEMPO=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["composition"]["tempo"])' <<<"${AFTER}")
+[[ "${AFTER_BRANCH}" == "Darker harmony" ]] || fail "Active branch lost after restart (got ${AFTER_BRANCH})"
+[[ "${AFTER_TEMPO}" == "90" ]] || fail "Branched composition lost after restart (tempo=${AFTER_TEMPO})"
 
-[[ "${BEFORE_HASH}" == "${AFTER_HASH}" ]] || fail "Composition changed after restart (volume not persisted?)"
-log "PASS: composition persisted across container restart"
+log "Checking out Original and restoring root revision after restart"
+AFTER_FILE=$(mktemp)
+printf '%s' "${AFTER}" >"${AFTER_FILE}"
+RESTORE_STATE=$(
+  BACKEND_URL="${BACKEND_URL}" PROJECT_ID="${PROJECT_ID}" ROOT_REV="${ROOT_REV}" PROJECT_JSON="${AFTER_FILE}" python3 <<'PY'
+import json, os, urllib.error, urllib.request
+
+backend = os.environ["BACKEND_URL"].rstrip("/")
+project_id = os.environ["PROJECT_ID"]
+root_revision_id = os.environ["ROOT_REV"]
+with open(os.environ["PROJECT_JSON"], encoding="utf-8") as handle:
+    project = json.load(handle)
+
+def request(method: str, path: str, payload: dict | None = None) -> dict:
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{backend}{path}",
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"} if payload is not None else {},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"{method} {path} failed: {exc.code} {body[:800]}") from exc
+
+branches = request("GET", f"/projects/{project_id}/branches")["branches"]
+original = next(item for item in branches if item["name"] == "Original")
+checked = request(
+    "POST",
+    f"/projects/{project_id}/branches/{original['id']}/checkout",
+    {
+        "expected_active_branch_id": project["active_branch_id"],
+        "expected_working_version": project["working_version"],
+        "expected_head_revision_id": project["current_revision_id"],
+    },
+)
+restored = request(
+    "POST",
+    f"/projects/{project_id}/revisions/{root_revision_id}/restore",
+    {
+        "branch_id": checked["active_branch_id"],
+        "expected_active_branch_id": checked["active_branch_id"],
+        "expected_working_version": checked["working_version"],
+        "expected_head_revision_id": checked["current_revision_id"],
+    },
+)
+print(json.dumps({
+    "checked_branch": checked["active_branch_name"],
+    "restore_operation": restored["operation_type"],
+}))
+PY
+)
+rm -f "${AFTER_FILE}"
+CHECKED_NAME=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_branch"])' <<<"${RESTORE_STATE}")
+RESTORE_OP=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["restore_operation"])' <<<"${RESTORE_STATE}")
+[[ "${CHECKED_NAME}" == "Original" ]] || fail "Checkout Original failed (${CHECKED_NAME})"
+[[ "${RESTORE_OP}" == "revision-restore" ]] || fail "Expected revision-restore, got ${RESTORE_OP}"
+
+AFTER_HASH=$(python3 -c 'import json,sys,hashlib; c=json.load(sys.stdin)["composition"]; print(hashlib.sha256(json.dumps(c,sort_keys=True).encode()).hexdigest())' <<<"${AFTER}")
+log "Post-restart branched composition sha256=${AFTER_HASH}"
+log "PASS: composition + multi-branch history persisted across container restart"

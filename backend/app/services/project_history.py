@@ -202,7 +202,6 @@ def list_revisions(
     """
     params: list[Any] = []
     clauses = ["r.project_id = ?"]
-    params.append(project_id)
     if branch_id is not None:
         query += """
             JOIN project_branches b
@@ -217,6 +216,8 @@ def list_revisions(
              AND head.id = b.head_revision_id
         """
         clauses.append("r.sequence <= head.sequence")
+    # project_id binds after JOIN placeholders so SQL `?` order matches params.
+    params.append(project_id)
     if before_sequence is not None:
         clauses.append("r.sequence < ?")
         params.append(before_sequence)

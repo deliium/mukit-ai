@@ -267,6 +267,17 @@ def test_restore_and_apply_as_branch(project_db, expressive_payload):
     branches = history.list_branches(created.id, db_path=project_db)
     original = next(item for item in branches.branches if item.name == "Original")
     assert original.head_revision_id == restored.current_revision_id
+    # Branch-filtered history must bind JOIN params before WHERE project_id
+    # (regression: swapped placeholders returned an empty list).
+    alt_history = history.list_revisions(
+        created.id,
+        branch_id=branched.active_branch_id,
+        limit=20,
+        db_path=project_db,
+    )
+    assert len(alt_history.revisions) >= 2
+    assert any(item.id == branched.current_revision_id for item in alt_history.revisions)
+    assert any(item.id == restored.current_revision_id for item in alt_history.revisions)
 
 
 def test_dirty_draft_commit_resolves_source_without_snapshot(project_db, expressive_payload):
