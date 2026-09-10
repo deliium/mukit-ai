@@ -60,6 +60,13 @@ function resetStore(composition = structuredClone(BASE)) {
     pianoRollTrackId: 'melody-1',
     pianoRollNoteId: null,
     pianoRollNoteIds: [],
+    editorSelectionRefs: [],
+    editorSelectionPrimary: null,
+    editorSelectionAnchor: null,
+    editorClipboard: null,
+    editorCommandFeedback: null,
+    hiddenTrackIds: [],
+    lockedTrackIds: [],
     pianoRollSnap: '1/8',
     pianoRollZoom: 0.05,
     pianoRollEditStatus: 'idle',
@@ -602,4 +609,276 @@ test('composition transaction marks project dirty for autosave revision', () => 
   const after = useMusicStore.getState();
   assert.equal(after.saveStatus, 'unsaved');
   assert.notEqual(after.compositionRevision, revisionBefore);
+});
+
+test('editor selection supports multi-track refs toggle and range clear', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  store.setEditorSelection({
+    refs: [{ trackId: 'melody-1', eventId: 'n1' }],
+    primary: { trackId: 'melody-1', eventId: 'n1' },
+  });
+  store.toggleEditorSelectionRef({ trackId: 'bass-1', eventId: 'b1' });
+  let state = useMusicStore.getState();
+  assert.equal(state.editorSelectionRefs.length, 2);
+  assert.equal(state.pianoRollTrackId, 'bass-1');
+  assert.equal(state.pianoRollNoteId, 'b1');
+
+  store.extendEditorSelectionTo({ trackId: 'melody-1', eventId: 'n2' });
+  state = useMusicStore.getState();
+  assert.ok(state.editorSelectionRefs.length >= 2);
+
+  store.clearEditorSelection();
+  state = useMusicStore.getState();
+  assert.deepEqual(state.editorSelectionRefs, []);
+  assert.equal(state.pianoRollNoteId, null);
+});
+
+test('clipboard copy/cut/paste/duplicate/delete use one history entry each', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  store.setEditorSelection({
+    refs: [
+      { trackId: 'melody-1', eventId: 'n1' },
+      { trackId: 'melody-1', eventId: 'n2' },
+    ],
+    primary: { trackId: 'melody-1', eventId: 'n1' },
+  });
+
+  const copied = store.copySelection();
+  assert.equal(copied.ok, true);
+  assert.ok(useMusicStore.getState().editorClipboard);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 0);
+
+  useMusicStore.getState().setEditorSelection({
+    refs: [{ trackId: 'melody-1', eventId: 'n1' }],
+    primary: { trackId: 'melody-1', eventId: 'n1' },
+  });
+  const duplicated = useMusicStore.getState().duplicateSelection();
+  assert.equal(duplicated.ok, true);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 1);
+  assert.ok(useMusicStore.getState().editorSelectionRefs.length >= 1);
+
+  useMusicStore.setState({ editCursorTick: 1920 });
+  const pasted = useMusicStore.getState().pasteClipboard();
+  assert.equal(pasted.ok, true);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 2);
+
+  const beforeCutEvents = useMusicStore.getState().editedMusicJson.tracks[0].events.length;
+  useMusicStore.getState().setEditorSelection({
+    refs: useMusicStore.getState().editorSelectionRefs.slice(0, 1),
+    primary: useMusicStore.getState().editorSelectionRefs[0],
+  });
+  const cut = useMusicStore.getState().cutSelection();
+  assert.equal(cut.ok, true);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 3);
+  assert.ok(
+    useMusicStore.getState().editedMusicJson.tracks[0].events.length < beforeCutEvents,
+  );
+
+  useMusicStore.getState().selectAllVisible();
+  const deleted = useMusicStore.getState().deleteSelection();
+  assert.equal(deleted.ok, true);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 4);
+  assert.equal(useMusicStore.getState().editorSelectionRefs.length, 0);
+});
+
+test('locked and empty selection guards reject mutating clipboard commands', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  assert.equal(store.cutSelection().ok, false);
+  assert.equal(store.pasteClipboard().ok, false);
+  assert.equal(useMusicStore.getState().editorCommandFeedback?.code, 'empty_clipboard');
+
+  store.setEditorSelection({
+    refs: [{ trackId: 'melody-1', eventId: 'n1' }],
+    primary: { trackId: 'melody-1', eventId: 'n1' },
+  });
+  store.setLockedTrackIds(['melody-1']);
+  const cut = store.cutSelection();
+  assert.equal(cut.ok, false);
+  assert.equal(cut.code, 'locked_targets');
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 0);
+
+  store.copySelection();
+  store.setLockedTrackIds(['melody-1']);
+  const paste = store.pasteClipboard();
+  assert.equal(paste.ok, false);
+  assert.equal(paste.code, 'locked_targets');
+});
+
+test('editor prefs hide/lock reconcile unknown ids and enforce locks on transforms', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  store.setHiddenTrackIds(['melody-1', 'ghost-track']);
+  store.setLockedTrackIds(['bass-1', 'missing-track']);
+  assert.deepEqual(useMusicStore.getState().hiddenTrackIds, ['melody-1']);
+  assert.deepEqual(useMusicStore.getState().lockedTrackIds, ['bass-1']);
+
+  store.setEditorSelection({
+    refs: [{ trackId: 'bass-1', eventId: 'b1' }],
+    primary: { trackId: 'bass-1', eventId: 'b1' },
+  });
+  assert.equal(store.transposeSelection(1).ok, false);
+  assert.equal(store.quantizeSelection({ strength: 100 }).ok, false);
+  assert.equal(store.setSelectionVelocity(80).ok, false);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 0);
+
+  store.toggleLockedTrackId('bass-1');
+  assert.deepEqual(useMusicStore.getState().lockedTrackIds, []);
+  assert.equal(store.transposeSelection(1).ok, true);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 1);
+});
+
+test('bulk expression transforms commit one history entry each', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  store.setEditorSelection({
+    refs: [
+      { trackId: 'melody-1', eventId: 'n1' },
+      { trackId: 'melody-1', eventId: 'n2' },
+    ],
+    primary: { trackId: 'melody-1', eventId: 'n1' },
+  });
+
+  assert.equal(store.quantizeSelection({ mode: 'start', strength: 100 }).ok, true);
+  assert.equal(store.setSelectionVelocity(70).ok, true);
+  assert.equal(store.deltaSelectionVelocity(5).ok, true);
+  assert.equal(store.setSelectionNoteLength({ toGrid: true }).ok, true);
+  assert.equal(store.nudgeSelectionNoteLength(1).ok, true);
+  assert.equal(store.setSelectionNoteLength({ quantizeEnds: true, strength: 100 }).ok, true);
+  assert.equal(store.humanizeSelection({
+    timingAmount: 4,
+    velocityAmount: 3,
+    random: () => 0.25,
+  }).ok, true);
+  assert.equal(store.setSelectionArticulation('accent', 'set').ok, true);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 8);
+
+  const events = useMusicStore.getState().editedMusicJson.tracks[0].events;
+  assert.ok(events.every((event) => event.velocity >= 1 && event.velocity <= 127));
+  assert.ok(events.some((event) => (event.articulations || []).includes('accent')));
+});
+
+test('dynamics upsert/remove use history and stay sorted unique', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  useMusicStore.setState({ editCursorTick: 480, aiEditStartBar: 2 });
+
+  assert.equal(store.upsertDynamicMark({ level: 'mf', at: 'cursor' }).ok, true);
+  assert.equal(store.upsertDynamicMark({ level: 'f', at: 'bar' }).ok, true);
+  assert.equal(store.upsertDynamicMark({ level: 'p', tick: 0 }).ok, true);
+  let marks = useMusicStore.getState().editedMusicJson.tracks[0].dynamic_marks;
+  assert.deepEqual(marks.map((mark) => mark.tick), [0, 480, 1920]);
+  assert.deepEqual(marks.map((mark) => mark.level), ['p', 'mf', 'f']);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 3);
+
+  assert.equal(store.upsertDynamicMark({ level: 'mp', tick: 480 }).ok, true);
+  marks = useMusicStore.getState().editedMusicJson.tracks[0].dynamic_marks;
+  assert.equal(marks.find((mark) => mark.tick === 480).level, 'mp');
+  assert.equal(marks.filter((mark) => mark.tick === 480).length, 1);
+
+  assert.equal(store.removeDynamicMark({ tick: 480 }).ok, true);
+  marks = useMusicStore.getState().editedMusicJson.tracks[0].dynamic_marks;
+  assert.deepEqual(marks.map((mark) => mark.tick), [0, 1920]);
+
+  assert.equal(store.undoCompositionEdit(), true);
+  marks = useMusicStore.getState().editedMusicJson.tracks[0].dynamic_marks;
+  assert.ok(marks.some((mark) => mark.tick === 480));
+});
+
+test('generation and import reconcile hidden/locked track prefs', () => {
+  resetStore();
+  useMusicStore.setState({
+    hiddenTrackIds: ['melody-1', 'stale-hidden'],
+    lockedTrackIds: ['bass-1', 'stale-locked'],
+    editorSelectionRefs: [{ trackId: 'melody-1', eventId: 'n1' }],
+    editorClipboard: { version: 1, notes: [] },
+  });
+
+  const next = structuredClone(BASE);
+  next.tracks = next.tracks.filter((track) => track.id === 'melody-1');
+  useMusicStore.getState().completeGeneration({
+    music: next,
+    musicxml: '<score/>',
+    warnings: [],
+  });
+
+  const afterGen = useMusicStore.getState();
+  assert.deepEqual(afterGen.hiddenTrackIds, ['melody-1']);
+  assert.deepEqual(afterGen.lockedTrackIds, []);
+  assert.deepEqual(afterGen.editorSelectionRefs, []);
+  assert.equal(afterGen.editorClipboard, null);
+
+  useMusicStore.setState({
+    hiddenTrackIds: ['melody-1', 'ghost'],
+    lockedTrackIds: ['gone'],
+  });
+  const imported = structuredClone(BASE);
+  imported.tracks = imported.tracks.filter((track) => track.id === 'bass-1');
+  assert.equal(useMusicStore.getState().completeImport({
+    composition: imported,
+    musicxml: '',
+  }), true);
+  const afterImport = useMusicStore.getState();
+  assert.deepEqual(afterImport.hiddenTrackIds, []);
+  assert.deepEqual(afterImport.lockedTrackIds, []);
+});
+
+test('articulation selection reports skipped tie-incompatible notes without partial violation', () => {
+  resetStore();
+  const composition = structuredClone(BASE);
+  composition.tracks[0].events = [
+    {
+      type: 'note',
+      id: 't1',
+      pitch: 'C4',
+      start_tick: 0,
+      duration_ticks: 480,
+      velocity: 90,
+      articulations: [],
+      tie: null,
+    },
+    {
+      type: 'note',
+      id: 't2',
+      pitch: 'C4',
+      start_tick: 480,
+      duration_ticks: 480,
+      velocity: 90,
+      articulations: [],
+      tie: null,
+    },
+    {
+      type: 'note',
+      id: 'free',
+      pitch: 'E4',
+      start_tick: 0,
+      duration_ticks: 480,
+      velocity: 88,
+      articulations: [],
+      tie: null,
+    },
+  ];
+  useMusicStore.setState({
+    editedMusicJson: composition,
+    generatedMusicJson: composition,
+  });
+  const store = useMusicStore.getState();
+  assert.equal(store.applyTieChain('melody-1', ['t1', 't2']), true);
+  store.setEditorSelection({
+    refs: [
+      { trackId: 'melody-1', eventId: 't2' },
+      { trackId: 'melody-1', eventId: 'free' },
+    ],
+    primary: { trackId: 'melody-1', eventId: 'free' },
+  });
+
+  const result = store.setSelectionArticulation('staccato', 'set');
+  assert.equal(result.ok, true);
+  assert.ok((result.summary?.skippedCount || 0) >= 1);
+  const events = useMusicStore.getState().editedMusicJson.tracks[0].events;
+  assert.deepEqual(events.find((event) => event.id === 'free').articulations, ['staccato']);
+  assert.deepEqual(events.find((event) => event.id === 't2').articulations, []);
+  assert.equal(useMusicStore.getState().editorCommandFeedback?.skippedCount, 1);
 });

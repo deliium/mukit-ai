@@ -2,9 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
-import { secondsToPlaybackPosition } from '../utils/playbackPosition.js';
 import {
-  ARTICULATION_VALUES,
   SNAP_VALUES,
   buildGridMetrics,
   buildTimelineCues,
@@ -27,10 +25,48 @@ import {
   resolveMotifOccurrenceBarSpan,
   validateMotifAuthoringSelection,
 } from '../utils/compositionMotifs.js';
+import {
+  collectNotesInBox,
+  makeNoteRef,
+  noteRefKey,
+  selectionSummary,
+  selectionTickRange,
+} from '../utils/compositionEditorSelection.js';
+import {
+  SHORTCUT_COMMAND,
+  dispatchShortcutEvent,
+} from '../utils/editorShortcuts.js';
+import {
+  DEFAULT_TICK_BUFFER,
+  anchorZoom,
+  computeVisiblePitchRange,
+  computeVisibleTickRange,
+  createThrottledFn,
+  filterNotesInViewport,
+} from '../utils/pianoRollViewport.js';
+import { createAppLogger } from '../utils/appLogger.js';
+import PianoRollNoteLayer from './piano-roll/PianoRollNoteLayer.jsx';
+import PianoRollOverlayLayer from './piano-roll/PianoRollOverlayLayer.jsx';
+import PianoRollSelectionInspector from './piano-roll/PianoRollSelectionInspector.jsx';
+import PianoRollTrackControls from './piano-roll/PianoRollTrackControls.jsx';
+import { usePianoRollDrag } from './piano-roll/usePianoRollDrag.js';
+
+const logger = createAppLogger('pianoRoll');
+const logViewportThrottled = createThrottledFn(500)((meta) => {
+  logger.debug('Viewport cull', meta);
+});
+
+/**
+ * Piano-roll empty-grid gestures (Task 5):
+ * - Shift+drag → AI bar-range selection (existing)
+ * - Alt+drag or Meta+drag → note box select across visible (non-hidden) tracks
+ * - Plain click → create note on the active track
+ */
 
 const CONTEXT_COLORS = ['#94a3b8', '#a78bfa', '#67e8f9', '#fbbf24', '#f472b6', '#86efac'];
 const NOTE_NOTATION_DEBOUNCE_MS = 450;
-const CURSOR_LOG_THROTTLE_MS = 1000;
+const BAR_SELECTION_LOG_THROTTLE_MS = 250;
+const CONTEXT_TRACK_OPACITY = 0.35;
 
 const Panel = styled.section`
   margin: 20px 0;
@@ -206,94 +242,6 @@ const ExpressionControls = styled.div`
   margin-bottom: 10px;
 `;
 
-const ChipButton = styled.button`
-  padding: 4px 8px;
-  border-radius: 999px;
-  border: 1px solid ${(props) => (props.$active ? '#4338ca' : '#c7d2fe')};
-  background: ${(props) => (props.$active ? '#eef2ff' : '#ffffff')};
-  color: #312e81;
-  font-size: 0.75rem;
-  cursor: pointer;
-
-  &:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-`;
-
-const NoteBlock = styled.div`
-  position: absolute;
-  left: ${(props) => props.$left}px;
-  top: ${(props) => props.$top}px;
-  width: ${(props) => Math.max(4, props.$width)}px;
-  height: ${(props) => Math.max(6, props.$height - 2)}px;
-  background: ${(props) => props.$color};
-  opacity: ${(props) => props.$opacity};
-  border-radius: 3px;
-  border: 2px solid ${(props) => {
-    if (props.$selected) return '#111827';
-    if (props.$motifRole === 'usage') return '#d97706';
-    if (props.$motifRole === 'source') return '#0891b2';
-    if (props.$motifRole === 'authoring') return '#6366f1';
-    return 'transparent';
-  }};
-  box-sizing: border-box;
-  cursor: ${(props) => (props.$editable ? 'grab' : 'default')};
-  z-index: ${(props) => (props.$selected ? 4 : props.$editable ? 3 : 1)};
-
-  &:active {
-    cursor: ${(props) => (props.$editable ? 'grabbing' : 'default')};
-  }
-`;
-
-const ResizeHandle = styled.div`
-  position: absolute;
-  right: 0;
-  top: 0;
-  width: 8px;
-  height: 100%;
-  cursor: ew-resize;
-  background: rgba(17, 24, 39, 0.25);
-`;
-
-const PlaybackCursor = styled.div`
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: ${(props) => props.$left}px;
-  width: 2px;
-  background: #ef4444;
-  pointer-events: none;
-  z-index: 5;
-`;
-
-const SelectionOverlay = styled.div`
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: ${(props) => props.$left}px;
-  width: ${(props) => props.$width}px;
-  background: rgba(79, 70, 229, 0.12);
-  border-left: 2px solid rgba(79, 70, 229, 0.55);
-  border-right: 2px solid rgba(79, 70, 229, 0.55);
-  pointer-events: none;
-  z-index: 2;
-`;
-
-const MotifUsageOverlay = styled(SelectionOverlay)`
-  background: rgba(245, 158, 11, 0.14);
-  border-left-color: rgba(217, 119, 6, 0.7);
-  border-right-color: rgba(217, 119, 6, 0.7);
-  z-index: 3;
-`;
-
-const MotifDestinationOverlay = styled(SelectionOverlay)`
-  background: rgba(16, 185, 129, 0.12);
-  border-left-color: rgba(5, 150, 105, 0.65);
-  border-right-color: rgba(5, 150, 105, 0.65);
-  z-index: 3;
-`;
-
 const NumberInput = styled.input`
   width: 64px;
   padding: 6px 8px;
@@ -303,35 +251,45 @@ const NumberInput = styled.input`
   font-size: 0.9rem;
 `;
 
-const CONTEXT_TRACK_OPACITY = 0.35;
-const BAR_SELECTION_LOG_THROTTLE_MS = 250;
-
 const PianoRollEditor = () => {
   const editedMusicJson = useMusicStore((state) => state.editedMusicJson);
   const pianoRollTrackId = useMusicStore((state) => state.pianoRollTrackId);
   const pianoRollNoteId = useMusicStore((state) => state.pianoRollNoteId);
   const pianoRollNoteIds = useMusicStore((state) => state.pianoRollNoteIds);
+  const editorSelectionRefs = useMusicStore((state) => state.editorSelectionRefs);
+  const editorClipboard = useMusicStore((state) => state.editorClipboard);
+  const editorCommandFeedback = useMusicStore((state) => state.editorCommandFeedback);
+  const hiddenTrackIds = useMusicStore((state) => state.hiddenTrackIds);
+  const lockedTrackIds = useMusicStore((state) => state.lockedTrackIds);
   const pianoRollSnap = useMusicStore((state) => state.pianoRollSnap);
   const pianoRollZoom = useMusicStore((state) => state.pianoRollZoom);
   const pianoRollNotationStatus = useMusicStore((state) => state.pianoRollNotationStatus);
   const pianoRollNotationError = useMusicStore((state) => state.pianoRollNotationError);
   const compositionEditUndoStack = useMusicStore((state) => state.compositionEditUndoStack);
   const compositionEditRedoStack = useMusicStore((state) => state.compositionEditRedoStack);
-  const playbackStatus = useMusicStore((state) => state.playbackStatus);
-  const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
   const notationRevision = useMusicStore((state) => state.notationRevision);
+  const playbackStatus = useMusicStore((state) => state.playbackStatus);
   const selectPianoRollTrack = useMusicStore((state) => state.selectPianoRollTrack);
-  const selectPianoRollNote = useMusicStore((state) => state.selectPianoRollNote);
+  const setEditorSelection = useMusicStore((state) => state.setEditorSelection);
+  const toggleEditorSelectionRef = useMusicStore((state) => state.toggleEditorSelectionRef);
+  const extendEditorSelectionTo = useMusicStore((state) => state.extendEditorSelectionTo);
+  const selectAllVisible = useMusicStore((state) => state.selectAllVisible);
+  const clearEditorSelection = useMusicStore((state) => state.clearEditorSelection);
+  const copySelection = useMusicStore((state) => state.copySelection);
+  const cutSelection = useMusicStore((state) => state.cutSelection);
+  const pasteClipboard = useMusicStore((state) => state.pasteClipboard);
+  const duplicateSelection = useMusicStore((state) => state.duplicateSelection);
+  const deleteSelection = useMusicStore((state) => state.deleteSelection);
+  const transposeSelection = useMusicStore((state) => state.transposeSelection);
+  const nudgeSelectionBySnap = useMusicStore((state) => state.nudgeSelectionBySnap);
   const setPianoRollSnap = useMusicStore((state) => state.setPianoRollSnap);
   const setPianoRollZoom = useMusicStore((state) => state.setPianoRollZoom);
   const createNote = useMusicStore((state) => state.createNote);
-  const updateNote = useMusicStore((state) => state.updateNote);
-  const deleteNote = useMusicStore((state) => state.deleteNote);
-  const toggleNoteArticulation = useMusicStore((state) => state.toggleNoteArticulation);
   const applyTieChain = useMusicStore((state) => state.applyTieChain);
   const removeTieChain = useMusicStore((state) => state.removeTieChain);
   const undoCompositionEdit = useMusicStore((state) => state.undoCompositionEdit);
   const redoCompositionEdit = useMusicStore((state) => state.redoCompositionEdit);
+  const setPlaybackStatus = useMusicStore((state) => state.setPlaybackStatus);
   const refreshMusicXmlFromEditedComposition = useMusicStore(
     (state) => state.refreshMusicXmlFromEditedComposition,
   );
@@ -350,12 +308,19 @@ const PianoRollEditor = () => {
 
   const editorRef = useRef(null);
   const scrollRef = useRef(null);
-  const dragRef = useRef(null);
   const barSelectRef = useRef(null);
+  const noteBoxSelectRef = useRef(null);
   const debounceRef = useRef(null);
-  const lastCursorLogRef = useRef(0);
   const lastBarSelectLogRef = useRef(0);
-  const [viewportWidth, setViewportWidth] = useState(0);
+  const scrollRafRef = useRef(0);
+  const zoomAnchorPendingRef = useRef(null);
+  const [viewport, setViewport] = useState({
+    scrollLeft: 0,
+    scrollTop: 0,
+    clientWidth: 0,
+    clientHeight: 0,
+  });
+  const [noteBoxSelectRect, setNoteBoxSelectRect] = useState(null);
 
   const validation = useMemo(
     () => (editedMusicJson ? validateMusicJson(editedMusicJson) : { valid: false, message: 'No composition generated yet.' }),
@@ -369,9 +334,70 @@ const PianoRollEditor = () => {
   const selectedTrack = tracks.find((track) => String(track.id) === String(pianoRollTrackId)) || null;
   const selectedEvents = Array.isArray(selectedTrack?.events) ? selectedTrack.events : [];
   const selectedNote = selectedEvents.find((event) => String(event.id) === String(pianoRollNoteId)) || null;
-  const selectedNoteSet = useMemo(
-    () => new Set((pianoRollNoteIds || []).map(String)),
-    [pianoRollNoteIds],
+  const selectedNoteKeySet = useMemo(() => {
+    const keys = new Set();
+    const refs = Array.isArray(editorSelectionRefs) ? editorSelectionRefs : [];
+    if (refs.length) {
+      refs.forEach((ref) => {
+        const key = noteRefKey(ref);
+        if (key) {
+          keys.add(key);
+        }
+      });
+      return keys;
+    }
+    (pianoRollNoteIds || []).forEach((id) => {
+      const key = noteRefKey(makeNoteRef(pianoRollTrackId, id));
+      if (key) {
+        keys.add(key);
+      }
+    });
+    return keys;
+  }, [editorSelectionRefs, pianoRollNoteIds, pianoRollTrackId]);
+
+  const selectionStats = useMemo(() => {
+    if (!editedMusicJson) {
+      return { selectedCount: 0, trackCount: 0, startTick: null, endTick: null };
+    }
+    const refs = Array.isArray(editorSelectionRefs) && editorSelectionRefs.length
+      ? editorSelectionRefs
+      : (pianoRollNoteIds || []).map((id) => makeNoteRef(pianoRollTrackId, id)).filter(Boolean);
+    return selectionSummary(editedMusicJson, refs, {
+      hiddenTrackIds,
+      lockedTrackIds,
+    });
+  }, [
+    editedMusicJson,
+    editorSelectionRefs,
+    pianoRollNoteIds,
+    pianoRollTrackId,
+    hiddenTrackIds,
+    lockedTrackIds,
+  ]);
+
+  const selectionRangeLabel = useMemo(() => {
+    if (!editedMusicJson || !selectionStats.selectedCount) {
+      return null;
+    }
+    const refs = Array.isArray(editorSelectionRefs) && editorSelectionRefs.length
+      ? editorSelectionRefs
+      : (pianoRollNoteIds || []).map((id) => makeNoteRef(pianoRollTrackId, id)).filter(Boolean);
+    const range = selectionTickRange(editedMusicJson, refs);
+    if (!range) {
+      return null;
+    }
+    return `${range.startTick}–${range.endTick}`;
+  }, [
+    editedMusicJson,
+    selectionStats.selectedCount,
+    editorSelectionRefs,
+    pianoRollNoteIds,
+    pianoRollTrackId,
+  ]);
+
+  const hiddenTrackIdSet = useMemo(
+    () => new Set((hiddenTrackIds || []).map(String)),
+    [hiddenTrackIds],
   );
 
   const motifAuthoringSelection = useMemo(() => {
@@ -421,6 +447,11 @@ const PianoRollEditor = () => {
     });
   }, [canonical, validation.valid, editedMusicJson, pianoRollSnap, pianoRollZoom]);
 
+  const { beginDrag, dragPreview, draggingNoteId } = usePianoRollDrag({
+    metrics,
+    trackId: pianoRollTrackId,
+  });
+
   const motifOverlays = useMemo(() => {
     if (!metrics || !editedMusicJson) {
       return { usageRect: null, destinationRect: null };
@@ -465,14 +496,14 @@ const PianoRollEditor = () => {
 
   useEffect(() => {
     if (!canonical || !validation.valid) {
-      console.warn('[PianoRollEditor] Unsupported or invalid composition for piano roll', {
+      logger.warn('Unsupported or invalid composition for piano roll', {
         canonical,
         valid: validation.valid,
         message: validation.message,
       });
       return;
     }
-    console.debug('[PianoRollEditor] Mount/render summary', {
+    logger.debug('Mount/render summary', {
       trackCount: tracks.length,
       selectedTrack: pianoRollTrackId,
       selectedNote: pianoRollNoteId,
@@ -496,7 +527,7 @@ const PianoRollEditor = () => {
     if (!metrics) {
       return undefined;
     }
-    console.debug('[PianoRollEditor] Grid metrics', {
+    logger.debug('Grid metrics', {
       barTicks: metrics.barTicks,
       snapTicks: metrics.snapTicks,
       visiblePitchRange: `${metrics.minMidi}-${metrics.maxMidi}`,
@@ -504,26 +535,81 @@ const PianoRollEditor = () => {
       zoom: pianoRollZoom,
     });
     if (metrics.warning) {
-      console.warn('[PianoRollEditor] Fallback/incomplete grid metrics', { warning: metrics.warning });
+      logger.warn('Fallback/incomplete grid metrics', { warning: metrics.warning });
     }
     return undefined;
   }, [metrics, pianoRollZoom]);
+
+  const measureViewport = useCallback(() => {
+    const node = scrollRef.current;
+    if (!node) {
+      return;
+    }
+    setViewport({
+      scrollLeft: node.scrollLeft,
+      scrollTop: node.scrollTop,
+      clientWidth: node.clientWidth,
+      clientHeight: node.clientHeight,
+    });
+  }, []);
 
   useEffect(() => {
     const node = scrollRef.current;
     if (!node) {
       return undefined;
     }
-    const update = () => setViewportWidth(node.clientWidth);
-    update();
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+    measureViewport();
+    const onScroll = () => {
+      if (scrollRafRef.current) {
+        return;
+      }
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = 0;
+        measureViewport();
+      });
+    };
+    const observer = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => measureViewport())
+      : null;
     observer?.observe(node);
-    window.addEventListener('resize', update);
+    node.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', measureViewport);
     return () => {
       observer?.disconnect();
-      window.removeEventListener('resize', update);
+      node.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', measureViewport);
+      if (scrollRafRef.current) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = 0;
+      }
     };
-  }, [canonical, validation.valid]);
+  }, [canonical, validation.valid, measureViewport, metrics?.totalWidth, metrics?.totalHeight]);
+
+  useEffect(() => {
+    const pending = zoomAnchorPendingRef.current;
+    const node = scrollRef.current;
+    if (!pending || !node || !metrics) {
+      return;
+    }
+    zoomAnchorPendingRef.current = null;
+    const nextContentWidth = metrics.totalWidth;
+    const anchored = anchorZoom({
+      scrollLeft: pending.scrollLeft,
+      pointerX: pending.pointerX,
+      oldPixelsPerTick: pending.oldPixelsPerTick,
+      newPixelsPerTick: metrics.pixelsPerTick,
+      contentWidth: nextContentWidth,
+      clientWidth: node.clientWidth,
+    });
+    if (anchored.clamped) {
+      logger.warn('Zoom scroll clamped to content bounds', {
+        scrollLeft: anchored.scrollLeft,
+        contentWidth: nextContentWidth,
+      });
+    }
+    node.scrollLeft = anchored.scrollLeft;
+    measureViewport();
+  }, [pianoRollZoom, metrics, measureViewport]);
 
   useEffect(() => {
     if (!canonical || !validation.valid) {
@@ -532,12 +618,12 @@ const PianoRollEditor = () => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
     }
-    console.debug('[PianoRollEditor] Notation debounce scheduled', {
+    logger.debug('Notation debounce scheduled', {
       notationRevision: notationRevision.slice(0, 48),
       delayMs: NOTE_NOTATION_DEBOUNCE_MS,
     });
     debounceRef.current = setTimeout(() => {
-      console.debug('[PianoRollEditor] Notation debounce completed; refreshing MusicXML', {
+      logger.debug('Notation debounce completed; refreshing MusicXML', {
         notationRevision: notationRevision.slice(0, 48),
       });
       refreshMusicXmlFromEditedComposition();
@@ -545,64 +631,143 @@ const PianoRollEditor = () => {
     return () => {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
-        console.debug('[PianoRollEditor] Notation debounce cancelled');
+        logger.debug('Notation debounce cancelled');
       }
     };
   }, [canonical, validation.valid, notationRevision, refreshMusicXmlFromEditedComposition]);
 
-  const contextCounts = useMemo(() => {
-    const counts = {};
-    tracks.forEach((track) => {
-      if (String(track.id) === String(pianoRollTrackId)) {
+  const { trackById, noteByKey, allNoteGeoms } = useMemo(() => {
+    const tracksMap = new Map();
+    const notesMap = new Map();
+    const items = [];
+    tracks.forEach((track, trackIndex) => {
+      const trackId = String(track.id);
+      if (hiddenTrackIdSet.has(trackId)) {
         return;
       }
-      counts[track.id] = Array.isArray(track.events) ? track.events.length : 0;
+      tracksMap.set(trackId, track);
+      const editable = trackId === String(pianoRollTrackId);
+      const color = editable ? '#4f46e5' : CONTEXT_COLORS[trackIndex % CONTEXT_COLORS.length];
+      const events = Array.isArray(track.events) ? track.events : [];
+      events.forEach((event) => {
+        const midi = pitchToMidi(event.pitch).midi;
+        if (midi === null) {
+          return;
+        }
+        const startTick = Number(event.start_tick) || 0;
+        const durationTicks = Number(event.duration_ticks) || 0;
+        const item = {
+          trackId: track.id,
+          trackIndex,
+          event,
+          startTick,
+          endTick: startTick + durationTicks,
+          pitchMidi: midi,
+          editable,
+          selectable: true,
+          color,
+        };
+        items.push(item);
+        notesMap.set(`${track.id}:${event.id}`, item);
+      });
     });
-    return counts;
-  }, [tracks, pianoRollTrackId]);
+    return { trackById: tracksMap, noteByKey: notesMap, allNoteGeoms: items };
+  }, [tracks, pianoRollTrackId, hiddenTrackIdSet]);
+
+  // Keep Map indexes live for O(1) lookup (selection/edit paths; size used in cull logging).
+  const noteIndexSize = noteByKey.size + trackById.size;
+  const visibleTicks = useMemo(() => {
+    if (!metrics) {
+      return { startTick: 0, endTick: 0, bufferTicks: DEFAULT_TICK_BUFFER };
+    }
+    return computeVisibleTickRange({
+      scrollLeft: viewport.scrollLeft,
+      clientWidth: viewport.clientWidth || 1,
+      pixelsPerTick: metrics.pixelsPerTick,
+      durationTicks: metrics.durationTicks,
+      bufferTicks: Math.max(DEFAULT_TICK_BUFFER, metrics.barTicks || DEFAULT_TICK_BUFFER),
+    });
+  }, [metrics, viewport.scrollLeft, viewport.clientWidth]);
+
+  const visiblePitches = useMemo(() => {
+    if (!metrics) {
+      return { minMidi: 0, maxMidi: 127, bufferRows: 2 };
+    }
+    return computeVisiblePitchRange({
+      scrollTop: viewport.scrollTop,
+      clientHeight: viewport.clientHeight || 1,
+      rowHeight: metrics.rowHeight,
+      minMidi: metrics.minMidi,
+      maxMidi: metrics.maxMidi,
+    });
+  }, [metrics, viewport.scrollTop, viewport.clientHeight]);
+
+  const visibleNoteGeoms = useMemo(() => filterNotesInViewport(allNoteGeoms, {
+    visibleTicks,
+    visiblePitches,
+  }), [allNoteGeoms, visibleTicks, visiblePitches]);
 
   useEffect(() => {
-    if (Object.keys(contextCounts).length) {
-      console.debug('[PianoRollEditor] Context note counts by track', contextCounts);
-    }
-  }, [contextCounts]);
-
-  const cursorTick = useMemo(() => {
-    if (!editedMusicJson || playbackStatus === 'idle') {
-      return null;
-    }
-    const position = secondsToPlaybackPosition(playbackSeconds, {
-      tempo: editedMusicJson.tempo,
-      ticksPerQuarter: editedMusicJson.ticks_per_quarter,
-      timeSignature: editedMusicJson.time_signature,
-      composition: editedMusicJson,
-    });
-    return position.tick;
-  }, [editedMusicJson, playbackStatus, playbackSeconds]);
-
-  useEffect(() => {
-    if (cursorTick === null || !metrics) {
+    if (!metrics) {
       return;
     }
-    const now = Date.now();
-    if (now - lastCursorLogRef.current < CURSOR_LOG_THROTTLE_MS) {
-      return;
-    }
-    lastCursorLogRef.current = now;
-    console.debug('[PianoRollEditor] Playback cursor', {
-      tick: Math.round(cursorTick),
-      px: Math.round(cursorTick * metrics.pixelsPerTick),
-      playbackStatus,
+    logViewportThrottled({
+      startTick: visibleTicks.startTick,
+      endTick: visibleTicks.endTick,
+      minMidi: visiblePitches.minMidi,
+      maxMidi: visiblePitches.maxMidi,
+      renderedNotes: visibleNoteGeoms.length,
+      totalNotes: allNoteGeoms.length,
+      indexSize: noteIndexSize,
     });
-  }, [cursorTick, metrics, playbackStatus]);
+  }, [
+    metrics,
+    visibleTicks.startTick,
+    visibleTicks.endTick,
+    visiblePitches.minMidi,
+    visiblePitches.maxMidi,
+    visibleNoteGeoms.length,
+    allNoteGeoms.length,
+    noteIndexSize,
+  ]);
 
-  useEffect(() => {
-    if (playbackStatus === 'playing') {
-      console.info('[PianoRollEditor] Playback cursor activated');
-    } else if (playbackStatus === 'idle' || playbackStatus === 'paused') {
-      console.info('[PianoRollEditor] Playback cursor deactivated/paused', { playbackStatus });
+  const visibleNotes = useMemo(() => {
+    if (!metrics) {
+      return [];
     }
-  }, [playbackStatus]);
+    return visibleNoteGeoms.map((item) => {
+      const event = item.event;
+      const eventId = String(event.id);
+      const refKey = noteRefKey(makeNoteRef(item.trackId, eventId));
+      const selected = Boolean(refKey && selectedNoteKeySet.has(refKey));
+      const onHighlightedTrack = item.editable
+        || motifHighlightSets.usage.has(eventId)
+        || motifHighlightSets.source.has(eventId)
+        || selected;
+      let motifRole = null;
+      if (motifHighlightSets.usage.has(eventId)) {
+        motifRole = 'usage';
+      } else if (motifHighlightSets.source.has(eventId)) {
+        motifRole = 'source';
+      } else if (item.editable && motifHighlightSets.authoring.has(eventId)) {
+        motifRole = 'authoring';
+      }
+      return {
+        key: `${item.trackId}:${event.id || `${event.pitch}-${event.start_tick}`}`,
+        trackId: item.trackId,
+        event,
+        left: item.startTick * metrics.pixelsPerTick,
+        top: (metrics.maxMidi - item.pitchMidi) * metrics.rowHeight,
+        width: (item.endTick - item.startTick) * metrics.pixelsPerTick,
+        color: item.color,
+        editable: item.editable,
+        selectable: item.selectable !== false,
+        opacity: onHighlightedTrack && motifRole ? 1 : (item.editable || selected ? 0.95 : CONTEXT_TRACK_OPACITY),
+        selected,
+        motifRole,
+      };
+    });
+  }, [metrics, visibleNoteGeoms, selectedNoteKeySet, motifHighlightSets]);
 
   const pitchRows = useMemo(() => {
     if (!metrics) {
@@ -622,9 +787,13 @@ const PianoRollEditor = () => {
     const labels = [];
     if (Array.isArray(metrics.barBoundaries) && metrics.barBoundaries.length > 1) {
       for (let bar = 0; bar < (metrics.barCount || 0); bar += 1) {
+        const tick = metrics.barBoundaries[bar];
+        if (tick < visibleTicks.startTick || tick > visibleTicks.endTick) {
+          continue;
+        }
         labels.push({
           bar: bar + 1,
-          left: metrics.barBoundaries[bar] * metrics.pixelsPerTick + 4,
+          left: tick * metrics.pixelsPerTick + 4,
         });
       }
       return labels;
@@ -633,204 +802,280 @@ const PianoRollEditor = () => {
       return [];
     }
     for (let bar = 0; bar < (metrics.barCount || 0); bar += 1) {
+      const tick = bar * metrics.barTicks;
+      if (tick < visibleTicks.startTick || tick > visibleTicks.endTick) {
+        continue;
+      }
       labels.push({
         bar: bar + 1,
-        left: bar * metrics.barTicks * metrics.pixelsPerTick + 4,
+        left: tick * metrics.pixelsPerTick + 4,
       });
     }
     return labels;
-  }, [metrics]);
+  }, [metrics, visibleTicks.startTick, visibleTicks.endTick]);
 
   const timelineCues = useMemo(() => {
     if (!editedMusicJson || !metrics) {
       return [];
     }
-    return buildTimelineCues(editedMusicJson).map((cue) => ({
-      ...cue,
-      left: cue.tick * metrics.pixelsPerTick + 2,
-    }));
-  }, [editedMusicJson, metrics]);
-
-  const schedulePointerEnd = useCallback(() => {
-    const interaction = dragRef.current;
-    if (!interaction) {
-      return;
-    }
-    window.removeEventListener('pointermove', interaction.onMove);
-    window.removeEventListener('pointerup', interaction.onUp);
-    window.removeEventListener('pointercancel', interaction.onUp);
-    dragRef.current = null;
-  }, []);
-
-  useEffect(() => () => schedulePointerEnd(), [schedulePointerEnd]);
+    return buildTimelineCues(editedMusicJson)
+      .filter((cue) => cue.tick >= visibleTicks.startTick && cue.tick <= visibleTicks.endTick)
+      .map((cue) => ({
+        ...cue,
+        left: cue.tick * metrics.pixelsPerTick + 2,
+      }));
+  }, [editedMusicJson, metrics, visibleTicks.startTick, visibleTicks.endTick]);
 
   const handleDeleteSelected = () => {
-    if (!pianoRollTrackId || !pianoRollNoteId) {
-      console.warn('[PianoRollEditor] Delete ignored; no note selected');
+    const result = deleteSelection();
+    if (!result?.ok) {
+      logger.warn('Delete selection guarded', { code: result?.code || null });
+    }
+  };
+
+  const handleZoomChange = useCallback((nextZoom) => {
+    const node = scrollRef.current;
+    const oldPpt = metrics?.pixelsPerTick || pianoRollZoom;
+    zoomAnchorPendingRef.current = {
+      scrollLeft: node?.scrollLeft || 0,
+      pointerX: node ? node.clientWidth / 2 : 0,
+      oldPixelsPerTick: oldPpt,
+    };
+    setPianoRollZoom(nextZoom);
+  }, [metrics, pianoRollZoom, setPianoRollZoom]);
+
+  const handleEditorShortcut = useCallback((event) => {
+    const { command } = dispatchShortcutEvent(event, { allowTransport: true });
+    if (!command) {
       return;
     }
-    console.info('[PianoRollEditor] Note delete requested', {
-      trackId: pianoRollTrackId,
-      noteId: pianoRollNoteId,
+    event.preventDefault();
+    logger.debug('Shortcut command', {
+      command,
+      selectedCount: selectionStats.selectedCount,
     });
-    deleteNote(pianoRollTrackId, pianoRollNoteId);
-  };
+
+    switch (command) {
+      case SHORTCUT_COMMAND.COPY:
+        copySelection();
+        break;
+      case SHORTCUT_COMMAND.CUT:
+        cutSelection();
+        break;
+      case SHORTCUT_COMMAND.PASTE:
+        pasteClipboard();
+        break;
+      case SHORTCUT_COMMAND.DUPLICATE:
+        duplicateSelection();
+        break;
+      case SHORTCUT_COMMAND.SELECT_ALL:
+        selectAllVisible();
+        break;
+      case SHORTCUT_COMMAND.CLEAR_SELECTION:
+        clearEditorSelection();
+        break;
+      case SHORTCUT_COMMAND.DELETE:
+        deleteSelection();
+        break;
+      case SHORTCUT_COMMAND.UNDO:
+        undoCompositionEdit();
+        break;
+      case SHORTCUT_COMMAND.REDO:
+        redoCompositionEdit();
+        break;
+      case SHORTCUT_COMMAND.NUDGE_LEFT:
+        nudgeSelectionBySnap(-1);
+        break;
+      case SHORTCUT_COMMAND.NUDGE_RIGHT:
+        nudgeSelectionBySnap(1);
+        break;
+      case SHORTCUT_COMMAND.NUDGE_UP:
+        transposeSelection(1);
+        break;
+      case SHORTCUT_COMMAND.NUDGE_DOWN:
+        transposeSelection(-1);
+        break;
+      case SHORTCUT_COMMAND.TRANSPOSE_OCTAVE_UP:
+        transposeSelection(12);
+        break;
+      case SHORTCUT_COMMAND.TRANSPOSE_OCTAVE_DOWN:
+        transposeSelection(-12);
+        break;
+      case SHORTCUT_COMMAND.TRANSPORT_TOGGLE:
+        if (playbackStatus === 'playing') {
+          setPlaybackStatus('paused');
+        } else if (playbackStatus === 'paused') {
+          setPlaybackStatus('playing');
+        } else {
+          setPlaybackStatus('playing');
+        }
+        break;
+      case SHORTCUT_COMMAND.ESCAPE:
+        clearEditorSelection();
+        setNoteBoxSelectRect(null);
+        break;
+      case SHORTCUT_COMMAND.ZOOM_IN:
+        handleZoomChange(Math.min(0.25, (pianoRollZoom || 0.05) * 1.25));
+        break;
+      case SHORTCUT_COMMAND.ZOOM_OUT:
+        handleZoomChange(Math.max(0.01, (pianoRollZoom || 0.05) / 1.25));
+        break;
+      default:
+        // Navigation / zoom-fit commands are resolved for Task 7 handlers.
+        logger.debug('Shortcut deferred to later editor tasks', { command });
+        break;
+    }
+  }, [
+    selectionStats.selectedCount,
+    copySelection,
+    cutSelection,
+    pasteClipboard,
+    duplicateSelection,
+    selectAllVisible,
+    clearEditorSelection,
+    deleteSelection,
+    undoCompositionEdit,
+    redoCompositionEdit,
+    nudgeSelectionBySnap,
+    transposeSelection,
+    playbackStatus,
+    setPlaybackStatus,
+    pianoRollZoom,
+    handleZoomChange,
+  ]);
 
   const handleKeyDown = (event) => {
-    if (event.key === 'Delete' || event.key === 'Backspace') {
-      event.preventDefault();
-      handleDeleteSelected();
-      return;
-    }
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
-      event.preventDefault();
-      if (event.shiftKey) {
-        redoCompositionEdit();
-      } else {
-        undoCompositionEdit();
-      }
-    }
+    handleEditorShortcut(event);
   };
 
-  const beginDrag = (mode, note, event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!metrics || !pianoRollTrackId) {
+  const onNotePointerDown = useCallback((note, pointerEvent, layout) => {
+    beginDrag('move', note, pointerEvent, layout);
+  }, [beginDrag]);
+
+  const onResizePointerDown = useCallback((note, pointerEvent, layout) => {
+    beginDrag('resize', note, pointerEvent, layout);
+  }, [beginDrag]);
+
+  const onNoteClick = useCallback((event, clickEvent, trackId) => {
+    clickEvent.stopPropagation();
+    const ref = makeNoteRef(trackId, event.id);
+    if (!ref) {
       return;
     }
-    const startMidi = pitchToMidi(note.pitch).midi;
-    if (startMidi === null) {
-      return;
+    if (clickEvent.shiftKey) {
+      extendEditorSelectionTo(ref);
+    } else if (clickEvent.ctrlKey || clickEvent.metaKey) {
+      toggleEditorSelectionRef(ref);
+    } else {
+      setEditorSelection({ refs: [ref], primary: ref, anchor: ref });
     }
-    selectPianoRollNote(note.id);
-    const historySnapshot = {
-      editedMusicJson: useMusicStore.getState().editedMusicJson,
-      pianoRollTrackId: useMusicStore.getState().pianoRollTrackId,
-      pianoRollNoteId: note.id,
-    };
-    let historyCommitted = false;
-    const origin = {
-      mode,
-      noteId: note.id,
-      pointerId: event.pointerId,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      originStartTick: note.start_tick,
-      originDurationTicks: note.duration_ticks,
-      originMidi: startMidi,
-    };
-
-    const commitHistoryOnce = () => {
-      if (historyCommitted) {
-        return { skipHistory: true };
-      }
-      historyCommitted = true;
-      return { historySnapshot };
-    };
-
-    const onMove = (moveEvent) => {
-      if (!dragRef.current || moveEvent.pointerId !== origin.pointerId) {
-        return;
-      }
-      const deltaX = moveEvent.clientX - origin.startClientX;
-      const deltaY = moveEvent.clientY - origin.startClientY;
-      const deltaTicks = pixelToTick(deltaX, metrics.pixelsPerTick).tick;
-      const deltaRows = Math.round(deltaY / metrics.rowHeight);
-      const historyOptions = commitHistoryOnce();
-
-      if (origin.mode === 'move') {
-        const snapped = snapTick(origin.originStartTick + deltaTicks, metrics.snapTicks, {
-          maxTick: Math.max(0, metrics.durationTicks - origin.originDurationTicks),
-        });
-        const nextMidi = origin.originMidi - deltaRows;
-        const pitch = midiToPitch(nextMidi).pitch;
-        if (!pitch) {
-          return;
-        }
-        if (snapped.clamped) {
-          console.warn('[PianoRollEditor] Move clamped at composition/MIDI bounds', {
-            noteId: origin.noteId,
-            start_tick: snapped.tick,
-            pitch,
-          });
-        }
-        console.debug('[PianoRollEditor] Drag move', {
-          noteId: origin.noteId,
-          old: sanitizeNoteSummary(note),
-          nextStart: snapped.tick,
-          nextPitch: pitch,
-          clamped: snapped.clamped,
-        });
-        updateNote(pianoRollTrackId, origin.noteId, {
-          start_tick: snapped.tick,
-          pitch,
-        }, historyOptions);
-        return;
-      }
-
-      if (origin.mode === 'resize') {
-        const rawDuration = origin.originDurationTicks + deltaTicks;
-        const snappedDuration = snapTick(rawDuration, metrics.snapTicks, {
-          maxTick: Math.max(metrics.snapTicks, metrics.durationTicks - origin.originStartTick),
-          mode: 'nearest',
-        });
-        const durationTicks = Math.max(metrics.snapTicks || 1, snappedDuration.tick);
-        if (snappedDuration.clamped || durationTicks !== rawDuration) {
-          console.warn('[PianoRollEditor] Resize clamped to min duration or composition end', {
-            noteId: origin.noteId,
-            durationTicks,
-          });
-        }
-        console.debug('[PianoRollEditor] Drag resize', {
-          noteId: origin.noteId,
-          oldDuration: origin.originDurationTicks,
-          nextDuration: durationTicks,
-          clamped: snappedDuration.clamped,
-        });
-        updateNote(pianoRollTrackId, origin.noteId, { duration_ticks: durationTicks }, historyOptions);
-      }
-    };
-
-    const onUp = (upEvent) => {
-      if (!dragRef.current || upEvent.pointerId !== origin.pointerId) {
-        return;
-      }
-      if (origin.mode === 'move') {
-        console.info('[PianoRollEditor] Note move/transpose completed', {
-          trackId: pianoRollTrackId,
-          noteId: origin.noteId,
-        });
-      } else {
-        console.info('[PianoRollEditor] Note duration edit completed', {
-          trackId: pianoRollTrackId,
-          noteId: origin.noteId,
-        });
-      }
-      schedulePointerEnd();
-    };
-
-    dragRef.current = { onMove, onUp, ...origin };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
-    console.debug('[PianoRollEditor] Drag started', {
-      mode,
-      noteId: note.id,
-      pitch: note.pitch,
-      start_tick: note.start_tick,
-      duration_ticks: note.duration_ticks,
+    logger.debug('Note selection click', {
+      trackId,
+      selectedCount: useMusicStore.getState().editorSelectionRefs?.length || 0,
+      shift: clickEvent.shiftKey,
+      toggle: clickEvent.ctrlKey || clickEvent.metaKey,
     });
-  };
+  }, [extendEditorSelectionTo, toggleEditorSelectionRef, setEditorSelection]);
 
   const handleGridPointerDown = (event) => {
-    if (!metrics || !pianoRollTrackId || event.target !== event.currentTarget) {
+    if (!metrics || event.target !== event.currentTarget) {
       return;
     }
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - bounds.left;
     const y = event.clientY - bounds.top;
 
+    // Alt+drag or Meta+drag → note box select (Shift+drag remains AI bars).
+    if (event.altKey || (event.metaKey && !event.shiftKey)) {
+      event.preventDefault();
+      const origin = { x, y };
+      setNoteBoxSelectRect({ left: x, top: y, width: 0, height: 0 });
+      logger.debug('Note box select started');
+
+      const onMove = (moveEvent) => {
+        if (!noteBoxSelectRef.current || moveEvent.pointerId !== event.pointerId) {
+          return;
+        }
+        const moveBounds = event.currentTarget.getBoundingClientRect();
+        const moveX = moveEvent.clientX - moveBounds.left;
+        const moveY = moveEvent.clientY - moveBounds.top;
+        const left = Math.min(origin.x, moveX);
+        const top = Math.min(origin.y, moveY);
+        const width = Math.abs(moveX - origin.x);
+        const height = Math.abs(moveY - origin.y);
+        setNoteBoxSelectRect({ left, top, width, height });
+      };
+
+      const onUp = (upEvent) => {
+        if (!noteBoxSelectRef.current || upEvent.pointerId !== event.pointerId) {
+          return;
+        }
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        const rect = noteBoxSelectRef.current.rect;
+        noteBoxSelectRef.current = null;
+        setNoteBoxSelectRect(null);
+        if (!rect || rect.width < 2 || rect.height < 2) {
+          return;
+        }
+        const startTick = pixelToTick(rect.left, metrics.pixelsPerTick).tick;
+        const endTick = pixelToTick(rect.left + rect.width, metrics.pixelsPerTick).tick;
+        const topMidi = pixelToPitchMidi(rect.top, {
+          minMidi: metrics.minMidi,
+          maxMidi: metrics.maxMidi,
+          rowHeight: metrics.rowHeight,
+        }).midi;
+        const bottomMidi = pixelToPitchMidi(rect.top + rect.height, {
+          minMidi: metrics.minMidi,
+          maxMidi: metrics.maxMidi,
+          rowHeight: metrics.rowHeight,
+        }).midi;
+        const refs = collectNotesInBox(editedMusicJson, {
+          startTick: Math.min(startTick, endTick),
+          endTick: Math.max(startTick, endTick),
+          pitchMin: Math.min(topMidi, bottomMidi),
+          pitchMax: Math.max(topMidi, bottomMidi),
+        }, { hiddenTrackIds });
+        setEditorSelection({
+          refs,
+          primary: refs[0] || null,
+          anchor: refs[0] || null,
+        });
+        logger.debug('Note box select committed', { selectedCount: refs.length });
+      };
+
+      noteBoxSelectRef.current = {
+        origin,
+        rect: { left: x, top: y, width: 0, height: 0 },
+        onMove,
+        onUp,
+      };
+      const wrapMove = (moveEvent) => {
+        onMove(moveEvent);
+        if (noteBoxSelectRef.current) {
+          const moveBounds = event.currentTarget.getBoundingClientRect();
+          const moveX = moveEvent.clientX - moveBounds.left;
+          const moveY = moveEvent.clientY - moveBounds.top;
+          noteBoxSelectRef.current.rect = {
+            left: Math.min(origin.x, moveX),
+            top: Math.min(origin.y, moveY),
+            width: Math.abs(moveX - origin.x),
+            height: Math.abs(moveY - origin.y),
+          };
+        }
+      };
+      noteBoxSelectRef.current.onMove = wrapMove;
+      window.addEventListener('pointermove', wrapMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+      return;
+    }
+
     if (event.shiftKey) {
+      if (!pianoRollTrackId) {
+        return;
+      }
       event.preventDefault();
       const mapped = pointerXToBar(x, {
         pixelsPerTick: metrics.pixelsPerTick,
@@ -848,7 +1093,7 @@ const PianoRollEditor = () => {
         endBar: originBar,
         trackMode: aiEditTrackMode,
       });
-      console.info('[PianoRollEditor] AI bar selection started', {
+      logger.info('AI bar selection started', {
         startBar: originBar,
         endBar: originBar,
         trackMode: aiEditTrackMode,
@@ -872,7 +1117,7 @@ const PianoRollEditor = () => {
         const now = Date.now();
         if (now - lastBarSelectLogRef.current >= BAR_SELECTION_LOG_THROTTLE_MS) {
           lastBarSelectLogRef.current = now;
-          console.debug('[PianoRollEditor] AI bar selection pointer update', {
+          logger.debug('AI bar selection pointer update', {
             startBar: originBar,
             endBar: nextBar.bar,
           });
@@ -897,7 +1142,7 @@ const PianoRollEditor = () => {
           metrics.barCount,
         );
         barSelectRef.current = null;
-        console.info('[PianoRollEditor] AI bar selection committed', {
+        logger.info('AI bar selection committed', {
           startBar: final.startBar,
           endBar: final.endBar,
           trackMode: aiEditTrackMode,
@@ -909,6 +1154,10 @@ const PianoRollEditor = () => {
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
       window.addEventListener('pointercancel', onUp);
+      return;
+    }
+
+    if (!pianoRollTrackId) {
       return;
     }
 
@@ -926,22 +1175,29 @@ const PianoRollEditor = () => {
     if (!pitch) {
       return;
     }
-    console.debug('[PianoRollEditor] Pointer create coordinates', {
+    logger.debug('Pointer create coordinates', {
       x,
       y,
       snappedStart: snappedStart.tick,
       pitch,
       durationTicks,
     });
-    const note = createNote(pianoRollTrackId, {
-      pitch,
-      start_tick: snappedStart.tick,
-      duration_ticks: durationTicks,
-      velocity: 90,
-    });
-    if (note) {
-      console.info('[PianoRollEditor] Note created', sanitizeNoteSummary(note));
-      selectPianoRollNote(note.id);
+    try {
+      const note = createNote(pianoRollTrackId, {
+        pitch,
+        start_tick: snappedStart.tick,
+        duration_ticks: durationTicks,
+        velocity: 90,
+      });
+      if (note) {
+        logger.info('Note created', sanitizeNoteSummary(note));
+        const ref = makeNoteRef(pianoRollTrackId, note.id);
+        if (ref) {
+          setEditorSelection({ refs: [ref], primary: ref, anchor: ref });
+        }
+      }
+    } catch (error) {
+      logger.error('Note create failed', { message: error?.message || 'unknown' });
     }
   };
 
@@ -1019,6 +1275,7 @@ const PianoRollEditor = () => {
             Track
             <Select
               id="piano-roll-track"
+              data-testid="piano-roll-track-select"
               value={pianoRollTrackId || ''}
               aria-label="Selected piano-roll track"
               onChange={(event) => selectPianoRollTrack(event.target.value)}
@@ -1093,7 +1350,7 @@ const PianoRollEditor = () => {
               const label = nextMotifLabel(editedMusicJson?.motifs || []);
               const result = markMotifFromSelection({ label });
               if (!result?.ok) {
-                console.warn('[PianoRollEditor] Mark motif rejected', { code: result?.code || null });
+                logger.warn('Mark motif rejected', { code: result?.code || null });
               }
             }}
           >
@@ -1118,7 +1375,7 @@ const PianoRollEditor = () => {
               id="piano-roll-zoom"
               value={String(pianoRollZoom)}
               aria-label="Horizontal zoom"
-              onChange={(event) => setPianoRollZoom(Number(event.target.value))}
+              onChange={(event) => handleZoomChange(Number(event.target.value))}
             >
               <option value="0.02">Far</option>
               <option value="0.05">Default</option>
@@ -1134,42 +1391,54 @@ const PianoRollEditor = () => {
           </Button>
           <Button
             type="button"
+            data-testid="piano-roll-select-all"
+            onClick={() => selectAllVisible()}
+            aria-label="Select all visible notes"
+          >
+            Select all visible
+          </Button>
+          <Button
+            type="button"
+            data-testid="piano-roll-clear-selection"
+            onClick={() => clearEditorSelection()}
+            disabled={!selectionStats.selectedCount}
+            aria-label="Clear note selection"
+          >
+            Clear selection
+          </Button>
+          <Button
+            type="button"
             $danger
             onClick={handleDeleteSelected}
-            disabled={!pianoRollNoteId}
-            aria-label="Delete selected note"
+            disabled={!selectionStats.selectedCount}
+            aria-label="Delete selected notes"
           >
-            Delete note
+            Delete
           </Button>
         </Controls>
       </HeaderRow>
 
+      <PianoRollTrackControls tracks={tracks} />
+
+      <Status data-testid="piano-roll-selection-status">
+        Selected {selectionStats.selectedCount} note(s)
+        {selectionStats.trackCount ? ` · ${selectionStats.trackCount} track(s)` : ''}
+        {selectionRangeLabel ? ` · ticks ${selectionRangeLabel}` : ''}
+        {editorClipboard ? ' · clipboard ready' : ''}
+        {editorCommandFeedback?.message ? ` · ${editorCommandFeedback.message}` : ''}
+      </Status>
+
+      <PianoRollSelectionInspector
+        selectedCount={selectionStats.selectedCount}
+        selectedNote={selectedNote}
+        hasSelection={selectionStats.selectedCount > 0}
+      />
+
       {selectedNote && (
-        <ExpressionControls aria-label="Selected note expression controls">
+        <ExpressionControls aria-label="Tie chain controls">
           <span style={{ fontSize: '0.8rem', color: '#374151' }}>
             Note {selectedNote.pitch} · selected {pianoRollNoteIds.length}
           </span>
-          {ARTICULATION_VALUES.map((articulation) => {
-            const active = Array.isArray(selectedNote.articulations)
-              && selectedNote.articulations.includes(articulation);
-            return (
-              <ChipButton
-                key={articulation}
-                type="button"
-                $active={active}
-                data-testid={`articulation-${articulation}`}
-                aria-label={`Toggle ${articulation}`}
-                onClick={() => {
-                  if (!pianoRollTrackId || !pianoRollNoteId) {
-                    return;
-                  }
-                  toggleNoteArticulation(pianoRollTrackId, pianoRollNoteId, articulation);
-                }}
-              >
-                {articulation}
-              </ChipButton>
-            );
-          })}
           <Button
             type="button"
             data-testid="piano-roll-tie"
@@ -1217,7 +1486,8 @@ const PianoRollEditor = () => {
       </Status>
       <Status>
         Scroll horizontally for longer pieces. Drag notes to move/transpose, use the right handle to resize,
-        click empty space to create, Shift+drag to select bars for AI edit. Viewport ~{viewportWidth}px wide.
+        click empty space to create, Shift+drag for AI bars, Alt+drag (or Meta+drag) for note box select.
+        Viewport ~{viewport.clientWidth}px wide · showing {visibleNotes.length}/{allNoteGeoms.length} notes.
         {selectionRect ? ` AI selection: bars ${selectionRect.startBar}-${selectionRect.endBar}.` : ''}
         {motifOverlays.usageRect
           ? ` Motif usage: bars ${motifOverlays.usageRect.startBar}-${motifOverlays.usageRect.endBar}.`
@@ -1256,31 +1526,6 @@ const PianoRollEditor = () => {
             onPointerDown={handleGridPointerDown}
             aria-label="Piano roll timeline grid"
           >
-            {selectionRect && (
-              <SelectionOverlay
-                data-testid="piano-roll-ai-selection-overlay"
-                $left={selectionRect.left}
-                $width={selectionRect.width}
-                aria-hidden="true"
-              />
-            )}
-            {motifOverlays.usageRect && (
-              <MotifUsageOverlay
-                data-testid="piano-roll-motif-usage-overlay"
-                $left={motifOverlays.usageRect.left}
-                $width={motifOverlays.usageRect.width}
-                aria-hidden="true"
-              />
-            )}
-            {motifOverlays.destinationRect
-              && String(motifDestinationTrackId) === String(pianoRollTrackId) ? (
-                <MotifDestinationOverlay
-                  data-testid="piano-roll-motif-destination-overlay"
-                  $left={motifOverlays.destinationRect.left}
-                  $width={motifOverlays.destinationRect.width}
-                  aria-hidden="true"
-                />
-              ) : null}
             {barLabels.map((label) => (
               <BarLabel key={label.bar} $left={label.left}>
                 Bar {label.bar}
@@ -1297,84 +1542,30 @@ const PianoRollEditor = () => {
               </TimelineCue>
             ))}
 
-            {tracks.map((track, trackIndex) => {
-              const editable = String(track.id) === String(pianoRollTrackId);
-              const color = editable ? '#4f46e5' : CONTEXT_COLORS[trackIndex % CONTEXT_COLORS.length];
-              const events = Array.isArray(track.events) ? track.events : [];
-              return events.map((event) => {
-                const midi = pitchToMidi(event.pitch).midi;
-                if (midi === null || midi < metrics.minMidi || midi > metrics.maxMidi) {
-                  return null;
-                }
-                const top = (metrics.maxMidi - midi) * metrics.rowHeight;
-                const left = event.start_tick * metrics.pixelsPerTick;
-                const width = event.duration_ticks * metrics.pixelsPerTick;
-                const eventId = String(event.id);
-                const selected = editable && (
-                  String(event.id) === String(pianoRollNoteId) || selectedNoteSet.has(eventId)
-                );
-                const onHighlightedTrack = String(track.id) === String(pianoRollTrackId)
-                  || motifHighlightSets.usage.has(eventId)
-                  || motifHighlightSets.source.has(eventId);
-                let motifRole = null;
-                if (motifHighlightSets.usage.has(eventId)) {
-                  motifRole = 'usage';
-                } else if (motifHighlightSets.source.has(eventId)) {
-                  motifRole = 'source';
-                } else if (editable && motifHighlightSets.authoring.has(eventId)) {
-                  motifRole = 'authoring';
-                }
-                return (
-                  <NoteBlock
-                    key={`${track.id}:${event.id || `${event.pitch}-${event.start_tick}`}`}
-                    $left={left}
-                    $top={top}
-                    $width={width}
-                    $height={metrics.rowHeight}
-                    $color={color}
-                    $opacity={onHighlightedTrack && motifRole ? 1 : (editable ? 0.95 : CONTEXT_TRACK_OPACITY)}
-                    $selected={selected}
-                    $motifRole={motifRole}
-                    $editable={editable}
-                    role={editable ? 'button' : 'presentation'}
-                    aria-label={editable ? `Note ${event.pitch} at tick ${event.start_tick}` : undefined}
-                    tabIndex={editable ? 0 : -1}
-                    onPointerDown={(pointerEvent) => {
-                      if (!editable) {
-                        return;
-                      }
-                      beginDrag('move', event, pointerEvent);
-                    }}
-                    onClick={(clickEvent) => {
-                      if (!editable) {
-                        return;
-                      }
-                      clickEvent.stopPropagation();
-                      selectPianoRollNote(event.id, { extend: clickEvent.shiftKey });
-                      console.info('[PianoRollEditor] Note selected', {
-                        trackId: track.id,
-                        noteId: event.id,
-                        pitch: event.pitch,
-                        start_tick: event.start_tick,
-                        duration_ticks: event.duration_ticks,
-                        extend: clickEvent.shiftKey,
-                      });
-                    }}
-                  >
-                    {editable && (
-                      <ResizeHandle
-                        aria-label={`Resize note ${event.pitch}`}
-                        onPointerDown={(pointerEvent) => beginDrag('resize', event, pointerEvent)}
-                      />
-                    )}
-                  </NoteBlock>
-                );
-              });
-            })}
+            <PianoRollNoteLayer
+              notes={visibleNotes}
+              rowHeight={metrics.rowHeight}
+              selectedNoteId={pianoRollNoteId}
+              selectedNoteSet={selectedNoteKeySet}
+              motifHighlightSets={motifHighlightSets}
+              draggingNoteId={draggingNoteId}
+              onNotePointerDown={onNotePointerDown}
+              onResizePointerDown={onResizePointerDown}
+              onNoteClick={onNoteClick}
+            />
 
-            {cursorTick !== null && (
-              <PlaybackCursor $left={cursorTick * metrics.pixelsPerTick} aria-hidden="true" />
-            )}
+            <PianoRollOverlayLayer
+              composition={editedMusicJson}
+              pixelsPerTick={metrics.pixelsPerTick}
+              selectionRect={selectionRect}
+              motifUsageRect={motifOverlays.usageRect}
+              motifDestinationRect={motifOverlays.destinationRect}
+              showMotifDestination={
+                String(motifDestinationTrackId) === String(pianoRollTrackId)
+              }
+              dragPreview={dragPreview}
+              noteBoxSelectRect={noteBoxSelectRect}
+            />
           </GridCanvas>
         </ScrollArea>
       </EditorShell>

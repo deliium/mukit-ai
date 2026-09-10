@@ -63,7 +63,7 @@ Rationale: Skipped by user because the roadmap has no open milestone for this ed
 
 ### Phase 2: Productive And Scalable Editor UI
 
-- [ ] Task 4: Split the piano roll into stable viewport/note layers and eliminate high-frequency canonical updates. (depends on Tasks 1-3)
+- [x] Task 4: Split the piano roll into stable viewport/note layers and eliminate high-frequency canonical updates. (depends on Tasks 1-3)
   - Refactor `frontend/src/components/PianoRollEditor.jsx` into focused components/hooks under `frontend/src/components/piano-roll/` only where this prevents the current monolithic component from rerendering all notes for cursor, selection-box, or drag-preview updates.
   - Add a viewport model in `frontend/src/utils/pianoRollViewport.js` that derives visible tick/pitch bounds from `scrollLeft`, client size, zoom, and a render buffer; render only intersecting notes/grid labels for 50-100 bar scores while retaining native horizontal scrolling and accessible offscreen navigation.
   - Isolate the playback cursor and transient selection/drag overlays from the memoized note layer. Use refs/CSS transforms or narrow local state for pointer movement and commit one store transaction on pointer-up; cancel/Escape restores the canonical view without a mutation.
@@ -71,7 +71,7 @@ Rationale: Skipped by user because the roadmap has no open milestone for this ed
   - Add `frontend/src/utils/pianoRollViewport.test.js` for culling, buffers, zoom anchors, and scroll bounds. Keep React component behavior for direct browser E2E in Task 9 rather than adding an unconfigured JSDOM stack.
   - Logging: use throttled DEBUG diagnostics for viewport ranges/rendered counts and gesture completion duration; do not log each pointer move. WARN only for clamping/cancelled invalid commits and ERROR for sanitized render/interaction failures.
 
-- [ ] Task 5: Add reliable multi-select, box/range selection, clipboard commands, duplicate, and keyboard shortcut routing. (depends on Task 4)
+- [x] Task 5: Add reliable multi-select, box/range selection, clipboard commands, duplicate, and keyboard shortcut routing. (depends on Task 4)
   - Implement click, Ctrl/Cmd-click toggle, Shift-click range extension, and drag-box selection across visible tracks in the piano-roll note layer; preserve a primary note for inspector defaults and fix the current pointerdown/click ordering that collapses Shift selection before toggling.
   - Reserve a clear gesture/modifier for bar-range selection so note box selection and the existing AI region range do not conflict. Add Select All Visible and Clear Selection actions and show selected note/track/range counts.
   - Wire Ctrl/Cmd+C, X, V, D, A, Delete/Backspace, Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl/Cmd+Y, arrow/nudge, octave transpose, Space, Escape, and documented navigation shortcuts through one `frontend/src/utils/editorShortcuts.js` dispatcher.
@@ -80,7 +80,7 @@ Rationale: Skipped by user because the roadmap has no open milestone for this ed
   - Add `frontend/src/utils/editorShortcuts.test.js` and store tests for platform modifiers, editable-target guards, command dispatch, selection transitions, clipboard lifecycle, and one-history-entry behavior.
   - Logging: DEBUG logs normalized command IDs and selection counts; INFO logs committed cut/paste/duplicate/delete summaries; WARN logs guarded/locked/empty commands. Never log key-by-key typing, clipboard note bodies, or JSON editor content.
 
-- [ ] Task 6: Add track controls and multi-note transformation/expression inspectors. (depends on Tasks 3-5)
+- [x] Task 6: Add track controls and multi-note transformation/expression inspectors. (depends on Tasks 3-5)
   - Add compact, responsive editor toolbar/inspector components under `frontend/src/components/piano-roll/` for semitone/octave transpose, quantize mode/grid/strength, velocity set/delta, note-length operations, timing/velocity humanize amounts, and duplicate.
   - Upgrade articulation controls to apply compatible changes across the current selection and clearly report notes skipped by tie constraints without partially violating V2 rules.
   - Add basic dynamics controls for the active track: choose `ppp` through `fff`, create/update at the edit cursor or selected bar start, and remove a mark. Keep `dynamic_marks` sorted and unique and commit through canonical history.
