@@ -117,6 +117,7 @@ import {
   validateMusicJson,
 } from '../utils/musicJsonValidation.js';
 import { compositionRevisionKey, notationRevisionKey } from '../utils/playbackPosition.js';
+import { recordCompositionCommit } from '../utils/editorPerfInstrumentation.js';
 import {
   deriveLoopRangeFromSelection,
   normalizePlaybackLoop,
@@ -2023,12 +2024,12 @@ export const useMusicStore = create((set, get) => ({
       const state = get();
       const current = state.editedMusicJson;
       if (!isCanonicalComposition(current)) {
-        console.warn('[musicStore] toggleNoteArticulation rejected non-canonical composition');
+        logger.warn('toggleNoteArticulation rejected non-canonical composition');
         return null;
       }
       const result = toggleTrackNoteArticulation(current, trackId, noteId, articulation);
       if (!result.note) {
-        console.warn('[musicStore] toggleNoteArticulation rejected', {
+        logger.warn('toggleNoteArticulation rejected', {
           trackId,
           noteId,
           articulation,
@@ -2038,7 +2039,7 @@ export const useMusicStore = create((set, get) => ({
       }
       const validation = validateMusicJson(result.composition);
       if (!validation.valid) {
-        console.warn('[musicStore] toggleNoteArticulation failed validation', { message: validation.message });
+        logger.warn('toggleNoteArticulation failed validation', { message: validation.message });
         return null;
       }
       commitCompositionTransaction(set, get, {
@@ -2052,7 +2053,7 @@ export const useMusicStore = create((set, get) => ({
         noteSummary: sanitizeNoteSummary(result.note),
         featureCounts: countV2FeatureSummary(result.composition),
       });
-      console.info('[musicStore] toggleNoteArticulation applied', {
+      logger.info('toggleNoteArticulation applied', {
         trackId,
         noteId,
         articulation,
@@ -2060,7 +2061,7 @@ export const useMusicStore = create((set, get) => ({
       });
       return result.note;
     } catch (error) {
-      console.error('[musicStore] toggleNoteArticulation unexpected failure', {
+      logger.error('toggleNoteArticulation unexpected failure', {
         trackId,
         noteId,
         articulation,
@@ -2075,22 +2076,22 @@ export const useMusicStore = create((set, get) => ({
       const state = get();
       const current = state.editedMusicJson;
       if (!isCanonicalComposition(current)) {
-        console.warn('[musicStore] applyTieChain rejected non-canonical composition');
+        logger.warn('applyTieChain rejected non-canonical composition');
         return false;
       }
       const ids = Array.isArray(noteIds) && noteIds.length ? noteIds : state.pianoRollNoteIds;
       const result = applyTrackTieChain(current, trackId, ids);
       if (!result.notes?.length) {
-        console.warn('[musicStore] applyTieChain rejected incompatible selection', {
+        logger.warn('applyTieChain rejected incompatible selection', {
           trackId,
-          noteIds: ids,
+          noteIds: ids.length,
           message: result.warning,
         });
         return false;
       }
       const validation = validateMusicJson(result.composition);
       if (!validation.valid) {
-        console.warn('[musicStore] applyTieChain failed validation', { message: validation.message });
+        logger.warn('applyTieChain failed validation', { message: validation.message });
         return false;
       }
       commitCompositionTransaction(set, get, {
@@ -2110,14 +2111,14 @@ export const useMusicStore = create((set, get) => ({
         },
         featureCounts: countV2FeatureSummary(result.composition),
       });
-      console.info('[musicStore] applyTieChain applied', {
+      logger.info('applyTieChain applied', {
         trackId,
         groupId: result.groupId,
         noteCount: result.notes.length,
       });
       return true;
     } catch (error) {
-      console.error('[musicStore] applyTieChain unexpected failure', {
+      logger.error('applyTieChain unexpected failure', {
         trackId,
         message: error.message,
       });
@@ -2130,22 +2131,22 @@ export const useMusicStore = create((set, get) => ({
       const state = get();
       const current = state.editedMusicJson;
       if (!isCanonicalComposition(current)) {
-        console.warn('[musicStore] removeTieChain rejected non-canonical composition');
+        logger.warn('removeTieChain rejected non-canonical composition');
         return false;
       }
       const ids = Array.isArray(noteIds) && noteIds.length ? noteIds : state.pianoRollNoteIds;
       const result = removeTrackTieChain(current, trackId, ids);
       if (!result.clearedCount) {
-        console.warn('[musicStore] removeTieChain rejected', {
+        logger.warn('removeTieChain rejected', {
           trackId,
-          noteIds: ids,
+          noteIds: ids.length,
           message: result.warning,
         });
         return false;
       }
       const validation = validateMusicJson(result.composition);
       if (!validation.valid) {
-        console.warn('[musicStore] removeTieChain failed validation', { message: validation.message });
+        logger.warn('removeTieChain failed validation', { message: validation.message });
         return false;
       }
       commitCompositionTransaction(set, get, {
@@ -2157,13 +2158,13 @@ export const useMusicStore = create((set, get) => ({
         noteSummary: { clearedCount: result.clearedCount },
         featureCounts: countV2FeatureSummary(result.composition),
       });
-      console.info('[musicStore] removeTieChain applied', {
+      logger.info('removeTieChain applied', {
         trackId,
         clearedCount: result.clearedCount,
       });
       return true;
     } catch (error) {
-      console.error('[musicStore] removeTieChain unexpected failure', {
+      logger.error('removeTieChain unexpected failure', {
         trackId,
         message: error.message,
       });
@@ -2173,10 +2174,10 @@ export const useMusicStore = create((set, get) => ({
 
   setPianoRollSnap: (snapValue) => {
     if (!SNAP_VALUES.includes(snapValue)) {
-      console.warn('[musicStore] Rejected invalid piano-roll snap', { snapValue });
+      logger.warn('Rejected invalid piano-roll snap', { snapValue });
       return;
     }
-    console.info('[musicStore] Piano-roll snap changed', { snapValue });
+    logger.info('Piano-roll snap changed', { snapValue });
     set({ pianoRollSnap: snapValue });
   },
 
@@ -2467,19 +2468,19 @@ export const useMusicStore = create((set, get) => ({
       const state = get();
       const current = state.editedMusicJson;
       if (!isCanonicalComposition(current)) {
-        console.warn('[musicStore] createNote rejected non-canonical composition');
+        logger.warn('createNote rejected non-canonical composition');
         set({ pianoRollEditStatus: 'error' });
         return null;
       }
       const result = createTrackNote(current, trackId, noteDraft);
       if (!result.note) {
-        console.warn('[musicStore] createNote rejected', { trackId, message: result.warning });
+        logger.warn('createNote rejected', { trackId, message: result.warning });
         set({ pianoRollEditStatus: 'error' });
         return null;
       }
       const validation = validateMusicJson(result.composition);
       if (!validation.valid) {
-        console.warn('[musicStore] createNote failed validation', { message: validation.message });
+        logger.warn('createNote failed validation', { message: validation.message });
         set({ pianoRollEditStatus: 'error' });
         return null;
       }
@@ -2492,7 +2493,7 @@ export const useMusicStore = create((set, get) => ({
       });
       return result.note;
     } catch (error) {
-      console.error('[musicStore] createNote unexpected failure', { trackId, message: error.message });
+      logger.error('createNote unexpected failure', { trackId, message: error.message });
       set({ pianoRollEditStatus: 'error' });
       return null;
     }
@@ -2503,20 +2504,20 @@ export const useMusicStore = create((set, get) => ({
       const state = get();
       const current = state.editedMusicJson;
       if (!isCanonicalComposition(current)) {
-        console.warn('[musicStore] updateNote rejected non-canonical composition');
+        logger.warn('updateNote rejected non-canonical composition');
         set({ pianoRollEditStatus: 'error' });
         return null;
       }
       const before = findNote(current, trackId, noteId);
       const result = updateTrackNote(current, trackId, noteId, patch);
       if (!result.note) {
-        console.warn('[musicStore] updateNote rejected', { trackId, noteId, message: result.warning });
+        logger.warn('updateNote rejected', { trackId, noteId, message: result.warning });
         set({ pianoRollEditStatus: 'error' });
         return null;
       }
       const validation = validateMusicJson(result.composition);
       if (!validation.valid) {
-        console.warn('[musicStore] updateNote failed validation', { message: validation.message });
+        logger.warn('updateNote failed validation', { message: validation.message });
         set({ pianoRollEditStatus: 'error' });
         return null;
       }
@@ -2534,7 +2535,7 @@ export const useMusicStore = create((set, get) => ({
       });
       return result.note;
     } catch (error) {
-      console.error('[musicStore] updateNote unexpected failure', {
+      logger.error('updateNote unexpected failure', {
         trackId,
         noteId,
         message: error.message,
@@ -2549,24 +2550,24 @@ export const useMusicStore = create((set, get) => ({
       const state = get();
       const current = state.editedMusicJson;
       if (!noteId) {
-        console.warn('[musicStore] deleteNote ignored with no selection', { trackId });
+        logger.warn('deleteNote ignored with no selection', { trackId });
         return false;
       }
       if (!isCanonicalComposition(current)) {
-        console.warn('[musicStore] deleteNote rejected non-canonical composition');
+        logger.warn('deleteNote rejected non-canonical composition');
         set({ pianoRollEditStatus: 'error' });
         return false;
       }
       const result = deleteTrackNote(current, trackId, noteId);
       if (!result.deleted) {
-        console.warn('[musicStore] deleteNote rejected', { trackId, noteId, message: result.warning });
+        logger.warn('deleteNote rejected', { trackId, noteId, message: result.warning });
         set({ pianoRollEditStatus: 'error' });
         return false;
       }
       const reconciled = applyMotifReconciliation(result.composition, [noteId]);
       const validation = validateMusicJson(reconciled.composition);
       if (!validation.valid) {
-        console.warn('[musicStore] deleteNote failed validation', { message: validation.message });
+        logger.warn('deleteNote failed validation', { message: validation.message });
         set({ pianoRollEditStatus: 'error' });
         return false;
       }
@@ -2582,7 +2583,7 @@ export const useMusicStore = create((set, get) => ({
       });
       return true;
     } catch (error) {
-      console.error('[musicStore] deleteNote unexpected failure', {
+      logger.error('deleteNote unexpected failure', {
         trackId,
         noteId,
         message: error.message,
@@ -5756,6 +5757,7 @@ function commitCompositionTransaction(set, get, {
     revisionPrefix: revision.slice(0, 48),
     skipHistory: Boolean(skipHistory),
   });
+  recordCompositionCommit(action || 'commit');
   const elapsedMs = (
     typeof performance !== 'undefined' && performance.now
       ? performance.now()
@@ -5842,13 +5844,6 @@ function findNote(composition, trackId, noteId) {
     return null;
   }
   return track.events.find((event) => String(event.id) === String(noteId)) || null;
-}
-
-function noteStillExists(composition, trackId, noteId) {
-  if (!noteId || !trackId) {
-    return false;
-  }
-  return Boolean(findNote(composition, trackId, noteId));
 }
 
 function cancelAutosaveTimer() {

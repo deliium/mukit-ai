@@ -176,7 +176,7 @@ npm run test:e2e
 npm run test:e2e:ui
 ```
 
-Specs live in `frontend/e2e/` (`v1-user-journey`, `v1-upgrade-to-v2`, `v2-user-journey`, `import-user-journey`, persistence suites). Persistence reopen after Compose restart is opt-in:
+Specs live in `frontend/e2e/` (`v1-user-journey`, `v1-upgrade-to-v2`, `v2-user-journey`, `v2-editor-workflow`, `import-user-journey`, persistence suites). Persistence reopen after Compose restart is opt-in:
 
 ```bash
 RUN_PLAYWRIGHT_DOCKER_RESTART=1 npm run test:e2e -- e2e/v1-persistence.spec.js
@@ -256,6 +256,33 @@ Full backend: `cd backend && ../.venv/bin/python -m pytest`. Frontend: `npm test
 
 Covers piano → piano/cello/string-ensemble `piano_to_ensemble` with three candidates, non-mutating preview, apply non-first, persistence of applied V2 only, range/duplicate/preservation checks, Arrange tab + 390px layout. Contract: [composition-arrangement.md](composition-arrangement.md). Logs may include operation, stage, provider/model, catalog version, counts, codes, and fingerprint prefixes only — never instructions, catalog override contents, compositions, or event arrays. Frontend verbosity: `VITE_LOG_LEVEL`.
 
+### V2 piano-roll editor workflow (large score)
+
+Requires a running stack (`LLM_FAKE_MODE=1` backend + frontend on port 3000):
+
+```bash
+cd frontend
+npm test -- e2e/helpers.test.js src/utils/editorPerfInstrumentation.test.js
+npm run lint
+npm run build
+LLM_FAKE_MODE=1 npm run test:e2e -- e2e/v2-editor-workflow.spec.js
+# Likely regressions after editor changes:
+LLM_FAKE_MODE=1 npm run test:e2e -- e2e/v2-user-journey.spec.js e2e/import-user-journey.spec.js
+```
+
+The journey seeds a deterministic **100-bar** multi-track fixture (`frontend/e2e/fixtures/largeScoreEditor.js`, ~600+ notes) via `seedLargeScoreEditorProject`, then uses **real pointer/keyboard** interaction (not store mutation) for multi-select, copy/duplicate, transpose, velocity, quantize, loop-from-selection, play-from-cursor, undo/redo, articulation/dynamics, bar/section navigation, lock/hide tracks, and 390px layout.
+
+Performance instrumentation (`frontend/src/utils/editorPerfInstrumentation.js`) is inert unless `window.__MUKIT_EDITOR_PERF_ENABLE__` is set (E2E enables it). Budgets (hardware-tolerant CI gates):
+
+| Gate | Budget |
+|------|--------|
+| Rendered note DOM nodes at start (buffered viewport) | ≤ 320 (and ≪ total score notes) |
+| Mid-drag canonical commits | 0 until pointer-up; exactly 1 on completion |
+| Extra note-layer renders during short playback | < 40 |
+| Box-select / transform / navigation / drag wall time | ≤ 4s / 4s / 3s / 4s |
+
+Logging checks: E2E asserts browser console lines never contain full `"events":[...]` dumps or clipboard note payloads. Use `VITE_LOG_LEVEL=silent` locally to confirm suppression; verbose `debug`/`info` summaries must stay count/status-only.
+
 Artifacts (trace/video on failure) are gitignored under `frontend/test-results/` and `frontend/playwright-report/`.
 
 ## Frontend Smoke Checks
@@ -290,7 +317,7 @@ Use these manual checks after `npm run build` and during local development.
 11. Use per-track Mute, Solo, and Volume while playing; confirm routing changes without editing composition JSON.
 12. Edit a note event while idle, then Play again; confirm playback uses the edited events. Edit during playback and confirm active playback stops.
 13. Open the piano-roll editor: select the melody track, set snap to `1/8` or `1/16`, drag a note to another pitch/time, resize duration, confirm the JSON editor shows the same `tracks[].events[]` change, confirm notation refreshes after the debounce, then Play and confirm the edited pitch/duration are heard with the red playback cursor moving.
-14. Use piano-roll Undo/Redo and Play again; confirm audible result follows the current edited state. Undo/redo applies only to note edits (not arbitrary JSON editor typing).
+14. Use piano-roll Undo/Redo and Play again; confirm audible result follows the current edited state. Undo/redo applies to composition transactions (notes, bulk transforms, dynamics, applied previews) — not arbitrary mid-typing JSON.
 15. Click Export MusicXML, Export MIDI, and Export WAV; confirm downloads use `.musicxml` / `.mid` / `.wav`, notation preview updates from the exported MusicXML, projection warnings appear when headers report approximations/omissions, WAV does not start browser playback, and a known fixture's playback positions match MIDI export note tuples.
 16. Open browser devtools and confirm sanitized playback/piano-roll diagnostics (path, event counts, note edit summaries, MusicXML preview length, instrument strategy/fallback, mute/solo gains) without raw composition dumps.
 17. Resize to a mobile viewport and confirm piano-roll controls, playback, and track controls remain usable.
@@ -315,6 +342,7 @@ The OSMD/Tone.js bundle can trigger Vite's large chunk warning; that warning is 
 
 ## See Also
 
+- [Composition Editor](composition-editor.md) — piano-roll selection, clipboard, transforms, cursor/loop, perf budgets
 - [Composition Arrangement](composition-arrangement.md) — catalog, operations, Apply lifecycle, test commands
 - [Composition Analysis](composition-analysis.md) — sidecar contract, warning codes, API
 - [MIDI and MusicXML import](import.md) — formats, limits, issue codes

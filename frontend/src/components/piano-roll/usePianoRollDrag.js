@@ -9,6 +9,7 @@ import {
   snapTick,
 } from '../../utils/pianoRollEvents.js';
 import { createAppLogger } from '../../utils/appLogger.js';
+import { beginDragPerf, endDragPerf } from '../../utils/editorPerfInstrumentation.js';
 
 const logger = createAppLogger('pianoRoll.drag');
 
@@ -50,6 +51,7 @@ export function usePianoRollDrag({ metrics, trackId }) {
     });
     clearListeners();
     setDragPreview(null);
+    endDragPerf({ committed: false });
   }, [clearListeners]);
 
   useEffect(() => () => {
@@ -67,6 +69,7 @@ export function usePianoRollDrag({ metrics, trackId }) {
     if (!metrics || !trackId || !note) {
       return;
     }
+    beginDragPerf();
     const startMidi = pitchToMidi(note.pitch).midi;
     if (startMidi === null) {
       return;
@@ -89,7 +92,9 @@ export function usePianoRollDrag({ metrics, trackId }) {
       originDurationTicks: note.duration_ticks,
       originMidi: startMidi,
       originLeft: Number(layout.left) || note.start_tick * metrics.pixelsPerTick,
-      originTop: Number(layout.top) ?? (metrics.maxMidi - startMidi) * metrics.rowHeight,
+      originTop: Number.isFinite(Number(layout.top))
+        ? Number(layout.top)
+        : (metrics.maxMidi - startMidi) * metrics.rowHeight,
       originWidth: Number(layout.width) || note.duration_ticks * metrics.pixelsPerTick,
       originHeight: Number(layout.height) || metrics.rowHeight,
       color: layout.color || '#4f46e5',
@@ -190,6 +195,7 @@ export function usePianoRollDrag({ metrics, trackId }) {
       setDragPreview(null);
 
       if (!commit || !preview) {
+        endDragPerf({ committed: false });
         logger.warn('Drag ended without commit', {
           mode: origin.mode,
           noteId: origin.noteId,
@@ -220,6 +226,7 @@ export function usePianoRollDrag({ metrics, trackId }) {
         : preview.duration_ticks === origin.originDurationTicks;
 
       if (unchanged) {
+        endDragPerf({ committed: false });
         logger.debug('Drag completed with no musical change', {
           mode: origin.mode,
           noteId: origin.noteId,
@@ -230,6 +237,7 @@ export function usePianoRollDrag({ metrics, trackId }) {
 
       const result = updateNote(origin.trackId, origin.noteId, patch, { historySnapshot });
       if (!result) {
+        endDragPerf({ committed: false });
         logger.warn('Drag commit rejected by store', {
           mode: origin.mode,
           noteId: origin.noteId,
@@ -238,6 +246,7 @@ export function usePianoRollDrag({ metrics, trackId }) {
         return;
       }
 
+      endDragPerf({ committed: true });
       logger.info(origin.mode === 'move' ? 'Note move/transpose committed' : 'Note duration edit committed', {
         trackId: origin.trackId,
         noteId: origin.noteId,

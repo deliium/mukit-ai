@@ -1048,8 +1048,6 @@ const PianoRollEditor = () => {
     }
   };
 
-  const clientWidthForZoom = () => scrollRef.current?.clientWidth || viewport.clientWidth || 0;
-
   const handleZoomChange = useCallback((nextZoom) => {
     const node = scrollRef.current;
     const oldPpt = metrics?.pixelsPerTick || pianoRollZoom;
@@ -1082,11 +1080,15 @@ const PianoRollEditor = () => {
   }, [metrics, pianoRollZoom, zoomOut]);
 
   const handleZoomToFit = useCallback(() => {
-    zoomToFit({ clientWidth: clientWidthForZoom() });
+    zoomToFit({
+      clientWidth: scrollRef.current?.clientWidth || viewport.clientWidth || 0,
+    });
   }, [zoomToFit, viewport.clientWidth]);
 
   const handleZoomToSelection = useCallback(() => {
-    zoomToSelection({ clientWidth: clientWidthForZoom() });
+    zoomToSelection({
+      clientWidth: scrollRef.current?.clientWidth || viewport.clientWidth || 0,
+    });
   }, [zoomToSelection, viewport.clientWidth]);
 
   const handleEditorShortcut = useCallback((event) => {
@@ -1932,9 +1934,6 @@ const PianoRollEditor = () => {
             <PianoRollNoteLayer
               notes={visibleNotes}
               rowHeight={metrics.rowHeight}
-              selectedNoteId={pianoRollNoteId}
-              selectedNoteSet={selectedNoteKeySet}
-              motifHighlightSets={motifHighlightSets}
               draggingNoteId={draggingNoteId}
               onNotePointerDown={onNotePointerDown}
               onResizePointerDown={onResizePointerDown}

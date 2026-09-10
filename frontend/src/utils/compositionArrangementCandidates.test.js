@@ -195,8 +195,6 @@ function sampleCatalogResponse(overrides = {}) {
     range_policy_version: ARRANGEMENT_RANGE_POLICY_VERSION,
     fingerprint: 'f'.repeat(64),
     source_path_category: 'packaged',
-    instruments,
-    track_roles: [...SUPPORTED_TRACK_ROLES],
     ...overrides,
     instruments: overrides.instruments || instruments,
     track_roles: overrides.track_roles || [...SUPPORTED_TRACK_ROLES],

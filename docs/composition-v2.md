@@ -315,12 +315,13 @@ Before treating V2 responses as production-ready, verify:
 - **Projects:** SQLite stores V2 after open/save; V1 migrates on read. Imported projects persist with `generationMeta: null`. See [project-persistence.md](./project-persistence.md).
 - **Playback:** `tonePlaybackEngine.js` compiles V2 expression with piecewise tempo; mute/solo is UI-only. Regenerated notation after import comes from backend MusicXML of the installed V2 — never from the uploaded file.
 - **Exports:** `/export/musicxml`, `/export/midi`, and `/export/wav` accept V1 or V2 input, normalize to V2, and attach `X-Mukit-Projection-*` headers (CORS-exposed). MusicXML may report notation omissions such as `automation_omitted_from_notation`; MIDI/WAV inherit the shared MIDI projection report (tempo quantization, automation sampling, articulation transforms, and related codes). WAV uses FluidSynth on the same MIDI bytes; env vars: `FLUIDSYNTH_BIN`, `COMPOSITION_WAV_SOUNDFONT` (Docker default `/usr/share/sounds/sf2/FluidR3_GM.sf2`), `COMPOSITION_WAV_SAMPLE_RATE`, `COMPOSITION_WAV_GAIN`, `COMPOSITION_WAV_TIMEOUT_SECONDS`. Missing FluidSynth/SoundFont → `503`.
-- **Editors:** Piano roll edits notes (articulations, ties); JSON editor holds full V2 including automation/timeline arrays.
+- **Editors:** Piano roll owns productive multi-note editing (selection, clipboard, transforms, dynamics, hide/lock, cursor/loop) via composition transactions — see [composition-editor.md](composition-editor.md). JSON editor holds full V2 including automation/timeline arrays; only valid canonical commits enter undo history.
 
 Staged generation, region editing, and V1 compatibility details: [composition-v1.md](./composition-v1.md).
 
 ## See Also
 
+- [Composition Editor](composition-editor.md) — piano-roll selection, clipboard, transforms, cursor/loop
 - [Composition Development](composition-development.md) — continue / add section / vary with multi-candidate preview
 - [Composition Arrangement](composition-arrangement.md) — instrumentation / texture redistribution preview (catalog not persisted)
 - [Composition Analysis](composition-analysis.md) — deterministic sidecar report (not part of canonical V2)

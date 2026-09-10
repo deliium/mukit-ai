@@ -110,7 +110,7 @@ Rationale: Skipped by user because the roadmap has no open milestone for this ed
 
 ### Phase 4: Acceptance, Performance, Logging, And Documentation
 
-- [ ] Task 9: Add direct interaction acceptance tests and enforce a large-score performance budget. (depends on Tasks 4-8)
+- [x] Task 9: Add direct interaction acceptance tests and enforce a large-score performance budget. (depends on Tasks 4-8)
   - Add a focused Playwright journey, expected at `frontend/e2e/v2-editor-workflow.spec.js`, that uses real pointer and keyboard interaction rather than direct store mutation to select several bars, copy/paste or duplicate, transpose, change velocities, quantize, set the edited loop, play from cursor, verify loop bounds, then undo/redo the complete operation sequence.
   - Cover box selection across visible tracks, locked/hidden track behavior, keyboard shortcut focus guards, articulation/dynamics edits, note length/humanize, horizontal scroll, zoom anchor, current-bar/section navigation, and mobile-width usability.
   - Add a deterministic 100-bar/high-note-count fixture/helper under `frontend/e2e/fixtures/` or `frontend/e2e/helpers.js`. Instrument rendered note-node count, canonical commit count during a drag, and interaction latency using stable browser marks/counters available only in development/test mode.
@@ -118,7 +118,7 @@ Rationale: Skipped by user because the roadmap has no open milestone for this ed
   - Run `npm test`, `npm run lint`, `npm run build`, and the focused Playwright editor journey from `frontend/`; then run the existing V1/V2/import journeys most likely to regress. Record test commands and performance budgets in `docs/testing.md`, not in a standalone report artifact.
   - Logging: tests assert `VITE_LOG_LEVEL=silent` suppression and verify representative verbose operation summaries contain no full composition/event/clipboard payloads. Performance instrumentation logs aggregated DEBUG measurements only and is disabled or inert in normal production builds.
 
-- [ ] Task 10: Complete logging migration and user/developer documentation. (depends on Tasks 1-9)
+- [x] Task 10: Complete logging migration and user/developer documentation. (depends on Tasks 1-9)
   - Replace remaining direct `console.*` calls in touched editor/playback/store paths with `frontend/src/utils/appLogger.js`; centralize editor logger namespaces and preserve environment-controlled `VITE_LOG_LEVEL` behavior.
   - Update `README.md` with the productive V2 editor workflow and keyboard/transport highlights.
   - Add or expand a dedicated editor section/page under `docs/` and update `docs/composition-v2.md` with canonical mutation, clipboard, selection, history, articulation, dynamics, track visibility/lock, and JSON-tooling boundaries.

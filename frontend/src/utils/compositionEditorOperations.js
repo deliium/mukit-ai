@@ -578,8 +578,8 @@ export function pasteNotes(composition, clipboard, {
     const targetTrackId = draft._targetTrackId;
     const id = allocateEventId(draft, usedIds, targetTrackId, indexCounter, 'paste');
     indexCounter += 1;
-    const { _targetTrackId, ...rest } = draft;
-    const event = { ...rest, id };
+    const event = { ...draft, id };
+    delete event._targetTrackId;
     if (!insertsByTrack.has(targetTrackId)) {
       insertsByTrack.set(targetTrackId, []);
     }

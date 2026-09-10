@@ -4,6 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  buildLargeScoreEditorFixture,
+  largeScoreNoteCount,
+  toCanonicalLargeScore,
+} from './fixtures/largeScoreEditor.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../..');
 
@@ -1075,6 +1081,88 @@ export async function seedV2ProjectViaApi(request, {
     sourceNoteSequences: extractNoteSequences(composition),
     composition,
   };
+}
+
+export {
+  buildLargeScoreEditorFixture,
+  toCanonicalLargeScore,
+  largeScoreNoteCount,
+};
+
+/** Seed a 100-bar dense score for editor culling / workflow acceptance. */
+export async function seedLargeScoreEditorProject(request, {
+  name = 'Large Score Editor',
+  barCount = 100,
+  notesPerBar = 4,
+} = {}) {
+  const raw = buildLargeScoreEditorFixture({ barCount, notesPerBar });
+  const composition = toCanonicalLargeScore(raw);
+  const seeded = await seedV2ProjectViaApi(request, { name, fixture: composition });
+  return {
+    ...seeded,
+    noteCount: largeScoreNoteCount(composition),
+    barCount: composition.bar_count,
+  };
+}
+
+export async function enableEditorPerfOnPage(page) {
+  await page.evaluate(() => {
+    window.__MUKIT_EDITOR_PERF_ENABLE__ = true;
+    window.__MUKIT_EDITOR_PERF_API__?.enable?.();
+    window.__MUKIT_EDITOR_PERF_API__?.reset?.();
+  });
+}
+
+export async function getEditorPerfSnapshot(page) {
+  return page.evaluate(() => window.__MUKIT_EDITOR_PERF_API__?.snapshot?.() || null);
+}
+
+export async function getEditorWorkflowSnapshot(page) {
+  return page.evaluate(() => {
+    const state = window.__MUKIT_MUSIC_STORE__?.getState?.();
+    if (!state) {
+      return null;
+    }
+    const composition = state.editedMusicJson;
+    const layer = document.querySelector('[data-testid="piano-roll-note-layer"]');
+    const renderedAttr = layer?.getAttribute('data-rendered-note-count');
+    const renderedDom = document.querySelectorAll('[data-testid="piano-roll-note"]').length;
+    return {
+      schemaVersion: composition?.schema_version ?? null,
+      barCount: composition?.bar_count ?? null,
+      eventCount: Array.isArray(composition?.tracks)
+        ? composition.tracks.reduce((sum, track) => sum + (track.events?.length || 0), 0)
+        : 0,
+      compositionRevision: state.compositionRevision,
+      selectedCount: Array.isArray(state.editorSelectionRefs) ? state.editorSelectionRefs.length : 0,
+      clipboardReady: Boolean(state.editorClipboard),
+      editCursorTick: state.editCursorTick,
+      playbackStatus: state.playbackStatus,
+      playbackLoop: state.playbackLoop
+        ? {
+          startTick: state.playbackLoop.startTick,
+          endTick: state.playbackLoop.endTick,
+          enabled: Boolean(state.playbackLoop.enabled),
+        }
+        : null,
+      undoDepth: Array.isArray(state.compositionEditUndoStack)
+        ? state.compositionEditUndoStack.length
+        : 0,
+      redoDepth: Array.isArray(state.compositionEditRedoStack)
+        ? state.compositionEditRedoStack.length
+        : 0,
+      hiddenTrackCount: Array.isArray(state.hiddenTrackIds) ? state.hiddenTrackIds.length : 0,
+      lockedTrackCount: Array.isArray(state.lockedTrackIds) ? state.lockedTrackIds.length : 0,
+      renderedNoteAttr: renderedAttr == null ? null : Number(renderedAttr),
+      renderedNoteDom: renderedDom,
+      currentBarValue: document.querySelector('[data-testid="piano-roll-current-bar"]')?.value || null,
+    };
+  });
+}
+
+export async function openPianoRollTab(page) {
+  await openComposerTab(page, 'piano');
+  await page.getByTestId('piano-roll-grid').waitFor({ state: 'visible', timeout: 30_000 });
 }
 
 export async function ensureFakeLlmSelected(page) {

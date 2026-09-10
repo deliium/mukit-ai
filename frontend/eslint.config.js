@@ -33,6 +33,11 @@ export default [
         structuredClone: 'readonly',
         crypto: 'readonly',
         TextEncoder: 'readonly',
+        performance: 'readonly',
+        navigator: 'readonly',
+        process: 'readonly',
+        requestAnimationFrame: 'readonly',
+        cancelAnimationFrame: 'readonly',
       },
     },
     plugins: {

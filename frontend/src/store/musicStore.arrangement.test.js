@@ -907,7 +907,7 @@ test('arrangement logger silent gate emits nothing; debug permits metadata only'
   assert.match(joined, /operation|candidateCount|status|revision|requestId/i);
 });
 
-test('API 422/502/503 preview failures stay non-mutating', async (t) => {
+test('API 422/502/503 preview failures stay non-mutating', async () => {
   const source = arrangementSource();
   const cases = [
     { status: 422, code: 'arrangement_inventory_mismatch', message: 'Inventory mismatch' },

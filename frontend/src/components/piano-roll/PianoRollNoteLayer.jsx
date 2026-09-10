@@ -1,5 +1,6 @@
-import React, { memo } from 'react';
+import React, { memo, useEffect } from 'react';
 import styled from 'styled-components';
+import { recordNoteLayerRender } from '../../utils/editorPerfInstrumentation.js';
 
 const NoteBlock = styled.div`
   position: absolute;
@@ -45,16 +46,21 @@ const ResizeHandle = styled.div`
 function PianoRollNoteLayer({
   notes,
   rowHeight,
-  selectedNoteId,
-  selectedNoteSet,
-  motifHighlightSets,
   draggingNoteId,
   onNotePointerDown,
   onResizePointerDown,
   onNoteClick,
 }) {
+  useEffect(() => {
+    recordNoteLayerRender(notes.length);
+  }, [notes]);
+
   return (
-    <div data-testid="piano-roll-note-layer" aria-hidden="false">
+    <div
+      data-testid="piano-roll-note-layer"
+      data-rendered-note-count={notes.length}
+      aria-hidden="false"
+    >
       {notes.map((item) => {
         const {
           key,
@@ -89,6 +95,7 @@ function PianoRollNoteLayer({
             role={selectable ? 'button' : 'presentation'}
             aria-label={selectable ? `Note ${event.pitch} at tick ${event.start_tick}` : undefined}
             tabIndex={selectable ? 0 : -1}
+            data-testid="piano-roll-note"
             data-track-id={trackId}
             data-event-id={eventId}
             onPointerDown={(pointerEvent) => {

@@ -9,8 +9,8 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Local Project Persistence**: Create/open/rename/duplicate/delete projects backed by SQLite; debounced autosave keeps edited compositions across Docker restarts
 - **Prompt Controls**: Configure genre, mood, key, meter, tempo range, instruments, sections, complexity, duration, and freeform instructions
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
-- **Piano-Roll Editor**: Create, select, drag/transpose, resize, and delete notes on `tracks[].events[]` with snap/zoom, track focus, context tracks, and note-edit undo/redo; shares the same `editedMusicJson` as the JSON editor
-- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start, piano-roll playback cursor)
+- **Piano-Roll Editor**: Multi-note V2 editing on `tracks[].events[]` — box/range selection, clipboard, bulk transpose/velocity/quantize/length/humanize, articulations, dynamics, track hide/lock, edit cursor, bar/section navigation, zoom, play-from-cursor and selection loop; composition-level undo/redo shares `editedMusicJson` with the JSON editor
+- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start, play-from-cursor, loop, piano-roll playback cursor)
 - **Composition Analysis**: Deterministic `composition.analysis.v1` sidecar for tonal context, inferred harmony, phrases/density, derived motif families, and stable warnings over current V2 (Analysis tab; optional bounded advisory context for LLM edit/repair — not persisted, not required for import/playback)
 - **Motif Authoring**: Mark a 1–2 bar pitched selection as a named motif, inspect usages, and apply mechanical or creative transforms via `POST /motifs/apply`; results are ordinary `tracks[].events[]` plus reference metadata (Motifs tab)
 - **Harmony & Reharmonization**: Edit explicit V2 harmony tick spans on the Harmony tab; preview deterministic or AI reharmonization via `POST /harmony/reharmonize/preview` without dirtying the project until Apply (melody/accompaniment policies; events remain the only audible source)
@@ -165,8 +165,8 @@ Contract, scopes, and warning codes: [docs/composition-analysis.md](docs/composi
 3. Open or create a project, then choose the provider/model in the LLM JSON Composer panel.
 4. Set prompt parameters such as genre, mood, key, time signature, tempo range, instruments, sections, complexity, duration, and freeform instructions.
 5. Click "Generate LLM Music JSON".
-6. Edit notes on the piano roll (or in the JSON editor). Invalid edits show a client-side validation error. Piano-roll undo/redo covers note edits only. Changes autosave when a project is open.
-7. Optionally Shift+drag bars on the piano roll, enter an instruction, and use **Regenerate Selection / AI Edit** to change only the selected region. Failures leave the current composition unchanged; success supports undo/redo.
+6. Edit notes on the piano roll (or in the JSON editor). Invalid edits show a client-side validation error. Piano-roll undo/redo covers canonical composition transactions (notes, bulk transforms, dynamics, applied previews) — not arbitrary mid-typing JSON. Changes autosave when a project is open.
+7. Optionally Shift+drag bars on the piano roll, enter an instruction, and use **Regenerate Selection / AI Edit** to change only the selected region. Failures leave the current composition unchanged; success supports undo/redo. Use Alt+drag for multi-note box select; Play From Cursor / loop-from-selection for focused audition.
 8. Review notation rendered from backend MusicXML; piano-roll and AI edits refresh notation via `POST /export/musicxml/preview` after a short debounce.
 9. Use Play/Stop to preview canonical note events from the generated or edited JSON; the piano-roll cursor follows playback position.
 10. Export MusicXML or MIDI from the edited canonical JSON; notation preview refreshes from the exported MusicXML.
@@ -277,10 +277,10 @@ mukit-ai/
 ├── frontend/
 │   ├── public/
 │   ├── src/
-│   │   ├── components/          # Generator, analysis, piano roll, notation, playback, export controls
+│   │   ├── components/          # Generator, analysis, piano-roll/, notation, playback, export controls
 │   │   ├── api/musicApi.js
-│   │   ├── store/               # Zustand music store (edits, undo, playback, notation, analysis)
-│   │   ├── utils/               # Validation, piano-roll geometry, playback, analysis helpers
+│   │   ├── store/               # Zustand music store (composition transactions, undo, playback, notation, analysis)
+│   │   ├── utils/               # Validation, editor selection/ops, viewport, playback, analysis helpers
 │   │   ├── App.jsx
 │   │   ├── index.jsx
 │   │   └── index.css
@@ -303,6 +303,7 @@ mukit-ai/
 | Guide | Description |
 |-------|-------------|
 | [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
+| [Composition Editor](docs/composition-editor.md) | Piano-roll multi-note editing, clipboard, cursor/loop |
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |
 | [Composition Arrangement](docs/composition-arrangement.md) | Instrumentation / texture redistribution; catalog + preview + Apply |
 | [Composition Analysis](docs/composition-analysis.md) | Deterministic sidecar, scopes, warnings, Analysis tab |
@@ -333,7 +334,7 @@ Additional manual smoke checks are documented in `docs/testing.md`.
 
 ## Logging And Secret Handling
 
-Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Python `logging` and intentionally log provider names, model names, schema version, normalization path, validation retry counts, event counts, timing summaries, and sanitized error details. API key values are never logged. Frontend API/store/validator/playback code uses `console.debug`, `console.info`, `console.warn`, and `console.error` for request intent, state transitions, JSON validation, instrument strategy/fallback, mute/solo gains, transport lifecycle, notation rendering, and playback scheduling without logging secrets or full raw composition payloads.
+Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Python `logging` and intentionally log provider names, model names, schema version, normalization path, validation retry counts, event counts, timing summaries, and sanitized error details. API key values are never logged. Frontend API/store/validator/playback/editor code uses `appLogger` (`VITE_LOG_LEVEL`) for request intent, composition transactions, instrument strategy/fallback, mute/solo gains, transport lifecycle, notation rendering, and playback scheduling without logging secrets, event arrays, clipboard bodies, or full raw composition payloads.
 
 ## 🧠 Generation Architecture
 

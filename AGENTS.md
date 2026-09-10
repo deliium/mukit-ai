@@ -35,14 +35,14 @@ mukit-ai/
 │   │   └── schemas.py       # LLM models + composition re-exports
 │   └── tests/
 ├── frontend/                # React + Vite SPA
-│   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement acceptance journeys
+│   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement/editor acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano roll, playback, …
-│       ├── store/           # Zustand musicStore
-│       └── utils/           # validation, playback, piano-roll, analysis, motif, harmony, arrangement helpers
+│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, …
+│       ├── store/           # Zustand musicStore (composition transactions + session previews)
+│       └── utils/           # validation, editor selection/ops/nav, viewport, playback, analysis, motif, harmony, arrangement helpers
 ├── scripts/                 # e.g. v1/v2_docker_acceptance.sh
-├── docs/                    # composition.v2/v1, analysis, arrangement, import, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, editor, analysis, arrangement, import, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -84,7 +84,13 @@ mukit-ai/
 | `backend/app/routers/projects.py` | Project CRUD + autosave APIs |
 | `backend/run.py` / `uvicorn app.main:app` | Backend process entry |
 | `frontend/src/main.jsx` | Frontend bootstrap |
-| `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import + analysis + harmony + development + arrangement preview) |
+| `frontend/src/store/musicStore.js` | Shared UI/application state (incl. import + analysis + harmony + development + arrangement + editor selection/clipboard/loop) |
+| `frontend/src/components/PianoRollEditor.jsx` | V2 piano-roll shell (viewport, shortcuts, cursor, selection) |
+| `frontend/src/components/piano-roll/` | Note/overlay layers, drag hook, selection inspector, track controls |
+| `frontend/src/utils/compositionEditorSelection.js` | Note refs, box/range selection geometry |
+| `frontend/src/utils/compositionEditorOperations.js` | Immutable bulk note ops + clipboard |
+| `frontend/src/utils/editorNavigation.js` | Edit cursor, bar/section/zoom helpers |
+| `frontend/src/utils/playbackLoop.js` | Selection/bar loop range helpers |
 | `frontend/src/components/ImportControls.jsx` | Import / replace UX |
 | `frontend/src/components/CompositionAnalysisPanel.jsx` | Analysis tab UI |
 | `frontend/src/components/CompositionDevelopmentPanel.jsx` | Develop tab candidate workflow |
@@ -107,6 +113,7 @@ mukit-ai/
 |----------|------|-------------|
 | README | `README.md` | Install, features, env vars, run instructions |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
+| Composition Editor | `docs/composition-editor.md` | Piano-roll selection, clipboard, transforms, cursor/loop |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |
