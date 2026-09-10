@@ -52,6 +52,17 @@ const BASE = migrateV1ToV2({
 
 function resetStore(composition = structuredClone(BASE)) {
   useMusicStore.setState({
+    currentProjectId: null,
+    activeBranchId: null,
+    workingVersion: null,
+    workingFingerprint: null,
+    currentRevisionId: null,
+    generationStatus: 'idle',
+    generationCandidate: null,
+    generationAuditionActive: false,
+    generationCompareResult: null,
+    generationRequestCapture: null,
+    generationMeta: null,
     generatedMusicJson: composition,
     editedMusicJson: composition,
     musicXml: '',
@@ -94,6 +105,19 @@ function resetStore(composition = structuredClone(BASE)) {
     playbackTransportIntent: null,
     uiError: '',
     warnings: [],
+    prompt: {
+      genre: 'ambient',
+      mood: 'cinematic',
+      key: '',
+      time_signature: '4/4',
+      tempo_min: 80,
+      tempo_max: 120,
+      instruments: 'piano',
+      sections: 'intro:4',
+      complexity: 'moderate',
+      duration_bars: 8,
+      instructions: '',
+    },
   });
 }
 
@@ -791,7 +815,7 @@ test('dynamics upsert/remove use history and stay sorted unique', () => {
   assert.ok(marks.some((mark) => mark.tick === 480));
 });
 
-test('generation and import reconcile hidden/locked track prefs', () => {
+test('generation apply and import reconcile hidden/locked track prefs', async () => {
   resetStore();
   useMusicStore.setState({
     hiddenTrackIds: ['melody-1', 'stale-hidden'],
@@ -802,11 +826,13 @@ test('generation and import reconcile hidden/locked track prefs', () => {
 
   const next = structuredClone(BASE);
   next.tracks = next.tracks.filter((track) => track.id === 'melody-1');
-  useMusicStore.getState().completeGeneration({
+  await useMusicStore.getState().startGeneration();
+  await useMusicStore.getState().completeGeneration({
     music: next,
     musicxml: '<score/>',
     warnings: [],
   });
+  await useMusicStore.getState().applyGenerationCandidate();
 
   const afterGen = useMusicStore.getState();
   assert.deepEqual(afterGen.hiddenTrackIds, ['melody-1']);
@@ -993,17 +1019,19 @@ test('zoom fit and selection update zoom plus viewport request', () => {
   store.zoomOut();
 });
 
-test('composition replacement clears viewport request and resets cursor', () => {
+test('composition replacement clears viewport request and resets cursor', async () => {
   resetStore();
   useMusicStore.setState({
     editCursorTick: 1200,
     viewportScrollRequest: { id: 9, scrollLeft: 40, centerTick: 1200, reason: 'gotoBar' },
   });
-  useMusicStore.getState().completeGeneration({
+  await useMusicStore.getState().startGeneration();
+  await useMusicStore.getState().completeGeneration({
     music: structuredClone(BASE),
     musicxml: '<score/>',
     warnings: [],
   });
+  await useMusicStore.getState().applyGenerationCandidate();
   const after = useMusicStore.getState();
   assert.equal(after.editCursorTick, 0);
   assert.equal(after.viewportScrollRequest, null);
@@ -1070,7 +1098,7 @@ test('playFromCursor and loop selection transport actions', () => {
   assert.equal(store.togglePlaybackTransport().startTick, null);
 });
 
-test('composition edits clamp or clear stale playback loops', () => {
+test('composition edits clamp or clear stale playback loops', async () => {
   resetStore();
   const store = useMusicStore.getState();
   store.setPlaybackLoop({ startTick: 0, endTick: 3000, enabled: true });
@@ -1092,11 +1120,13 @@ test('composition edits clamp or clear stale playback loops', () => {
   assert.equal(useMusicStore.getState().playbackLoop, null);
 
   store.setPlaybackLoop({ startTick: 0, endTick: 480, enabled: true });
-  store.completeGeneration({
+  await store.startGeneration();
+  await store.completeGeneration({
     music: structuredClone(BASE),
     musicxml: '<score/>',
     warnings: [],
   });
+  await store.applyGenerationCandidate();
   assert.equal(useMusicStore.getState().playbackLoop, null);
 });
 

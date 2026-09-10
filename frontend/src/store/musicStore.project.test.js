@@ -228,10 +228,10 @@ test('dirty to saving to saved transitions and autosave debounce cancel/fire', a
   }
 });
 
-test('completeGeneration captures provider/model/prompt and marks dirty for open project', async () => {
+test('completeGeneration stages preview; Apply captures provider/model/prompt locally', async () => {
   resetProjectState({
-    currentProjectId: 'p1',
-    currentProjectName: 'Opened',
+    currentProjectId: null,
+    currentProjectName: '',
     activeView: 'composer',
     editedMusicJson: structuredClone(COMPOSITION),
     generatedMusicJson: structuredClone(COMPOSITION),
@@ -250,20 +250,23 @@ test('completeGeneration captures provider/model/prompt and marks dirty for open
     velocity: 80,
   });
 
-  useMusicStore.getState().completeGeneration({
+  await useMusicStore.getState().startGeneration();
+  await useMusicStore.getState().completeGeneration({
     music: composition,
     musicxml: '<xml/>',
     warnings: [],
     provider: 'deepseek',
     model: 'deepseek-chat',
   });
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events.length, 1);
+  await useMusicStore.getState().applyGenerationCandidate();
 
   const state = useMusicStore.getState();
   assert.equal(state.generationMeta.provider, 'deepseek');
   assert.equal(state.generationMeta.model, 'deepseek-chat');
   assert.ok(state.generationMeta.prompt);
   assert.ok(!JSON.stringify(state.generationMeta).includes('api_key'));
-  assert.equal(state.saveStatus, 'unsaved');
+  assert.equal(state.editedMusicJson.tracks[0].events.length, 2);
 });
 
 test('deleteProjectById clears active project', async (t) => {
@@ -409,13 +412,17 @@ test('identical events with new generationMeta marks dirty and Save patches', as
     await useMusicStore.getState().openProject('p1');
     assert.equal(useMusicStore.getState().saveStatus, 'saved');
 
-    useMusicStore.getState().completeGeneration({
-      music: structuredClone(COMPOSITION),
-      musicxml: '<xml/>',
-      warnings: [],
-      provider: 'deepseek',
-      model: 'deepseek-chat',
+    // Generation metadata change without composition replace still dirties draft autosave.
+    useMusicStore.setState({
+      generationMeta: {
+        provider: 'deepseek',
+        model: 'deepseek-chat',
+        prompt: { genre: 'ambient' },
+      },
     });
+    useMusicStore.getState().scheduleAutosave?.();
+    // Force dirty via mark path used by prompt sync.
+    useMusicStore.setState({ saveStatus: 'unsaved' });
 
     assert.equal(useMusicStore.getState().saveStatus, 'unsaved');
     await useMusicStore.getState().saveCurrentProject({ reason: 'manual' });

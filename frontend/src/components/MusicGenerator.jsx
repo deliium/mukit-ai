@@ -183,8 +183,18 @@ const MusicGenerator = () => {
   const startGeneration = useMusicStore((state) => state.startGeneration);
   const completeGeneration = useMusicStore((state) => state.completeGeneration);
   const failGeneration = useMusicStore((state) => state.failGeneration);
+  const generationCandidate = useMusicStore((state) => state.generationCandidate);
+  const generationAuditionActive = useMusicStore((state) => state.generationAuditionActive);
+  const generationCompareResult = useMusicStore((state) => state.generationCompareResult);
+  const setGenerationAuditionActive = useMusicStore((state) => state.setGenerationAuditionActive);
+  const refreshGenerationComparison = useMusicStore((state) => state.refreshGenerationComparison);
+  const rejectGenerationCandidate = useMusicStore((state) => state.rejectGenerationCandidate);
+  const applyGenerationCandidate = useMusicStore((state) => state.applyGenerationCandidate);
+  const currentProjectId = useMusicStore((state) => state.currentProjectId);
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [branchNameDraft, setBranchNameDraft] = useState('');
+  const [applyBusy, setApplyBusy] = useState(false);
   const startedAtRef = useRef(null);
 
   useEffect(() => {
@@ -206,7 +216,7 @@ const MusicGenerator = () => {
       return;
     }
 
-    const started = startGeneration();
+    const started = await startGeneration();
     if (!started) {
       console.warn('[MusicGenerator] Duplicate generate blocked by store guard');
       return;
@@ -222,7 +232,7 @@ const MusicGenerator = () => {
 
     try {
       const response = await generateLlmMusicJson(requestData);
-      completeGeneration({
+      await completeGeneration({
         music: response.music,
         musicxml: response.musicxml,
         warnings: response.warnings,
@@ -358,11 +368,132 @@ const MusicGenerator = () => {
             </ProgressHint>
           )}
 
+          {generationCandidate ? (
+            <div data-testid="generation-candidate-panel" style={{ marginTop: 14 }}>
+              <StatusMessage className="success">
+                Generation preview ready
+                {generationCandidate.provider
+                  ? ` · ${generationCandidate.provider}/${generationCandidate.model || '—'}`
+                  : ''}
+                . Working composition is unchanged until Apply.
+              </StatusMessage>
+              {generationCompareResult ? (
+                <StatusMessage className="info" data-testid="generation-compare-summary">
+                  Compare vs working:{' '}
+                  {generationCompareResult.identical ? 'identical' : 'differences'}
+                  {' · '}
+                  +{generationCompareResult.events?.added || 0}
+                  {' / -'}
+                  {generationCompareResult.events?.removed || 0}
+                  {' / ~'}
+                  {generationCompareResult.events?.changed || 0}
+                </StatusMessage>
+              ) : null}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <Button
+                  type="button"
+                  data-testid="generation-audition-toggle"
+                  style={{ width: 'auto', marginTop: 0 }}
+                  disabled={applyBusy}
+                  onClick={() => {
+                    const next = !generationAuditionActive;
+                    console.debug('[MusicGenerator] Toggle generation audition', { active: next });
+                    setGenerationAuditionActive(next);
+                  }}
+                >
+                  {generationAuditionActive ? 'Play working' : 'Audition candidate'}
+                </Button>
+                <Button
+                  type="button"
+                  data-testid="generation-compare"
+                  style={{ width: 'auto', marginTop: 0, background: '#475569' }}
+                  disabled={applyBusy}
+                  onClick={() => {
+                    console.debug('[MusicGenerator] Compare generation candidate');
+                    refreshGenerationComparison();
+                  }}
+                >
+                  Compare
+                </Button>
+                <Button
+                  type="button"
+                  data-testid="generation-apply"
+                  style={{ width: 'auto', marginTop: 0, background: '#059669' }}
+                  disabled={applyBusy}
+                  onClick={async () => {
+                    setApplyBusy(true);
+                    try {
+                      console.info('[MusicGenerator] Apply generation candidate');
+                      await applyGenerationCandidate();
+                    } catch {
+                      // store records uiError
+                    } finally {
+                      setApplyBusy(false);
+                    }
+                  }}
+                >
+                  Apply
+                </Button>
+                <Button
+                  type="button"
+                  data-testid="generation-reject"
+                  style={{ width: 'auto', marginTop: 0, background: '#dc2626' }}
+                  disabled={applyBusy}
+                  onClick={() => {
+                    console.info('[MusicGenerator] Reject generation candidate');
+                    rejectGenerationCandidate();
+                  }}
+                >
+                  Reject
+                </Button>
+              </div>
+              {currentProjectId ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                  <Input
+                    aria-label="Apply as new branch name"
+                    data-testid="generation-branch-name"
+                    placeholder="New branch name"
+                    value={branchNameDraft}
+                    disabled={applyBusy}
+                    onChange={(event) => setBranchNameDraft(event.target.value)}
+                  />
+                  <Button
+                    type="button"
+                    data-testid="generation-apply-as-branch"
+                    style={{ width: 'auto', marginTop: 0, background: '#7c3aed' }}
+                    disabled={applyBusy || !branchNameDraft.trim()}
+                    onClick={async () => {
+                      setApplyBusy(true);
+                      try {
+                        console.info('[MusicGenerator] Apply generation as new branch');
+                        await applyGenerationCandidate({
+                          asNewBranch: true,
+                          branchName: branchNameDraft.trim(),
+                        });
+                        setBranchNameDraft('');
+                      } catch {
+                        // store records uiError
+                      } finally {
+                        setApplyBusy(false);
+                      }
+                    }}
+                  >
+                    Apply as new branch
+                  </Button>
+                </div>
+              ) : (
+                <ProgressHint>
+                  No project open: Apply installs locally only (no durable history).
+                </ProgressHint>
+              )}
+            </div>
+          ) : null}
+
           <ImportControls mode="replace" title="Or import a score" />
         </GenerationPanel>
 
         <div>
-          {editedMusicJson || generatedMusicJson ? (
+          {editedMusicJson || generatedMusicJson || generationCandidate ? (
             <ComposerWorkspace />
           ) : (
             <StatusMessage className="info">

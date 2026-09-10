@@ -76,6 +76,8 @@ const PlaybackControls = () => {
   const versionSelectedRevisionId = useMusicStore((state) => state.versionSelectedRevisionId);
   const versionRevisionDetails = useMusicStore((state) => state.versionRevisionDetails);
   const versionAuditionTrackControls = useMusicStore((state) => state.versionAuditionTrackControls);
+  const generationAuditionActive = useMusicStore((state) => state.generationAuditionActive);
+  const generationCandidate = useMusicStore((state) => state.generationCandidate);
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
   const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
   const playbackBar = useMusicStore((state) => state.playbackBar);
@@ -115,6 +117,8 @@ const PlaybackControls = () => {
       arrangementAuditionMode,
       arrangementCandidates,
       arrangementSelectedCandidateId,
+      generationAuditionActive,
+      generationCandidate,
       versionAuditionActive,
       versionSelectedRevisionId,
       versionRevisionDetails,
@@ -135,6 +139,8 @@ const PlaybackControls = () => {
     developmentCandidates,
     developmentSelectedCandidateId,
     editedMusicJson,
+    generationAuditionActive,
+    generationCandidate,
     versionAuditionActive,
     versionRevisionDetails,
     versionSelectedRevisionId,
@@ -527,11 +533,13 @@ const PlaybackControls = () => {
         {canonical ? ' · composition.v2' : playbackComposition ? ' · legacy' : ''}
         {arrangementCandidateAudition
           ? ' · auditioning arrangement candidate'
-          : versionAudition
-            ? ' · auditioning version'
-            : developmentAuditionActive
-              ? ' · auditioning candidate'
-              : ''}
+          : playbackSource === 'generation'
+            ? ' · auditioning generation candidate'
+            : versionAudition
+              ? ' · auditioning version'
+              : developmentAuditionActive
+                ? ' · auditioning candidate'
+                : ''}
         {' · '}
         <span data-testid="playback-loop-status">{loopLabel}</span>
         {' · '}

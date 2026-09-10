@@ -986,13 +986,15 @@ test('generation and import fully clear arrangement candidate state', async () =
     arrangementInstruction: 'temp',
   });
 
-  useMusicStore.getState().completeGeneration({
+  await useMusicStore.getState().startGeneration();
+  await useMusicStore.getState().completeGeneration({
     music: source,
     musicxml: '<score/>',
     warnings: [],
     provider: 'fake',
     model: 'fake',
   });
+  await useMusicStore.getState().applyGenerationCandidate();
   let state = useMusicStore.getState();
   assert.equal(state.arrangementStatus, 'idle');
   assert.equal(state.arrangementCandidates.length, 0);

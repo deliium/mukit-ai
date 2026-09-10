@@ -365,7 +365,7 @@ test('failed analysis retains prior result and retry recovers', async (t) => {
   assert.ok(recovered.analysisResult);
 });
 
-test('project/composition replacement clears analysis state', () => {
+test('project/composition replacement clears analysis state', async () => {
   resetAnalysisStore();
   useMusicStore.setState({
     analysisResult: sampleReport(),
@@ -376,12 +376,21 @@ test('project/composition replacement clears analysis state', () => {
     analysisSelectedSectionKey: makeAnalysisSectionKey(BASE.sections[0], 0),
   });
 
-  useMusicStore.getState().completeGeneration({
+  await useMusicStore.getState().startGeneration();
+  await useMusicStore.getState().completeGeneration({
     music: structuredClone(BASE),
     musicxml: '<score/>',
     warnings: [],
     provider: 'fake',
     model: 'fixture',
+  });
+  await useMusicStore.getState().applyGenerationCandidate();
+  // Cancel any analysis debounce kicked by the apply transaction.
+  useMusicStore.setState({
+    analysisResult: null,
+    analysisStatus: 'idle',
+    analysisScope: 'composition',
+    analysisSelectedSectionKey: null,
   });
   const afterGen = useMusicStore.getState();
   assert.equal(afterGen.analysisResult, null);

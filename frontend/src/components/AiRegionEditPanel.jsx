@@ -89,10 +89,17 @@ const AiRegionEditPanel = () => {
   const startAiEdit = useMusicStore((state) => state.startAiEdit);
   const failAiEdit = useMusicStore((state) => state.failAiEdit);
   const completeAiEdit = useMusicStore((state) => state.completeAiEdit);
-  const refreshMusicXmlFromEditedComposition = useMusicStore(
-    (state) => state.refreshMusicXmlFromEditedComposition,
-  );
+  const rejectAiEditCandidate = useMusicStore((state) => state.rejectAiEditCandidate);
+  const applyAiEditCandidate = useMusicStore((state) => state.applyAiEditCandidate);
+  const setAiEditAuditionActive = useMusicStore((state) => state.setAiEditAuditionActive);
+  const refreshAiEditComparison = useMusicStore((state) => state.refreshAiEditComparison);
+  const aiEditCandidate = useMusicStore((state) => state.aiEditCandidate);
+  const aiEditAuditionActive = useMusicStore((state) => state.aiEditAuditionActive);
+  const aiEditCompareResult = useMusicStore((state) => state.aiEditCompareResult);
+  const currentProjectId = useMusicStore((state) => state.currentProjectId);
   const openDevelopWithAiSelection = useMusicStore((state) => state.openDevelopWithAiSelection);
+  const [branchNameDraft, setBranchNameDraft] = React.useState('');
+  const [applyBusy, setApplyBusy] = React.useState(false);
 
   const validation = useMemo(
     () => (editedMusicJson ? validateMusicJson(editedMusicJson) : { valid: false, message: 'No composition' }),
@@ -157,7 +164,7 @@ const AiRegionEditPanel = () => {
       console.debug('[AiRegionEditPanel] Submit disabled', { reason: disabledReason });
       return;
     }
-    const started = startAiEdit();
+    const started = await startAiEdit();
     if (!started) {
       return;
     }
@@ -193,20 +200,21 @@ const AiRegionEditPanel = () => {
 
     try {
       const response = await editCompositionRegion(payload);
-      const applied = completeAiEdit({
+      const staged = await completeAiEdit({
         composition: response.composition,
         musicxml: response.musicxml || '',
         warnings: response.warnings || [],
+        provider: response.provider,
+        model: response.model,
       });
-      if (!applied) {
+      if (!staged) {
         return;
       }
-      console.debug('[AiRegionEditPanel] Notation refresh requested after AI edit', {
+      console.debug('[AiRegionEditPanel] AI edit candidate staged', {
         eventCount: Array.isArray(response.composition?.tracks)
           ? response.composition.tracks.reduce((total, track) => total + (track.events?.length || 0), 0)
           : 0,
       });
-      await refreshMusicXmlFromEditedComposition();
     } catch (error) {
       const message = error.message || 'AI region edit failed';
       console.error('[AiRegionEditPanel] Submission failure', { message });
@@ -264,14 +272,140 @@ const AiRegionEditPanel = () => {
           Develop selection…
         </Button>
       </ButtonRow>
+      {aiEditCandidate ? (
+        <div data-testid="ai-edit-candidate-panel" style={{ marginTop: 12 }}>
+          <Status $tone="info">
+            AI edit preview ready
+            {aiEditCandidate.provider
+              ? ` · ${aiEditCandidate.provider}/${aiEditCandidate.model || '—'}`
+              : ''}
+            . Working composition is unchanged until Apply.
+          </Status>
+          {aiEditCompareResult ? (
+            <Status $tone="info" data-testid="ai-edit-compare-summary">
+              Compare vs working:{' '}
+              {aiEditCompareResult.identical ? 'identical' : 'differences'}
+              {' · '}
+              +{aiEditCompareResult.events?.added || 0}
+              {' / -'}
+              {aiEditCompareResult.events?.removed || 0}
+              {' / ~'}
+              {aiEditCompareResult.events?.changed || 0}
+            </Status>
+          ) : null}
+          <ButtonRow>
+            <Button
+              type="button"
+              data-testid="ai-edit-audition-toggle"
+              disabled={applyBusy}
+              style={{ background: '#475569' }}
+              onClick={() => {
+                const next = !aiEditAuditionActive;
+                console.debug('[AiRegionEditPanel] Toggle AI edit audition', { active: next });
+                setAiEditAuditionActive(next);
+              }}
+            >
+              {aiEditAuditionActive ? 'Play working' : 'Audition candidate'}
+            </Button>
+            <Button
+              type="button"
+              data-testid="ai-edit-compare"
+              disabled={applyBusy}
+              style={{ background: '#475569' }}
+              onClick={() => {
+                console.debug('[AiRegionEditPanel] Compare AI edit candidate');
+                refreshAiEditComparison();
+              }}
+            >
+              Compare
+            </Button>
+            <Button
+              type="button"
+              data-testid="ai-edit-apply"
+              disabled={applyBusy}
+              style={{ background: '#059669' }}
+              onClick={async () => {
+                setApplyBusy(true);
+                try {
+                  console.info('[AiRegionEditPanel] Apply AI edit candidate');
+                  await applyAiEditCandidate();
+                } catch {
+                  // store records uiError / aiEditError
+                } finally {
+                  setApplyBusy(false);
+                }
+              }}
+            >
+              Apply
+            </Button>
+            <Button
+              type="button"
+              data-testid="ai-edit-reject"
+              disabled={applyBusy}
+              style={{ background: '#dc2626' }}
+              onClick={() => {
+                console.info('[AiRegionEditPanel] Reject AI edit candidate');
+                rejectAiEditCandidate();
+              }}
+            >
+              Reject
+            </Button>
+          </ButtonRow>
+          {currentProjectId ? (
+            <ButtonRow>
+              <input
+                aria-label="Apply AI edit as new branch name"
+                data-testid="ai-edit-branch-name"
+                placeholder="New branch name"
+                value={branchNameDraft}
+                disabled={applyBusy}
+                onChange={(event) => setBranchNameDraft(event.target.value)}
+                style={{
+                  flex: '1 1 160px',
+                  padding: '8px 10px',
+                  border: '1px solid #c7d2fe',
+                  borderRadius: 6,
+                }}
+              />
+              <Button
+                type="button"
+                data-testid="ai-edit-apply-as-branch"
+                disabled={applyBusy || !branchNameDraft.trim()}
+                style={{ background: '#7c3aed' }}
+                onClick={async () => {
+                  setApplyBusy(true);
+                  try {
+                    console.info('[AiRegionEditPanel] Apply AI edit as new branch');
+                    await applyAiEditCandidate({
+                      asNewBranch: true,
+                      branchName: branchNameDraft.trim(),
+                    });
+                    setBranchNameDraft('');
+                  } catch {
+                    // store records uiError / aiEditError
+                  } finally {
+                    setApplyBusy(false);
+                  }
+                }}
+              >
+                Apply as new branch
+              </Button>
+            </ButtonRow>
+          ) : (
+            <Status $tone="warn">
+              No project open: Apply installs locally only (no durable history).
+            </Status>
+          )}
+        </div>
+      ) : null}
       {disabledReason && aiEditStatus !== 'loading' && (
         <Status $tone="warn">{disabledReason}</Status>
       )}
       {aiEditStatus === 'error' && aiEditError && (
         <Status $tone="error">{aiEditError}</Status>
       )}
-      {aiEditStatus === 'success' && (
-        <Status $tone="info">AI region edit applied. Use Undo/Redo to compare before/after.</Status>
+      {aiEditStatus === 'success' && aiEditCandidate && (
+        <Status $tone="info">Preview staged. Apply to update the working composition.</Status>
       )}
       {aiEditWarnings.map((warning, index) => (
         <Status key={`${index}:${warning}`} $tone="warn">{warning}</Status>

@@ -38,14 +38,24 @@ import {
   renameBranch as renameBranchRequest,
   restoreRevision as restoreRevisionRequest,
 } from '../api/projectApi.js';
-import { compareCompositions } from '../utils/compositionVersionComparison.js';
 import {
   PLAYBACK_SOURCE_ARRANGEMENT,
   PLAYBACK_SOURCE_DEVELOPMENT,
+  PLAYBACK_SOURCE_GENERATION,
   PLAYBACK_SOURCE_VERSION,
   exclusiveAuditionPatch,
   resolvePlaybackSource,
 } from '../utils/playbackSource.js';
+import {
+  AI_CANDIDATE_STATUS,
+  aiCandidateLogFields,
+  buildAiCandidateEnvelope,
+  captureAiRequestContext,
+  detectAiRequestStale,
+  fingerprintCompositionOrNull,
+  makeAiCandidateId,
+} from '../utils/compositionCandidateLifecycle.js';
+import { compareCompositions } from '../utils/compositionVersionComparison.js';
 import {
   ANALYSIS_DEBOUNCE_MS,
   AnalysisScopeError,
@@ -114,6 +124,7 @@ import {
   DEVELOPMENT_OPERATIONS,
   DEVELOPMENT_SECTION_TYPES,
   VARIATION_STRENGTHS,
+  compositionEditFingerprint,
   editFingerprintLogPrefix,
   findDevelopmentCandidateById,
   resolveDevelopmentDefaults,
@@ -400,6 +411,14 @@ function historyStateFromDurable(result) {
   };
 }
 
+function normalizeAiProvider(provider) {
+  const value = String(provider || '').trim().toLowerCase();
+  if (value === 'openai' || value === 'deepseek' || value === 'fake') {
+    return value;
+  }
+  return null;
+}
+
 function projectIsDirtyForUnload(state) {
   if (!state?.currentProjectId) {
     return false;
@@ -440,6 +459,7 @@ let versionBranchesRequestSeq = 0;
 let versionRevisionsRequestSeq = 0;
 let versionDetailRequestSeq = 0;
 let versionActionRequestSeq = 0;
+let generationRequestSeq = 0;
 
 const initialPrompt = {
   genre: 'ambient',
@@ -493,6 +513,10 @@ export const useMusicStore = create((set, get) => ({
   editedMusicJson: null,
   musicXml: '',
   generationStatus: 'idle',
+  generationCandidate: null,
+  generationAuditionActive: false,
+  generationCompareResult: null,
+  generationRequestCapture: null,
   playbackStatus: 'idle',
   playbackSeconds: 0,
   playbackBar: 1,
@@ -551,6 +575,10 @@ export const useMusicStore = create((set, get) => ({
   aiEditStatus: 'idle',
   aiEditError: '',
   aiEditWarnings: [],
+  aiEditCandidate: null,
+  aiEditAuditionActive: false,
+  aiEditCompareResult: null,
+  aiEditRequestCapture: null,
 
   activeView: 'home',
   currentProjectId: null,
@@ -628,7 +656,7 @@ export const useMusicStore = create((set, get) => ({
     syncGenerationMetaFromPrompt(set, get, { reason: 'prompt-edit' });
   },
 
-  startGeneration: () => {
+  startGeneration: async () => {
     if (get().generationStatus === 'loading') {
       console.warn('[musicStore] Duplicate generation blocked', {
         provider: get().selectedProvider,
@@ -636,81 +664,427 @@ export const useMusicStore = create((set, get) => ({
       });
       return false;
     }
+    generationRequestSeq += 1;
+    const requestId = generationRequestSeq;
+    const capture = captureAiRequestContext(get());
+    const sourceFingerprint = await fingerprintCompositionOrNull(get().editedMusicJson);
+    // Abandon if a newer startGeneration began while fingerprinting.
+    if (requestId !== generationRequestSeq) {
+      return false;
+    }
     console.info('[musicStore] LLM generation started', {
       provider: get().selectedProvider,
       model: get().selectedModel,
+      requestId,
+      projectId: capture.projectId,
+      sourcePrefix: editFingerprintLogPrefix(sourceFingerprint),
     });
-    set({ generationStatus: 'loading', uiError: '', warnings: [] });
+    set({
+      generationStatus: 'loading',
+      uiError: '',
+      warnings: [],
+      generationCandidate: null,
+      generationAuditionActive: false,
+      generationCompareResult: null,
+      generationRequestCapture: {
+        ...capture,
+        requestId,
+        sourceFingerprint,
+        promptSnapshot: buildPromptSnapshot(get().prompt),
+      },
+    });
     return true;
   },
 
-  completeGeneration: ({ music, musicxml, warnings = [], provider = null, model = null }) => {
-    const { composition: withIds } = ensureCompositionNoteIds(music);
-    const composition = prepareCompositionForStore(withIds);
+  completeGeneration: async ({ music, musicxml, warnings = [], provider = null, model = null }) => {
+    const capture = get().generationRequestCapture;
+    if (!capture || get().generationStatus !== 'loading') {
+      console.warn('[musicStore] Ignoring generation response without active request');
+      return false;
+    }
+    const requestId = capture.requestId;
+    const stale = detectAiRequestStale(capture, get());
+    if (stale.stale) {
+      console.warn('[musicStore] Generation response rejected as stale', {
+        reason: stale.reason,
+        requestId,
+      });
+      set({
+        generationStatus: 'error',
+        uiError: 'Composition or project changed during generation; request a new preview',
+        generationCandidate: null,
+        generationAuditionActive: false,
+        generationCompareResult: null,
+      });
+      return false;
+    }
+
+    let composition;
+    try {
+      const { composition: withIds } = ensureCompositionNoteIds(music);
+      composition = prepareCompositionForStore(withIds);
+    } catch (error) {
+      console.warn('[musicStore] Generation candidate prepare failed', {
+        code: error.code || 'prepare_failed',
+      });
+      set({
+        generationStatus: 'error',
+        uiError: error.message || 'Generated composition invalid',
+      });
+      return false;
+    }
     const validation = validateMusicJson(composition);
-    const revision = compositionRevisionKey(composition);
-    const notationRev = notationRevisionKey(composition);
-    const promptSnapshot = buildPromptSnapshot(get().prompt);
-    const generationMeta = {
+    if (!validation.valid || !isCanonicalComposition(composition)) {
+      console.error('[musicStore] Generated music JSON failed validation', {
+        message: validation.message,
+      });
+      set({
+        generationStatus: 'error',
+        uiError: validation.message || 'Generated composition invalid',
+      });
+      return false;
+    }
+
+    const candidateFingerprint = await compositionEditFingerprint(composition);
+    if (get().generationRequestCapture?.requestId !== requestId) {
+      console.warn('[musicStore] Ignoring superseded generation response', { requestId });
+      return false;
+    }
+    const candidate = buildAiCandidateEnvelope({
+      candidateId: makeAiCandidateId('gen'),
+      operationType: 'generate-apply',
+      composition,
+      sourceFingerprint: capture.sourceFingerprint,
+      candidateFingerprint,
       provider: provider || get().selectedProvider || null,
       model: model || get().selectedModel || null,
-      prompt: promptSnapshot,
-    };
-    console.debug('[musicStore] LLM generation completed', {
-      hasMusic: Boolean(composition),
-      schemaVersion: composition?.schema_version || 'legacy',
-      canonical: isCanonicalComposition(composition),
-      musicXmlLength: musicxml?.length || 0,
-      warningCount: warnings.length,
-      valid: validation.valid,
-      compositionRevision: revision.slice(0, 48),
-      provider: generationMeta.provider,
-      model: generationMeta.model,
-      projectId: get().currentProjectId,
-    });
-    if (!validation.valid) {
-      console.error('[musicStore] Generated music JSON failed validation', { message: validation.message });
-    }
-    cancelAnalysisLifecycle();
-    const prev = get();
-    set({
-      generatedMusicJson: composition,
-      editedMusicJson: composition,
-      musicXml: musicxml || '',
+      instruction: capture.promptSnapshot?.instructions || get().prompt?.instructions || null,
       warnings,
+      musicXml: musicxml || '',
+      extras: {
+        prompt: capture.promptSnapshot || buildPromptSnapshot(get().prompt),
+        request_id: requestId,
+      },
+    });
+
+    console.info('[musicStore] Generation candidate staged', {
+      ...aiCandidateLogFields(candidate),
+      requestId,
+      barCount: composition.bar_count,
+    });
+    set({
+      generationCandidate: candidate,
+      generationAuditionActive: false,
+      generationCompareResult: null,
       generationStatus: 'success',
       uiError: '',
-      compositionRevision: revision,
-      notationRevision: notationRev,
-      trackControls: buildDefaultTrackControls(composition),
-      playbackStatus: 'idle',
-      playbackSeconds: 0,
-      playbackBar: 1,
-      pianoRollTrackId: pickDefaultTrackId(composition),
-      pianoRollNoteId: null,
-      pianoRollNoteIds: [],
-      pianoRollEditStatus: 'idle',
-      pianoRollNotationStatus: 'idle',
-      pianoRollNotationError: '',
-      editCursorTick: 0,
-      viewportScrollRequest: null,
-      compositionEditUndoStack: [],
-      compositionEditRedoStack: [],
-      generationMeta,
-      ...editorPrefsForCompositionReplace(prev, composition),
-      ...clearedAnalysisState(),
-      ...clearedMotifUiState(),
-      ...clearedReharmonizePreviewState(),
-      ...clearedDevelopmentPreviewState(),
-      ...clearedArrangementPreviewState(),
-      ...initialHarmonyUiState,
+      warnings,
+      // Keep legacy generatedMusicJson as a non-authoritative preview mirror for UI emptiness checks.
+      generatedMusicJson: composition,
+      musicXml: musicxml || '',
     });
-    markProjectDirty(set, get);
+    return true;
   },
 
   failGeneration: (message) => {
     console.error('[musicStore] LLM generation failed', { message });
-    set({ generationStatus: 'error', uiError: message });
+    set({
+      generationStatus: 'error',
+      uiError: message,
+      generationAuditionActive: false,
+    });
+  },
+
+  rejectGenerationCandidate: () => {
+    const candidate = get().generationCandidate;
+    console.info('[musicStore] Generation candidate rejected', {
+      ...aiCandidateLogFields(candidate),
+    });
+    set({
+      generationCandidate: null,
+      generationAuditionActive: false,
+      generationCompareResult: null,
+      generationStatus: 'idle',
+      generatedMusicJson: get().editedMusicJson,
+      musicXml: '',
+      warnings: [],
+      uiError: '',
+    });
+    return true;
+  },
+
+  setGenerationAuditionActive: (active) => {
+    const enabled = Boolean(active);
+    const candidate = get().generationCandidate;
+    if (enabled && (!candidate || candidate.status !== AI_CANDIDATE_STATUS.READY)) {
+      return false;
+    }
+    console.info('[musicStore] Generation audition toggled', {
+      active: enabled,
+      ...aiCandidateLogFields(candidate),
+    });
+    set({
+      generationAuditionActive: enabled,
+      ...(enabled
+        ? exclusiveAuditionPatch(PLAYBACK_SOURCE_GENERATION, ARRANGEMENT_AUDITION_SOURCE)
+        : {}),
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  refreshGenerationComparison: () => {
+    const candidate = get().generationCandidate;
+    if (!candidate) {
+      set({ generationCompareResult: null });
+      return null;
+    }
+    const result = compareCompositions(get().editedMusicJson, candidate.composition, {
+      leftLabel: 'working',
+      rightLabel: 'generation-candidate',
+    });
+    console.debug('[musicStore] Generation comparison ready', {
+      identical: Boolean(result?.identical),
+      added: Number(result?.events?.added) || 0,
+      removed: Number(result?.events?.removed) || 0,
+      changed: Number(result?.events?.changed) || 0,
+      ...aiCandidateLogFields(candidate),
+    });
+    set({ generationCompareResult: result });
+    return result;
+  },
+
+  applyGenerationCandidate: async ({ asNewBranch = false, branchName = null } = {}) => {
+    const state = get();
+    const candidate = state.generationCandidate;
+    if (!candidate || candidate.status !== AI_CANDIDATE_STATUS.READY) {
+      return false;
+    }
+    const stale = detectAiRequestStale(state.generationRequestCapture, state);
+    if (stale.stale) {
+      console.warn('[musicStore] Generation apply blocked; request context stale', {
+        reason: stale.reason,
+      });
+      set({
+        generationCandidate: {
+          ...candidate,
+          status: AI_CANDIDATE_STATUS.STALE,
+        },
+        generationStatus: 'error',
+        uiError: 'Source changed; request a new generation preview',
+      });
+      return false;
+    }
+    const liveSourceFp = await fingerprintCompositionOrNull(state.editedMusicJson);
+    const liveCandidateFp = await compositionEditFingerprint(candidate.composition);
+    if (
+      liveSourceFp !== candidate.source_fingerprint
+      || liveCandidateFp !== candidate.candidate_fingerprint
+    ) {
+      console.warn('[musicStore] Generation apply blocked by fingerprint mismatch', {
+        ...aiCandidateLogFields(candidate),
+      });
+      set({
+        generationCandidate: {
+          ...candidate,
+          status: AI_CANDIDATE_STATUS.STALE,
+        },
+        generationStatus: 'error',
+        uiError: 'Candidate fingerprints no longer match; request a new preview',
+      });
+      return false;
+    }
+
+    const prepared = prepareCompositionForStore(
+      ensureCompositionNoteIds(candidate.composition).composition,
+    );
+    const validation = validateMusicJson(prepared);
+    if (!validation.valid || !isCanonicalComposition(prepared)) {
+      set({
+        generationStatus: 'error',
+        uiError: validation.message || 'Candidate composition invalid',
+      });
+      return false;
+    }
+
+    set({
+      generationCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.APPLYING },
+    });
+
+    const generationMeta = {
+      provider: candidate.provider || state.selectedProvider || null,
+      model: candidate.model || state.selectedModel || null,
+      prompt: candidate.prompt || buildPromptSnapshot(state.prompt),
+    };
+
+    // No open project: documented local-only install (no durable history claim).
+    if (!state.currentProjectId) {
+      console.info('[musicStore] Generation apply local-only (no project)', {
+        ...aiCandidateLogFields(candidate),
+      });
+      cancelAnalysisLifecycle();
+      const ok = commitCompositionTransaction(set, get, {
+        nextComposition: prepared,
+        selectedTrackId: state.pianoRollTrackId,
+        selectedNoteId: state.pianoRollNoteId,
+        selectedNoteIds: state.pianoRollNoteIds,
+        action: 'generate-apply',
+        noteSummary: null,
+        statePatch: {
+          generatedMusicJson: prepared,
+          musicXml: candidate.music_xml || '',
+          generationMeta,
+          generationCandidate: null,
+          generationAuditionActive: false,
+          generationCompareResult: null,
+          generationStatus: 'idle',
+          warnings: candidate.warnings || [],
+          pianoRollTrackId: pickDefaultTrackId(prepared, state.pianoRollTrackId),
+          pianoRollNoteId: null,
+          pianoRollNoteIds: [],
+          editCursorTick: 0,
+          ...editorPrefsForCompositionReplace(state, prepared),
+          ...clearedAnalysisState(),
+          ...clearedMotifUiState(),
+          ...clearedReharmonizePreviewState(),
+          ...clearedDevelopmentPreviewState(),
+          ...clearedArrangementPreviewState(),
+          ...initialHarmonyUiState,
+        },
+      });
+      return ok;
+    }
+
+    if (
+      !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+      || !state.workingFingerprint
+    ) {
+      set({
+        generationCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+        generationStatus: 'error',
+        uiError: 'Missing branch CAS fields for durable generation apply',
+      });
+      return false;
+    }
+
+    try {
+      let durable;
+      if (asNewBranch) {
+        const name = String(branchName || '').trim();
+        if (!name) {
+          set({
+            generationCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+            generationStatus: 'error',
+            uiError: 'Branch name required for Apply as new branch',
+          });
+          return false;
+        }
+        durable = await applyAsBranchRequest(state.currentProjectId, {
+          name,
+          source_branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'generate-apply',
+          ai: {
+            provider: normalizeAiProvider(generationMeta.provider),
+            model: generationMeta.model,
+            user_instruction: candidate.instruction || undefined,
+            candidate_id: candidate.candidate_id,
+            candidate_fingerprint: candidate.candidate_fingerprint,
+            warning_codes: (candidate.warnings || [])
+              .map((item) => (typeof item === 'string' ? item : item?.code))
+              .filter(Boolean)
+              .slice(0, 32),
+          },
+        });
+      } else {
+        durable = await commitRevisionRequest(state.currentProjectId, {
+          branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'generate-apply',
+          checkpoint_dirty_draft: true,
+          ai: {
+            provider: normalizeAiProvider(generationMeta.provider),
+            model: generationMeta.model,
+            user_instruction: candidate.instruction || undefined,
+            candidate_id: candidate.candidate_id,
+            candidate_fingerprint: candidate.candidate_fingerprint,
+            warning_codes: (candidate.warnings || [])
+              .map((item) => (typeof item === 'string' ? item : item?.code))
+              .filter(Boolean)
+              .slice(0, 32),
+          },
+        });
+      }
+
+      if (get().currentProjectId !== state.currentProjectId) {
+        console.warn('[musicStore] Generation apply ignored after project switch');
+        return false;
+      }
+
+      console.info('[musicStore] Generation candidate applied', {
+        ...aiCandidateLogFields(candidate),
+        asNewBranch: Boolean(asNewBranch),
+        revisionCreated: Boolean(durable?.revision_created),
+      });
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: Boolean(asNewBranch),
+        markSaved: true,
+        action: 'generate-apply',
+      });
+      set({
+        generationMeta,
+        generationCandidate: null,
+        generationAuditionActive: false,
+        generationCompareResult: null,
+        generationStatus: 'idle',
+        generatedMusicJson: get().editedMusicJson,
+        musicXml: candidate.music_xml || '',
+        warnings: candidate.warnings || [],
+        ...(asNewBranch ? clearedVersionHistoryState() : {}),
+      });
+      if (asNewBranch) {
+        await get().loadVersionBranches().catch(() => {});
+        await get().loadVersionRevisions({ reset: true }).catch(() => {});
+      }
+      return true;
+    } catch (error) {
+      if (error instanceof ProjectRevisionConflictError) {
+        console.warn('[musicStore] Generation apply conflict', {
+          code: error.code,
+          ...aiCandidateLogFields(candidate),
+        });
+        set({
+          generationCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+          generationStatus: 'error',
+          uiError: 'Revision conflict; reload or retry apply',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      console.warn('[musicStore] Generation apply failed', {
+        status: error.status || null,
+        ...aiCandidateLogFields(candidate),
+      });
+      set({
+        generationCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+        generationStatus: 'error',
+        uiError: error.message || 'Failed to apply generation candidate',
+      });
+      throw error;
+    }
   },
 
   startImport: ({ format = null } = {}) => {
@@ -2933,7 +3307,7 @@ export const useMusicStore = create((set, get) => ({
     });
   },
 
-  startAiEdit: () => {
+  startAiEdit: async () => {
     const state = get();
     if (state.aiEditStatus === 'loading') {
       console.warn('[musicStore] Duplicate AI edit blocked', {
@@ -2955,6 +3329,8 @@ export const useMusicStore = create((set, get) => ({
       console.warn('[musicStore] AI edit start rejected; empty instruction');
       return false;
     }
+    const capture = captureAiRequestContext(state);
+    const sourceFingerprint = await fingerprintCompositionOrNull(state.editedMusicJson);
     console.info('[musicStore] AI edit started', {
       startBar: state.aiEditStartBar,
       endBar: state.aiEditEndBar,
@@ -2962,11 +3338,24 @@ export const useMusicStore = create((set, get) => ({
       trackScopeCount: (state.aiEditTrackIds || []).length,
       provider: state.selectedProvider,
       model: state.selectedModel,
+      sourcePrefix: editFingerprintLogPrefix(sourceFingerprint),
     });
     set({
       aiEditStatus: 'loading',
       aiEditError: '',
       aiEditWarnings: [],
+      aiEditCandidate: null,
+      aiEditAuditionActive: false,
+      aiEditCompareResult: null,
+      aiEditRequestCapture: {
+        ...capture,
+        sourceFingerprint,
+        instruction,
+        startBar: state.aiEditStartBar,
+        endBar: state.aiEditEndBar,
+        trackIds: Array.isArray(state.aiEditTrackIds) ? [...state.aiEditTrackIds] : [],
+        trackMode: state.aiEditTrackMode,
+      },
     });
     return true;
   },
@@ -2977,12 +3366,43 @@ export const useMusicStore = create((set, get) => ({
     set({
       aiEditStatus: 'error',
       aiEditError: safeMessage,
+      aiEditAuditionActive: false,
     });
   },
 
-  completeAiEdit: ({ composition, musicxml = '', warnings = [] } = {}) => {
-    const state = get();
-    const prepared = prepareCompositionForStore(ensureCompositionNoteIds(composition).composition);
+  completeAiEdit: async ({
+    composition,
+    musicxml = '',
+    warnings = [],
+    provider = null,
+    model = null,
+  } = {}) => {
+    const capture = get().aiEditRequestCapture;
+    if (!capture || get().aiEditStatus !== 'loading') {
+      console.warn('[musicStore] Ignoring AI edit response without active request');
+      return false;
+    }
+    const stale = detectAiRequestStale(capture, get());
+    if (stale.stale) {
+      console.warn('[musicStore] AI edit response rejected as stale', { reason: stale.reason });
+      set({
+        aiEditStatus: 'error',
+        aiEditError: 'Composition or project changed during edit; request a new preview',
+        aiEditCandidate: null,
+      });
+      return false;
+    }
+
+    let prepared;
+    try {
+      prepared = prepareCompositionForStore(ensureCompositionNoteIds(composition).composition);
+    } catch (error) {
+      set({
+        aiEditStatus: 'error',
+        aiEditError: error.message || 'Edited composition invalid',
+      });
+      return false;
+    }
     const validation = validateMusicJson(prepared);
     if (!validation.valid || !isCanonicalComposition(prepared)) {
       logger.error('AI edit completion rejected invalid composition', {
@@ -2995,39 +3415,274 @@ export const useMusicStore = create((set, get) => ({
       return false;
     }
 
-    const ok = commitCompositionTransaction(set, get, {
-      nextComposition: prepared,
-      selectedTrackId: pickDefaultTrackId(prepared, state.pianoRollTrackId),
-      selectedNoteId: null,
-      selectedNoteIds: [],
-      action: 'ai-edit',
-      noteSummary: null,
-      affectedNoteCount: countEvents(prepared),
-      affectedTrackCount: prepared.tracks?.length || 0,
-      statePatch: {
-        generatedMusicJson: prepared,
-        musicXml: musicxml || state.musicXml || '',
-        aiEditStatus: 'success',
-        aiEditError: '',
-        aiEditWarnings: Array.isArray(warnings) ? warnings : [],
-        ...clearedMotifUiState(),
-        ...clearedReharmonizePreviewState(),
-        ...clearedDevelopmentPreviewState(),
-        ...clearedArrangementPreviewState(),
-      },
+    const candidateFingerprint = await compositionEditFingerprint(prepared);
+    if (get().aiEditRequestCapture !== capture) {
+      return false;
+    }
+    const candidate = buildAiCandidateEnvelope({
+      candidateId: makeAiCandidateId('edit'),
+      operationType: 'ai-region-edit-apply',
+      composition: prepared,
+      sourceFingerprint: capture.sourceFingerprint,
+      candidateFingerprint,
+      provider: provider || get().selectedProvider || null,
+      model: model || get().selectedModel || null,
+      instruction: capture.instruction,
+      warnings,
+      declaredRanges: [{ start_bar: capture.startBar, end_bar: capture.endBar }],
+      declaredTrackIds: capture.trackIds || [],
+      musicXml: musicxml || '',
     });
-    if (!ok) {
+    console.info('[musicStore] AI edit candidate staged', {
+      ...aiCandidateLogFields(candidate),
+      startBar: capture.startBar,
+      endBar: capture.endBar,
+    });
+    set({
+      aiEditCandidate: candidate,
+      aiEditAuditionActive: false,
+      aiEditCompareResult: null,
+      aiEditStatus: 'success',
+      aiEditError: '',
+      aiEditWarnings: Array.isArray(warnings) ? warnings : [],
+    });
+    return true;
+  },
+
+  rejectAiEditCandidate: () => {
+    console.info('[musicStore] AI edit candidate rejected', {
+      ...aiCandidateLogFields(get().aiEditCandidate),
+    });
+    set({
+      aiEditCandidate: null,
+      aiEditAuditionActive: false,
+      aiEditCompareResult: null,
+      aiEditStatus: 'idle',
+      aiEditError: '',
+      aiEditWarnings: [],
+    });
+    return true;
+  },
+
+  setAiEditAuditionActive: (active) => {
+    const enabled = Boolean(active);
+    const candidate = get().aiEditCandidate;
+    if (enabled && (!candidate || candidate.status !== AI_CANDIDATE_STATUS.READY)) {
+      return false;
+    }
+    set({
+      aiEditAuditionActive: enabled,
+      ...(enabled
+        ? {
+          ...exclusiveAuditionPatch(PLAYBACK_SOURCE_GENERATION, ARRANGEMENT_AUDITION_SOURCE),
+          generationAuditionActive: false,
+        }
+        : {}),
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  refreshAiEditComparison: () => {
+    const candidate = get().aiEditCandidate;
+    if (!candidate) {
+      set({ aiEditCompareResult: null });
+      return null;
+    }
+    const result = compareCompositions(get().editedMusicJson, candidate.composition, {
+      leftLabel: 'working',
+      rightLabel: 'ai-edit-candidate',
+    });
+    set({ aiEditCompareResult: result });
+    return result;
+  },
+
+  applyAiEditCandidate: async ({ asNewBranch = false, branchName = null } = {}) => {
+    const state = get();
+    const candidate = state.aiEditCandidate;
+    if (!candidate || candidate.status !== AI_CANDIDATE_STATUS.READY) {
+      return false;
+    }
+    const stale = detectAiRequestStale(state.aiEditRequestCapture, state);
+    if (stale.stale) {
       set({
+        aiEditCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.STALE },
         aiEditStatus: 'error',
-        aiEditError: 'Edited composition failed validation',
+        aiEditError: 'Source changed; request a new edit preview',
       });
       return false;
     }
-    logger.info('Project autosave-dirty transition after AI edit', {
-      projectId: state.currentProjectId,
-      revisionPrefix: get().compositionRevision.slice(0, 48),
-    });
-    return true;
+    const liveSourceFp = await fingerprintCompositionOrNull(state.editedMusicJson);
+    const liveCandidateFp = await compositionEditFingerprint(candidate.composition);
+    if (
+      liveSourceFp !== candidate.source_fingerprint
+      || liveCandidateFp !== candidate.candidate_fingerprint
+    ) {
+      set({
+        aiEditCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.STALE },
+        aiEditStatus: 'error',
+        aiEditError: 'Candidate fingerprints no longer match; request a new preview',
+      });
+      return false;
+    }
+
+    const prepared = prepareCompositionForStore(
+      ensureCompositionNoteIds(candidate.composition).composition,
+    );
+    const validation = validateMusicJson(prepared);
+    if (!validation.valid || !isCanonicalComposition(prepared)) {
+      set({
+        aiEditStatus: 'error',
+        aiEditError: validation.message || 'Candidate composition invalid',
+      });
+      return false;
+    }
+
+    set({ aiEditCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.APPLYING } });
+
+    const aiPayload = {
+      provider: normalizeAiProvider(candidate.provider),
+      model: candidate.model,
+      user_instruction: candidate.instruction || undefined,
+      candidate_id: candidate.candidate_id,
+      candidate_fingerprint: candidate.candidate_fingerprint,
+      warning_codes: (candidate.warnings || [])
+        .map((item) => (typeof item === 'string' ? item : item?.code))
+        .filter(Boolean)
+        .slice(0, 32),
+    };
+
+    if (!state.currentProjectId) {
+      cancelAnalysisLifecycle();
+      const ok = commitCompositionTransaction(set, get, {
+        nextComposition: prepared,
+        selectedTrackId: pickDefaultTrackId(prepared, state.pianoRollTrackId),
+        selectedNoteId: null,
+        selectedNoteIds: [],
+        action: 'ai-edit',
+        noteSummary: null,
+        affectedNoteCount: countEvents(prepared),
+        affectedTrackCount: prepared.tracks?.length || 0,
+        statePatch: {
+          generatedMusicJson: prepared,
+          musicXml: candidate.music_xml || state.musicXml || '',
+          aiEditStatus: 'idle',
+          aiEditError: '',
+          aiEditWarnings: candidate.warnings || [],
+          aiEditCandidate: null,
+          aiEditAuditionActive: false,
+          aiEditCompareResult: null,
+          ...editorPrefsForCompositionReplace(state, prepared),
+          ...clearedMotifUiState(),
+          ...clearedReharmonizePreviewState(),
+          ...clearedDevelopmentPreviewState(),
+          ...clearedArrangementPreviewState(),
+        },
+      });
+      return ok;
+    }
+
+    if (
+      !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+      || !state.workingFingerprint
+    ) {
+      set({
+        aiEditCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+        aiEditStatus: 'error',
+        aiEditError: 'Missing branch CAS fields for durable AI edit apply',
+      });
+      return false;
+    }
+
+    try {
+      let durable;
+      if (asNewBranch) {
+        const name = String(branchName || '').trim();
+        if (!name) {
+          set({
+            aiEditCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+            aiEditStatus: 'error',
+            aiEditError: 'Branch name required for Apply as new branch',
+          });
+          return false;
+        }
+        durable = await applyAsBranchRequest(state.currentProjectId, {
+          name,
+          source_branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'ai-region-edit-apply',
+          declared_scope: {
+            ranges: candidate.declared_ranges || [],
+            track_ids: candidate.declared_track_ids || [],
+          },
+          ai: aiPayload,
+        });
+      } else {
+        durable = await commitRevisionRequest(state.currentProjectId, {
+          branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'ai-region-edit-apply',
+          checkpoint_dirty_draft: true,
+          declared_scope: {
+            ranges: candidate.declared_ranges || [],
+            track_ids: candidate.declared_track_ids || [],
+          },
+          ai: aiPayload,
+        });
+      }
+      if (get().currentProjectId !== state.currentProjectId) {
+        return false;
+      }
+      console.info('[musicStore] AI edit candidate applied', {
+        ...aiCandidateLogFields(candidate),
+        asNewBranch: Boolean(asNewBranch),
+      });
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: Boolean(asNewBranch),
+        markSaved: true,
+        action: 'ai-edit',
+      });
+      set({
+        musicXml: candidate.music_xml || get().musicXml || '',
+        aiEditStatus: 'idle',
+        aiEditError: '',
+        aiEditWarnings: candidate.warnings || [],
+        aiEditCandidate: null,
+        aiEditAuditionActive: false,
+        aiEditCompareResult: null,
+        ...(asNewBranch ? clearedVersionHistoryState() : {}),
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof ProjectRevisionConflictError) {
+        set({
+          aiEditCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+          aiEditStatus: 'error',
+          aiEditError: 'Revision conflict; reload or retry apply',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      set({
+        aiEditCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+        aiEditStatus: 'error',
+        aiEditError: error.message || 'Failed to apply AI edit candidate',
+      });
+      throw error;
+    }
   },
 
   refreshMusicXmlFromEditedComposition: async () => {
@@ -3512,6 +4167,11 @@ export const useMusicStore = create((set, get) => ({
           notationReport: null,
           compositionEditUndoStack: [],
           compositionEditRedoStack: [],
+          generationCandidate: null,
+          generationAuditionActive: false,
+          generationCompareResult: null,
+          generationRequestCapture: null,
+          generationStatus: 'idle',
           ...clearedAnalysisState(),
           ...clearedMotifUiState(),
           ...clearedReharmonizePreviewState(),
@@ -7056,6 +7716,11 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     saveError: '',
     generationMeta,
     prompt: restoredPrompt,
+    generationCandidate: null,
+    generationAuditionActive: false,
+    generationCompareResult: null,
+    generationRequestCapture: null,
+    generationStatus: 'idle',
     trackControls: buildDefaultTrackControls(composition),
     playbackStatus: 'idle',
     playbackSeconds: 0,

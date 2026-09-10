@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   PLAYBACK_SOURCE_ARRANGEMENT,
   PLAYBACK_SOURCE_DEVELOPMENT,
+  PLAYBACK_SOURCE_GENERATION,
   PLAYBACK_SOURCE_VERSION,
   PLAYBACK_SOURCE_WORKING,
   exclusiveAuditionPatch,
@@ -36,6 +37,29 @@ test('resolvePlaybackSource prefers arrangement over version and development', (
   );
   assert.equal(resolved.source, PLAYBACK_SOURCE_ARRANGEMENT);
   assert.equal(resolved.composition, arrangement);
+});
+
+test('resolvePlaybackSource prefers generation over version and development', () => {
+  const generation = { id: 'gen' };
+  const resolved = resolvePlaybackSource(
+    {
+      editedMusicJson: working,
+      arrangementAuditionMode: 'source',
+      generationAuditionActive: true,
+      generationCandidate: { composition: generation },
+      versionAuditionActive: true,
+      versionSelectedRevisionId: 'r1',
+      versionRevisionDetails: { r1: { composition: version } },
+      developmentAuditionActive: true,
+      developmentCandidates: [{ candidate_id: 'd1', composition: development }],
+      developmentSelectedCandidateId: 'd1',
+    },
+    {
+      findDevelopmentCandidateById: (list, id) => list.find((c) => c.candidate_id === id),
+    },
+  );
+  assert.equal(resolved.source, PLAYBACK_SOURCE_GENERATION);
+  assert.equal(resolved.composition, generation);
 });
 
 test('resolvePlaybackSource uses version audition before development', () => {
@@ -79,14 +103,31 @@ test('exclusiveAuditionPatch clears competitors', () => {
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_VERSION, 'source'), {
     developmentAuditionActive: false,
     arrangementAuditionMode: 'source',
+    generationAuditionActive: false,
+    aiEditAuditionActive: false,
   });
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_DEVELOPMENT, 'source'), {
     arrangementAuditionMode: 'source',
     versionAuditionActive: false,
+    generationAuditionActive: false,
+    aiEditAuditionActive: false,
   });
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_WORKING, 'source'), {
     developmentAuditionActive: false,
     arrangementAuditionMode: 'source',
     versionAuditionActive: false,
+    generationAuditionActive: false,
+    aiEditAuditionActive: false,
   });
+});
+
+test('resolvePlaybackSource uses AI edit audition after generation', () => {
+  const edit = { id: 'edit' };
+  const resolved = resolvePlaybackSource({
+    editedMusicJson: working,
+    aiEditAuditionActive: true,
+    aiEditCandidate: { composition: edit },
+  });
+  assert.equal(resolved.source, PLAYBACK_SOURCE_GENERATION);
+  assert.equal(resolved.composition, edit);
 });
