@@ -10,7 +10,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Prompt Controls**: Configure genre, mood, key, meter, tempo range, instruments, sections, complexity, duration, and freeform instructions
 - **Editable JSON Workflow**: Review and edit canonical sections, tracks, harmony metadata, timing, and note events
 - **Piano-Roll Editor**: Multi-note V2 editing on `tracks[].events[]` — box/range selection, clipboard, bulk transpose/velocity/quantize/length/humanize, articulations, dynamics, track hide/lock, edit cursor, bar/section navigation, zoom, play-from-cursor and selection loop; composition-level undo/redo shares `editedMusicJson` with the JSON editor
-- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (mute/solo/volume, pause/resume, seek-to-start, play-from-cursor, loop, piano-roll playback cursor)
+- **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (sampled/synth voices, velocity/expression, mute/solo/trim/pan/reverb send, pause/resume, seek, play-from-cursor, loop, activity meters). Browser mixer state is ephemeral and never changes export.
 - **Composition Analysis**: Deterministic `composition.analysis.v1` sidecar for tonal context, inferred harmony, phrases/density, derived motif families, and stable warnings over current V2 (Analysis tab; optional bounded advisory context for LLM edit/repair — not persisted, not required for import/playback)
 - **Motif Authoring**: Mark a 1–2 bar pitched selection as a named motif, inspect usages, and apply mechanical or creative transforms via `POST /motifs/apply`; creative AI results stage as candidates until Apply; mechanical transforms remain direct undoable edits (Motifs tab)
 - **Harmony & Reharmonization**: Edit explicit V2 harmony tick spans on the Harmony tab; preview deterministic or AI reharmonization via `POST /harmony/reharmonize/preview` without dirtying the project until Apply (melody/accompaniment policies; events remain the only audible source)
@@ -26,7 +26,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Persistence**: SQLite project store (`PROJECT_DB_PATH`) with numbered SQL migrations, zlib content-addressed composition snapshots, revisions/branches, and Docker named volume `mukit_project_data`
 - **Music Processing**: music21 library for MusicXML rendering
 - **LLM Orchestration**: LangChain/LangGraph with OpenAI-compatible chat providers
-- **Frontend State**: Zustand store for API status, LLM models, project browser/save status, generation output, piano-roll edit state, notation, playback transport state, per-track mute/solo/volume, and derived analysis report cache
+- **Frontend State**: Zustand store for API status, LLM models, project browser/save status, generation output, piano-roll edit state, notation, playback transport state, per-source ephemeral mixer controls, and derived analysis report cache
 
 ## Prerequisites
 
@@ -305,6 +305,7 @@ mukit-ai/
 |-------|-------------|
 | [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
 | [Composition Editor](docs/composition-editor.md) | Piano-roll multi-note editing, clipboard, cursor/loop |
+| [Browser playback](docs/browser-playback.md) | Tone.js projection, mixer, samples vs FluidSynth export |
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |
 | [Composition Arrangement](docs/composition-arrangement.md) | Instrumentation / texture redistribution; catalog + preview + Apply |
 | [Composition Analysis](docs/composition-analysis.md) | Deterministic sidecar, scopes, warnings, Analysis tab |
@@ -348,7 +349,7 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 - **MusicXML rendering**: canonical note events are converted to deterministic MusicXML with music21 for notation preview and `/export/musicxml`; harmony remains chord-symbol metadata.
 - **MIDI export**: `/export/midi` writes a Standard MIDI File via `mido` from the same track-local events, preserving velocity, program, channel, volume, and pan.
 - **WAV export**: `/export/wav` synthesizes PCM with the FluidSynth CLI from those MIDI bytes (Docker installs `fluidsynth` + `fluid-soundfont-gm` / FluidR3_GM). Browser Tone.js remains interactive preview only.
-- **Frontend preview**: the browser edits canonical JSON via piano roll or JSON editor, renders MusicXML with OSMD (including debounced preview refresh), schedules exact multi-track note events from ticks with Tone.js (no harmony-derived substitutes), exposes mute/solo/volume routing controls, and downloads MusicXML/MIDI/WAV exports that share the same `tracks[].events[]`.
+- **Frontend preview**: the browser edits canonical JSON via piano roll or JSON editor, renders MusicXML with OSMD (including debounced preview refresh), schedules exact multi-track note events from ticks with Tone.js (no harmony-derived substitutes), exposes ephemeral mixer controls (trim/pan/mute/solo/send), and downloads MusicXML/MIDI/WAV exports that share the same `tracks[].events[]`. See [docs/browser-playback.md](docs/browser-playback.md). Browser assets are not the FluidR3 SoundFont.
 
 ## 🔍 Troubleshooting
 
@@ -378,7 +379,9 @@ Backend LLM settings, normalization, rendering, and MIDI-ready mapping use Pytho
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+**Owner resolution needed:** the root [`LICENSE`](LICENSE) file currently contains **CC0 1.0 Universal** text, while this README historically stated **MIT**. Do not assume either without maintainer confirmation; this documentation only flags the inconsistency and does not change the project license.
+
+See the `LICENSE` file for the legal text currently checked into the repository.
 
 ## 🙏 Acknowledgments
 

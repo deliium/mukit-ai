@@ -32,6 +32,9 @@ const StickyTransport = styled.div`
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   backdrop-filter: blur(6px);
+  max-height: min(48vh, 520px);
+  overflow: auto;
+  min-width: 0;
 `;
 
 const SectionTitle = styled.h3`

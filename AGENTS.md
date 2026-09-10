@@ -86,6 +86,11 @@ mukit-ai/
 | `backend/app/services/project_history_store.py` | SQLite CAS history graph + compressed composition snapshots |
 | `frontend/src/utils/compositionVersionComparison.js` | Deterministic working/revision composition compare |
 | `frontend/src/utils/playbackSource.js` | Mutual-exclusive working / preview / version audition playback source |
+| `frontend/src/utils/playbackMixerControls.js` | Ephemeral per-scope mixer control normalize/merge helpers |
+| `frontend/src/utils/tonePlaybackEngine.js` | Tone.js transport, V2 schedule, mixer graph, meters |
+| `frontend/src/utils/playbackInstrumentAdapters.js` | Synth + Tone.Sampler adapters with fallback reason codes |
+| `frontend/src/components/TrackPlaybackControls.jsx` | Collapsible mixer rows (trim/pan/mute/solo/send/levels) |
+| `docs/browser-playback.md` | Browser projection boundary vs FluidSynth export |
 | `frontend/src/components/ProjectVersionsPanel.jsx` | Versions tab: branches, compare, audition, restore |
 | `backend/app/services/project_store.py` | SQLite project CRUD |
 | `backend/app/services/project_history_store.py` | Snapshots, revisions, branches, CAS draft/commit/restore/checkout |
@@ -126,6 +131,7 @@ mukit-ai/
 | README | `README.md` | Install, features, env vars, run instructions |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
 | Composition Editor | `docs/composition-editor.md` | Piano-roll selection, clipboard, transforms, cursor/loop |
+| Browser playback | `docs/browser-playback.md` | Tone.js instruments/mixer/transport; ephemeral session state |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |

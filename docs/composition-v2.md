@@ -6,6 +6,8 @@
 
 Playable pitches live **only** in `tracks[].events[]`. Timeline metadata, markers, harmony, and track expression direct deterministic **projections** — they never synthesize notes.
 
+Browser Tone.js playback (instruments, mixer, ambience) is another projection layer: session-only and never persisted into V2. See [browser-playback.md](browser-playback.md). Server FluidSynth WAV export remains separate.
+
 **Derived musical analysis** (`composition.analysis.v1`) is a separate sidecar from `POST /analysis/composition`. It is not a V2 field, is not persisted in projects, and is not consumed by playback or export. See [composition-analysis.md](composition-analysis.md).
 
 ## Version dispatch

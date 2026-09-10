@@ -387,7 +387,7 @@ flowchart TD
 
 **To change JSON editing rules**: Edit `validateMusicJson()` and editor behavior in `frontend/src/components/PromptJsonEditor.jsx`.
 
-**To change playback**: Edit Tone playback utils under `frontend/src/utils/` and playback UI components; keep schedule derived from `tracks[].events[]` only.
+**To change playback**: Edit Tone playback utils under `frontend/src/utils/` (`tonePlaybackEngine`, `playbackTracks`, `playbackEvents`, `playbackSource`, `playbackMixerControls`, instrument adapters/assets) and `PlaybackControls` / `TrackPlaybackControls`; keep schedule derived from `tracks[].events[]` only. See `docs/browser-playback.md`.
 
 **To change Docker setup**: Edit `docker-compose.yml`, optional `compose.dev.yml`, `backend/Dockerfile`, `frontend/Dockerfile` / `nginx.conf`, and `.env.example`.
 

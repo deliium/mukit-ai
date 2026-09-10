@@ -39,6 +39,7 @@ Clipboard: Ctrl/Cmd+C / X / V / D. Paste anchors at the **edit cursor**. Motif m
 - Zoom in/out, fit, zoom-to-selection; Ctrl+wheel zoom
 - **Play From Cursor**, loop from selection / toggle / clear
 - Auto-follow scrolls the viewport during playback without rerendering every note on each tick
+- Browser instruments/mixer (trim/pan/mute/solo/send) are ephemeral — see [browser-playback.md](browser-playback.md)
 
 ## Keyboard focus
 

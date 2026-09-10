@@ -266,9 +266,35 @@ export async function createProjectAndGenerate(page, {
   await pickFakeProvider(page);
   await prepareFakeLlmPrompt(page, { durationBars, instruments, sections });
   await page.getByTestId('generate-music').click();
-  await waitForCompositionNotes(page, { minEvents, timeout: 90_000 });
+
+  // Generation is preview-first: Apply must install the candidate into editedMusicJson.
+  await page.getByTestId('generation-candidate-panel').waitFor({ state: 'visible', timeout: 90_000 });
+  console.info('[FIX:e2e-fake-generate] Generation candidate ready; applying to working composition', {
+    durationBars,
+    instruments,
+  });
+  await page.getByTestId('generation-apply').click();
+
+  try {
+    await waitForCompositionNotes(page, { minEvents, timeout: 90_000 });
+  } catch (error) {
+    const debug = await page.evaluate(() => {
+      const state = window.__MUKIT_MUSIC_STORE__?.getState?.();
+      return {
+        hasCandidate: Boolean(state?.generationCandidate),
+        candidateStatus: state?.generationCandidate?.status || null,
+        eventCount: Array.isArray(state?.editedMusicJson?.tracks)
+          ? state.editedMusicJson.tracks.reduce((sum, track) => sum + (track.events?.length || 0), 0)
+          : 0,
+        uiError: state?.uiError || null,
+      };
+    });
+    console.error('[FIX:e2e-fake-generate] Apply did not install working notes', debug);
+    throw error;
+  }
+
   const snapshot = await getStoreSnapshot(page);
-  console.info('[FIX:e2e-fake-generate] Generate completed', {
+  console.info('[FIX:e2e-fake-generate] Generate+Apply completed', {
     durationBars,
     schemaVersion: snapshot?.schemaVersion,
     barCount: snapshot?.barCount,

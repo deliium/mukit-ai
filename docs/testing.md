@@ -177,7 +177,7 @@ npm run test:e2e
 npm run test:e2e:ui
 ```
 
-Specs live in `frontend/e2e/` (`v1-user-journey`, `v1-upgrade-to-v2`, `v2-user-journey`, `v2-editor-workflow`, `import-user-journey`, `project-version-history`, development/arrangement workflows, persistence suites). Persistence reopen after Compose restart is opt-in:
+Specs live in `frontend/e2e/` (`v1-user-journey`, `v1-upgrade-to-v2`, `v2-user-journey`, `v2-editor-workflow`, `playback-mixer`, `import-user-journey`, `project-version-history`, development/arrangement workflows, persistence suites). Persistence reopen after Compose restart is opt-in:
 
 ```bash
 RUN_PLAYWRIGHT_DOCKER_RESTART=1 npm run test:e2e -- e2e/v1-persistence.spec.js
@@ -267,6 +267,7 @@ npm test -- e2e/helpers.test.js src/utils/editorPerfInstrumentation.test.js
 npm run lint
 npm run build
 LLM_FAKE_MODE=1 npm run test:e2e -- e2e/v2-editor-workflow.spec.js
+LLM_FAKE_MODE=1 npm run test:e2e -- e2e/playback-mixer.spec.js
 # Likely regressions after editor changes:
 LLM_FAKE_MODE=1 npm run test:e2e -- e2e/v2-user-journey.spec.js e2e/import-user-journey.spec.js
 ```

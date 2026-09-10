@@ -80,7 +80,7 @@ The first shipped pack should be a deliberately small, size-budgeted derivative 
 
 ### Phase 2: Instruments and Mixer Engine
 
-- [ ] **Task 4: Integrate audited local sample instruments with deterministic synth fallback.**
+- [x] **Task 4: Integrate audited local sample instruments with deterministic synth fallback.**
   - Spike the pinned `smplr` adapter against Tone's AudioContext and track output bus. If it cannot satisfy scheduling, polyphony, connection, cleanup, and testability without parallel transport logic, record the code-level decision and implement the same adapter with `Tone.Sampler` instead.
   - Curate and encode a compact local piano/bass/strings core pack under `frontend/public/audio/<pack-id>/`; use sparse pitch coverage, practical browser codecs, velocity regions where supported, and validated loop points for sustained strings. Enforce the size/memory budgets defined by task 1.
   - Lazy-load only profiles needed by the active composition, deduplicate concurrent loads and decoded buffers, wait for readiness before transport starts, and atomically choose a synth fallback for each failed track before scheduling. Never swap timbre during active playback.
@@ -90,7 +90,7 @@ The first shipped pack should be a deliberately small, size-budgeted derivative 
   - Logging: INFO one bounded load/fallback result per profile, DEBUG cache/load timing and byte counts, WARN per-track fallback with stable reason code, ERROR unrecoverable adapter initialization. Never log sample data, signed URLs, manifests wholesale, or repeated per-note messages.
   - Dependencies: tasks 1-3; create the required provenance/license records with each asset, and treat task 9's final audit as release-blocking.
 
-- [ ] **Task 5: Build the track mixer, shared ambience, protection, and metering graph.**
+- [x] **Task 5: Build the track mixer, shared ambience, protection, and metering graph.**
   - Refactor each route to separate canonical expression/volume/pan from session trim/pan/mute/solo and remove double application of canonical volume.
   - Use post-fader sends into one shared `Tone.Reverb` ambience bus and route dry/wet output through a conservative master gain/limiter before destination. Await reverb readiness and clear wet tails on full stop/dispose.
   - Apply live volume trim, pan offset, mute, solo, and send changes without rescheduling notes. Smooth parameter changes over short ramps to avoid clicks and ensure mute/solo also silence new wet input.
@@ -100,7 +100,7 @@ The first shipped pack should be a deliberately small, size-budgeted derivative 
   - Logging: DEBUG graph/profile/route counts and bounded peak/clipping diagnostics, INFO engine readiness, WARN meter/effect degradation or limiter intervention summaries, ERROR route construction/disposal failures. Never log periodic meter frames.
   - Dependencies: task 4.
 
-- [ ] **Task 6: Centralize ephemeral playback/mixer state and safe logging.**
+- [x] **Task 6: Centralize ephemeral playback/mixer state and safe logging.**
   - Update Zustand playback state/actions for authoritative source key/tick, operation epoch, per-source mixer isolation, neutral control defaults, pan/send/preset status, and activity reset.
   - Preserve working, candidate, and version mixer isolation without duplicating action implementations. Reconcile controls by active source/track IDs without pruning working controls when auditioning a candidate.
   - Ensure mixer and browser profile changes do not mutate composition JSON, composition/notation/analysis revisions, save status, persistence fingerprints, autosave, history snapshots, or composition undo/redo.
@@ -111,7 +111,7 @@ The first shipped pack should be a deliberately small, size-budgeted derivative 
 
 ### Phase 3: Mixer UI, Acceptance, and Documentation
 
-- [ ] **Task 7: Deliver an accessible, responsive mixer UI.**
+- [x] **Task 7: Deliver an accessible, responsive mixer UI.**
   - Expand `TrackPlaybackControls` into compact rows showing track name, canonical instrument, resolved sampled/synth profile and load/fallback status, volume trim, pan, mute, solo, reverb send, and a basic level/activity bar.
   - Keep automatic instrument-aware preset selection; show the resolved profile rather than rewriting canonical instrument/program fields. A manual browser preset selector is optional only if it can remain clearly session-only and source-isolated.
   - Add proper labels, values/units, `aria-pressed`, keyboard-operable 44px targets, non-color status text, stable test IDs, and reduced-motion-safe level animation.
@@ -121,7 +121,7 @@ The first shipped pack should be a deliberately small, size-budgeted derivative 
   - Logging: DEBUG only committed UI control changes with track/source IDs; WARN rejected values; no render, animation-frame, raw pointer, or meter logging.
   - Dependencies: tasks 5 and 6.
 
-- [ ] **Task 8: Add deterministic unit, integration, browser, and export-regression coverage.**
+- [x] **Task 8: Add deterministic unit, integration, browser, and export-regression coverage.**
   - Extend pure tests for source identity/priority, asset manifests and allowlisting, instrument/GM mappings, control normalization, synth fallback, note identity, sustain boundaries, dynamics/articulations, velocity extremes, tempo changes, linear automation, and loop normalization.
   - Extend the fake Tone environment and engine tests for asynchronous sample/reverb readiness, one-track failure fallback, shared effect count, graph gains, velocity delivery, overlapping same-pitch voices, owned Transport IDs, click-free relocation, held-note reconstruction, pause/resume, seek, loop wrap/change, live mixer controls, meters, stale async cancellation, disposal, and cache reuse.
   - Add store regressions proving source mixer isolation and zero composition/persistence/history/analysis mutation.
@@ -132,7 +132,7 @@ The first shipped pack should be a deliberately small, size-budgeted derivative 
   - Logging: tests assert bounded lifecycle/fallback reason codes, absence of event/composition dumps, and no noisy per-note/meter logs. Capture browser console failures without retaining asset payloads.
   - Dependencies: tasks 1-7.
 
-- [ ] **Task 9: Complete asset licensing, operator, fidelity, and architecture documentation.**
+- [x] **Task 9: Complete asset licensing, operator, fidelity, and architecture documentation.**
   - Add `docs/browser-playback.md` describing the browser projection boundary, selected technology, instrument mapping/fallback, mixer semantics, V2 expression handling, tempo/transport/loop behavior, performance budgets, troubleshooting, and browser-versus-WAV timbre expectations.
   - Place exact upstream license text and attribution/conversion records beside each pack and add `THIRD_PARTY_NOTICES.md` entries. Document package-code licenses separately from audio-content licenses. Require hashes and release approval for every shipped binary; omit any unverified sample.
   - Update `README.md`, `.env.example` only if an explicit build-time asset-base option is implemented, `docs/composition-v2.md`, `docs/composition-editor.md`, `docs/testing.md`, `docs/CODEBASE_MAP.md`, and `AGENTS.md`. Do not conflate browser assets with the server FluidR3/FluidSynth SoundFont.
