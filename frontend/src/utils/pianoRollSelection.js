@@ -85,7 +85,8 @@ export function pointerXToBar(pointerX, {
 }
 
 /**
- * Derive inclusive-start / exclusive-end tick bounds for a bar range.
+ * Shared variable-meter bar → tick window for AI region overlays and note-editor
+ * bar/range selection. Does not own note selection or transport state.
  * @returns {{ startTick: number|null, endTick: number|null, barTicks: number|null, warning?: string }}
  */
 export function selectedTickBoundaries(startBar, endBar, {
@@ -106,8 +107,12 @@ export function selectedTickBoundaries(startBar, endBar, {
       return { startTick: null, endTick: null, barTicks: null, warning: 'invalid bar range for timeline' };
     }
     let endTick = range.endTick;
-    if (Number.isFinite(Number(durationTicks))) {
-      endTick = Math.min(endTick, Number(durationTicks));
+    const durationLimit = durationTicks != null
+      ? Number(durationTicks)
+      : Number(composition?.duration_ticks);
+    // Avoid Number(null) === 0 clamping the window shut when duration is omitted.
+    if (Number.isFinite(durationLimit) && durationLimit >= 0) {
+      endTick = Math.min(endTick, durationLimit);
     }
     const firstBarTicks = timeline.barBoundaries[1] - timeline.barBoundaries[0];
     return { startTick: range.startTick, endTick, barTicks: firstBarTicks };
@@ -123,6 +128,14 @@ export function selectedTickBoundaries(startBar, endBar, {
     endTick = Math.min(endTick, Number(durationTicks));
   }
   return { startTick, endTick, barTicks };
+}
+
+/**
+ * Alias for editor consumers that need the same variable-meter bar tick window
+ * without coupling to AI-region UI naming.
+ */
+export function barRangeTickWindow(startBar, endBar, options = {}) {
+  return selectedTickBoundaries(startBar, endBar, options);
 }
 
 /**

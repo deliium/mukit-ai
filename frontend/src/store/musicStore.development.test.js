@@ -145,8 +145,9 @@ test('development preview is ephemeral and apply succeeds with matching fingerpr
   useMusicStore.setState({
     editedMusicJson: structuredClone(base),
     compositionRevision: 'rev-base',
-    noteEditUndoStack: [],
-    noteEditRedoStack: [],
+    editCursorTick: 0,
+    compositionEditUndoStack: [],
+    compositionEditRedoStack: [],
     developmentOperation: 'continue',
     developmentIntent: 'continue',
     developmentStrength: 'balanced',
@@ -177,7 +178,7 @@ test('development preview is ephemeral and apply succeeds with matching fingerpr
   assert.equal(applied, true);
   const after = useMusicStore.getState().editedMusicJson;
   assert.equal(after.bar_count, 24);
-  assert.equal(useMusicStore.getState().noteEditUndoStack.length, 1);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 1);
   for (let i = 0; i < before.tracks[0].events.length; i += 1) {
     assert.equal(after.tracks[0].events[i].pitch, before.tracks[0].events[i].pitch);
     assert.equal(after.tracks[0].events[i].start_tick, before.tracks[0].events[i].start_tick);
@@ -188,16 +189,16 @@ test('development selection and discard do not dirty history', () => {
   useMusicStore.setState({
     editedMusicJson: sixteenBarComposition(),
     compositionRevision: 'rev-1',
-    noteEditUndoStack: [{ editedMusicJson: sixteenBarComposition() }],
+    compositionEditUndoStack: [{ editedMusicJson: sixteenBarComposition() }],
     developmentCandidates: [candidateFrom(sixteenBarComposition())],
     developmentSelectedCandidateId: 'dev-cand-aaaa',
     developmentStatus: 'ready',
     developmentAuditionActive: true,
   });
-  const undoLen = useMusicStore.getState().noteEditUndoStack.length;
+  const undoLen = useMusicStore.getState().compositionEditUndoStack.length;
   useMusicStore.getState().selectDevelopmentCandidate('dev-cand-aaaa');
   useMusicStore.getState().discardDevelopmentCandidates();
-  assert.equal(useMusicStore.getState().noteEditUndoStack.length, undoLen);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, undoLen);
   assert.equal(useMusicStore.getState().developmentCandidates.length, 0);
   assert.equal(useMusicStore.getState().developmentAuditionActive, false);
 });

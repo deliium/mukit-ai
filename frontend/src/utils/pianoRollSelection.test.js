@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   MOTIF_BAR_SPAN_EXCEEDED_CODE,
+  barRangeTickWindow,
   defaultTargetTrackIds,
   motifDestinationTickRange,
   motifSourceTickRange,
@@ -42,6 +43,32 @@ test('selectedTickBoundaries returns inclusive bar tick window', () => {
   });
   assert.equal(bounds.startTick, 8 * 1920);
   assert.equal(bounds.endTick, 12 * 1920);
+});
+
+test('barRangeTickWindow shares variable-meter bounds with selectedTickBoundaries', () => {
+  const composition = {
+    schema_version: 'composition.v2',
+    tempo: 100,
+    key: 'C major',
+    time_signature: '4/4',
+    ticks_per_quarter: 480,
+    bar_count: 4,
+    duration_ticks: 6720, // 4/4 + 3/4 + 4/4 + 3/4 = 1920+1440+1920+1440
+    sections: [{ type: 'intro', start_bar: 1, bar_count: 4, start_tick: 0, duration_ticks: 6720 }],
+    tracks: [{ id: 'melody-1', events: [] }],
+    tempo_changes: [],
+    time_signature_changes: [
+      { tick: 1920, time_signature: '3/4' },
+      { tick: 3360, time_signature: '4/4' },
+      { tick: 5280, time_signature: '3/4' },
+    ],
+    key_changes: [],
+  };
+  const viaAlias = barRangeTickWindow(2, 3, { composition });
+  const viaPrimary = selectedTickBoundaries(2, 3, { composition });
+  assert.deepEqual(viaAlias, viaPrimary);
+  assert.equal(viaAlias.startTick, 1920);
+  assert.equal(viaAlias.endTick, 5280); // end of bar 3
 });
 
 test('defaultTargetTrackIds prefers current track then falls back', () => {

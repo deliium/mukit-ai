@@ -203,14 +203,14 @@ test('Arrange acceptance: piano sketch → 3 ensemble candidates, apply second, 
   expect(saveProbe.hasArrangementKeys).toBe(false);
   expect(saveProbe.compositionHasInstruction).toBe(false);
 
-  await page.evaluate(() => window.__MUKIT_MUSIC_STORE__.getState().undoNoteEdit());
+  await page.evaluate(() => window.__MUKIT_MUSIC_STORE__.getState().undoCompositionEdit());
   const undone = await getArrangementSnapshot(page);
   expect(undone.melodyPitches).toEqual(MELODY_PITCHES);
   expect(undone.harmonyChords).toEqual(HARMONY_CHORDS);
   expect(await getNoteSequencesFromStore(page)).toEqual(sequencesBefore);
   expect(undone.trackCount).toBe(3);
 
-  await page.evaluate(() => window.__MUKIT_MUSIC_STORE__.getState().redoNoteEdit());
+  await page.evaluate(() => window.__MUKIT_MUSIC_STORE__.getState().redoCompositionEdit());
   const redone = await getArrangementSnapshot(page);
   expect(redone.melodyPitches).toEqual(MELODY_PITCHES);
   expect(instrumentTokens(redone.trackSummaries).some((name) => name.includes('cello'))).toBe(true);

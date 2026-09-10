@@ -9,6 +9,9 @@ const SUPPORTED_DENOMINATORS = new Set([1, 2, 4, 8, 16, 32]);
 const ARTICULATION_VALUES = new Set(['staccato', 'staccatissimo', 'tenuto', 'accent', 'marcato']);
 const GATE_SHORTENING_ARTICULATIONS = new Set(['staccato', 'staccatissimo', 'marcato']);
 const ATTACK_ARTICULATIONS = new Set(['accent', 'marcato']);
+/** Mirrors backend ``DynamicLevel`` / ``DYNAMIC_LEVEL_TO_EXPRESSION`` keys. */
+export const DYNAMIC_LEVELS = Object.freeze(['ppp', 'pp', 'p', 'mp', 'mf', 'f', 'ff', 'fff']);
+const DYNAMIC_LEVEL_SET = new Set(DYNAMIC_LEVELS);
 /** Mirrors backend ``SUPPORTED_SECTION_TYPES`` (includes import-neutral ``unsectioned``). */
 export const SUPPORTED_SECTION_TYPES = new Set([
   'intro',
@@ -292,6 +295,10 @@ function validateCanonicalTracks(tracks, durationTicks, variant) {
       if (!Number.isInteger(expression) || expression < 0 || expression > 127) {
         return invalid('Track expression must be an integer from 0 to 127.');
       }
+      const dynamicsResult = validateDynamicMarks(track.dynamic_marks, durationTicks, track.id);
+      if (!dynamicsResult.valid) {
+        return dynamicsResult;
+      }
       const pedalsResult = validateSustainPedals(track.sustain_pedals, durationTicks, track.id);
       if (!pedalsResult.valid) {
         return pedalsResult;
@@ -430,6 +437,46 @@ function validateTieChains(track) {
     }
   }
   return valid('Tie chains are valid.');
+}
+
+/**
+ * Validate V2 track dynamic_marks against backend CompositionV2DynamicMark rules:
+ * shape `{tick, level}`, level enum ppp–fff, unique ascending ticks, tick in [0, duration_ticks].
+ */
+function validateDynamicMarks(marks, durationTicks, trackId) {
+  if (marks == null) {
+    return valid('dynamic_marks omitted.');
+  }
+  if (!Array.isArray(marks)) {
+    return invalid(`Track ${trackId} dynamic_marks must be an array.`);
+  }
+  let previousTick = -1;
+  const seen = new Set();
+  for (const mark of marks) {
+    if (!mark || typeof mark !== 'object' || Array.isArray(mark)) {
+      return invalid('dynamic_marks entries must be objects with tick and level.');
+    }
+    const tick = Number(mark.tick);
+    if (!Number.isInteger(tick) || tick < 0) {
+      return invalid('dynamic_marks tick must be a non-negative integer.');
+    }
+    if (tick > durationTicks) {
+      return invalid('dynamic_marks must fit within composition duration.');
+    }
+    if (seen.has(tick)) {
+      return invalid('dynamic_marks ticks must be unique within a track.');
+    }
+    if (tick < previousTick) {
+      return invalid('dynamic_marks must be in ascending tick order.');
+    }
+    const level = typeof mark.level === 'string' ? mark.level.trim() : '';
+    if (!DYNAMIC_LEVEL_SET.has(level)) {
+      return invalid(`Unsupported dynamic_marks level: ${mark.level}`);
+    }
+    seen.add(tick);
+    previousTick = tick;
+  }
+  return valid('dynamic_marks are valid.');
 }
 
 function validateSustainPedals(pedals, durationTicks, trackId) {

@@ -110,8 +110,9 @@ function resetAnalysisStore(composition = structuredClone(BASE)) {
     pianoRollTrackId: 'melody-1',
     pianoRollNoteId: null,
     pianoRollNoteIds: [],
-    noteEditUndoStack: [],
-    noteEditRedoStack: [],
+    editCursorTick: 0,
+    compositionEditUndoStack: [],
+    compositionEditRedoStack: [],
     analysisScope: 'composition',
     analysisSelectedSectionKey: null,
     analysisResult: null,
@@ -407,7 +408,7 @@ test('undo restores freshness against retained analysis result', async (t) => {
   useMusicStore.getState().updateNote('melody-1', 'n1', { pitch: 'G4' });
   assert.equal(useMusicStore.getState().getAnalysisFreshness().isStale, true);
 
-  assert.equal(useMusicStore.getState().undoNoteEdit(), true);
+  assert.equal(useMusicStore.getState().undoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().compositionRevision, originalRevision);
   const freshness = useMusicStore.getState().getAnalysisFreshness();
   assert.equal(freshness.isCurrent, true);

@@ -34,7 +34,7 @@ async function getDevelopmentSnapshot(page) {
       candidateCount: Array.isArray(state.developmentCandidates) ? state.developmentCandidates.length : 0,
       selectedCandidateId: state.developmentSelectedCandidateId,
       auditionActive: state.developmentAuditionActive,
-      undoDepth: Array.isArray(state.noteEditUndoStack) ? state.noteEditUndoStack.length : 0,
+      undoDepth: Array.isArray(state.compositionEditUndoStack) ? state.compositionEditUndoStack.length : 0,
       prefixEvents,
       sectionTypes: (composition?.sections || []).map((section) => section.type),
     };

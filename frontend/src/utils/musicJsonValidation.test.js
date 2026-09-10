@@ -223,6 +223,45 @@ test('rejects dangling motif event references and note payloads', () => {
   assert.match(payload.message, /note payloads/i);
 });
 
+test('validates dynamic_marks shape, levels, order, uniqueness, and duration bounds', async () => {
+  const { DYNAMIC_LEVELS } = await import('./musicJsonValidation.js');
+  assert.deepEqual([...DYNAMIC_LEVELS], ['ppp', 'pp', 'p', 'mp', 'mf', 'f', 'ff', 'fff']);
+
+  const composition = migrateV1ToV2(canonicalV1Composition());
+  composition.tracks[0].dynamic_marks = [
+    { tick: 0, level: 'ppp' },
+    { tick: 480, level: 'mf' },
+    { tick: 1920, level: 'fff' },
+  ];
+  assert.equal(validateMusicJson(composition).valid, true, validateMusicJson(composition).message);
+
+  composition.tracks[0].dynamic_marks = [{ tick: 0, level: 'mezzo' }];
+  assert.equal(validateMusicJson(composition).valid, false);
+  assert.match(validateMusicJson(composition).message, /Unsupported dynamic_marks level/);
+
+  composition.tracks[0].dynamic_marks = [
+    { tick: 480, level: 'mf' },
+    { tick: 0, level: 'p' },
+  ];
+  assert.equal(validateMusicJson(composition).valid, false);
+  assert.match(validateMusicJson(composition).message, /ascending tick order/);
+
+  composition.tracks[0].dynamic_marks = [
+    { tick: 0, level: 'p' },
+    { tick: 0, level: 'f' },
+  ];
+  assert.equal(validateMusicJson(composition).valid, false);
+  assert.match(validateMusicJson(composition).message, /unique/);
+
+  composition.tracks[0].dynamic_marks = [{ tick: 1921, level: 'f' }];
+  assert.equal(validateMusicJson(composition).valid, false);
+  assert.match(validateMusicJson(composition).message, /fit within composition duration/);
+
+  composition.tracks[0].dynamic_marks = { tick: 0, level: 'mf' };
+  assert.equal(validateMusicJson(composition).valid, false);
+  assert.match(validateMusicJson(composition).message, /must be an array/);
+});
+
 function canonicalV1Composition() {
   return {
     schema_version: 'composition.v1',

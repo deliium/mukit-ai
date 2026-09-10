@@ -315,8 +315,8 @@ const PianoRollEditor = () => {
   const pianoRollZoom = useMusicStore((state) => state.pianoRollZoom);
   const pianoRollNotationStatus = useMusicStore((state) => state.pianoRollNotationStatus);
   const pianoRollNotationError = useMusicStore((state) => state.pianoRollNotationError);
-  const noteEditUndoStack = useMusicStore((state) => state.noteEditUndoStack);
-  const noteEditRedoStack = useMusicStore((state) => state.noteEditRedoStack);
+  const compositionEditUndoStack = useMusicStore((state) => state.compositionEditUndoStack);
+  const compositionEditRedoStack = useMusicStore((state) => state.compositionEditRedoStack);
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
   const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
   const notationRevision = useMusicStore((state) => state.notationRevision);
@@ -330,8 +330,8 @@ const PianoRollEditor = () => {
   const toggleNoteArticulation = useMusicStore((state) => state.toggleNoteArticulation);
   const applyTieChain = useMusicStore((state) => state.applyTieChain);
   const removeTieChain = useMusicStore((state) => state.removeTieChain);
-  const undoNoteEdit = useMusicStore((state) => state.undoNoteEdit);
-  const redoNoteEdit = useMusicStore((state) => state.redoNoteEdit);
+  const undoCompositionEdit = useMusicStore((state) => state.undoCompositionEdit);
+  const redoCompositionEdit = useMusicStore((state) => state.redoCompositionEdit);
   const refreshMusicXmlFromEditedComposition = useMusicStore(
     (state) => state.refreshMusicXmlFromEditedComposition,
   );
@@ -685,9 +685,9 @@ const PianoRollEditor = () => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
       event.preventDefault();
       if (event.shiftKey) {
-        redoNoteEdit();
+        redoCompositionEdit();
       } else {
-        undoNoteEdit();
+        undoCompositionEdit();
       }
     }
   };
@@ -1126,10 +1126,10 @@ const PianoRollEditor = () => {
               <option value="0.18">Detail</option>
             </Select>
           </ControlGroup>
-          <Button type="button" data-testid="piano-roll-undo" onClick={() => undoNoteEdit()} disabled={!noteEditUndoStack.length} aria-label="Undo note edit">
+          <Button type="button" data-testid="piano-roll-undo" onClick={() => undoCompositionEdit()} disabled={!compositionEditUndoStack.length} aria-label="Undo composition edit">
             Undo
           </Button>
-          <Button type="button" onClick={() => redoNoteEdit()} disabled={!noteEditRedoStack.length} aria-label="Redo note edit">
+          <Button type="button" onClick={() => redoCompositionEdit()} disabled={!compositionEditRedoStack.length} aria-label="Redo composition edit">
             Redo
           </Button>
           <Button

@@ -63,8 +63,9 @@ function resetProjectState(overrides = {}) {
     editedMusicJson: null,
     musicXml: '',
     uiError: '',
-    noteEditUndoStack: [],
-    noteEditRedoStack: [],
+    editCursorTick: 0,
+    compositionEditUndoStack: [],
+    compositionEditRedoStack: [],
     prompt: {
       genre: 'ambient',
       mood: 'cinematic',
@@ -675,7 +676,7 @@ test('completeImport installs V2, clears generation, and marks open project dirt
     saveStatus: 'saved',
     aiEditStartBar: 1,
     aiEditEndBar: 2,
-    noteEditUndoStack: [{ kind: 'edit' }],
+    compositionEditUndoStack: [{ kind: 'edit' }],
   });
 
   const composition = structuredClone(COMPOSITION);
@@ -697,7 +698,7 @@ test('completeImport installs V2, clears generation, and marks open project dirt
   assert.equal(state.musicXml, '<score/>');
   assert.equal(state.generationMeta, null);
   assert.equal(state.aiEditStartBar, null);
-  assert.deepEqual(state.noteEditUndoStack, []);
+  assert.deepEqual(state.compositionEditUndoStack, []);
   assert.equal(state.importReport.status, 'approximated');
   assert.equal(state.notationReport.status, 'exact');
   assert.equal(state.saveStatus, 'unsaved');

@@ -65,8 +65,9 @@ function resetStore(composition = structuredClone(BASE)) {
     pianoRollEditStatus: 'idle',
     pianoRollNotationStatus: 'idle',
     pianoRollNotationError: '',
-    noteEditUndoStack: [],
-    noteEditRedoStack: [],
+    compositionEditUndoStack: [],
+    compositionEditRedoStack: [],
+    editCursorTick: 0,
     aiEditStartBar: null,
     aiEditEndBar: null,
     aiEditTrackMode: 'current',
@@ -110,9 +111,9 @@ test('store create/update/delete and undo/redo keep editedMusicJson authoritativ
   assert.equal(store.deleteNote('melody-1', created.id), true);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events.length, 2);
 
-  assert.equal(store.undoNoteEdit(), true);
+  assert.equal(store.undoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events.length, 3);
-  assert.equal(store.redoNoteEdit(), true);
+  assert.equal(store.redoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events.length, 2);
 });
 
@@ -140,10 +141,10 @@ test('updateNote skipHistory does not grow undo stack on every call', () => {
     pianoRollNoteId: 'n1',
   };
   store.updateNote('melody-1', 'n1', { start_tick: 240 }, { historySnapshot: snapshot });
-  assert.equal(useMusicStore.getState().noteEditUndoStack.length, 1);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 1);
   store.updateNote('melody-1', 'n1', { start_tick: 480 }, { skipHistory: true });
   store.updateNote('melody-1', 'n1', { start_tick: 720 }, { skipHistory: true });
-  assert.equal(useMusicStore.getState().noteEditUndoStack.length, 1);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 1);
   assert.equal(
     useMusicStore.getState().editedMusicJson.tracks[0].events.find((event) => event.id === 'n1').start_tick,
     720,
@@ -160,8 +161,8 @@ test('AI edit failure leaves composition and history unchanged', () => {
   store.failAiEdit('provider failed');
   const after = useMusicStore.getState();
   assert.deepEqual(after.editedMusicJson, before);
-  assert.equal(after.noteEditUndoStack.length, 0);
-  assert.equal(after.noteEditRedoStack.length, 0);
+  assert.equal(after.compositionEditUndoStack.length, 0);
+  assert.equal(after.compositionEditRedoStack.length, 0);
   assert.equal(after.aiEditStatus, 'error');
   assert.match(after.aiEditError, /provider failed/);
 });
@@ -182,14 +183,14 @@ test('AI edit success pushes one undo snapshot and supports undo/redo', () => {
   assert.equal(store.completeAiEdit({ composition: edited, musicxml: '<score/>', warnings: ['ok'] }), true);
 
   const afterApply = useMusicStore.getState();
-  assert.equal(afterApply.noteEditUndoStack.length, 1);
+  assert.equal(afterApply.compositionEditUndoStack.length, 1);
   assert.equal(afterApply.aiEditStatus, 'success');
   assert.equal(afterApply.editedMusicJson.tracks[0].events[0].pitch, 'G4');
   assert.equal(afterApply.playbackStatus, 'idle');
 
-  assert.equal(store.undoNoteEdit(), true);
+  assert.equal(store.undoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events[0].pitch, 'C4');
-  assert.equal(store.redoNoteEdit(), true);
+  assert.equal(store.redoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events[0].pitch, 'G4');
 });
 
@@ -289,12 +290,12 @@ test('store tie and articulation edits preserve V2 metadata and undo/redo', () =
     ['tenuto'],
   );
 
-  assert.equal(store.undoNoteEdit(), true);
+  assert.equal(store.undoCompositionEdit(), true);
   assert.deepEqual(
     useMusicStore.getState().editedMusicJson.tracks[0].events[0].articulations,
     [],
   );
-  assert.equal(store.redoNoteEdit(), true);
+  assert.equal(store.redoCompositionEdit(), true);
   assert.deepEqual(
     useMusicStore.getState().editedMusicJson.tracks[0].events[0].articulations,
     ['tenuto'],
@@ -461,7 +462,7 @@ test('reharmonize preview does not dirty composition; apply preserves melody and
   assert.notEqual(after.compositionRevision, revision);
   assert.equal(after.compositionRevision, compositionRevisionKey(after.editedMusicJson));
 
-  assert.equal(useMusicStore.getState().undoNoteEdit(), true);
+  assert.equal(useMusicStore.getState().undoCompositionEdit(), true);
   assert.deepEqual(useMusicStore.getState().editedMusicJson, composition);
 });
 
@@ -492,8 +493,113 @@ test('harmony timeline edits create one undo entry and preserve note events', ()
   const mid = useMusicStore.getState().editedMusicJson;
   assert.equal(mid.harmony.some((span) => span.chord === 'E7(b9)'), true);
   assert.deepEqual(mid.tracks.map((track) => track.events), eventsBefore);
-  assert.equal(useMusicStore.getState().noteEditUndoStack.length, 1);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 1);
 
-  assert.equal(useMusicStore.getState().undoNoteEdit(), true);
+  assert.equal(useMusicStore.getState().undoCompositionEdit(), true);
   assert.deepEqual(useMusicStore.getState().editedMusicJson.harmony, composition.harmony);
+});
+
+test('failed validation leaves composition and history untouched', () => {
+  resetStore();
+  const before = useMusicStore.getState().editedMusicJson;
+  const undoBefore = useMusicStore.getState().compositionEditUndoStack.length;
+  useMusicStore.getState().selectPianoRollNote('n1');
+  useMusicStore.setState({ editCursorTick: 960 });
+
+  const rejected = useMusicStore.getState().updateNote('melody-1', 'n1', { pitch: 'not-a-pitch' });
+  assert.equal(rejected, null);
+  assert.equal(useMusicStore.getState().editedMusicJson, before);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, undoBefore);
+  assert.equal(useMusicStore.getState().editCursorTick, 960);
+});
+
+test('valid JSON edit records one history entry; invalid JSON does not', () => {
+  resetStore();
+  useMusicStore.setState({ editCursorTick: 480 });
+  const before = useMusicStore.getState().editedMusicJson;
+
+  const valid = structuredClone(before);
+  valid.tempo = 110;
+  useMusicStore.getState().setEditedMusicJson(valid);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 1);
+  assert.equal(useMusicStore.getState().editedMusicJson.tempo, 110);
+  assert.equal(useMusicStore.getState().editCursorTick, 480);
+  assert.equal(useMusicStore.getState().compositionEditRedoStack.length, 0);
+
+  const invalid = structuredClone(useMusicStore.getState().editedMusicJson);
+  invalid.tracks[0].events[0].velocity = 999;
+  useMusicStore.getState().setEditedMusicJson(invalid);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 1);
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events[0].velocity, 999);
+
+  assert.equal(useMusicStore.getState().undoCompositionEdit(), true);
+  assert.equal(useMusicStore.getState().editedMusicJson.tempo, 100);
+  assert.equal(useMusicStore.getState().editCursorTick, 480);
+});
+
+test('new transaction clears redo stack and bounds undo to 50 entries', () => {
+  resetStore();
+  const store = useMusicStore.getState();
+  for (let i = 0; i < 52; i += 1) {
+    store.createNote('melody-1', {
+      pitch: 'C5',
+      start_tick: Math.min(3000, i * 10),
+      duration_ticks: 60,
+    });
+  }
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 50);
+
+  assert.equal(useMusicStore.getState().undoCompositionEdit(), true);
+  assert.equal(useMusicStore.getState().compositionEditRedoStack.length, 1);
+
+  useMusicStore.getState().createNote('melody-1', {
+    pitch: 'D5',
+    start_tick: 120,
+    duration_ticks: 60,
+  });
+  assert.equal(useMusicStore.getState().compositionEditRedoStack.length, 0);
+  assert.ok(useMusicStore.getState().compositionEditUndoStack.length <= 50);
+});
+
+test('undo restores selection and composition transaction invalidates arrangement preview', () => {
+  resetStore();
+  useMusicStore.setState({
+    arrangementStatus: 'ready',
+    arrangementCandidates: [{ candidate_id: 'c1' }],
+    arrangementSelectedCandidateId: 'c1',
+    editCursorTick: 720,
+  });
+  const store = useMusicStore.getState();
+  store.selectPianoRollNote('n1');
+  const created = store.createNote('melody-1', {
+    pitch: 'F4',
+    start_tick: 960,
+    duration_ticks: 240,
+  });
+  assert.ok(created?.id);
+  assert.equal(useMusicStore.getState().pianoRollNoteId, created.id);
+  assert.equal(useMusicStore.getState().editCursorTick, 720);
+  assert.notEqual(useMusicStore.getState().arrangementStatus, 'ready');
+
+  assert.equal(store.undoCompositionEdit(), true);
+  assert.equal(useMusicStore.getState().pianoRollNoteId, 'n1');
+  assert.equal(useMusicStore.getState().editCursorTick, 720);
+});
+
+test('composition transaction marks project dirty for autosave revision', () => {
+  resetStore();
+  useMusicStore.setState({
+    currentProjectId: 'project-txn',
+    lastSavedPersistRevision: 'persist-clean',
+    saveStatus: 'saved',
+  });
+  const revisionBefore = useMusicStore.getState().compositionRevision;
+  useMusicStore.getState().createNote('melody-1', {
+    pitch: 'B4',
+    start_tick: 1440,
+    duration_ticks: 120,
+  });
+  const after = useMusicStore.getState();
+  assert.equal(after.saveStatus, 'unsaved');
+  assert.notEqual(after.compositionRevision, revisionBefore);
 });

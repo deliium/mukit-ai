@@ -2,7 +2,10 @@ import React from 'react';
 import { JsonEditor } from 'json-edit-react';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
+import { createAppLogger } from '../utils/appLogger.js';
 import { validateMusicJson } from '../utils/musicJsonValidation.js';
+
+const logger = createAppLogger('PromptJsonEditor');
 
 const EditorShell = styled.div`
   margin-top: 20px;
@@ -62,10 +65,14 @@ const PromptJsonEditor = () => {
 
   const handleSetData = (nextData) => {
     const nextValidation = validateMusicJson(nextData);
-    console.debug('[PromptJsonEditor] JSON editor parse result', { valid: nextValidation.valid });
+    logger.debug('JSON editor change', { valid: nextValidation.valid });
+    // Valid canonical JSON commits through shared history; invalid stays repairable
+    // without wiping undo snapshots (handled inside setEditedMusicJson).
     setEditedMusicJson(nextData);
     if (!nextValidation.valid) {
-      console.warn('[PromptJsonEditor] Invalid edited music JSON', { message: nextValidation.message });
+      logger.warn('Invalid edited music JSON kept repairable', {
+        message: nextValidation.message,
+      });
       setUiError(nextValidation.message);
       return;
     }

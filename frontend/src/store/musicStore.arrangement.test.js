@@ -364,8 +364,9 @@ function resetStore(composition, extras = {}) {
     editedMusicJson: structuredClone(composition),
     compositionRevision: 'rev-base',
     notationRevision: 'notation-base',
-    noteEditUndoStack: [],
-    noteEditRedoStack: [],
+    editCursorTick: 0,
+    compositionEditUndoStack: [],
+    compositionEditRedoStack: [],
     trackControls: {
       'melody-1': { muted: false, solo: false, volumeMidi: 100 },
       'harmony-1': { muted: true, solo: false, volumeMidi: 64 },
@@ -457,7 +458,7 @@ test('arrangement preview is ephemeral and ignores superseded races', async (t) 
   resetStore(source);
 
   const before = structuredClone(useMusicStore.getState().editedMusicJson);
-  const undoLen = useMusicStore.getState().noteEditUndoStack.length;
+  const undoLen = useMusicStore.getState().compositionEditUndoStack.length;
   const first = useMusicStore.getState().startArrangementPreview();
   const secondOk = await useMusicStore.getState().startArrangementPreview();
   assert.equal(secondOk, true);
@@ -467,7 +468,7 @@ test('arrangement preview is ephemeral and ignores superseded races', async (t) 
   assert.equal(firstOk, false);
   assert.equal(useMusicStore.getState().arrangementSelectedCandidateId, 'arr-cand-two22222');
   assert.deepEqual(useMusicStore.getState().editedMusicJson, before);
-  assert.equal(useMusicStore.getState().noteEditUndoStack.length, undoLen);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, undoLen);
   assert.equal(useMusicStore.getState().saveStatus, 'saved');
 });
 
@@ -619,11 +620,11 @@ test('fingerprint tamper rejection blocks apply without history mutation', async
   resetStore(source);
   assert.equal(await useMusicStore.getState().startArrangementPreview(), true);
   const before = structuredClone(useMusicStore.getState().editedMusicJson);
-  const undoLen = useMusicStore.getState().noteEditUndoStack.length;
+  const undoLen = useMusicStore.getState().compositionEditUndoStack.length;
   assert.equal(await useMusicStore.getState().applySelectedArrangementCandidate(), false);
   assert.equal(useMusicStore.getState().arrangementStatus, 'error');
   assert.deepEqual(useMusicStore.getState().editedMusicJson, before);
-  assert.equal(useMusicStore.getState().noteEditUndoStack.length, undoLen);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, undoLen);
 });
 
 test('apply/undo/redo restores topology and mixer; autosave only after apply', async (t) => {
@@ -710,7 +711,7 @@ test('apply/undo/redo restores topology and mixer; autosave only after apply', a
 
   const applied = await useMusicStore.getState().applySelectedArrangementCandidate();
   assert.equal(applied, true);
-  assert.equal(useMusicStore.getState().noteEditUndoStack.length, 1);
+  assert.equal(useMusicStore.getState().compositionEditUndoStack.length, 1);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks.some((item) => item.id === 'harmony-1'), false);
   assert.ok(useMusicStore.getState().editedMusicJson.tracks.some((item) => item.id === 'strings-new'));
   assert.equal(useMusicStore.getState().pianoRollTrackId, 'melody-1');
@@ -723,7 +724,7 @@ test('apply/undo/redo restores topology and mixer; autosave only after apply', a
   assert.equal(useMusicStore.getState().developmentStatus, 'idle');
   assert.equal(useMusicStore.getState().saveStatus, 'unsaved');
 
-  assert.equal(useMusicStore.getState().undoNoteEdit(), true);
+  assert.equal(useMusicStore.getState().undoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks.length, 3);
   assert.ok(useMusicStore.getState().editedMusicJson.tracks.some((item) => item.id === 'harmony-1'));
   assert.equal(useMusicStore.getState().trackControls['harmony-1'].muted, true);
@@ -731,7 +732,7 @@ test('apply/undo/redo restores topology and mixer; autosave only after apply', a
   assert.equal(useMusicStore.getState().trackControls['strings-new'], undefined);
   assert.equal(useMusicStore.getState().pianoRollTrackId, 'harmony-1');
 
-  assert.equal(useMusicStore.getState().redoNoteEdit(), true);
+  assert.equal(useMusicStore.getState().redoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks.some((item) => item.id === 'strings-new'), true);
   assert.ok(useMusicStore.getState().trackControls['strings-new']);
 });
@@ -932,14 +933,14 @@ test('API 422/502/503 preview failures stay non-mutating', async (t) => {
     });
     resetStore(source);
     const before = structuredClone(useMusicStore.getState().editedMusicJson);
-    const undoLen = useMusicStore.getState().noteEditUndoStack.length;
+    const undoLen = useMusicStore.getState().compositionEditUndoStack.length;
     const saveStatus = useMusicStore.getState().saveStatus;
     assert.equal(await useMusicStore.getState().startArrangementPreview(), false);
     assert.equal(useMusicStore.getState().arrangementStatus, 'error');
     assert.match(useMusicStore.getState().arrangementError, new RegExp(scenario.message.slice(0, 8)));
     assert.equal(useMusicStore.getState().arrangementCandidates.length, 0);
     assert.deepEqual(useMusicStore.getState().editedMusicJson, before);
-    assert.equal(useMusicStore.getState().noteEditUndoStack.length, undoLen);
+    assert.equal(useMusicStore.getState().compositionEditUndoStack.length, undoLen);
     assert.equal(useMusicStore.getState().saveStatus, saveStatus);
     restore();
   }
@@ -1295,7 +1296,7 @@ test('all ten operations preview without mutating working composition', async (t
       arrangementCatalogFingerprint: catalog.fingerprint,
     });
     const before = structuredClone(useMusicStore.getState().editedMusicJson);
-    const undoLen = useMusicStore.getState().noteEditUndoStack.length;
+    const undoLen = useMusicStore.getState().compositionEditUndoStack.length;
     assert.equal(
       await useMusicStore.getState().startArrangementPreview(),
       true,
@@ -1303,7 +1304,7 @@ test('all ten operations preview without mutating working composition', async (t
     );
     assert.deepEqual(postedOps, [op.operation]);
     assert.deepEqual(useMusicStore.getState().editedMusicJson, before);
-    assert.equal(useMusicStore.getState().noteEditUndoStack.length, undoLen);
+    assert.equal(useMusicStore.getState().compositionEditUndoStack.length, undoLen);
     assert.equal(useMusicStore.getState().saveStatus, 'saved');
     assert.equal(useMusicStore.getState().arrangementStatus, 'ready');
     useMusicStore.getState().selectArrangementCandidate(

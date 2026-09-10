@@ -44,6 +44,11 @@ import {
   sanitizeScopeForLog,
 } from '../utils/compositionAnalysis.js';
 import {
+  makeNoteRef,
+  reconcileSelection,
+  uniqueNoteRefs,
+} from '../utils/compositionEditorSelection.js';
+import {
   applyMotifReconciliation,
   nextMotifLabel,
   projectMotifUsagesForDisplay,
@@ -180,6 +185,7 @@ export const DEFAULT_ARRANGEMENT_RANGE_ADJUSTMENT = 'reject';
 export const ARRANGEMENT_AUDITION_SOURCE = 'source';
 export const ARRANGEMENT_AUDITION_CANDIDATE = 'candidate';
 
+const logger = createAppLogger('musicStore');
 const arrangementLogger = createAppLogger('musicStore.arrangement');
 
 const initialDevelopmentControlsState = {
@@ -310,8 +316,9 @@ export const useMusicStore = create((set, get) => ({
   pianoRollEditStatus: 'idle',
   pianoRollNotationStatus: 'idle',
   pianoRollNotationError: '',
-  noteEditUndoStack: [],
-  noteEditRedoStack: [],
+  editCursorTick: 0,
+  compositionEditUndoStack: [],
+  compositionEditRedoStack: [],
 
   aiEditStartBar: null,
   aiEditEndBar: null,
@@ -453,8 +460,9 @@ export const useMusicStore = create((set, get) => ({
       pianoRollEditStatus: 'idle',
       pianoRollNotationStatus: 'idle',
       pianoRollNotationError: '',
-      noteEditUndoStack: [],
-      noteEditRedoStack: [],
+      editCursorTick: 0,
+      compositionEditUndoStack: [],
+      compositionEditRedoStack: [],
       generationMeta,
       ...clearedAnalysisState(),
       ...clearedMotifUiState(),
@@ -550,8 +558,9 @@ export const useMusicStore = create((set, get) => ({
       pianoRollEditStatus: 'idle',
       pianoRollNotationStatus: 'idle',
       pianoRollNotationError: '',
-      noteEditUndoStack: [],
-      noteEditRedoStack: [],
+      editCursorTick: 0,
+      compositionEditUndoStack: [],
+      compositionEditRedoStack: [],
       aiEditStartBar: null,
       aiEditEndBar: null,
       aiEditTrackMode: 'current',
@@ -722,89 +731,149 @@ export const useMusicStore = create((set, get) => ({
   },
 
   setEditedMusicJson: (editedMusicJson) => {
+    const state = get();
     const normalized = editedMusicJson
       ? coerceEditableComposition(editedMusicJson)
       : editedMusicJson;
-    const validation = normalized ? validateMusicJson(normalized) : { valid: false };
-    const previous = get().editedMusicJson;
-    const previousEventCount = countEvents(previous);
+    const validation = normalized
+      ? validateMusicJson(normalized)
+      : { valid: false, message: 'Composition required' };
+    const previousEventCount = countEvents(state.editedMusicJson);
     const nextEventCount = countEvents(normalized);
-    const revision = compositionRevisionKey(normalized);
-    const notationRev = notationRevisionKey(normalized);
-    const staleNotation = notationStalePatch(get().notationRevision, notationRev);
-    const previousTrackId = get().pianoRollTrackId;
-    const nextTrackId = pickDefaultTrackId(normalized, previousTrackId);
-    if (previousTrackId && nextTrackId && previousTrackId !== nextTrackId) {
-      console.warn('[musicStore] Stale piano-roll track recovered after JSON edit', {
-        previousTrackId,
-        nextTrackId,
-      });
-    }
-    console.debug('[musicStore] Edited music JSON changed', {
+    const isValidCanonical = Boolean(
+      normalized
+      && validation.valid
+      && isCanonicalComposition(normalized),
+    );
+
+    logger.debug('Edited music JSON change requested', {
       hasJson: Boolean(normalized),
       schemaVersion: normalized?.schema_version || 'legacy',
       canonical: isCanonicalComposition(normalized),
       valid: validation.valid,
       previousEventCount,
       nextEventCount,
-      compositionRevision: revision.slice(0, 48),
     });
-    if (!validation.valid && normalized) {
-      console.warn('[musicStore] Invalid edited JSON may prevent playback', { message: validation.message });
-    }
-    set({
-      editedMusicJson: normalized,
-      compositionRevision: revision,
-      notationRevision: notationRev,
-      ...staleNotation,
-      trackControls: mergeTrackControls(get().trackControls, normalized),
-      pianoRollTrackId: nextTrackId,
-      pianoRollNoteId: noteStillExists(normalized, nextTrackId, get().pianoRollNoteId)
-        ? get().pianoRollNoteId
-        : null,
-      pianoRollNoteIds: filterExistingNoteIds(normalized, nextTrackId, get().pianoRollNoteIds),
-      noteEditUndoStack: [],
-      noteEditRedoStack: [],
-      analysisSelectedSectionKey: recoverAnalysisSectionKey(normalized, get().analysisSelectedSectionKey),
-      ...clearedMotifUiState(),
-      ...clearedReharmonizePreviewState(),
-      ...clearedDevelopmentPreviewState(),
-      ...clearedArrangementPreviewState(),
-      ...initialHarmonyUiState,
-    });
-    markProjectDirty(set, get);
-    scheduleAnalysisRequest(get, { reason: 'edited-json' });
-  },
 
-  resetEditedMusicJson: () => {
-    console.debug('[musicStore] Edited music JSON reset');
-    set((state) => {
-      const music = state.generatedMusicJson;
-      const revision = compositionRevisionKey(music);
-      const notationRev = notationRevisionKey(music);
+    // Invalid / incomplete JSON stays repairable in the editor without
+    // replacing canonical undo/redo snapshots or committing history.
+    if (!isValidCanonical) {
+      const revision = compositionRevisionKey(normalized);
+      const notationRev = notationRevisionKey(normalized);
       const staleNotation = notationStalePatch(state.notationRevision, notationRev);
-      return {
-        editedMusicJson: music,
+      const previousTrackId = state.pianoRollTrackId;
+      const nextTrackId = pickDefaultTrackId(normalized, previousTrackId);
+      const selection = reconcileLegacyPianoRollSelection(
+        normalized,
+        nextTrackId,
+        state.pianoRollNoteId,
+        state.pianoRollNoteIds,
+      );
+      if (previousTrackId && nextTrackId && previousTrackId !== nextTrackId) {
+        logger.warn('Stale piano-roll track recovered after invalid JSON edit', {
+          previousTrackId,
+          nextTrackId,
+        });
+      }
+      logger.warn('Invalid JSON kept repairable; history unchanged', {
+        message: validation.message || 'invalid composition',
+        historyDepth: state.compositionEditUndoStack?.length || 0,
+      });
+      set({
+        editedMusicJson: normalized,
         compositionRevision: revision,
         notationRevision: notationRev,
         ...staleNotation,
+        trackControls: mergeTrackControls(state.trackControls, normalized),
+        pianoRollTrackId: selection.trackId,
+        pianoRollNoteId: selection.noteId,
+        pianoRollNoteIds: selection.noteIds,
+        editCursorTick: clampEditCursorTick(normalized, state.editCursorTick),
+        analysisSelectedSectionKey: recoverAnalysisSectionKey(
+          normalized,
+          state.analysisSelectedSectionKey,
+        ),
+        ...clearedReharmonizePreviewState(),
+        ...clearedDevelopmentPreviewState(),
+        ...clearedArrangementPreviewState(),
+      });
+      markProjectDirty(set, get);
+      return;
+    }
+
+    const previousTrackId = state.pianoRollTrackId;
+    const nextTrackId = pickDefaultTrackId(normalized, previousTrackId);
+    if (previousTrackId && nextTrackId && previousTrackId !== nextTrackId) {
+      logger.warn('Stale piano-roll track recovered after JSON edit', {
+        previousTrackId,
+        nextTrackId,
+      });
+    }
+    const selection = reconcileLegacyPianoRollSelection(
+      normalized,
+      nextTrackId,
+      state.pianoRollNoteId,
+      state.pianoRollNoteIds,
+    );
+    commitCompositionTransaction(set, get, {
+      nextComposition: normalized,
+      selectedTrackId: selection.trackId,
+      selectedNoteId: selection.noteId,
+      selectedNoteIds: selection.noteIds,
+      action: 'json-edit',
+      noteSummary: null,
+      affectedNoteCount: selection.noteIds.length,
+      affectedTrackCount: normalized.tracks?.length || 0,
+      statePatch: {
+        ...clearedMotifUiState(),
+        ...initialHarmonyUiState,
+      },
+    });
+  },
+
+  resetEditedMusicJson: () => {
+    const state = get();
+    const music = state.generatedMusicJson;
+    logger.debug('Edited music JSON reset requested');
+    if (!music || !isCanonicalComposition(music) || !validateMusicJson(music).valid) {
+      logger.warn('Reset to generated rejected; generated composition invalid');
+      set({
+        editedMusicJson: music,
+        compositionRevision: compositionRevisionKey(music),
+        notationRevision: notationRevisionKey(music),
         trackControls: buildDefaultTrackControls(music),
         pianoRollTrackId: pickDefaultTrackId(music),
         pianoRollNoteId: null,
         pianoRollNoteIds: [],
+        editCursorTick: 0,
         pianoRollEditStatus: 'idle',
-        noteEditUndoStack: [],
-        noteEditRedoStack: [],
         analysisSelectedSectionKey: recoverAnalysisSectionKey(music, state.analysisSelectedSectionKey),
         ...clearedMotifUiState(),
         ...clearedReharmonizePreviewState(),
-      ...clearedDevelopmentPreviewState(),
-      ...clearedArrangementPreviewState(),
+        ...clearedDevelopmentPreviewState(),
+        ...clearedArrangementPreviewState(),
         ...initialHarmonyUiState,
-      };
+      });
+      markProjectDirty(set, get);
+      return;
+    }
+    commitCompositionTransaction(set, get, {
+      nextComposition: music,
+      selectedTrackId: pickDefaultTrackId(music),
+      selectedNoteId: null,
+      selectedNoteIds: [],
+      action: 'json-reset',
+      noteSummary: null,
+      statePatch: {
+        trackControls: buildDefaultTrackControls(music),
+        editCursorTick: 0,
+        ...clearedMotifUiState(),
+        ...clearedReharmonizePreviewState(),
+        ...clearedDevelopmentPreviewState(),
+        ...clearedArrangementPreviewState(),
+        ...initialHarmonyUiState,
+      },
     });
-    markProjectDirty(set, get);
-    scheduleAnalysisRequest(get, { reason: 'reset-edited' });
   },
 
   selectPianoRollTrack: (trackId) => {
@@ -882,7 +951,7 @@ export const useMusicStore = create((set, get) => ({
         console.warn('[musicStore] toggleNoteArticulation failed validation', { message: validation.message });
         return null;
       }
-      applyNoteEdit(set, get, {
+      commitCompositionTransaction(set, get, {
         nextComposition: result.composition,
         selectedTrackId: trackId,
         selectedNoteId: result.note.id,
@@ -934,7 +1003,7 @@ export const useMusicStore = create((set, get) => ({
         console.warn('[musicStore] applyTieChain failed validation', { message: validation.message });
         return false;
       }
-      applyNoteEdit(set, get, {
+      commitCompositionTransaction(set, get, {
         nextComposition: result.composition,
         selectedTrackId: trackId,
         selectedNoteId: result.notes[0]?.id ?? null,
@@ -989,7 +1058,7 @@ export const useMusicStore = create((set, get) => ({
         console.warn('[musicStore] removeTieChain failed validation', { message: validation.message });
         return false;
       }
-      applyNoteEdit(set, get, {
+      commitCompositionTransaction(set, get, {
         nextComposition: result.composition,
         selectedTrackId: trackId,
         selectedNoteId: state.pianoRollNoteId,
@@ -1053,7 +1122,7 @@ export const useMusicStore = create((set, get) => ({
         set({ pianoRollEditStatus: 'error' });
         return null;
       }
-      applyNoteEdit(set, get, {
+      commitCompositionTransaction(set, get, {
         nextComposition: result.composition,
         selectedTrackId: trackId,
         selectedNoteId: result.note.id,
@@ -1090,7 +1159,7 @@ export const useMusicStore = create((set, get) => ({
         set({ pianoRollEditStatus: 'error' });
         return null;
       }
-      applyNoteEdit(set, get, {
+      commitCompositionTransaction(set, get, {
         nextComposition: result.composition,
         selectedTrackId: trackId,
         selectedNoteId: result.note.id,
@@ -1140,7 +1209,7 @@ export const useMusicStore = create((set, get) => ({
         set({ pianoRollEditStatus: 'error' });
         return false;
       }
-      applyNoteEdit(set, get, {
+      commitCompositionTransaction(set, get, {
         nextComposition: reconciled.composition,
         selectedTrackId: trackId,
         selectedNoteId: null,
@@ -1162,24 +1231,35 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
-  undoNoteEdit: () => {
+  undoCompositionEdit: () => {
     const state = get();
-    if (!state.noteEditUndoStack.length) {
-      console.warn('[musicStore] undoNoteEdit ignored; stack empty');
+    if (!state.compositionEditUndoStack.length) {
+      logger.warn('undoCompositionEdit ignored; stack empty');
       return false;
     }
-    const previous = state.noteEditUndoStack[state.noteEditUndoStack.length - 1];
-    const currentSnapshot = snapshotNoteEditState(state);
-    const nextUndo = state.noteEditUndoStack.slice(0, -1);
-    const nextRedo = [...state.noteEditRedoStack, currentSnapshot].slice(-MAX_UNDO_HISTORY);
+    const previous = state.compositionEditUndoStack[state.compositionEditUndoStack.length - 1];
+    const currentSnapshot = snapshotCompositionEditState(state);
+    const nextUndo = state.compositionEditUndoStack.slice(0, -1);
+    const nextRedo = [...state.compositionEditRedoStack, currentSnapshot].slice(-MAX_UNDO_HISTORY);
     const revision = compositionRevisionKey(previous.editedMusicJson);
     const notationRev = notationRevisionKey(previous.editedMusicJson);
     const staleNotation = notationStalePatch(state.notationRevision, notationRev);
-    console.info('[musicStore] undoNoteEdit applied', {
-      trackId: previous.pianoRollTrackId,
-      noteId: previous.pianoRollNoteId,
-      eventCount: countEvents(previous.editedMusicJson),
-      compositionRevision: revision.slice(0, 48),
+    const selection = reconcileLegacyPianoRollSelection(
+      previous.editedMusicJson,
+      previous.pianoRollTrackId,
+      previous.pianoRollNoteId,
+      previous.pianoRollNoteIds,
+    );
+    const editCursorTick = clampEditCursorTick(
+      previous.editedMusicJson,
+      previous.editCursorTick ?? state.editCursorTick,
+    );
+    logger.info('undoCompositionEdit applied', {
+      action: 'undo',
+      affectedNoteCount: selection.noteIds.length,
+      affectedTrackCount: previous.editedMusicJson?.tracks?.length || 0,
+      historyDepth: nextUndo.length,
+      revisionPrefix: revision.slice(0, 48),
     });
     set({
       editedMusicJson: previous.editedMusicJson,
@@ -1189,15 +1269,19 @@ export const useMusicStore = create((set, get) => ({
       trackControls: previous.trackControls
         ? { ...previous.trackControls }
         : mergeTrackControls(state.trackControls, previous.editedMusicJson),
-      pianoRollTrackId: previous.pianoRollTrackId,
-      pianoRollNoteId: previous.pianoRollNoteId,
-      pianoRollNoteIds: previous.pianoRollNoteIds || [],
+      pianoRollTrackId: selection.trackId,
+      pianoRollNoteId: selection.noteId,
+      pianoRollNoteIds: selection.noteIds,
+      editCursorTick,
       harmonySelectionStartBar: previous.harmonySelectionStartBar ?? state.harmonySelectionStartBar,
       harmonySelectionEndBar: previous.harmonySelectionEndBar ?? state.harmonySelectionEndBar,
       harmonySelectedSpanStartTick: previous.harmonySelectedSpanStartTick ?? null,
-      noteEditUndoStack: nextUndo,
-      noteEditRedoStack: nextRedo,
+      compositionEditUndoStack: nextUndo,
+      compositionEditRedoStack: nextRedo,
       pianoRollEditStatus: 'idle',
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
       analysisSelectedSectionKey: recoverAnalysisSectionKey(
         previous.editedMusicJson,
         state.analysisSelectedSectionKey,
@@ -1212,24 +1296,35 @@ export const useMusicStore = create((set, get) => ({
     return true;
   },
 
-  redoNoteEdit: () => {
+  redoCompositionEdit: () => {
     const state = get();
-    if (!state.noteEditRedoStack.length) {
-      console.warn('[musicStore] redoNoteEdit ignored; stack empty');
+    if (!state.compositionEditRedoStack.length) {
+      logger.warn('redoCompositionEdit ignored; stack empty');
       return false;
     }
-    const next = state.noteEditRedoStack[state.noteEditRedoStack.length - 1];
-    const currentSnapshot = snapshotNoteEditState(state);
-    const nextRedo = state.noteEditRedoStack.slice(0, -1);
-    const nextUndo = [...state.noteEditUndoStack, currentSnapshot].slice(-MAX_UNDO_HISTORY);
+    const next = state.compositionEditRedoStack[state.compositionEditRedoStack.length - 1];
+    const currentSnapshot = snapshotCompositionEditState(state);
+    const nextRedo = state.compositionEditRedoStack.slice(0, -1);
+    const nextUndo = [...state.compositionEditUndoStack, currentSnapshot].slice(-MAX_UNDO_HISTORY);
     const revision = compositionRevisionKey(next.editedMusicJson);
     const notationRev = notationRevisionKey(next.editedMusicJson);
     const staleNotation = notationStalePatch(state.notationRevision, notationRev);
-    console.info('[musicStore] redoNoteEdit applied', {
-      trackId: next.pianoRollTrackId,
-      noteId: next.pianoRollNoteId,
-      eventCount: countEvents(next.editedMusicJson),
-      compositionRevision: revision.slice(0, 48),
+    const selection = reconcileLegacyPianoRollSelection(
+      next.editedMusicJson,
+      next.pianoRollTrackId,
+      next.pianoRollNoteId,
+      next.pianoRollNoteIds,
+    );
+    const editCursorTick = clampEditCursorTick(
+      next.editedMusicJson,
+      next.editCursorTick ?? state.editCursorTick,
+    );
+    logger.info('redoCompositionEdit applied', {
+      action: 'redo',
+      affectedNoteCount: selection.noteIds.length,
+      affectedTrackCount: next.editedMusicJson?.tracks?.length || 0,
+      historyDepth: nextUndo.length,
+      revisionPrefix: revision.slice(0, 48),
     });
     set({
       editedMusicJson: next.editedMusicJson,
@@ -1239,15 +1334,19 @@ export const useMusicStore = create((set, get) => ({
       trackControls: next.trackControls
         ? { ...next.trackControls }
         : mergeTrackControls(state.trackControls, next.editedMusicJson),
-      pianoRollTrackId: next.pianoRollTrackId,
-      pianoRollNoteId: next.pianoRollNoteId,
-      pianoRollNoteIds: next.pianoRollNoteIds || [],
+      pianoRollTrackId: selection.trackId,
+      pianoRollNoteId: selection.noteId,
+      pianoRollNoteIds: selection.noteIds,
+      editCursorTick,
       harmonySelectionStartBar: next.harmonySelectionStartBar ?? state.harmonySelectionStartBar,
       harmonySelectionEndBar: next.harmonySelectionEndBar ?? state.harmonySelectionEndBar,
       harmonySelectedSpanStartTick: next.harmonySelectedSpanStartTick ?? null,
-      noteEditUndoStack: nextUndo,
-      noteEditRedoStack: nextRedo,
+      compositionEditUndoStack: nextUndo,
+      compositionEditRedoStack: nextRedo,
       pianoRollEditStatus: 'idle',
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
       analysisSelectedSectionKey: recoverAnalysisSectionKey(
         next.editedMusicJson,
         state.analysisSelectedSectionKey,
@@ -1389,7 +1488,7 @@ export const useMusicStore = create((set, get) => ({
     const prepared = prepareCompositionForStore(ensureCompositionNoteIds(composition).composition);
     const validation = validateMusicJson(prepared);
     if (!validation.valid || !isCanonicalComposition(prepared)) {
-      console.error('[musicStore] AI edit completion rejected invalid composition', {
+      logger.error('AI edit completion rejected invalid composition', {
         message: validation.message,
       });
       set({
@@ -1399,56 +1498,38 @@ export const useMusicStore = create((set, get) => ({
       return false;
     }
 
-    const historySnapshot = snapshotNoteEditState(state);
-    const revision = compositionRevisionKey(prepared);
-    const notationRev = notationRevisionKey(prepared);
-    const staleNotation = notationStalePatch(state.notationRevision, notationRev);
-    console.info('[musicStore] AI edit applied', {
-      startBar: state.aiEditStartBar,
-      endBar: state.aiEditEndBar,
-      trackScopeCount: (state.aiEditTrackIds || []).length,
-      warningCount: warnings.length,
-      eventCount: countEvents(prepared),
-      compositionRevision: revision.slice(0, 48),
+    const ok = commitCompositionTransaction(set, get, {
+      nextComposition: prepared,
+      selectedTrackId: pickDefaultTrackId(prepared, state.pianoRollTrackId),
+      selectedNoteId: null,
+      selectedNoteIds: [],
+      action: 'ai-edit',
+      noteSummary: null,
+      affectedNoteCount: countEvents(prepared),
+      affectedTrackCount: prepared.tracks?.length || 0,
+      statePatch: {
+        generatedMusicJson: prepared,
+        musicXml: musicxml || state.musicXml || '',
+        aiEditStatus: 'success',
+        aiEditError: '',
+        aiEditWarnings: Array.isArray(warnings) ? warnings : [],
+        ...clearedMotifUiState(),
+        ...clearedReharmonizePreviewState(),
+        ...clearedDevelopmentPreviewState(),
+        ...clearedArrangementPreviewState(),
+      },
     });
-    console.debug('[musicStore] AI edit revision/event counts', {
-      previousEventCount: countEvents(state.editedMusicJson),
-      nextEventCount: countEvents(prepared),
-      undoDepth: Math.min(state.noteEditUndoStack.length + 1, MAX_UNDO_HISTORY),
-    });
-
-    set({
-      editedMusicJson: prepared,
-      generatedMusicJson: prepared,
-      musicXml: musicxml || state.musicXml || '',
-      compositionRevision: revision,
-      notationRevision: notationRev,
-      ...staleNotation,
-      trackControls: mergeTrackControls(state.trackControls, prepared),
-      pianoRollTrackId: pickDefaultTrackId(prepared, state.pianoRollTrackId),
-      pianoRollNoteId: null,
-      pianoRollNoteIds: [],
-      noteEditUndoStack: [...state.noteEditUndoStack, historySnapshot].slice(-MAX_UNDO_HISTORY),
-      noteEditRedoStack: [],
-      playbackStatus: 'idle',
-      playbackSeconds: 0,
-      playbackBar: 1,
-      aiEditStatus: 'success',
-      aiEditError: '',
-      aiEditWarnings: Array.isArray(warnings) ? warnings : [],
-      pianoRollEditStatus: 'idle',
-      analysisSelectedSectionKey: recoverAnalysisSectionKey(prepared, state.analysisSelectedSectionKey),
-      ...clearedMotifUiState(),
-      ...clearedReharmonizePreviewState(),
-      ...clearedDevelopmentPreviewState(),
-      ...clearedArrangementPreviewState(),
-    });
-    console.info('[musicStore] Project autosave-dirty transition after AI edit', {
+    if (!ok) {
+      set({
+        aiEditStatus: 'error',
+        aiEditError: 'Edited composition failed validation',
+      });
+      return false;
+    }
+    logger.info('Project autosave-dirty transition after AI edit', {
       projectId: state.currentProjectId,
-      revision: revision.slice(0, 48),
+      revisionPrefix: get().compositionRevision.slice(0, 48),
     });
-    markProjectDirty(set, get);
-    scheduleAnalysisRequest(get, { reason: 'ai-edit' });
     return true;
   },
 
@@ -1732,8 +1813,8 @@ export const useMusicStore = create((set, get) => ({
           importError: '',
           importReport: null,
           notationReport: null,
-          noteEditUndoStack: [],
-          noteEditRedoStack: [],
+          compositionEditUndoStack: [],
+          compositionEditRedoStack: [],
           ...clearedAnalysisState(),
           ...clearedMotifUiState(),
           ...clearedReharmonizePreviewState(),
@@ -1978,7 +2059,7 @@ export const useMusicStore = create((set, get) => ({
       console.warn('[musicStore] renameMotif failed validation', { message: validation.message });
       return false;
     }
-    applyNoteEdit(set, get, {
+    commitCompositionTransaction(set, get, {
       nextComposition,
       selectedTrackId: state.pianoRollTrackId,
       selectedNoteId: state.pianoRollNoteId,
@@ -2011,7 +2092,7 @@ export const useMusicStore = create((set, get) => ({
       console.warn('[musicStore] deleteMotif failed validation', { message: validation.message });
       return false;
     }
-    applyNoteEdit(set, get, {
+    commitCompositionTransaction(set, get, {
       nextComposition,
       selectedTrackId: state.pianoRollTrackId,
       selectedNoteId: state.pianoRollNoteId,
@@ -2076,7 +2157,7 @@ export const useMusicStore = create((set, get) => ({
       console.warn('[musicStore] markMotifFromSelection failed validation', { message: validation.message });
       return { ok: false, message: validation.message, code: 'motif_invalid_composition' };
     }
-    applyNoteEdit(set, get, {
+    commitCompositionTransaction(set, get, {
       nextComposition,
       selectedTrackId: selection.trackId,
       selectedNoteId: selection.eventIds[0] || null,
@@ -2330,7 +2411,7 @@ export const useMusicStore = create((set, get) => ({
     const motifValidation = validateMotifDefinitions(prepared);
     if (!validation.valid || !isCanonicalComposition(prepared) || !motifValidation.valid) {
       const message = validation.message || motifValidation.message || 'Motif apply result failed validation';
-      console.error('[musicStore] Motif apply completion rejected invalid composition', { message });
+      logger.error('Motif apply completion rejected invalid composition', { message });
       set({
         motifApplyStatus: 'error',
         motifApplyError: message,
@@ -2338,51 +2419,47 @@ export const useMusicStore = create((set, get) => ({
       return false;
     }
 
-    const historySnapshot = snapshotNoteEditState(state);
-    const revision = compositionRevisionKey(prepared);
-    const notationRev = notationRevisionKey(prepared);
-    const staleNotation = notationStalePatch(state.notationRevision, notationRev);
     const newOccurrenceId = result?.new_occurrence_id || null;
-    console.info('[musicStore] Motif apply completed', {
-      motifId: result?.motif_id || state.motifSelectedMotifId,
-      sourceOccurrenceId: result?.source_occurrence_id || state.motifSelectedOccurrenceId,
-      newOccurrenceId,
-      operation: result?.relationship || state.motifOperation,
-      warningCount: warnings.length,
-      eventCount: countEvents(prepared),
-      compositionRevision: revision.slice(0, 48),
+    const createdEventIds = Array.isArray(result?.created_event_ids) ? result.created_event_ids : [];
+    const destinationTrackId = pickDefaultTrackId(
+      prepared,
+      result?.destination_track_id || state.motifDestinationTrackId,
+    );
+    const ok = commitCompositionTransaction(set, get, {
+      nextComposition: prepared,
+      selectedTrackId: destinationTrackId,
+      selectedNoteId: null,
+      selectedNoteIds: createdEventIds,
+      action: 'motif-apply',
+      noteSummary: {
+        motifId: result?.motif_id || state.motifSelectedMotifId,
+        newOccurrenceId,
+        createdEventCount: createdEventIds.length,
+      },
+      affectedNoteCount: createdEventIds.length,
+      affectedTrackCount: 1,
+      statePatch: {
+        musicXml: musicxml || state.musicXml || '',
+        motifApplyStatus: 'success',
+        motifApplyError: '',
+        motifApplyWarnings: Array.isArray(warnings) ? warnings : [],
+        motifSelectedMotifId: result?.motif_id || state.motifSelectedMotifId,
+        motifSelectedOccurrenceId: newOccurrenceId || state.motifSelectedOccurrenceId,
+        motifHighlightedUsageKey: result?.motif_id && newOccurrenceId
+          ? `canonical:${result.motif_id}:${newOccurrenceId}`
+          : state.motifHighlightedUsageKey,
+        ...clearedReharmonizePreviewState({ preserveControls: true }),
+        ...clearedDevelopmentPreviewState({ preserveControls: true }),
+        ...clearedArrangementPreviewState({ preserveControls: true }),
+      },
     });
-
-    set({
-      editedMusicJson: prepared,
-      musicXml: musicxml || state.musicXml || '',
-      compositionRevision: revision,
-      notationRevision: notationRev,
-      ...staleNotation,
-      trackControls: mergeTrackControls(state.trackControls, prepared),
-      pianoRollTrackId: pickDefaultTrackId(prepared, result?.destination_track_id || state.motifDestinationTrackId),
-      pianoRollNoteId: null,
-      pianoRollNoteIds: Array.isArray(result?.created_event_ids) ? result.created_event_ids : [],
-      noteEditUndoStack: [...state.noteEditUndoStack, historySnapshot].slice(-MAX_UNDO_HISTORY),
-      noteEditRedoStack: [],
-      playbackStatus: 'idle',
-      playbackSeconds: 0,
-      playbackBar: 1,
-      motifApplyStatus: 'success',
-      motifApplyError: '',
-      motifApplyWarnings: Array.isArray(warnings) ? warnings : [],
-      motifSelectedMotifId: result?.motif_id || state.motifSelectedMotifId,
-      motifSelectedOccurrenceId: newOccurrenceId || state.motifSelectedOccurrenceId,
-      motifHighlightedUsageKey: result?.motif_id && newOccurrenceId
-        ? `canonical:${result.motif_id}:${newOccurrenceId}`
-        : state.motifHighlightedUsageKey,
-      analysisSelectedSectionKey: recoverAnalysisSectionKey(prepared, state.analysisSelectedSectionKey),
-      ...clearedReharmonizePreviewState({ preserveControls: true }),
-      ...clearedDevelopmentPreviewState({ preserveControls: true }),
-      ...clearedArrangementPreviewState({ preserveControls: true }),
-    });
-    markProjectDirty(set, get);
-    scheduleAnalysisRequest(get, { reason: 'motif-apply' });
+    if (!ok) {
+      set({
+        motifApplyStatus: 'error',
+        motifApplyError: 'Motif apply result failed validation',
+      });
+      return false;
+    }
     return true;
   },
 
@@ -2488,7 +2565,7 @@ export const useMusicStore = create((set, get) => ({
       console.warn('[musicStore] Harmony edit rejected validation', { action, message: validation.message });
       return false;
     }
-    applyCompositionEdit(set, get, {
+    commitCompositionTransaction(set, get, {
       nextComposition: prepared,
       selectedTrackId: state.pianoRollTrackId,
       selectedNoteId: state.pianoRollNoteId,
@@ -2956,7 +3033,7 @@ export const useMusicStore = create((set, get) => ({
       barCount: prepared.bar_count,
     });
 
-    applyCompositionEdit(set, get, {
+    commitCompositionTransaction(set, get, {
       nextComposition: prepared,
       selectedTrackId: state.pianoRollTrackId,
       selectedNoteId: state.pianoRollNoteId,
@@ -3512,7 +3589,7 @@ export const useMusicStore = create((set, get) => ({
       state.pianoRollNoteId,
       state.pianoRollNoteIds,
     );
-    const historySnapshot = snapshotNoteEditState(state);
+    const historySnapshot = snapshotCompositionEditState(state);
     const nextTrackControls = mergeTrackControls(state.trackControls, prepared);
 
     arrangementLogger.info('Arrangement candidate apply', {
@@ -3524,7 +3601,7 @@ export const useMusicStore = create((set, get) => ({
       status: 'apply',
     });
 
-    applyCompositionEdit(set, get, {
+    commitCompositionTransaction(set, get, {
       nextComposition: prepared,
       selectedTrackId: selection.trackId,
       selectedNoteId: selection.noteId,
@@ -3736,7 +3813,7 @@ export const useMusicStore = create((set, get) => ({
       changedSpanCount: state.reharmonizeHarmonyChanges.length,
       changedTrackCount: state.reharmonizeTrackChanges.filter((item) => item.events_changed > 0).length,
     });
-    applyCompositionEdit(set, get, {
+    commitCompositionTransaction(set, get, {
       nextComposition: prepared,
       selectedTrackId: state.pianoRollTrackId,
       selectedNoteId: null,
@@ -3819,12 +3896,13 @@ function countEvents(musicJson) {
   return musicJson.tracks.reduce((count, track) => count + (Array.isArray(track.events) ? track.events.length : 0), 0);
 }
 
-function snapshotNoteEditState(state) {
+function snapshotCompositionEditState(state) {
   return {
     editedMusicJson: state.editedMusicJson,
     pianoRollTrackId: state.pianoRollTrackId,
     pianoRollNoteId: state.pianoRollNoteId,
     pianoRollNoteIds: state.pianoRollNoteIds || [],
+    editCursorTick: Number.isFinite(Number(state.editCursorTick)) ? Number(state.editCursorTick) : 0,
     harmonySelectionStartBar: state.harmonySelectionStartBar,
     harmonySelectionEndBar: state.harmonySelectionEndBar,
     harmonySelectedSpanStartTick: state.harmonySelectedSpanStartTick,
@@ -3832,8 +3910,42 @@ function snapshotNoteEditState(state) {
   };
 }
 
-function applyCompositionEdit(set, get, options) {
-  return applyNoteEdit(set, get, options);
+/**
+ * Clamp the ephemeral edit cursor into [0, duration_ticks] without resetting to zero.
+ */
+function clampEditCursorTick(composition, cursorTick) {
+  const raw = Number(cursorTick);
+  const tick = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
+  const duration = Number(composition?.duration_ticks);
+  if (!Number.isInteger(duration) || duration < 0) {
+    return tick;
+  }
+  return Math.min(tick, duration);
+}
+
+/**
+ * Reconcile single-track piano-roll selection fields using Task 1 note refs.
+ * Hidden/locked track UI arrives in later tasks; for now drop only missing notes.
+ */
+function reconcileLegacyPianoRollSelection(composition, trackId, noteId, noteIds) {
+  const resolvedTrackId = trackId ? String(trackId) : pickDefaultTrackId(composition);
+  const candidateIds = Array.isArray(noteIds) && noteIds.length
+    ? noteIds
+    : (noteId ? [noteId] : []);
+  const refs = uniqueNoteRefs(
+    candidateIds.map((id) => makeNoteRef(resolvedTrackId, id)).filter(Boolean),
+  );
+  const reconciled = reconcileSelection(composition, {
+    refs,
+    primary: noteId ? makeNoteRef(resolvedTrackId, noteId) : null,
+  });
+  return {
+    trackId: resolvedTrackId,
+    noteId: reconciled.primary?.eventId || null,
+    noteIds: reconciled.refs
+      .filter((ref) => ref.trackId === resolvedTrackId)
+      .map((ref) => ref.eventId),
+  };
 }
 
 function filterExistingNoteIds(composition, trackId, noteIds) {
@@ -3848,7 +3960,11 @@ function filterExistingNoteIds(composition, trackId, noteIds) {
   return noteIds.filter((id) => existing.has(String(id)));
 }
 
-function applyNoteEdit(set, get, {
+/**
+ * Single canonical composition commit path: validate caller-supplied composition,
+ * one undo entry, selection/cursor clamp, preview invalidation, dirty/autosave.
+ */
+function commitCompositionTransaction(set, get, {
   nextComposition,
   selectedTrackId,
   selectedNoteId,
@@ -3856,41 +3972,82 @@ function applyNoteEdit(set, get, {
   action,
   noteSummary,
   featureCounts = null,
+  affectedNoteCount = null,
+  affectedTrackCount = null,
   skipHistory = false,
   historySnapshot = null,
   statePatch = {},
   keepReharmonizePreview = false,
 }) {
+  const startedAt = typeof performance !== 'undefined' && performance.now
+    ? performance.now()
+    : Date.now();
   const state = get();
+  const validation = validateMusicJson(nextComposition);
+  if (!validation.valid || !isCanonicalComposition(nextComposition)) {
+    logger.warn('Composition transaction rejected', {
+      action,
+      message: validation.message || 'invalid composition',
+    });
+    return false;
+  }
+
   const revision = compositionRevisionKey(nextComposition);
   const notationRev = notationRevisionKey(nextComposition);
   const staleNotation = notationStalePatch(state.notationRevision, notationRev);
-  const resolvedNoteIds = selectedNoteIds ?? (selectedNoteId ? [selectedNoteId] : []);
-  console.info('[musicStore] Note edit applied', {
+  const selection = reconcileLegacyPianoRollSelection(
+    nextComposition,
+    selectedTrackId,
+    selectedNoteId,
+    selectedNoteIds ?? (selectedNoteId ? [selectedNoteId] : []),
+  );
+  const resolvedNoteIds = selection.noteIds;
+  const resolvedNoteId = selection.noteId;
+  const resolvedTrackId = selection.trackId;
+  const nextCursor = clampEditCursorTick(
+    nextComposition,
+    Object.prototype.hasOwnProperty.call(statePatch, 'editCursorTick')
+      ? statePatch.editCursorTick
+      : state.editCursorTick,
+  );
+  const noteCount = affectedNoteCount != null
+    ? Number(affectedNoteCount)
+    : resolvedNoteIds.length;
+  const trackCount = affectedTrackCount != null
+    ? Number(affectedTrackCount)
+    : (Array.isArray(nextComposition?.tracks) ? nextComposition.tracks.length : 0);
+
+  let compositionEditUndoStack = state.compositionEditUndoStack || [];
+  let compositionEditRedoStack = state.compositionEditRedoStack || [];
+  if (!skipHistory) {
+    const snapshot = historySnapshot || snapshotCompositionEditState(state);
+    compositionEditUndoStack = [...compositionEditUndoStack, snapshot].slice(-MAX_UNDO_HISTORY);
+    compositionEditRedoStack = [];
+  }
+
+  const undoDepth = compositionEditUndoStack.length;
+  logger.info('Composition transaction committed', {
     action,
-    trackId: selectedTrackId,
-    noteId: selectedNoteId,
-    selectedIds: resolvedNoteIds,
-    note: noteSummary,
-    skipHistory,
+    affectedNoteCount: noteCount,
+    affectedTrackCount: trackCount,
+    historyDepth: undoDepth,
+    revisionPrefix: revision.slice(0, 48),
+    skipHistory: Boolean(skipHistory),
   });
-  console.debug('[musicStore] Note edit revision/event counts', {
+  const elapsedMs = (
+    typeof performance !== 'undefined' && performance.now
+      ? performance.now()
+      : Date.now()
+  ) - startedAt;
+  logger.debug('Composition transaction diagnostics', {
+    action,
+    elapsedMs: Math.round(elapsedMs),
     previousEventCount: countEvents(state.editedMusicJson),
     nextEventCount: countEvents(nextComposition),
-    compositionRevision: revision.slice(0, 48),
     featureCounts: featureCounts || countV2FeatureSummary(nextComposition),
-    undoDepth: skipHistory
-      ? state.noteEditUndoStack.length
-      : Math.min(state.noteEditUndoStack.length + 1, MAX_UNDO_HISTORY),
+    noteSummary: noteSummary || null,
+    editCursorTick: nextCursor,
   });
-
-  let noteEditUndoStack = state.noteEditUndoStack;
-  let noteEditRedoStack = state.noteEditRedoStack;
-  if (!skipHistory) {
-    const snapshot = historySnapshot || snapshotNoteEditState(state);
-    noteEditUndoStack = [...state.noteEditUndoStack, snapshot].slice(-MAX_UNDO_HISTORY);
-    noteEditRedoStack = [];
-  }
 
   set({
     editedMusicJson: nextComposition,
@@ -3898,12 +4055,12 @@ function applyNoteEdit(set, get, {
     notationRevision: notationRev,
     ...staleNotation,
     trackControls: mergeTrackControls(state.trackControls, nextComposition),
-    pianoRollTrackId: selectedTrackId,
-    pianoRollNoteId: selectedNoteId,
+    pianoRollTrackId: resolvedTrackId,
+    pianoRollNoteId: resolvedNoteId,
     pianoRollNoteIds: resolvedNoteIds,
     pianoRollEditStatus: 'idle',
-    noteEditUndoStack,
-    noteEditRedoStack,
+    compositionEditUndoStack,
+    compositionEditRedoStack,
     playbackStatus: 'idle',
     playbackSeconds: 0,
     playbackBar: 1,
@@ -3915,15 +4072,22 @@ function applyNoteEdit(set, get, {
     ...(keepReharmonizePreview ? {} : clearedDevelopmentPreviewState({ preserveControls: true })),
     ...(keepReharmonizePreview ? {} : clearedArrangementPreviewState({ preserveControls: true })),
     ...statePatch,
+    // Re-apply clamped cursor after statePatch so ordinary edits do not reset to 0.
+    editCursorTick: nextCursor,
   });
   markProjectDirty(set, get);
   const analysisReason = action?.startsWith('harmony')
     || action === 'reharmonize-apply'
     || action === 'development-apply'
     || action === 'arrangement-apply'
+    || action === 'ai-edit'
+    || action === 'motif-apply'
+    || action === 'json-edit'
+    || action === 'json-reset'
     ? action
     : 'note-edit';
   scheduleAnalysisRequest(get, { reason: analysisReason });
+  return true;
 }
 
 function findNote(composition, trackId, noteId) {
@@ -4076,8 +4240,9 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     pianoRollEditStatus: 'idle',
     pianoRollNotationStatus: 'idle',
     pianoRollNotationError: '',
-    noteEditUndoStack: [],
-    noteEditRedoStack: [],
+    editCursorTick: 0,
+    compositionEditUndoStack: [],
+    compositionEditRedoStack: [],
     uiError: '',
     ...clearedAnalysisState(),
     ...clearedMotifUiState(),

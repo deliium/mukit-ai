@@ -124,7 +124,7 @@ test('Harmony workflow: bars 9-12 increase_tension preview is non-mutating then 
   expect(afterApply.harmonyChordsInRange.join('|')).not.toBe(beforePreview.harmonyChordsInRange.join('|'));
   expect(afterApply.bassPitchesInRange.join('|')).not.toBe(beforePreview.bassPitchesInRange.join('|'));
 
-  await page.evaluate(() => window.__MUKIT_MUSIC_STORE__.getState().undoNoteEdit());
+  await page.evaluate(() => window.__MUKIT_MUSIC_STORE__.getState().undoCompositionEdit());
   const afterUndo = await getHarmonySnapshot(page);
   expect(afterUndo.melodyEventFingerprints).toEqual(beforePreview.melodyEventFingerprints);
   expect(afterUndo.harmonyChordsInRange).toEqual(beforePreview.harmonyChordsInRange);

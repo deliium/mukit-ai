@@ -50,8 +50,9 @@ function resetMotifStore(composition = motifAuthoringComposition()) {
     pianoRollTrackId: 'melody-1',
     pianoRollNoteId: null,
     pianoRollNoteIds: [],
-    noteEditUndoStack: [],
-    noteEditRedoStack: [],
+    editCursorTick: 0,
+    compositionEditUndoStack: [],
+    compositionEditRedoStack: [],
     playbackStatus: 'playing',
     playbackSeconds: 12,
     playbackBar: 2,
@@ -102,8 +103,8 @@ test('markMotifFromSelection writes motif definitions into editedMusicJson.motif
   assert.equal(after.editedMusicJson.motifs[0].occurrences[0].relationship, 'original');
   assert.deepEqual(after.editedMusicJson.motifs[0].occurrences[0].event_ids, ['n1', 'n2', 'n3']);
   assert.equal(after.motifSelectedMotifId, after.editedMusicJson.motifs[0].id);
-  assert.equal(after.noteEditUndoStack.length, 1);
-  assert.equal(after.noteEditRedoStack.length, 0);
+  assert.equal(after.compositionEditUndoStack.length, 1);
+  assert.equal(after.compositionEditRedoStack.length, 0);
   assert.equal(after.playbackStatus, 'idle');
 });
 
@@ -121,9 +122,9 @@ test('deleteMotif removes definition and supports undo/redo', () => {
   assert.equal(useMusicStore.getState().editedMusicJson.motifs.length, 0);
   assert.equal(useMusicStore.getState().motifSelectedMotifId, null);
 
-  assert.equal(store.undoNoteEdit(), true);
+  assert.equal(store.undoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.motifs.length, 1);
-  assert.equal(store.redoNoteEdit(), true);
+  assert.equal(store.redoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.motifs.length, 0);
 });
 
@@ -190,7 +191,7 @@ test('completeMotifApply and failMotifApply manage request status without mutati
   const success = useMusicStore.getState();
   assert.equal(success.motifApplyStatus, 'success');
   assert.equal(success.motifApplyWarnings.length, 1);
-  assert.equal(success.noteEditUndoStack.length, 2);
+  assert.equal(success.compositionEditUndoStack.length, 2);
   assert.equal(success.playbackStatus, 'idle');
 });
 
@@ -325,12 +326,12 @@ test('undo/redo motif mark restores composition and clears apply status', () => 
   store.markMotifFromSelection();
   useMusicStore.setState({ motifApplyStatus: 'success', motifApplyError: '', motifApplyWarnings: ['x'] });
 
-  assert.equal(store.undoNoteEdit(), true);
+  assert.equal(store.undoCompositionEdit(), true);
   const undone = useMusicStore.getState();
   assert.equal(undone.editedMusicJson.motifs?.length || 0, 0);
   assert.equal(undone.motifApplyStatus, 'idle');
   assert.equal(undone.motifApplyWarnings.length, 0);
 
-  assert.equal(store.redoNoteEdit(), true);
+  assert.equal(store.redoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.motifs.length, 1);
 });
