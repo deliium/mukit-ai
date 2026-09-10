@@ -18,10 +18,39 @@ import {
   controllerStateAtTick,
   logicalNotesSoundingAtTick,
 } from './playbackEvents.js';
+import { prepareTrackInstrumentAdapters } from './playbackInstrumentLoader.js';
 import { secondsToPlaybackPosition, ticksToPlaybackSeconds } from './playbackPosition.js';
 import { clampSeekSecondsToLoop, normalizePlaybackLoop } from './playbackLoop.js';
 
 const RELOCATION_FADE_SECONDS = 0.02;
+/** Disable per-track meters above this route count (CPU budget). */
+const METER_TRACK_BUDGET = 24;
+
+/** Relative output calibration per strategy/preset family (browser only). */
+const PROFILE_OUTPUT_GAIN = Object.freeze({
+  piano_keyboard: 0.82,
+  bass: 0.92,
+  bass_synth: 0.92,
+  strings_pad: 0.72,
+  guitar_pluck: 0.8,
+  brass: 0.78,
+  lead_synth: 0.75,
+  woodwind_lead: 0.75,
+  mallet: 0.85,
+  drums: 0.88,
+  drums_basic: 0.88,
+});
+
+/**
+ * Soft velocity curve — preserves extremes without rewriting MIDI velocity.
+ * @param {number} velocity 0–1
+ * @returns {number}
+ */
+export function mapPlaybackVelocity(velocity) {
+  const v = Math.max(0, Math.min(1, Number(velocity) || 0));
+  // Mild concave curve so soft notes stay soft and forte remains distinct.
+  return Number((v ** 1.15).toFixed(4));
+}
 
 export function createPlaybackEngine({ Tone, logger = console } = {}) {
   if (!Tone) {
@@ -46,7 +75,11 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
   let sessionId = 0;
   let sourceKey = null;
   let masterGain = null;
+  let limiter = null;
+  let sharedReverb = null;
+  let effectsReady = false;
   let relocating = false;
+  let metersEnabled = true;
 
   function log(level, message, context = {}) {
     const method = typeof logger[level] === 'function' ? logger[level].bind(logger) : logger.log?.bind(logger);
@@ -144,8 +177,75 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
       return masterGain;
     }
     masterGain = new Tone.Gain(1);
-    masterGain.toDestination();
+    if (typeof Tone.Limiter === 'function') {
+      try {
+        limiter = new Tone.Limiter(-1.5);
+        masterGain.connect(limiter);
+        limiter.toDestination();
+      } catch (error) {
+        log('warn', 'Limiter unavailable; direct master output', { message: error?.message });
+        limiter = null;
+        masterGain.toDestination();
+      }
+    } else {
+      masterGain.toDestination();
+    }
     return masterGain;
+  }
+
+  async function ensureSharedEffects() {
+    ensureMasterGain();
+    if (effectsReady) {
+      return;
+    }
+    if (typeof Tone.Reverb === 'function' && !sharedReverb) {
+      try {
+        sharedReverb = new Tone.Reverb({ decay: 2.2, preDelay: 0.015, wet: 1 });
+        if (typeof sharedReverb.generate === 'function') {
+          await sharedReverb.generate();
+        }
+        sharedReverb.connect(masterGain);
+        log('info', 'Shared reverb ready', { sessionId });
+      } catch (error) {
+        log('warn', 'Shared reverb unavailable', { message: error?.message });
+        try {
+          sharedReverb?.dispose?.();
+        } catch {
+          // ignore
+        }
+        sharedReverb = null;
+      }
+    }
+    effectsReady = true;
+    log('info', 'Playback effects ready', {
+      sessionId,
+      hasReverb: Boolean(sharedReverb),
+      hasLimiter: Boolean(limiter),
+    });
+  }
+
+  function disposeSharedEffects({ clearMaster = false } = {}) {
+    try {
+      sharedReverb?.dispose?.();
+    } catch (error) {
+      log('warn', 'Shared reverb dispose failed', { message: error?.message });
+    }
+    sharedReverb = null;
+    effectsReady = false;
+    if (clearMaster) {
+      try {
+        limiter?.dispose?.();
+      } catch (error) {
+        log('warn', 'Limiter dispose failed', { message: error?.message });
+      }
+      limiter = null;
+      try {
+        masterGain?.dispose?.();
+      } catch (error) {
+        log('warn', 'Master gain dispose failed', { message: error?.message });
+      }
+      masterGain = null;
+    }
   }
 
   function setMasterGainImmediate(value) {
@@ -164,16 +264,34 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     setMasterGainImmediate(value);
   }
 
+  function rampParam(param, value, durationSeconds = 0.03) {
+    if (!param) {
+      return;
+    }
+    if (typeof param.linearRampTo === 'function') {
+      param.linearRampTo(value, Math.max(0, durationSeconds));
+      return;
+    }
+    param.value = value;
+  }
+
   function disposeTrackNodes() {
     const beforeCount = trackNodes.size;
     let disposedCount = 0;
     trackNodes.forEach((node, trackId) => {
       try {
-        node.synth?.dispose?.();
+        node.adapter?.dispose?.();
+        // Adapter dispose already disposes its Tone node when present.
+        if (!node.adapter) {
+          node.synth?.dispose?.();
+        }
+        node.profileGain?.dispose?.();
         node.expressionGain?.dispose?.();
         node.volumeGain?.dispose?.();
         node.uiGain?.dispose?.();
         node.panner?.dispose?.();
+        node.sendGain?.dispose?.();
+        node.meter?.dispose?.();
         disposedCount += 1;
       } catch (error) {
         log('error', 'Failed to dispose track node', {
@@ -243,12 +361,27 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     activeNotes = new Map();
   }
 
-  function buildTrackRoutes(tracks, trackOverrides = {}) {
+  function resolveProfileOutputGain(strategy) {
+    const key = strategy?.presetId || strategy?.id;
+    if (key && PROFILE_OUTPUT_GAIN[key] != null) {
+      return PROFILE_OUTPUT_GAIN[key];
+    }
+    return 0.85;
+  }
+
+  function buildTrackRoutes(tracks, trackOverrides = {}, adaptersByTrackId = null) {
     disposeTrackNodes();
     currentTracks = tracks || [];
     currentTrackOverrides = trackOverrides;
     const states = resolveEffectiveTrackGains(buildTrackPlaybackStates(tracks, trackOverrides));
     const routes = new Map();
+    const useMeters = metersEnabled && states.length <= METER_TRACK_BUDGET;
+    if (metersEnabled && !useMeters) {
+      log('warn', 'Track meters disabled over CPU budget', {
+        trackCount: states.length,
+        budget: METER_TRACK_BUDGET,
+      });
+    }
 
     states.forEach((state) => {
       const sourceTrack = (tracks || []).find((track) => String(track?.id ?? '') === state.trackId);
@@ -257,57 +390,117 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
         : state.volumeMidi;
 
       let synth;
+      let profileGain;
       let expressionGain;
       let volumeGain;
       let uiGain;
       let panner;
+      let sendGain;
+      let meter = null;
+      let adapter = adaptersByTrackId?.get?.(state.trackId) || null;
       try {
-        const strategy = state.strategy;
-        if (strategy.synth === 'MembraneSynth') {
-          synth = new Tone.MembraneSynth(strategy.options || {});
-        } else if (strategy.synth === 'MonoSynth') {
-          synth = new Tone.MonoSynth(strategy.options || {});
-        } else {
-          const Voice = Tone[strategy.voice || 'Synth'] || Tone.Synth;
-          synth = new Tone.PolySynth(Voice, strategy.options?.voice || {});
-          if (strategy.options?.maxPolyphony && synth.maxPolyphony !== undefined) {
-            synth.maxPolyphony = strategy.options.maxPolyphony;
-          }
-        }
-
+        const profileOut = resolveProfileOutputGain(state.strategy);
+        profileGain = new Tone.Gain(profileOut);
         expressionGain = new Tone.Gain(1);
         volumeGain = new Tone.Gain(midiVolumeToGain(persistedVolume));
-        // Mute/solo via live effective gain so unmute during play hears already-scheduled notes.
+        // Session mute/solo/trim only — canonical volume stays on volumeGain.
         uiGain = new Tone.Gain(state.effectiveGain);
         panner = new Tone.Panner(state.panStereo || 0);
+        const initialSend = state.audible
+          ? Math.max(0, Math.min(1, Number(state.reverbSend) || 0))
+          : 0;
+        sendGain = new Tone.Gain(initialSend);
 
-        synth.connect(expressionGain);
+        if (adapter?.getToneNode?.()) {
+          synth = adapter.getToneNode();
+          adapter.connect(profileGain);
+        } else {
+          adapter = null;
+          const strategy = state.strategy;
+          if (strategy.synth === 'MembraneSynth') {
+            synth = new Tone.MembraneSynth(strategy.options || {});
+          } else if (strategy.synth === 'MonoSynth') {
+            synth = new Tone.MonoSynth(strategy.options || {});
+          } else {
+            const Voice = Tone[strategy.voice || 'Synth'] || Tone.Synth;
+            synth = new Tone.PolySynth(Voice, strategy.options?.voice || {});
+            if (strategy.options?.maxPolyphony && synth.maxPolyphony !== undefined) {
+              synth.maxPolyphony = strategy.options.maxPolyphony;
+            }
+          }
+          synth.connect(profileGain);
+        }
+
+        profileGain.connect(expressionGain);
         expressionGain.connect(volumeGain);
         volumeGain.connect(uiGain);
+        // Post-fader dry path
         uiGain.connect(panner);
+        if (typeof Tone.Meter === 'function' && useMeters) {
+          try {
+            meter = new Tone.Meter({ normalRange: true, smoothing: 0.8 });
+            panner.connect(meter);
+          } catch (error) {
+            log('warn', 'Track meter unavailable', {
+              trackId: state.trackId,
+              message: error?.message,
+            });
+            meter = null;
+          }
+        }
         panner.connect(ensureMasterGain());
+        // Post-fader wet send (mute/solo also zeros send via applyTrackOverrides)
+        uiGain.connect(sendGain);
+        if (sharedReverb) {
+          sendGain.connect(sharedReverb);
+        }
       } catch (error) {
         log('error', 'Track route creation failed', {
           trackId: state.trackId,
           strategy: state.strategy?.id,
           message: error?.message,
         });
+        adapter?.dispose?.();
         synth?.dispose?.();
+        profileGain?.dispose?.();
         expressionGain?.dispose?.();
         volumeGain?.dispose?.();
         uiGain?.dispose?.();
         panner?.dispose?.();
+        sendGain?.dispose?.();
+        meter?.dispose?.();
         return;
       }
 
-      const node = { synth, expressionGain, volumeGain, uiGain, panner, state };
+      const node = {
+        synth,
+        adapter,
+        profileGain,
+        expressionGain,
+        volumeGain,
+        uiGain,
+        panner,
+        sendGain,
+        meter,
+        state,
+        instrumentStatus: adapter?.getStatus?.() || {
+          ready: true,
+          fallback: true,
+          profileId: state.strategy?.presetId || state.strategy?.id,
+          reasonCode: 'inline_synth',
+          engine: 'tone_synth',
+        },
+      };
       trackNodes.set(state.trackId, node);
       routes.set(state.trackId, node);
     });
 
-    log('info', 'Track routes built', {
+    log('debug', 'Track routes built', {
       trackCount: routes.size,
       nodeCount: trackNodes.size,
+      adapterCount: adaptersByTrackId ? adaptersByTrackId.size : 0,
+      metersEnabled: useMeters,
+      hasSharedReverb: Boolean(sharedReverb),
     });
     return routes;
   }
@@ -342,8 +535,11 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
 
   function scheduleAttack(node, item, time) {
     const pitch = item.pitch;
-    const velocity = Number.isFinite(item.velocity) ? item.velocity : (item.velocityMidi || 80) / 127;
-    if (node.synth.triggerAttack) {
+    const rawVelocity = Number.isFinite(item.velocity) ? item.velocity : (item.velocityMidi || 80) / 127;
+    const velocity = mapPlaybackVelocity(rawVelocity);
+    if (node.adapter?.attack) {
+      node.adapter.attack(item.noteId || noteKey(item), pitch, velocity, time);
+    } else if (node.synth.triggerAttack) {
       node.synth.triggerAttack(pitch, time, velocity);
     } else if (node.synth.triggerAttackRelease) {
       node.synth.triggerAttackRelease(pitch, 3600, time, velocity);
@@ -370,9 +566,10 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
       activeNotes.delete(key);
       return;
     }
-    if (node.synth.triggerRelease) {
+    if (node.adapter?.release) {
+      node.adapter.release(item.noteId || key, time, item.pitch);
+    } else if (node.synth.triggerRelease) {
       // PolySynth: triggerRelease(note, time). MonoSynth/MembraneSynth: triggerRelease(time).
-      // Passing a pitch string as the MonoSynth time arg yields cancelAndHoldAtTime(null).
       if (typeof node.synth.maxPolyphony === 'number') {
         node.synth.triggerRelease(item.pitch, time);
       } else {
@@ -435,6 +632,10 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
   } = {}) {
     if (disposed || !currentSchedule) {
       return { scheduledCount: 0, endPosition: 0, looping: false };
+    }
+    if (relocating) {
+      log('debug', 'Relocate skipped; already relocating', { reason });
+      return { scheduledCount: 0, endPosition: currentEndPosition, looping: Boolean(currentLoopSeconds?.enabled) };
     }
     const opId = beginOperation(reason);
     relocating = true;
@@ -722,16 +923,48 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
       }
       node.state = state;
       if (node.uiGain?.gain) {
-        // Session mute/solo/trim only — canonical volume stays on volumeGain.
-        node.uiGain.gain.value = state.effectiveGain;
+        // Session mute/solo/trim — also silences wet send input.
+        rampParam(node.uiGain.gain, state.effectiveGain, 0.04);
       }
       if (node.panner?.pan && Number.isFinite(state.panStereo)) {
-        node.panner.pan.value = state.panStereo;
+        rampParam(node.panner.pan, state.panStereo, 0.04);
+      }
+      if (node.sendGain?.gain) {
+        const send = state.audible ? Math.max(0, Math.min(1, Number(state.reverbSend) || 0)) : 0;
+        rampParam(node.sendGain.gain, send, 0.04);
       }
     });
   }
 
-  function prepare({
+  /**
+   * Bounded activity snapshot for UI meters (call ≤ 10–20 Hz).
+   * @returns {{ tracks: Record<string, number>, clipped: boolean }}
+   */
+  function getActivitySnapshot() {
+    const tracks = {};
+    let clipped = false;
+    if (!metersEnabled) {
+      return { tracks, clipped };
+    }
+    trackNodes.forEach((node, trackId) => {
+      let level = 0;
+      const meterValue = node.meter?.getValue?.();
+      if (typeof meterValue === 'number') {
+        level = Math.max(0, Math.min(1, meterValue));
+      } else if (Array.isArray(meterValue) && meterValue.length) {
+        level = Math.max(0, Math.min(1, Math.max(...meterValue.map((value) => Number(value) || 0))));
+      } else if (node.uiGain?.gain) {
+        level = node.state?.audible ? Math.min(1, Number(node.uiGain.gain.value) || 0) : 0;
+      }
+      tracks[trackId] = Number(level.toFixed(3));
+      if (level >= 0.98) {
+        clipped = true;
+      }
+    });
+    return { tracks, clipped };
+  }
+
+  async function prepare({
     tracks,
     events,
     schedule: incomingSchedule,
@@ -743,6 +976,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     startTick = null,
     loop = null,
     sourceKey: nextSourceKey = null,
+    loadInstruments = true,
   } = {}) {
     if (disposed) {
       throw new Error('Playback engine has been disposed');
@@ -815,12 +1049,35 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
       sourceKey,
       sessionId,
       opId,
+      loadInstruments,
     });
 
     clearScheduledEvents();
-    ensureMasterGain();
+    await ensureSharedEffects();
+    if (!isCurrentOperation(opId)) {
+      log('warn', 'Stale prepare aborted after effects load', { opId, sessionId });
+      return { scheduledCount: 0, endPosition: 0, looping: false };
+    }
     setMasterGainImmediate(1);
-    buildTrackRoutes(tracks || [], trackOverrides);
+
+    let adapters = null;
+    if (loadInstruments && Array.isArray(tracks) && tracks.length) {
+      try {
+        adapters = await prepareTrackInstrumentAdapters({ Tone, tracks });
+      } catch (error) {
+        log('error', 'Instrument adapter preparation failed; inline synth fallback', {
+          message: error?.message,
+          opId,
+        });
+        adapters = null;
+      }
+    }
+    if (!isCurrentOperation(opId)) {
+      log('warn', 'Stale prepare aborted after instrument load', { opId, sessionId });
+      return { scheduledCount: 0, endPosition: 0, looping: false };
+    }
+
+    buildTrackRoutes(tracks || [], trackOverrides, adapters);
     if (Number.isFinite(tempo) && tempo > 0) {
       Tone.Transport.bpm.value = tempo;
     }
@@ -901,6 +1158,8 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
       Tone.Transport.position = 0;
     }
     const disposedCount = disposeTrackNodes();
+    // Drop wet tails so the next prepare regenerates a clean shared reverb.
+    disposeSharedEffects({ clearMaster: false });
     currentSchedule = null;
     currentTracks = [];
     currentTrackOverrides = {};
@@ -909,7 +1168,9 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     currentEndPosition = 0;
     // Keep loop tick bounds across stop; seconds re-resolve on next prepare.
     currentLoopSeconds = null;
-    setMasterGainImmediate(1);
+    if (masterGain) {
+      setMasterGainImmediate(1);
+    }
     log('info', 'Playback stopped', {
       transportState: Tone.Transport.state,
       clearedEvents: cleared,
@@ -1053,6 +1314,11 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     return node?.uiGain?.gain?.value;
   }
 
+  function getTrackSendGain(trackId) {
+    const node = trackNodes.get(String(trackId));
+    return node?.sendGain?.gain?.value;
+  }
+
   function getSessionId() {
     return sessionId;
   }
@@ -1083,14 +1349,23 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     stop({ seekToStart: true });
     currentLoop = null;
     currentLoopSeconds = null;
-    try {
-      masterGain?.dispose?.();
-    } catch (error) {
-      log('warn', 'Master gain dispose failed', { message: error?.message });
-    }
-    masterGain = null;
+    disposeSharedEffects({ clearMaster: true });
     disposed = true;
     log('debug', 'Playback engine disposed');
+  }
+
+  function getInstrumentStatuses() {
+    const statuses = {};
+    trackNodes.forEach((node, trackId) => {
+      statuses[trackId] = node.instrumentStatus
+        ? { ...node.instrumentStatus }
+        : { ready: false, fallback: true, profileId: 'unknown', reasonCode: 'missing' };
+    });
+    return statuses;
+  }
+
+  function hasSharedReverb() {
+    return Boolean(sharedReverb);
   }
 
   return {
@@ -1106,6 +1381,9 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     getLoop,
     rebuildSchedule,
     applyTrackOverrides,
+    getActivitySnapshot,
+    getInstrumentStatuses,
+    hasSharedReverb,
     getPositionSeconds,
     getPlaybackPosition,
     getTransportState,
@@ -1113,6 +1391,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     getTrackNodeCount,
     getEndPositionSeconds,
     getTrackEffectiveGain,
+    getTrackSendGain,
     getSessionId,
     getOperationEpoch,
     getSourceKey,

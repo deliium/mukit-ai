@@ -8,11 +8,30 @@ import {
   captureAiRequestContext,
   detectAiRequestStale,
   makeAiCandidateId,
+  toHistoryAiWarningCodes,
 } from './compositionCandidateLifecycle.js';
 
 test('makeAiCandidateId returns prefixed id', () => {
   const id = makeAiCandidateId('gen');
   assert.match(id, /^gen-[a-f0-9]+$/i);
+});
+
+test('toHistoryAiWarningCodes extracts codes and drops freeform oversize prose', () => {
+  const codes = toHistoryAiWarningCodes([
+    'Fake LLM mode: returned deterministic fixture composition (no API credits used).',
+    'Fake LLM mode: applied deterministic Motif A transpose recurrence via production transforms.',
+    'automation_omitted_from_notation: Track automation has no MusicXML score notation.',
+    'sustain_projected: Sustain spans were projected to CC64 or pedal directions.',
+    { code: 'ok_code' },
+    'x'.repeat(100),
+  ]);
+  assert.deepEqual(codes, [
+    'fake_llm_mode',
+    'automation_omitted_from_notation',
+    'sustain_projected',
+    'ok_code',
+    'x'.repeat(80),
+  ]);
 });
 
 test('buildAiCandidateEnvelope keeps bounded instruction and warnings', () => {

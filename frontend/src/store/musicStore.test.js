@@ -1212,3 +1212,41 @@ function reconcileViaStore(store, loop, durationTicks) {
   useMusicStore.setState({ editedMusicJson: composition });
   return store.setPlaybackLoop(loop);
 }
+
+test('mixer controls are scope-isolated and do not mutate composition or undo', () => {
+  const store = useMusicStore.getState();
+  store.setEditedMusicJson(structuredClone(BASE));
+  const beforeComposition = structuredClone(useMusicStore.getState().editedMusicJson);
+  const beforeRevision = useMusicStore.getState().compositionRevision;
+  const beforeUndo = useMusicStore.getState().compositionEditUndoStack.length;
+  const trackId = 'melody-1';
+
+  store.updateMixerTrackControl('working', trackId, { muted: true, trimDb: 3, reverbSend: 0.4 });
+  store.updateMixerTrackControl('preview', trackId, { muted: false, trimDb: -2, reverbSend: 0.1 });
+  store.updateMixerTrackControl('development', trackId, { solo: true, panOffset: 0.25 });
+
+  const after = useMusicStore.getState();
+  assert.equal(after.trackControls[trackId].muted, true);
+  assert.equal(after.trackControls[trackId].trimDb, 3);
+  assert.equal(after.previewTrackControls[trackId].muted, false);
+  assert.equal(after.previewTrackControls[trackId].trimDb, -2);
+  assert.equal(after.developmentCandidateTrackControls[trackId].solo, true);
+  assert.equal(after.developmentCandidateTrackControls[trackId].panOffset, 0.25);
+  assert.deepEqual(after.editedMusicJson, beforeComposition);
+  assert.equal(after.compositionRevision, beforeRevision);
+  assert.equal(after.compositionEditUndoStack.length, beforeUndo);
+
+  // Auditioning preview must not prune working mixer state.
+  store.syncMixerControlsForScope('preview', after.editedMusicJson);
+  assert.equal(useMusicStore.getState().trackControls[trackId].muted, true);
+  assert.equal(useMusicStore.getState().trackControls[trackId].trimDb, 3);
+});
+
+test('playback activity updates only on material change', () => {
+  const store = useMusicStore.getState();
+  store.resetPlaybackActivity();
+  assert.equal(store.setPlaybackActivity({ tracks: { a: 0.5 }, clipped: false }), true);
+  assert.equal(store.setPlaybackActivity({ tracks: { a: 0.505 }, clipped: false }), false);
+  assert.equal(store.setPlaybackActivity({ tracks: { a: 0.55 }, clipped: false }), true);
+  assert.equal(useMusicStore.getState().playbackActivity.tracks.a, 0.55);
+});

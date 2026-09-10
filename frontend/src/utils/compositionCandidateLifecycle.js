@@ -15,6 +15,67 @@ export const AI_CANDIDATE_STATUS = Object.freeze({
   ERROR: 'error',
 });
 
+/** Matches backend `project_history_schemas.WARNING_CODE_MAX_*`. */
+export const HISTORY_AI_WARNING_CODE_MAX_LEN = 80;
+export const HISTORY_AI_WARNING_CODE_MAX_COUNT = 32;
+
+/**
+ * Normalize candidate display warnings into durable history `warning_codes`.
+ * Freeform LLM prose and `code: message` projection strings must not 422 commit.
+ *
+ * @param {unknown} warnings
+ * @returns {string[]}
+ */
+export function toHistoryAiWarningCodes(warnings) {
+  const out = [];
+  const seen = new Set();
+  if (!Array.isArray(warnings)) {
+    return out;
+  }
+  for (const item of warnings) {
+    let raw = '';
+    if (typeof item === 'string') {
+      raw = item;
+    } else if (item && typeof item === 'object') {
+      raw = item.code || item.message || '';
+    }
+    raw = String(raw || '').trim();
+    if (!raw) {
+      continue;
+    }
+
+    let code = raw;
+    const coded = raw.match(/^([a-z][a-z0-9_]{0,79})\s*:/i);
+    if (coded) {
+      code = coded[1].toLowerCase();
+    } else if (/\s/.test(raw) || raw.length > HISTORY_AI_WARNING_CODE_MAX_LEN) {
+      // Keep provenance without storing freeform sentences as codes.
+      if (/fake\s+llm/i.test(raw)) {
+        code = 'fake_llm_mode';
+      } else {
+        code = raw
+          .toLowerCase()
+          .replace(/[^a-z0-9_]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, HISTORY_AI_WARNING_CODE_MAX_LEN);
+      }
+    }
+
+    if (!code || code.length > HISTORY_AI_WARNING_CODE_MAX_LEN) {
+      continue;
+    }
+    if (seen.has(code)) {
+      continue;
+    }
+    seen.add(code);
+    out.push(code);
+    if (out.length >= HISTORY_AI_WARNING_CODE_MAX_COUNT) {
+      break;
+    }
+  }
+  return out;
+}
+
 /**
  * @returns {string}
  */

@@ -1,0 +1,112 @@
+{
+  "schema": "browser.playback.assets.v1",
+  "packId": "dev-tone-fixtures-v1",
+  "version": "0.1.0-dev",
+  "basePath": "/audio/dev-tone-fixtures-v1/",
+  "provenance": {
+    "sourceUrl": "local://mukit-ai/generated-fixtures",
+    "creator": "mukit-ai",
+    "license": "Project-owned synthetic WAV fixtures (not third-party samples)",
+    "sourceHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "outputHash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "conversion": "python wave module; 22.05kHz mono 16-bit 80ms sine with linear decay",
+    "attribution": "Generated for deterministic browser playback tests. Not a musical sample library.",
+    "redistributionApproved": true
+  },
+  "instruments": [
+    {
+      "profileId": "piano_fixture",
+      "fallbackPresetId": "piano_keyboard",
+      "instrumentNames": ["piano", "acoustic_grand_piano"],
+      "gmPrograms": [0, 1],
+      "roleHints": ["piano", "keyboard"],
+      "provenance": {
+        "sourceUrl": "local://mukit-ai/generated-fixtures/piano",
+        "creator": "mukit-ai",
+        "license": "Project-owned synthetic WAV fixtures",
+        "sourceHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "redistributionApproved": true
+      },
+      "samples": [
+        {
+          "path": "piano/c4.wav",
+          "bytes": 3572,
+          "digest": "sha256:857c5fb50d624fd9974c78b3d4690a7cfb94ee3e93167fa79ab12973b19f763a",
+          "format": "audio/wav",
+          "pitch": "C4"
+        },
+        {
+          "path": "piano/c5.wav",
+          "bytes": 3572,
+          "digest": "sha256:fff05a3be41a050057428e5c6d4e18c108d3a8b0a52c69f8a2c0cb82132ab024",
+          "format": "audio/wav",
+          "pitch": "C5"
+        }
+      ]
+    },
+    {
+      "profileId": "bass_fixture",
+      "fallbackPresetId": "bass_synth",
+      "instrumentNames": ["bass", "acoustic_bass", "electric_bass"],
+      "gmPrograms": [32, 33],
+      "roleHints": ["bass"],
+      "provenance": {
+        "sourceUrl": "local://mukit-ai/generated-fixtures/bass",
+        "creator": "mukit-ai",
+        "license": "Project-owned synthetic WAV fixtures",
+        "sourceHash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "redistributionApproved": true
+      },
+      "samples": [
+        {
+          "path": "bass/c2.wav",
+          "bytes": 3572,
+          "digest": "sha256:041ba9d59bc6e88b52ee01f8e474fbaf14d5d7e0c6bd1a94762f46a1d1a095de",
+          "format": "audio/wav",
+          "pitch": "C2"
+        },
+        {
+          "path": "bass/c3.wav",
+          "bytes": 3572,
+          "digest": "sha256:59cb788b1434e6dbc7345ae17bcd64b32a9ee8090b8a07052d6e6ebb6712519b",
+          "format": "audio/wav",
+          "pitch": "C3"
+        }
+      ]
+    },
+    {
+      "profileId": "strings_fixture",
+      "fallbackPresetId": "strings_pad",
+      "instrumentNames": ["strings", "string_ensemble_1", "cello", "violin"],
+      "gmPrograms": [40, 41, 42, 48],
+      "roleHints": ["strings", "pad"],
+      "provenance": {
+        "sourceUrl": "local://mukit-ai/generated-fixtures/strings",
+        "creator": "mukit-ai",
+        "license": "Project-owned synthetic WAV fixtures",
+        "sourceHash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "redistributionApproved": true
+      },
+      "samples": [
+        {
+          "path": "strings/c4.wav",
+          "bytes": 3572,
+          "digest": "sha256:857c5fb50d624fd9974c78b3d4690a7cfb94ee3e93167fa79ab12973b19f763a",
+          "format": "audio/wav",
+          "pitch": "C4",
+          "loopStart": 0.01,
+          "loopEnd": 0.07
+        },
+        {
+          "path": "strings/g4.wav",
+          "bytes": 3572,
+          "digest": "sha256:5def7e8fa67c4e0698e57f9d119515878eeeabb48e414e9009daab761b1a57d7",
+          "format": "audio/wav",
+          "pitch": "G4",
+          "loopStart": 0.01,
+          "loopEnd": 0.07
+        }
+      ]
+    }
+  ]
+}

@@ -20,6 +20,15 @@ import {
 } from '../api/musicApi.js';
 import { createAppLogger } from '../utils/appLogger.js';
 import {
+  activityLevelsMateriallyChanged,
+  buildDefaultMixerControls,
+  createDefaultTrackControl,
+  mergeMixerControls,
+  mixerControlsStateKey,
+  normalizeTrackControlPatch,
+  sanitizeMixerLogMeta,
+} from '../utils/playbackMixerControls.js';
+import {
   ProjectRevisionConflictError,
   applyAsBranch as applyAsBranchRequest,
   checkoutBranch as checkoutBranchRequest,
@@ -39,6 +48,11 @@ import {
   restoreRevision as restoreRevisionRequest,
 } from '../api/projectApi.js';
 import {
+  PLAYBACK_MIXER_SCOPE_ARRANGEMENT,
+  PLAYBACK_MIXER_SCOPE_DEVELOPMENT,
+  PLAYBACK_MIXER_SCOPE_PREVIEW,
+  PLAYBACK_MIXER_SCOPE_VERSION,
+  PLAYBACK_MIXER_SCOPE_WORKING,
   PLAYBACK_SOURCE_ARRANGEMENT,
   PLAYBACK_SOURCE_DEVELOPMENT,
   PLAYBACK_SOURCE_GENERATION,
@@ -54,6 +68,7 @@ import {
   detectAiRequestStale,
   fingerprintCompositionOrNull,
   makeAiCandidateId,
+  toHistoryAiWarningCodes,
 } from '../utils/compositionCandidateLifecycle.js';
 import { compareCompositions } from '../utils/compositionVersionComparison.js';
 import {
@@ -540,6 +555,16 @@ export const useMusicStore = create((set, get) => ({
    */
   playbackTransportIntent: null,
   trackControls: {},
+  /** Ephemeral development-candidate mixer (isolated from working). */
+  developmentCandidateTrackControls: {},
+  /** Ephemeral AI preview mixer (generation / edit / motif / reharmonize). */
+  previewTrackControls: {},
+  /** Authoritative audition source key last armed by transport. */
+  playbackSourceKey: null,
+  /** Engine operation epoch mirrored for UI (ephemeral). */
+  playbackOperationEpoch: 0,
+  /** Bounded activity meters; updated ≤10–20 Hz when materially changed. */
+  playbackActivity: { tracks: {}, clipped: false },
   compositionRevision: 'empty',
   notationRevision: 'empty',
   uiError: '',
@@ -1005,10 +1030,7 @@ export const useMusicStore = create((set, get) => ({
             user_instruction: candidate.instruction || undefined,
             candidate_id: candidate.candidate_id,
             candidate_fingerprint: candidate.candidate_fingerprint,
-            warning_codes: (candidate.warnings || [])
-              .map((item) => (typeof item === 'string' ? item : item?.code))
-              .filter(Boolean)
-              .slice(0, 32),
+            warning_codes: toHistoryAiWarningCodes(candidate.warnings),
           },
         });
       } else {
@@ -1027,10 +1049,7 @@ export const useMusicStore = create((set, get) => ({
             user_instruction: candidate.instruction || undefined,
             candidate_id: candidate.candidate_id,
             candidate_fingerprint: candidate.candidate_fingerprint,
-            warning_codes: (candidate.warnings || [])
-              .map((item) => (typeof item === 'string' ? item : item?.code))
-              .filter(Boolean)
-              .slice(0, 32),
+            warning_codes: toHistoryAiWarningCodes(candidate.warnings),
           },
         });
       }
@@ -3654,10 +3673,7 @@ export const useMusicStore = create((set, get) => ({
       user_instruction: candidate.instruction || undefined,
       candidate_id: candidate.candidate_id,
       candidate_fingerprint: candidate.candidate_fingerprint,
-      warning_codes: (candidate.warnings || [])
-        .map((item) => (typeof item === 'string' ? item : item?.code))
-        .filter(Boolean)
-        .slice(0, 32),
+      warning_codes: toHistoryAiWarningCodes(candidate.warnings),
     };
 
     if (!state.currentProjectId) {
@@ -4022,41 +4038,150 @@ export const useMusicStore = create((set, get) => ({
     }));
   },
 
-  toggleTrackMute: (trackId) => {
+  syncMixerControlsForScope: (mixerScope, musicJson) => {
+    const stateKey = mixerControlsStateKey(mixerScope);
+    set((state) => ({
+      [stateKey]: mergeTrackControls(state[stateKey] || {}, musicJson),
+    }));
+  },
+
+  /**
+   * Scope-aware mixer patch. Does not touch composition JSON / undo / persistence.
+   */
+  updateMixerTrackControl: (mixerScope, trackId, patch = {}) => {
+    const id = String(trackId || '');
+    if (!id) {
+      logger.warn('Rejected mixer control update; missing trackId', sanitizeMixerLogMeta({ mixerScope }));
+      return null;
+    }
+    const stateKey = mixerControlsStateKey(mixerScope);
+    let nextControl = null;
     set((state) => {
-      const current = state.trackControls[trackId] || defaultControl();
-      const next = {
-        ...state.trackControls,
-        [trackId]: { ...current, muted: !current.muted },
+      const bucket = state[stateKey] || {};
+      const current = bucket[id] || defaultControl();
+      nextControl = normalizeTrackControlPatch(patch, current, current.volumeMidi);
+      logger.debug('Mixer control updated', sanitizeMixerLogMeta({
+        mixerScope,
+        trackId: id,
+        muted: nextControl.muted,
+        solo: nextControl.solo,
+        trimDb: nextControl.trimDb,
+        panOffset: nextControl.panOffset,
+        reverbSend: nextControl.reverbSend,
+        volumeMidi: nextControl.volumeMidi,
+        presetId: nextControl.presetId,
+      }));
+      return {
+        [stateKey]: {
+          ...bucket,
+          [id]: nextControl,
+        },
       };
-      console.info('[musicStore] Track mute toggled', { trackId, muted: next[trackId].muted });
-      return { trackControls: next };
+    });
+    return nextControl;
+  },
+
+  toggleTrackMute: (trackId) => {
+    const state = get();
+    const current = state.trackControls[trackId] || defaultControl();
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_WORKING, trackId, {
+      muted: !current.muted,
     });
   },
 
   toggleTrackSolo: (trackId) => {
-    set((state) => {
-      const current = state.trackControls[trackId] || defaultControl();
-      const next = {
-        ...state.trackControls,
-        [trackId]: { ...current, solo: !current.solo },
-      };
-      console.info('[musicStore] Track solo toggled', { trackId, solo: next[trackId].solo });
-      return { trackControls: next };
+    const state = get();
+    const current = state.trackControls[trackId] || defaultControl();
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_WORKING, trackId, {
+      solo: !current.solo,
     });
   },
 
   setTrackVolume: (trackId, volumeMidi) => {
-    const clamped = Math.max(0, Math.min(127, Number(volumeMidi) || 0));
-    set((state) => {
-      const current = state.trackControls[trackId] || defaultControl();
-      const next = {
-        ...state.trackControls,
-        [trackId]: { ...current, volumeMidi: clamped },
-      };
-      console.info('[musicStore] Track volume changed', { trackId, volumeMidi: clamped });
-      return { trackControls: next };
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_WORKING, trackId, {
+      volumeMidi,
     });
+  },
+
+  setTrackTrimDb: (trackId, trimDb) => {
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_WORKING, trackId, { trimDb });
+  },
+
+  setTrackPanOffset: (trackId, panOffset) => {
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_WORKING, trackId, { panOffset });
+  },
+
+  setTrackReverbSend: (trackId, reverbSend) => {
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_WORKING, trackId, { reverbSend });
+  },
+
+  syncDevelopmentCandidateTrackControls: (musicJson) => {
+    get().syncMixerControlsForScope(PLAYBACK_MIXER_SCOPE_DEVELOPMENT, musicJson);
+  },
+
+  toggleDevelopmentCandidateMute: (trackId) => {
+    const current = get().developmentCandidateTrackControls[trackId] || defaultControl();
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_DEVELOPMENT, trackId, {
+      muted: !current.muted,
+    });
+  },
+
+  toggleDevelopmentCandidateSolo: (trackId) => {
+    const current = get().developmentCandidateTrackControls[trackId] || defaultControl();
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_DEVELOPMENT, trackId, {
+      solo: !current.solo,
+    });
+  },
+
+  setDevelopmentCandidateVolume: (trackId, volumeMidi) => {
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_DEVELOPMENT, trackId, { volumeMidi });
+  },
+
+  syncPreviewTrackControls: (musicJson) => {
+    get().syncMixerControlsForScope(PLAYBACK_MIXER_SCOPE_PREVIEW, musicJson);
+  },
+
+  togglePreviewMute: (trackId) => {
+    const current = get().previewTrackControls[trackId] || defaultControl();
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_PREVIEW, trackId, {
+      muted: !current.muted,
+    });
+  },
+
+  togglePreviewSolo: (trackId) => {
+    const current = get().previewTrackControls[trackId] || defaultControl();
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_PREVIEW, trackId, {
+      solo: !current.solo,
+    });
+  },
+
+  setPreviewVolume: (trackId, volumeMidi) => {
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_PREVIEW, trackId, { volumeMidi });
+  },
+
+  setPlaybackSourceKey: (playbackSourceKey) => {
+    set({ playbackSourceKey: playbackSourceKey == null ? null : String(playbackSourceKey) });
+  },
+
+  setPlaybackOperationEpoch: (playbackOperationEpoch) => {
+    set({ playbackOperationEpoch: Number(playbackOperationEpoch) || 0 });
+  },
+
+  setPlaybackActivity: (snapshot) => {
+    const next = {
+      tracks: snapshot?.tracks && typeof snapshot.tracks === 'object' ? { ...snapshot.tracks } : {},
+      clipped: Boolean(snapshot?.clipped),
+    };
+    const previous = get().playbackActivity;
+    if (!activityLevelsMateriallyChanged(previous, next)) {
+      return false;
+    }
+    set({ playbackActivity: next });
+    return true;
+  },
+
+  resetPlaybackActivity: () => {
+    set({ playbackActivity: { tracks: {}, clipped: false } });
   },
 
   setUiError: (uiError) => {
@@ -5010,40 +5135,21 @@ export const useMusicStore = create((set, get) => ({
   },
 
   toggleVersionAuditionMute: (trackId) => {
-    set((current) => {
-      const existing = current.versionAuditionTrackControls[trackId] || defaultControl();
-      return {
-        versionAuditionTrackControls: {
-          ...current.versionAuditionTrackControls,
-          [trackId]: { ...existing, muted: !existing.muted },
-        },
-      };
+    const existing = get().versionAuditionTrackControls[trackId] || defaultControl();
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_VERSION, trackId, {
+      muted: !existing.muted,
     });
   },
 
   toggleVersionAuditionSolo: (trackId) => {
-    set((current) => {
-      const existing = current.versionAuditionTrackControls[trackId] || defaultControl();
-      return {
-        versionAuditionTrackControls: {
-          ...current.versionAuditionTrackControls,
-          [trackId]: { ...existing, solo: !existing.solo },
-        },
-      };
+    const existing = get().versionAuditionTrackControls[trackId] || defaultControl();
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_VERSION, trackId, {
+      solo: !existing.solo,
     });
   },
 
   setVersionAuditionVolume: (trackId, volumeMidi) => {
-    const clamped = Math.max(0, Math.min(127, Number(volumeMidi) || 0));
-    set((current) => {
-      const existing = current.versionAuditionTrackControls[trackId] || defaultControl();
-      return {
-        versionAuditionTrackControls: {
-          ...current.versionAuditionTrackControls,
-          [trackId]: { ...existing, volumeMidi: clamped },
-        },
-      };
-    });
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_VERSION, trackId, { volumeMidi });
   },
 
   nameVersionRevision: async (revisionId, name) => {
@@ -6119,10 +6225,7 @@ export const useMusicStore = create((set, get) => ({
       model: candidate.model,
       candidate_id: candidate.candidate_id,
       candidate_fingerprint: candidate.candidate_fingerprint,
-      warning_codes: (candidate.warnings || [])
-        .map((item) => (typeof item === 'string' ? item : item?.code))
-        .filter(Boolean)
-        .slice(0, 32),
+      warning_codes: toHistoryAiWarningCodes(candidate.warnings),
     };
 
     const localStatePatch = {
@@ -6886,7 +6989,7 @@ export const useMusicStore = create((set, get) => ({
       user_instruction: state.developmentInstruction || undefined,
       candidate_id: candidate.candidate_id,
       candidate_fingerprint: candidate.candidate_fingerprint,
-      warning_codes: (state.developmentWarnings || []).slice(0, 32),
+      warning_codes: toHistoryAiWarningCodes(state.developmentWarnings),
     };
 
     console.info('[musicStore] Development candidate apply', {
@@ -7232,40 +7335,21 @@ export const useMusicStore = create((set, get) => ({
   },
 
   toggleArrangementCandidateMute: (trackId) => {
-    set((state) => {
-      const current = state.arrangementCandidateTrackControls[trackId] || defaultControl();
-      return {
-        arrangementCandidateTrackControls: {
-          ...state.arrangementCandidateTrackControls,
-          [trackId]: { ...current, muted: !current.muted },
-        },
-      };
+    const current = get().arrangementCandidateTrackControls[trackId] || defaultControl();
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_ARRANGEMENT, trackId, {
+      muted: !current.muted,
     });
   },
 
   toggleArrangementCandidateSolo: (trackId) => {
-    set((state) => {
-      const current = state.arrangementCandidateTrackControls[trackId] || defaultControl();
-      return {
-        arrangementCandidateTrackControls: {
-          ...state.arrangementCandidateTrackControls,
-          [trackId]: { ...current, solo: !current.solo },
-        },
-      };
+    const current = get().arrangementCandidateTrackControls[trackId] || defaultControl();
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_ARRANGEMENT, trackId, {
+      solo: !current.solo,
     });
   },
 
   setArrangementCandidateVolume: (trackId, volumeMidi) => {
-    const clamped = Math.max(0, Math.min(127, Number(volumeMidi) || 0));
-    set((state) => {
-      const current = state.arrangementCandidateTrackControls[trackId] || defaultControl();
-      return {
-        arrangementCandidateTrackControls: {
-          ...state.arrangementCandidateTrackControls,
-          [trackId]: { ...current, volumeMidi: clamped },
-        },
-      };
-    });
+    return get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_ARRANGEMENT, trackId, { volumeMidi });
   },
 
   discardArrangementCandidates: () => {
@@ -7544,7 +7628,7 @@ export const useMusicStore = create((set, get) => ({
       user_instruction: state.arrangementInstruction || undefined,
       candidate_id: candidate.candidate_id,
       candidate_fingerprint: candidate.candidate_fingerprint,
-      warning_codes: (state.arrangementWarnings || []).slice(0, 32),
+      warning_codes: toHistoryAiWarningCodes(state.arrangementWarnings),
     };
     const localStatePatch = {
       trackControls: nextTrackControls,
@@ -7905,10 +7989,7 @@ export const useMusicStore = create((set, get) => ({
       model: usedAiEngine ? (state.reharmonizeModel || state.selectedModel || null) : null,
       user_instruction: state.reharmonizeInstruction || undefined,
       candidate_fingerprint: liveProposalFingerprint,
-      warning_codes: (state.reharmonizeWarnings || [])
-        .map((item) => (typeof item === 'string' ? item : item?.code))
-        .filter(Boolean)
-        .slice(0, 32),
+      warning_codes: toHistoryAiWarningCodes(state.reharmonizeWarnings),
     };
     const declaredRanges = state.harmonySelectionStartBar && state.harmonySelectionEndBar
       ? [{ start_bar: state.harmonySelectionStartBar, end_bar: state.harmonySelectionEndBar }]
@@ -8110,37 +8191,18 @@ function selectModel(models, defaults, state) {
 }
 
 function defaultControl(volumeMidi = 100) {
-  return {
-    muted: false,
-    solo: false,
-    volumeMidi,
-  };
+  return createDefaultTrackControl(volumeMidi);
 }
 
 function buildDefaultTrackControls(musicJson) {
-  if (!isCanonicalComposition(musicJson) || !Array.isArray(musicJson.tracks)) {
+  if (!isCanonicalComposition(musicJson)) {
     return {};
   }
-  const controls = {};
-  musicJson.tracks.forEach((track) => {
-    const trackId = String(track.id);
-    const volume = Number(track.volume);
-    controls[trackId] = defaultControl(Number.isFinite(volume) ? volume : 100);
-  });
-  return controls;
+  return buildDefaultMixerControls(musicJson);
 }
 
 function mergeTrackControls(existing, musicJson) {
-  const defaults = buildDefaultTrackControls(musicJson);
-  const merged = {};
-  Object.keys(defaults).forEach((trackId) => {
-    merged[trackId] = {
-      ...defaults[trackId],
-      ...(existing[trackId] || {}),
-      volumeMidi: existing[trackId]?.volumeMidi ?? defaults[trackId].volumeMidi,
-    };
-  });
-  return merged;
+  return mergeMixerControls(existing, musicJson);
 }
 
 function countEvents(musicJson) {

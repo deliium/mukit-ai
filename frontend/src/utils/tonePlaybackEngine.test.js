@@ -89,6 +89,37 @@ function createFakeTone() {
     }
   }
 
+  class FakeReverb extends FakeGain {
+    constructor(options = {}) {
+      super(1);
+      this.options = options;
+      this.generated = false;
+    }
+
+    async generate() {
+      this.generated = true;
+    }
+  }
+
+  class FakeLimiter extends FakeGain {
+    constructor(threshold = -1) {
+      super(1);
+      this.threshold = threshold;
+    }
+  }
+
+  class FakeMeter extends FakeGain {
+    constructor(options = {}) {
+      super(1);
+      this.options = options;
+      this._value = 0.25;
+    }
+
+    getValue() {
+      return this._value;
+    }
+  }
+
   return {
     start: async () => {
       state = 'started';
@@ -100,6 +131,9 @@ function createFakeTone() {
     PolySynth: FakeSynth,
     MonoSynth: FakeSynth,
     MembraneSynth: FakeSynth,
+    Reverb: FakeReverb,
+    Limiter: FakeLimiter,
+    Meter: FakeMeter,
     Transport: {
       bpm: { value: 120 },
       get state() {
@@ -171,7 +205,8 @@ test('schedules multi-track attack/release events including muted tracks', async
   };
 
   const engine = createPlaybackEngine({ Tone, logger });
-  const schedule = engine.prepare({
+  const schedule = await engine.prepare({
+    loadInstruments: false,
     tempo: 120,
     tracks: [
       { id: 'piano-1', instrument: 'piano', midi_program: 0, volume: 100, pan: 0 },
@@ -239,7 +274,8 @@ test('schedules multi-track attack/release events including muted tracks', async
   assert.equal(Tone.Transport.position, 0);
   assert.ok(Tone.Transport._cancelled.length >= 1);
 
-  engine.prepare({
+  await engine.prepare({
+    loadInstruments: false,
     tempo: 100,
     tracks: [{ id: 'piano-1', instrument: 'piano', midi_program: 0, volume: 100 }],
     events: [{
@@ -258,10 +294,11 @@ test('schedules multi-track attack/release events including muted tracks', async
   assert.equal(engine.getTrackNodeCount(), 0);
 });
 
-test('applies mute/solo overrides without rebuilding composition data', () => {
+test('applies mute/solo overrides without rebuilding composition data', async () => {
   const Tone = createFakeTone();
   const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
-  engine.prepare({
+  await engine.prepare({
+    loadInstruments: false,
     tempo: 120,
     tracks: [
       { id: 'a', instrument: 'piano', volume: 127 },
@@ -295,11 +332,12 @@ test('applies mute/solo overrides without rebuilding composition data', () => {
   engine.dispose();
 });
 
-test('prepares compiled v2 schedule with trailing silence completion', () => {
+test('prepares compiled v2 schedule with trailing silence completion', async () => {
   const Tone = createFakeTone();
   const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
   const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
-  const result = engine.prepare({
+  const result = await engine.prepare({
+    loadInstruments: false,
     tracks: EXPRESSIVE_FIXTURE.tracks,
     schedule,
     composition: EXPRESSIVE_FIXTURE,
@@ -312,11 +350,12 @@ test('prepares compiled v2 schedule with trailing silence completion', () => {
   engine.dispose();
 });
 
-test('seek rebuilds schedule from current transport position', () => {
+test('seek rebuilds schedule from current transport position', async () => {
   const Tone = createFakeTone();
   const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
   const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
-  engine.prepare({
+  await engine.prepare({
+    loadInstruments: false,
     tracks: EXPRESSIVE_FIXTURE.tracks,
     schedule,
     composition: EXPRESSIVE_FIXTURE,
@@ -331,14 +370,15 @@ test('seek rebuilds schedule from current transport position', () => {
   engine.dispose();
 });
 
-test('prepare honors nonzero startTick via timeline conversion', () => {
+test('prepare honors nonzero startTick via timeline conversion', async () => {
   const Tone = createFakeTone();
   const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
   const schedule = compilePlaybackSchedule(TIMELINE_FIXTURE);
   const startTick = 1920;
   const expectedSeconds = ticksToPlaybackSeconds(startTick, { composition: TIMELINE_FIXTURE });
 
-  const result = engine.prepare({
+  const result = await engine.prepare({
+    loadInstruments: false,
     tracks: TIMELINE_FIXTURE.tracks,
     schedule,
     composition: TIMELINE_FIXTURE,
@@ -356,7 +396,7 @@ test('prepare honors nonzero startTick via timeline conversion', () => {
   engine.dispose();
 });
 
-test('loop wraps at exact endTick and reschedules from startTick', () => {
+test('loop wraps at exact endTick and reschedules from startTick', async () => {
   const Tone = createFakeTone();
   const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
   const composition = {
@@ -385,7 +425,8 @@ test('loop wraps at exact endTick and reschedules from startTick', () => {
   const loopEnd = 960;
   const loopEndSeconds = ticksToPlaybackSeconds(loopEnd, { composition });
 
-  engine.prepare({
+  await engine.prepare({
+    loadInstruments: false,
     tracks: composition.tracks,
     schedule,
     composition,
@@ -413,11 +454,12 @@ test('loop wraps at exact endTick and reschedules from startTick', () => {
   engine.dispose();
 });
 
-test('setLoop while paused rebuilds window without clearing bounds', () => {
+test('setLoop while paused rebuilds window without clearing bounds', async () => {
   const Tone = createFakeTone();
   const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
   const schedule = compilePlaybackSchedule(EXPRESSIVE_FIXTURE);
-  engine.prepare({
+  await engine.prepare({
+    loadInstruments: false,
     tracks: EXPRESSIVE_FIXTURE.tracks,
     schedule,
     composition: EXPRESSIVE_FIXTURE,
@@ -453,7 +495,7 @@ test('clampSeekSecondsToLoop relocates outside enabled window to loop start', ()
   assert.equal(clampSeekSecondsToLoop(2, { ...loop, enabled: false }), 2);
 });
 
-test('seek outside enabled loop relocates to loop start and reconstructs held notes', () => {
+test('seek outside enabled loop relocates to loop start and reconstructs held notes', async () => {
   const Tone = createFakeTone();
   const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
   const composition = {
@@ -480,7 +522,8 @@ test('seek outside enabled loop relocates to loop start and reconstructs held no
     harmony: [],
   };
   const schedule = compilePlaybackSchedule(composition);
-  engine.prepare({
+  await engine.prepare({
+    loadInstruments: false,
     tracks: composition.tracks,
     schedule,
     composition,
@@ -517,4 +560,56 @@ test('deriveLoopRangeFromSelection prefers notes then bars', () => {
   assert.equal(fromBars.startTick, 1920);
 
   assert.equal(deriveLoopRangeFromSelection({ composition: { duration_ticks: 100 } }), null);
+});
+
+test('shared reverb and meters wire; live mute zeros dry and send', async () => {
+  const Tone = createFakeTone();
+  const engine = createPlaybackEngine({ Tone, logger: silentLogger() });
+  await engine.prepare({
+    loadInstruments: false,
+    tempo: 120,
+    tracks: [
+      { id: 'piano-1', instrument: 'piano', midi_program: 0, volume: 100, pan: 0 },
+      { id: 'bass-1', instrument: 'electric_bass', midi_program: 33, volume: 90, pan: 20 },
+    ],
+    events: [{
+      trackId: 'piano-1',
+      pitch: 'C4',
+      notes: ['C4'],
+      position: 0,
+      duration: 0.5,
+      stopPosition: 0.5,
+      velocity: 0.5,
+      velocityMidi: 64,
+    }],
+    trackOverrides: {
+      'piano-1': { reverbSend: 0.4, trimDb: 0 },
+      'bass-1': { reverbSend: 0.2 },
+    },
+  });
+
+  assert.equal(engine.hasSharedReverb(), true);
+  assert.ok(engine.getTrackSendGain('piano-1') > 0.3);
+  const activity = engine.getActivitySnapshot();
+  assert.ok(Object.prototype.hasOwnProperty.call(activity.tracks, 'piano-1'));
+  assert.equal(typeof activity.clipped, 'boolean');
+
+  engine.applyTrackOverrides({
+    'piano-1': { muted: true, reverbSend: 0.4 },
+    'bass-1': { reverbSend: 0.2 },
+  });
+  assert.equal(engine.getTrackEffectiveGain('piano-1'), 0);
+  assert.equal(engine.getTrackSendGain('piano-1'), 0);
+  assert.ok(engine.getTrackEffectiveGain('bass-1') > 0);
+
+  engine.stop();
+  assert.equal(engine.hasSharedReverb(), false);
+  engine.dispose();
+});
+
+test('mapPlaybackVelocity softens mid dynamics without rewriting extremes', async () => {
+  const { mapPlaybackVelocity } = await import('./tonePlaybackEngine.js');
+  assert.equal(mapPlaybackVelocity(0), 0);
+  assert.equal(mapPlaybackVelocity(1), 1);
+  assert.ok(mapPlaybackVelocity(0.5) < 0.5);
 });

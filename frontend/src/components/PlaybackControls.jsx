@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as Tone from 'tone';
 import styled from 'styled-components';
 import {
@@ -15,6 +15,14 @@ import { findArrangementCandidateById } from '../utils/compositionArrangementCan
 import { secondsToPlaybackPosition, ticksToPlaybackSeconds } from '../utils/playbackPosition.js';
 import { createPlaybackEngine } from '../utils/tonePlaybackEngine.js';
 import { createAppLogger } from '../utils/appLogger.js';
+import {
+  PLAYBACK_MIXER_SCOPE_ARRANGEMENT,
+  PLAYBACK_MIXER_SCOPE_DEVELOPMENT,
+  PLAYBACK_MIXER_SCOPE_PREVIEW,
+  PLAYBACK_MIXER_SCOPE_VERSION,
+  PLAYBACK_MIXER_SCOPE_WORKING,
+} from '../utils/playbackSource.js';
+import { sanitizeMixerLogMeta } from '../utils/playbackMixerControls.js';
 import TrackPlaybackControls from './TrackPlaybackControls.jsx';
 
 const logger = createAppLogger('PlaybackControls');
@@ -72,6 +80,8 @@ const PlaybackControls = () => {
   const arrangementCandidates = useMusicStore((state) => state.arrangementCandidates);
   const arrangementSelectedCandidateId = useMusicStore((state) => state.arrangementSelectedCandidateId);
   const arrangementCandidateTrackControls = useMusicStore((state) => state.arrangementCandidateTrackControls);
+  const developmentCandidateTrackControls = useMusicStore((state) => state.developmentCandidateTrackControls);
+  const previewTrackControls = useMusicStore((state) => state.previewTrackControls);
   const versionAuditionActive = useMusicStore((state) => state.versionAuditionActive);
   const versionSelectedRevisionId = useMusicStore((state) => state.versionSelectedRevisionId);
   const versionRevisionDetails = useMusicStore((state) => state.versionRevisionDetails);
@@ -93,27 +103,28 @@ const PlaybackControls = () => {
   const trackControls = useMusicStore((state) => state.trackControls);
   const setPlaybackStatus = useMusicStore((state) => state.setPlaybackStatus);
   const setPlaybackPosition = useMusicStore((state) => state.setPlaybackPosition);
+  const setPlaybackSourceKey = useMusicStore((state) => state.setPlaybackSourceKey);
+  const setPlaybackOperationEpoch = useMusicStore((state) => state.setPlaybackOperationEpoch);
+  const setPlaybackActivity = useMusicStore((state) => state.setPlaybackActivity);
+  const resetPlaybackActivity = useMusicStore((state) => state.resetPlaybackActivity);
   const setUiError = useMusicStore((state) => state.setUiError);
   const playFromCursor = useMusicStore((state) => state.playFromCursor);
   const setLoopFromSelection = useMusicStore((state) => state.setLoopFromSelection);
   const clearPlaybackLoop = useMusicStore((state) => state.clearPlaybackLoop);
   const setPlaybackLoopEnabled = useMusicStore((state) => state.setPlaybackLoopEnabled);
-  const toggleTrackMute = useMusicStore((state) => state.toggleTrackMute);
-  const toggleTrackSolo = useMusicStore((state) => state.toggleTrackSolo);
-  const setTrackVolume = useMusicStore((state) => state.setTrackVolume);
+  const updateMixerTrackControl = useMusicStore((state) => state.updateMixerTrackControl);
+  const playbackActivity = useMusicStore((state) => state.playbackActivity);
   const syncTrackControlsFromComposition = useMusicStore((state) => state.syncTrackControlsFromComposition);
   const syncArrangementCandidateTrackControls = useMusicStore(
     (state) => state.syncArrangementCandidateTrackControls,
   );
+  const syncDevelopmentCandidateTrackControls = useMusicStore(
+    (state) => state.syncDevelopmentCandidateTrackControls,
+  );
+  const syncPreviewTrackControls = useMusicStore((state) => state.syncPreviewTrackControls);
   const syncVersionAuditionTrackControls = useMusicStore(
     (state) => state.syncVersionAuditionTrackControls,
   );
-  const toggleArrangementCandidateMute = useMusicStore((state) => state.toggleArrangementCandidateMute);
-  const toggleArrangementCandidateSolo = useMusicStore((state) => state.toggleArrangementCandidateSolo);
-  const setArrangementCandidateVolume = useMusicStore((state) => state.setArrangementCandidateVolume);
-  const toggleVersionAuditionMute = useMusicStore((state) => state.toggleVersionAuditionMute);
-  const toggleVersionAuditionSolo = useMusicStore((state) => state.toggleVersionAuditionSolo);
-  const setVersionAuditionVolume = useMusicStore((state) => state.setVersionAuditionVolume);
 
   const arrangementCandidateAudition = arrangementAuditionMode === ARRANGEMENT_AUDITION_CANDIDATE;
 
@@ -169,11 +180,21 @@ const PlaybackControls = () => {
   const playbackMixerScope = playbackResolved.mixerScope;
   const versionAudition = playbackSource === 'version';
 
-  const activeTrackControls = arrangementCandidateAudition
-    ? arrangementCandidateTrackControls
-    : versionAudition
-      ? versionAuditionTrackControls
-      : trackControls;
+  const activeTrackControls = (() => {
+    switch (playbackMixerScope) {
+      case PLAYBACK_MIXER_SCOPE_ARRANGEMENT:
+        return arrangementCandidateTrackControls;
+      case PLAYBACK_MIXER_SCOPE_VERSION:
+        return versionAuditionTrackControls;
+      case PLAYBACK_MIXER_SCOPE_DEVELOPMENT:
+        return developmentCandidateTrackControls;
+      case PLAYBACK_MIXER_SCOPE_PREVIEW:
+        return previewTrackControls;
+      case PLAYBACK_MIXER_SCOPE_WORKING:
+      default:
+        return trackControls;
+    }
+  })();
 
   const playbackRevision = useMemo(
     () => (playbackComposition ? audibleRevisionKey(playbackComposition) : 'empty'),
@@ -187,28 +208,39 @@ const PlaybackControls = () => {
   const lastTransportSeqRef = useRef(0);
   const playbackStatusRef = useRef(playbackStatus);
   playbackStatusRef.current = playbackStatus;
+  const [instrumentStatuses, setInstrumentStatuses] = useState({});
+  const [mixerCollapsed, setMixerCollapsed] = useState(false);
 
   useEffect(() => {
     if (!playbackComposition) {
       return;
     }
-    // Candidate / version audition must never prune source mixer controls.
-    if (arrangementCandidateAudition) {
+    // Candidate / version / preview audition must never prune working mixer controls.
+    if (playbackMixerScope === PLAYBACK_MIXER_SCOPE_ARRANGEMENT) {
       syncArrangementCandidateTrackControls(playbackComposition);
       return;
     }
-    if (versionAudition) {
+    if (playbackMixerScope === PLAYBACK_MIXER_SCOPE_VERSION) {
       syncVersionAuditionTrackControls(playbackComposition);
+      return;
+    }
+    if (playbackMixerScope === PLAYBACK_MIXER_SCOPE_DEVELOPMENT) {
+      syncDevelopmentCandidateTrackControls(playbackComposition);
+      return;
+    }
+    if (playbackMixerScope === PLAYBACK_MIXER_SCOPE_PREVIEW) {
+      syncPreviewTrackControls(playbackComposition);
       return;
     }
     syncTrackControlsFromComposition(playbackComposition);
   }, [
-    arrangementCandidateAudition,
     playbackComposition,
+    playbackMixerScope,
     syncArrangementCandidateTrackControls,
+    syncDevelopmentCandidateTrackControls,
+    syncPreviewTrackControls,
     syncTrackControlsFromComposition,
     syncVersionAuditionTrackControls,
-    versionAudition,
   ]);
 
   useEffect(() => {
@@ -222,10 +254,16 @@ const PlaybackControls = () => {
         engineRef.current = null;
       }
       disposeLegacySynth(legacySynthRef);
+      resetPlaybackActivity();
+      setInstrumentStatuses({});
       setPlaybackStatus('idle');
       setPlaybackPosition({ seconds: 0, bar: 1 });
     };
-  }, [setPlaybackPosition, setPlaybackStatus]);
+  }, [resetPlaybackActivity, setPlaybackPosition, setPlaybackStatus]);
+
+  useEffect(() => {
+    setPlaybackSourceKey(playbackSourceKey);
+  }, [playbackSourceKey, setPlaybackSourceKey]);
 
   useEffect(() => {
     if (!scheduledRevisionRef.current) {
@@ -258,6 +296,7 @@ const PlaybackControls = () => {
       setPlaybackStatus,
       setPlaybackPosition,
     });
+    resetPlaybackActivity();
     return undefined;
   }, [
     playbackRevision,
@@ -265,6 +304,7 @@ const PlaybackControls = () => {
     playbackMixerScope,
     developmentAuditionActive,
     arrangementCandidateAudition,
+    resetPlaybackActivity,
     setPlaybackPosition,
     setPlaybackStatus,
   ]);
@@ -276,10 +316,38 @@ const PlaybackControls = () => {
     if (playbackStatus !== 'playing' && playbackStatus !== 'paused') {
       return undefined;
     }
-    logger.debug('Applying live track control overrides');
+    logger.debug('Applying live track control overrides', sanitizeMixerLogMeta({
+      mixerScope: playbackMixerScope,
+      sourceKey: playbackSourceKey,
+      trackCount: Object.keys(activeTrackControls || {}).length,
+    }));
     engineRef.current.applyTrackOverrides(activeTrackControls);
     return undefined;
-  }, [activeTrackControls, playbackComposition, playbackStatus]);
+  }, [
+    activeTrackControls,
+    playbackComposition,
+    playbackMixerScope,
+    playbackSourceKey,
+    playbackStatus,
+  ]);
+
+  // Poll activity meters at ~12.5 Hz; store updates only on material change.
+  useEffect(() => {
+    if (!engineRef.current || playbackStatus !== 'playing') {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      const snapshot = engineRef.current?.getActivitySnapshot?.();
+      if (snapshot) {
+        setPlaybackActivity(snapshot);
+      }
+      const epoch = engineRef.current?.getOperationEpoch?.();
+      if (epoch != null) {
+        setPlaybackOperationEpoch(epoch);
+      }
+    }, 80);
+    return () => window.clearInterval(timer);
+  }, [playbackStatus, setPlaybackActivity, setPlaybackOperationEpoch]);
 
   // Sync loop enable/bounds into the running engine without restarting transport.
   useEffect(() => {
@@ -339,6 +407,7 @@ const PlaybackControls = () => {
           setPlaybackStatus,
           setPlaybackPosition,
           setUiError,
+          setInstrumentStatuses,
           startTick,
           loop: playbackLoop,
           sourceKey: playbackSourceKey,
@@ -585,69 +654,77 @@ const PlaybackControls = () => {
         <TrackPlaybackControls
           tracks={tracks}
           trackControls={activeTrackControls}
+          instrumentStatuses={instrumentStatuses}
+          activityLevels={playbackActivity?.tracks || {}}
+          activityClipped={Boolean(playbackActivity?.clipped)}
           disabled={!playbackComposition}
+          collapsed={mixerCollapsed}
+          onCollapsedChange={setMixerCollapsed}
           ariaLabel={
-            arrangementCandidateAudition
+            playbackMixerScope === PLAYBACK_MIXER_SCOPE_ARRANGEMENT
               ? 'Arrangement candidate mixer'
-              : versionAudition
+              : playbackMixerScope === PLAYBACK_MIXER_SCOPE_VERSION
                 ? 'Version audition mixer'
-                : 'Track mixer'
+                : playbackMixerScope === PLAYBACK_MIXER_SCOPE_DEVELOPMENT
+                  ? 'Development candidate mixer'
+                  : playbackMixerScope === PLAYBACK_MIXER_SCOPE_PREVIEW
+                    ? 'Preview mixer'
+                    : 'Track mixer'
           }
           hint={
-            arrangementCandidateAudition
-              ? 'Candidate mixer (ephemeral; does not change source track controls)'
-              : versionAudition
-                ? 'Version mixer (ephemeral; does not change working track controls)'
-                : 'Tracks / mixer (canonical composition.v2; mute/solo are UI-only)'
+            playbackMixerScope === PLAYBACK_MIXER_SCOPE_WORKING
+              ? 'Tracks / mixer (canonical composition.v2; mute/solo are UI-only)'
+              : `${playbackMixerScope} mixer (ephemeral; does not change working track controls)`
           }
           onMuteToggle={(trackId) => {
-            logger.info('User mute toggle', {
+            const current = activeTrackControls[trackId] || {};
+            logger.debug('User mute toggle', sanitizeMixerLogMeta({
               trackId,
-              arrangementAudition: arrangementCandidateAudition,
-              versionAudition,
-            });
-            if (arrangementCandidateAudition) {
-              toggleArrangementCandidateMute(trackId);
-              return;
-            }
-            if (versionAudition) {
-              toggleVersionAuditionMute(trackId);
-              return;
-            }
-            toggleTrackMute(trackId);
+              mixerScope: playbackMixerScope,
+              muted: !current.muted,
+            }));
+            updateMixerTrackControl(playbackMixerScope, trackId, { muted: !current.muted });
           }}
           onSoloToggle={(trackId) => {
-            logger.info('User solo toggle', {
+            const current = activeTrackControls[trackId] || {};
+            logger.debug('User solo toggle', sanitizeMixerLogMeta({
               trackId,
-              arrangementAudition: arrangementCandidateAudition,
-              versionAudition,
-            });
-            if (arrangementCandidateAudition) {
-              toggleArrangementCandidateSolo(trackId);
-              return;
-            }
-            if (versionAudition) {
-              toggleVersionAuditionSolo(trackId);
-              return;
-            }
-            toggleTrackSolo(trackId);
+              mixerScope: playbackMixerScope,
+              solo: !current.solo,
+            }));
+            updateMixerTrackControl(playbackMixerScope, trackId, { solo: !current.solo });
+          }}
+          onTrimChange={(trackId, trimDb) => {
+            logger.debug('User trim change', sanitizeMixerLogMeta({
+              trackId,
+              mixerScope: playbackMixerScope,
+              trimDb,
+            }));
+            updateMixerTrackControl(playbackMixerScope, trackId, { trimDb });
+          }}
+          onPanChange={(trackId, panOffset) => {
+            logger.debug('User pan change', sanitizeMixerLogMeta({
+              trackId,
+              mixerScope: playbackMixerScope,
+              panOffset,
+            }));
+            updateMixerTrackControl(playbackMixerScope, trackId, { panOffset });
+          }}
+          onSendChange={(trackId, reverbSend) => {
+            logger.debug('User send change', sanitizeMixerLogMeta({
+              trackId,
+              mixerScope: playbackMixerScope,
+              reverbSend,
+            }));
+            updateMixerTrackControl(playbackMixerScope, trackId, { reverbSend });
           }}
           onVolumeChange={(trackId, volumeMidi) => {
-            logger.info('User volume change', {
+            logger.debug('User volume change', sanitizeMixerLogMeta({
               trackId,
+              mixerScope: playbackMixerScope,
               volumeMidi,
-              arrangementAudition: arrangementCandidateAudition,
-              versionAudition,
-            });
-            if (arrangementCandidateAudition) {
-              setArrangementCandidateVolume(trackId, volumeMidi);
-              return;
-            }
-            if (versionAudition) {
-              setVersionAuditionVolume(trackId, volumeMidi);
-              return;
-            }
-            setTrackVolume(trackId, volumeMidi);
+            }));
+            updateMixerTrackControl(playbackMixerScope, trackId, { volumeMidi });
           }}
         />
       ) : (
@@ -667,6 +744,7 @@ async function startCanonicalPlayback({
   setPlaybackStatus,
   setPlaybackPosition,
   setUiError,
+  setInstrumentStatuses = null,
   startTick = null,
   loop = null,
   sourceKey = null,
@@ -688,7 +766,7 @@ async function startCanonicalPlayback({
   }
 
   // Never inspect harmony for audible content on the canonical path.
-  engineRef.current.prepare({
+  await engineRef.current.prepare({
     tracks: playbackComposition.tracks,
     schedule,
     composition: playbackComposition,
@@ -708,6 +786,10 @@ async function startCanonicalPlayback({
       });
     },
   });
+
+  if (typeof setInstrumentStatuses === 'function') {
+    setInstrumentStatuses(engineRef.current.getInstrumentStatuses?.() || {});
+  }
 
   scheduledRevisionRef.current = audibleRevisionKey(playbackComposition);
   await engineRef.current.start();
