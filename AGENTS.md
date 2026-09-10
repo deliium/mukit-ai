@@ -81,7 +81,12 @@ mukit-ai/
 | `backend/app/services/composition_projection.py` | Shared export projection report + issue codes |
 | `backend/app/services/fake_llm.py` | Deterministic `LLM_FAKE_MODE` generate/edit/arrangement (incl. V2 expressive fixture) |
 | `backend/app/ready.py` | Logging/CORS helpers and readiness report |
-| `backend/app/routers/projects.py` | Project CRUD + autosave APIs |
+| `backend/app/routers/projects.py` | Project CRUD + autosave + revision/branch history APIs |
+| `backend/app/services/project_history.py` | Revision list/detail, durable commit/restore, branch checkout/apply-as-branch |
+| `backend/app/services/project_history_store.py` | SQLite CAS history graph + compressed composition snapshots |
+| `frontend/src/utils/compositionVersionComparison.js` | Deterministic working/revision composition compare |
+| `frontend/src/utils/playbackSource.js` | Mutual-exclusive working / preview / version audition playback source |
+| `frontend/src/components/ProjectVersionsPanel.jsx` | Versions tab: branches, compare, audition, restore |
 | `backend/app/services/project_store.py` | SQLite project CRUD |
 | `backend/app/services/project_history_store.py` | Snapshots, revisions, branches, CAS draft/commit/restore/checkout |
 | `backend/app/services/project_history.py` | Domain orchestration for revision/branch commands |

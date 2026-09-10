@@ -84,6 +84,13 @@ const ProjectComposerBar = () => {
   }
 
   const status = STATUS_STYLES[saveStatus] || STATUS_STYLES.unsaved;
+  const openVersions = () => {
+    console.debug('[ProjectComposerBar] Open Versions tab', { projectId: currentProjectId });
+    useMusicStore.setState((state) => ({
+      composerTabRequest: 'versions',
+      composerTabRequestSeq: (state.composerTabRequestSeq || 0) + 1,
+    }));
+  };
 
   return (
     <Bar>
@@ -136,6 +143,14 @@ const ProjectComposerBar = () => {
             Reload
           </Button>
         ) : null}
+        <Button
+          type="button"
+          $secondary
+          data-testid="open-versions"
+          onClick={openVersions}
+        >
+          History
+        </Button>
         <Button
           type="button"
           data-testid="save-project"

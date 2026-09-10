@@ -21,14 +21,31 @@ import {
 import { createAppLogger } from '../utils/appLogger.js';
 import {
   ProjectRevisionConflictError,
+  applyAsBranch as applyAsBranchRequest,
+  checkoutBranch as checkoutBranchRequest,
   commitRevision as commitRevisionRequest,
+  createBranch as createBranchRequest,
   createProject as createProjectRequest,
   deleteProject as deleteProjectRequest,
   duplicateProject as duplicateProjectRequest,
   getProject as getProjectRequest,
+  getRevision as getRevisionRequest,
+  listBranches as listBranchesRequest,
   listProjects as listProjectsRequest,
+  listRevisions as listRevisionsRequest,
+  nameRevision as nameRevisionRequest,
   patchProject as patchProjectRequest,
+  renameBranch as renameBranchRequest,
+  restoreRevision as restoreRevisionRequest,
 } from '../api/projectApi.js';
+import { compareCompositions } from '../utils/compositionVersionComparison.js';
+import {
+  PLAYBACK_SOURCE_ARRANGEMENT,
+  PLAYBACK_SOURCE_DEVELOPMENT,
+  PLAYBACK_SOURCE_VERSION,
+  exclusiveAuditionPatch,
+  resolvePlaybackSource,
+} from '../utils/playbackSource.js';
 import {
   ANALYSIS_DEBOUNCE_MS,
   AnalysisScopeError,
@@ -167,7 +184,9 @@ import {
 import { projectPersistRevisionKey } from '../utils/projectPersistRevision.js';
 
 export const AUTOSAVE_DEBOUNCE_MS = 900;
+export const VERSION_HISTORY_PAGE_SIZE = 25;
 export { ANALYSIS_DEBOUNCE_MS };
+export { resolvePlaybackSource };
 
 const MOTIF_CREATIVE_OPERATIONS = new Set([
   'rhythmic_variation',
@@ -243,6 +262,27 @@ export const DEFAULT_ARRANGEMENT_OPERATION = 'change_instrumentation';
 export const DEFAULT_ARRANGEMENT_RANGE_ADJUSTMENT = 'reject';
 export const ARRANGEMENT_AUDITION_SOURCE = 'source';
 export const ARRANGEMENT_AUDITION_CANDIDATE = 'candidate';
+
+const initialVersionHistoryState = {
+  versionBranches: [],
+  versionBranchesStatus: 'idle',
+  versionBranchesError: '',
+  versionRevisions: [],
+  versionRevisionsStatus: 'idle',
+  versionRevisionsError: '',
+  versionRevisionsNextBefore: null,
+  versionSelectedRevisionId: null,
+  versionCompareRevisionId: null,
+  versionRevisionDetails: {},
+  versionCompareResult: null,
+  versionCompareStatus: 'idle',
+  versionCompareError: '',
+  versionAuditionActive: false,
+  versionAuditionTrackControls: {},
+  versionActionStatus: 'idle',
+  versionActionError: '',
+  versionRestoreBlockReason: null,
+};
 
 const logger = createAppLogger('musicStore');
 const arrangementLogger = createAppLogger('musicStore.arrangement');
@@ -396,6 +436,10 @@ let reharmonizeRequestSeq = 0;
 let developmentRequestSeq = 0;
 let arrangementRequestSeq = 0;
 let arrangementCatalogRequestSeq = 0;
+let versionBranchesRequestSeq = 0;
+let versionRevisionsRequestSeq = 0;
+let versionDetailRequestSeq = 0;
+let versionActionRequestSeq = 0;
 
 const initialPrompt = {
   genre: 'ambient',
@@ -518,6 +562,7 @@ export const useMusicStore = create((set, get) => ({
   workingVersion: null,
   workingFingerprint: null,
   saveConflict: null,
+  ...initialVersionHistoryState,
   projectList: [],
   projectListStatus: 'idle',
   saveStatus: 'saved',
@@ -3450,6 +3495,7 @@ export const useMusicStore = create((set, get) => ({
           workingVersion: null,
           workingFingerprint: null,
           saveConflict: null,
+          ...clearedVersionHistoryState(),
           activeView: 'home',
           generatedMusicJson: null,
           editedMusicJson: null,
@@ -3670,6 +3716,12 @@ export const useMusicStore = create((set, get) => ({
         saveError: '',
         saveConflict: null,
         currentProjectName: draftResult.name || projectOrDurable.name || get().currentProjectName,
+        versionRestoreBlockReason: computeVersionRestoreBlockReason({
+          ...get(),
+          ...historyFields,
+          lastSavedPersistRevision: persistRevisionAtStart,
+          saveStatus: 'saved',
+        }),
       });
       return projectOrDurable;
     } catch (error) {
@@ -3707,6 +3759,839 @@ export const useMusicStore = create((set, get) => ({
       });
       console.debug('[musicStore] Save status transition', { from: 'saving', to: 'error', reason });
       set({ saveStatus: 'error', saveError: error.message, saveConflict: null });
+      throw error;
+    }
+  },
+
+  loadVersionBranches: async () => {
+    const state = get();
+    const projectId = state.currentProjectId;
+    if (!projectId) {
+      return null;
+    }
+    versionBranchesRequestSeq += 1;
+    const requestId = versionBranchesRequestSeq;
+    console.debug('[musicStore] Version branches load started', { projectId, requestId });
+    set({ versionBranchesStatus: 'loading', versionBranchesError: '' });
+    try {
+      const response = await listBranchesRequest(projectId);
+      if (requestId !== versionBranchesRequestSeq || get().currentProjectId !== projectId) {
+        console.warn('[musicStore] Ignoring stale version branches response', { requestId, projectId });
+        return null;
+      }
+      const branches = Array.isArray(response?.branches) ? response.branches : [];
+      console.info('[musicStore] Version branches loaded', {
+        projectId,
+        requestId,
+        count: branches.length,
+      });
+      set({
+        versionBranches: branches,
+        versionBranchesStatus: 'ready',
+        versionBranchesError: '',
+        versionRestoreBlockReason: computeVersionRestoreBlockReason(get()),
+      });
+      return branches;
+    } catch (error) {
+      if (requestId !== versionBranchesRequestSeq || get().currentProjectId !== projectId) {
+        return null;
+      }
+      console.warn('[musicStore] Version branches load failed', {
+        projectId,
+        requestId,
+        status: error.status || null,
+      });
+      set({
+        versionBranchesStatus: 'error',
+        versionBranchesError: error.message || 'Failed to load branches',
+      });
+      throw error;
+    }
+  },
+
+  loadVersionRevisions: async ({ reset = true } = {}) => {
+    const state = get();
+    const projectId = state.currentProjectId;
+    const branchId = state.activeBranchId;
+    if (!projectId || !branchId) {
+      return null;
+    }
+    const beforeSequence = reset ? null : state.versionRevisionsNextBefore;
+    if (!reset && beforeSequence == null) {
+      return state.versionRevisions;
+    }
+    versionRevisionsRequestSeq += 1;
+    const requestId = versionRevisionsRequestSeq;
+    console.debug('[musicStore] Version revisions load started', {
+      projectId,
+      branchId,
+      requestId,
+      reset: Boolean(reset),
+      beforeSequence,
+    });
+    set({
+      versionRevisionsStatus: 'loading',
+      versionRevisionsError: '',
+      ...(reset
+        ? {
+          versionRevisions: [],
+          versionRevisionsNextBefore: null,
+          versionSelectedRevisionId: null,
+          versionCompareRevisionId: null,
+          versionRevisionDetails: {},
+          versionCompareResult: null,
+          versionAuditionActive: false,
+          versionAuditionTrackControls: {},
+        }
+        : {}),
+    });
+    try {
+      const response = await listRevisionsRequest(projectId, {
+        branchId,
+        limit: VERSION_HISTORY_PAGE_SIZE,
+        beforeSequence,
+      });
+      if (
+        requestId !== versionRevisionsRequestSeq
+        || get().currentProjectId !== projectId
+        || get().activeBranchId !== branchId
+      ) {
+        console.warn('[musicStore] Ignoring stale version revisions response', {
+          requestId,
+          projectId,
+          branchId,
+        });
+        return null;
+      }
+      const page = Array.isArray(response?.revisions) ? response.revisions : [];
+      const nextBefore = response?.next_before_sequence ?? null;
+      const merged = reset ? page : [...(get().versionRevisions || []), ...page];
+      console.info('[musicStore] Version revisions loaded', {
+        projectId,
+        branchId,
+        requestId,
+        pageCount: page.length,
+        totalCount: merged.length,
+        hasMore: nextBefore != null,
+      });
+      set({
+        versionRevisions: merged,
+        versionRevisionsNextBefore: nextBefore,
+        versionRevisionsStatus: 'ready',
+        versionRevisionsError: '',
+        versionRestoreBlockReason: computeVersionRestoreBlockReason({
+          ...get(),
+          versionRevisions: merged,
+        }),
+      });
+      return merged;
+    } catch (error) {
+      if (
+        requestId !== versionRevisionsRequestSeq
+        || get().currentProjectId !== projectId
+      ) {
+        return null;
+      }
+      console.warn('[musicStore] Version revisions load failed', {
+        projectId,
+        requestId,
+        status: error.status || null,
+      });
+      set({
+        versionRevisionsStatus: 'error',
+        versionRevisionsError: error.message || 'Failed to load revisions',
+      });
+      throw error;
+    }
+  },
+
+  ensureVersionRevisionDetail: async (revisionId) => {
+    const normalizedId = typeof revisionId === 'string' && revisionId.trim()
+      ? revisionId.trim()
+      : null;
+    const state = get();
+    const projectId = state.currentProjectId;
+    if (!projectId || !normalizedId) {
+      return null;
+    }
+    const cached = state.versionRevisionDetails?.[normalizedId];
+    if (cached && Object.prototype.hasOwnProperty.call(cached, 'composition')) {
+      return cached;
+    }
+    versionDetailRequestSeq += 1;
+    const requestId = versionDetailRequestSeq;
+    console.debug('[musicStore] Version revision detail load started', {
+      projectId,
+      revisionId: normalizedId,
+      requestId,
+    });
+    try {
+      const detail = await getRevisionRequest(projectId, normalizedId);
+      if (
+        requestId !== versionDetailRequestSeq
+        || get().currentProjectId !== projectId
+      ) {
+        console.warn('[musicStore] Ignoring stale version revision detail', {
+          requestId,
+          projectId,
+        });
+        return null;
+      }
+      const entry = {
+        revision: detail?.revision || null,
+        composition: detail?.composition ?? null,
+      };
+      const keepIds = new Set([
+        get().versionSelectedRevisionId,
+        get().versionCompareRevisionId,
+        normalizedId,
+      ].filter(Boolean));
+      const nextDetails = pruneVersionRevisionDetails(
+        {
+          ...(get().versionRevisionDetails || {}),
+          [normalizedId]: entry,
+        },
+        keepIds,
+      );
+      set({ versionRevisionDetails: nextDetails });
+      console.debug('[musicStore] Version revision detail ready', {
+        projectId,
+        revisionId: normalizedId,
+        requestId,
+        hasComposition: entry.composition != null,
+      });
+      return entry;
+    } catch (error) {
+      if (requestId !== versionDetailRequestSeq || get().currentProjectId !== projectId) {
+        return null;
+      }
+      console.warn('[musicStore] Version revision detail failed', {
+        projectId,
+        revisionId: normalizedId,
+        status: error.status || null,
+      });
+      throw error;
+    }
+  },
+
+  selectVersionRevision: async (revisionId) => {
+    const normalizedId = typeof revisionId === 'string' && revisionId.trim()
+      ? revisionId.trim()
+      : null;
+    const state = get();
+    if (!normalizedId) {
+      set({
+        versionSelectedRevisionId: null,
+        versionAuditionActive: false,
+        versionAuditionTrackControls: {},
+        versionCompareResult: null,
+        versionRestoreBlockReason: computeVersionRestoreBlockReason(state),
+      });
+      return null;
+    }
+    console.debug('[musicStore] Version revision selected', { revisionId: normalizedId });
+    set({
+      versionSelectedRevisionId: normalizedId,
+      versionAuditionActive: false,
+      versionAuditionTrackControls: {},
+      versionActionError: '',
+    });
+    const detail = await get().ensureVersionRevisionDetail(normalizedId);
+    await get().refreshVersionComparison();
+    set({
+      versionRestoreBlockReason: computeVersionRestoreBlockReason(get()),
+    });
+    return detail;
+  },
+
+  selectVersionCompareRevision: async (revisionId) => {
+    const normalizedId = typeof revisionId === 'string' && revisionId.trim()
+      ? revisionId.trim()
+      : null;
+    console.debug('[musicStore] Version compare revision selected', {
+      revisionId: normalizedId,
+    });
+    set({
+      versionCompareRevisionId: normalizedId,
+      versionCompareResult: null,
+      versionCompareError: '',
+    });
+    if (normalizedId) {
+      await get().ensureVersionRevisionDetail(normalizedId);
+    }
+    await get().refreshVersionComparison();
+    return normalizedId;
+  },
+
+  refreshVersionComparison: async () => {
+    const state = get();
+    const leftId = state.versionSelectedRevisionId;
+    const rightId = state.versionCompareRevisionId;
+    if (!leftId && !rightId) {
+      set({
+        versionCompareResult: null,
+        versionCompareStatus: 'idle',
+        versionCompareError: '',
+      });
+      return null;
+    }
+    set({ versionCompareStatus: 'loading', versionCompareError: '' });
+    try {
+      let leftComposition = state.editedMusicJson;
+      let rightComposition = state.editedMusicJson;
+      let leftLabel = 'working';
+      let rightLabel = 'working';
+
+      if (leftId) {
+        const detail = await get().ensureVersionRevisionDetail(leftId);
+        leftComposition = detail?.composition ?? null;
+        leftLabel = 'revision';
+      }
+      if (rightId) {
+        const detail = await get().ensureVersionRevisionDetail(rightId);
+        rightComposition = detail?.composition ?? null;
+        rightLabel = 'revision';
+      } else if (leftId) {
+        // Selected vs working draft
+        rightComposition = state.editedMusicJson;
+        rightLabel = 'working';
+      }
+
+      const result = compareCompositions(leftComposition, rightComposition, {
+        leftLabel,
+        rightLabel,
+      });
+      if (
+        get().versionSelectedRevisionId !== leftId
+        || get().versionCompareRevisionId !== rightId
+      ) {
+        return null;
+      }
+      console.debug('[musicStore] Version comparison ready', {
+        leftLabel,
+        rightLabel,
+        identical: Boolean(result?.identical),
+        added: Number(result?.events?.added) || 0,
+        removed: Number(result?.events?.removed) || 0,
+        changed: Number(result?.events?.changed) || 0,
+      });
+      set({
+        versionCompareResult: result,
+        versionCompareStatus: 'ready',
+        versionCompareError: '',
+      });
+      return result;
+    } catch (error) {
+      console.warn('[musicStore] Version comparison failed', {
+        code: error?.code || 'compare_failed',
+      });
+      set({
+        versionCompareResult: null,
+        versionCompareStatus: 'error',
+        versionCompareError: error.message || 'Comparison failed',
+      });
+      return null;
+    }
+  },
+
+  setVersionAuditionActive: async (active) => {
+    const enabled = Boolean(active);
+    const state = get();
+    if (!enabled) {
+      console.info('[musicStore] Version audition toggled', { active: false });
+      set({
+        versionAuditionActive: false,
+        playbackStatus: 'idle',
+        playbackSeconds: 0,
+        playbackBar: 1,
+      });
+      return true;
+    }
+    const revisionId = state.versionSelectedRevisionId;
+    if (!revisionId) {
+      return false;
+    }
+    const detail = await get().ensureVersionRevisionDetail(revisionId);
+    if (!detail || get().versionSelectedRevisionId !== revisionId) {
+      return false;
+    }
+    const composition = detail.composition;
+    const nextLoop = reconcilePlaybackLoop(state.playbackLoop, composition);
+    console.info('[musicStore] Version audition toggled', {
+      active: true,
+      revisionId,
+      hasComposition: composition != null,
+    });
+    set({
+      versionAuditionActive: true,
+      versionAuditionTrackControls: buildDefaultTrackControls(composition),
+      ...exclusiveAuditionPatch(PLAYBACK_SOURCE_VERSION, ARRANGEMENT_AUDITION_SOURCE),
+      playbackLoop: nextLoop,
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  syncVersionAuditionTrackControls: (musicJson) => {
+    set((current) => ({
+      versionAuditionTrackControls: mergeTrackControls(
+        current.versionAuditionTrackControls,
+        musicJson,
+      ),
+    }));
+  },
+
+  toggleVersionAuditionMute: (trackId) => {
+    set((current) => {
+      const existing = current.versionAuditionTrackControls[trackId] || defaultControl();
+      return {
+        versionAuditionTrackControls: {
+          ...current.versionAuditionTrackControls,
+          [trackId]: { ...existing, muted: !existing.muted },
+        },
+      };
+    });
+  },
+
+  toggleVersionAuditionSolo: (trackId) => {
+    set((current) => {
+      const existing = current.versionAuditionTrackControls[trackId] || defaultControl();
+      return {
+        versionAuditionTrackControls: {
+          ...current.versionAuditionTrackControls,
+          [trackId]: { ...existing, solo: !existing.solo },
+        },
+      };
+    });
+  },
+
+  setVersionAuditionVolume: (trackId, volumeMidi) => {
+    const clamped = Math.max(0, Math.min(127, Number(volumeMidi) || 0));
+    set((current) => {
+      const existing = current.versionAuditionTrackControls[trackId] || defaultControl();
+      return {
+        versionAuditionTrackControls: {
+          ...current.versionAuditionTrackControls,
+          [trackId]: { ...existing, volumeMidi: clamped },
+        },
+      };
+    });
+  },
+
+  nameVersionRevision: async (revisionId, name) => {
+    const projectId = get().currentProjectId;
+    const normalizedId = String(revisionId || '').trim();
+    if (!projectId || !normalizedId) {
+      return null;
+    }
+    versionActionRequestSeq += 1;
+    const requestId = versionActionRequestSeq;
+    set({ versionActionStatus: 'loading', versionActionError: '' });
+    try {
+      const item = await nameRevisionRequest(projectId, normalizedId, {
+        name: name == null ? null : String(name),
+      });
+      if (requestId !== versionActionRequestSeq || get().currentProjectId !== projectId) {
+        return null;
+      }
+      set((current) => ({
+        versionRevisions: (current.versionRevisions || []).map((row) => (
+          row.id === normalizedId ? { ...row, ...item } : row
+        )),
+        versionRevisionDetails: current.versionRevisionDetails?.[normalizedId]
+          ? {
+            ...current.versionRevisionDetails,
+            [normalizedId]: {
+              ...current.versionRevisionDetails[normalizedId],
+              revision: {
+                ...(current.versionRevisionDetails[normalizedId].revision || {}),
+                ...item,
+              },
+            },
+          }
+          : current.versionRevisionDetails,
+        versionActionStatus: 'idle',
+        versionActionError: '',
+      }));
+      console.info('[musicStore] Version revision named', {
+        projectId,
+        revisionId: normalizedId,
+        hasName: Boolean(item?.name),
+      });
+      return item;
+    } catch (error) {
+      if (requestId !== versionActionRequestSeq) {
+        return null;
+      }
+      console.warn('[musicStore] Version revision name failed', {
+        projectId,
+        revisionId: normalizedId,
+        status: error.status || null,
+      });
+      set({
+        versionActionStatus: 'error',
+        versionActionError: error.message || 'Failed to name revision',
+      });
+      throw error;
+    }
+  },
+
+  createVersionBranch: async ({ name, fromRevisionId, checkout = false } = {}) => {
+    const projectId = get().currentProjectId;
+    if (!projectId) {
+      return null;
+    }
+    versionActionRequestSeq += 1;
+    const requestId = versionActionRequestSeq;
+    set({ versionActionStatus: 'loading', versionActionError: '' });
+    try {
+      const branch = await createBranchRequest(projectId, {
+        name: String(name || '').trim(),
+        from_revision_id: fromRevisionId,
+        checkout: false,
+      });
+      if (requestId !== versionActionRequestSeq || get().currentProjectId !== projectId) {
+        return null;
+      }
+      console.info('[musicStore] Version branch created', {
+        projectId,
+        branchId: branch?.id,
+        checkout: Boolean(checkout),
+      });
+      set({ versionActionStatus: 'idle', versionActionError: '' });
+      await get().loadVersionBranches();
+      if (checkout && branch?.id) {
+        await get().checkoutVersionBranch(branch.id);
+      }
+      return branch;
+    } catch (error) {
+      if (requestId !== versionActionRequestSeq) {
+        return null;
+      }
+      if (error instanceof ProjectRevisionConflictError) {
+        set({
+          versionActionStatus: 'error',
+          versionActionError: 'Revision conflict',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      console.warn('[musicStore] Version branch create failed', {
+        projectId,
+        status: error.status || null,
+      });
+      set({
+        versionActionStatus: 'error',
+        versionActionError: error.message || 'Failed to create branch',
+      });
+      throw error;
+    }
+  },
+
+  renameVersionBranch: async (branchId, name) => {
+    const projectId = get().currentProjectId;
+    const normalizedId = String(branchId || '').trim();
+    if (!projectId || !normalizedId) {
+      return null;
+    }
+    versionActionRequestSeq += 1;
+    const requestId = versionActionRequestSeq;
+    set({ versionActionStatus: 'loading', versionActionError: '' });
+    try {
+      const branch = await renameBranchRequest(projectId, normalizedId, {
+        name: String(name || '').trim(),
+      });
+      if (requestId !== versionActionRequestSeq || get().currentProjectId !== projectId) {
+        return null;
+      }
+      set((current) => ({
+        versionBranches: (current.versionBranches || []).map((row) => (
+          row.id === normalizedId ? { ...row, ...branch } : row
+        )),
+        activeBranchName: current.activeBranchId === normalizedId
+          ? (branch?.name || current.activeBranchName)
+          : current.activeBranchName,
+        versionActionStatus: 'idle',
+        versionActionError: '',
+      }));
+      console.info('[musicStore] Version branch renamed', {
+        projectId,
+        branchId: normalizedId,
+      });
+      return branch;
+    } catch (error) {
+      if (requestId !== versionActionRequestSeq) {
+        return null;
+      }
+      console.warn('[musicStore] Version branch rename failed', {
+        projectId,
+        branchId: normalizedId,
+        status: error.status || null,
+      });
+      set({
+        versionActionStatus: 'error',
+        versionActionError: error.message || 'Failed to rename branch',
+      });
+      throw error;
+    }
+  },
+
+  checkoutVersionBranch: async (branchId) => {
+    const state = get();
+    const projectId = state.currentProjectId;
+    const normalizedId = String(branchId || '').trim();
+    if (!projectId || !normalizedId) {
+      return null;
+    }
+    if (
+      !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+    ) {
+      set({
+        versionActionStatus: 'error',
+        versionActionError: 'Missing branch CAS fields for checkout',
+      });
+      return null;
+    }
+    versionActionRequestSeq += 1;
+    const requestId = versionActionRequestSeq;
+    set({ versionActionStatus: 'loading', versionActionError: '' });
+    try {
+      await flushProjectDraft(get, { reason: 'branch-checkout-flush' });
+      const durable = await checkoutBranchRequest(projectId, normalizedId, {
+        expected_active_branch_id: get().activeBranchId,
+        expected_working_version: get().workingVersion,
+        expected_head_revision_id: get().currentRevisionId,
+      });
+      if (requestId !== versionActionRequestSeq || get().currentProjectId !== projectId) {
+        return null;
+      }
+      console.info('[musicStore] Version branch checkout completed', {
+        projectId,
+        branchId: normalizedId,
+      });
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: true,
+        markSaved: true,
+        action: 'branch-checkout',
+      });
+      set({
+        versionActionStatus: 'idle',
+        versionActionError: '',
+        ...clearedVersionHistoryState(),
+      });
+      await get().loadVersionBranches();
+      await get().loadVersionRevisions({ reset: true });
+      return durable;
+    } catch (error) {
+      if (requestId !== versionActionRequestSeq) {
+        return null;
+      }
+      if (error instanceof ProjectRevisionConflictError) {
+        set({
+          versionActionStatus: 'error',
+          versionActionError: 'Revision conflict',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      console.warn('[musicStore] Version branch checkout failed', {
+        projectId,
+        branchId: normalizedId,
+        status: error.status || null,
+      });
+      set({
+        versionActionStatus: 'error',
+        versionActionError: error.message || 'Failed to checkout branch',
+      });
+      throw error;
+    }
+  },
+
+  restoreVersionRevision: async (revisionId, { checkpointIfDirty = false } = {}) => {
+    const state = get();
+    const projectId = state.currentProjectId;
+    const normalizedId = String(revisionId || '').trim();
+    if (!projectId || !normalizedId) {
+      return { ok: false, reason: 'missing-ids' };
+    }
+    const blockReason = computeVersionRestoreBlockReason(state);
+    if (blockReason) {
+      set({ versionRestoreBlockReason: blockReason });
+      if (!checkpointIfDirty) {
+        console.debug('[musicStore] Version restore blocked', {
+          projectId,
+          revisionId: normalizedId,
+          reason: blockReason,
+        });
+        return { ok: false, reason: blockReason };
+      }
+      console.info('[musicStore] Version restore checkpointing dirty draft', {
+        projectId,
+        revisionId: normalizedId,
+        reason: blockReason,
+      });
+      await get().saveCurrentProject({ reason: 'manual' });
+      const afterSave = computeVersionRestoreBlockReason(get());
+      if (afterSave) {
+        set({
+          versionRestoreBlockReason: afterSave,
+          versionActionStatus: 'error',
+          versionActionError: 'Draft still dirty after checkpoint',
+        });
+        return { ok: false, reason: afterSave };
+      }
+    }
+
+    const cas = get();
+    if (
+      !cas.activeBranchId
+      || cas.workingVersion == null
+      || !cas.currentRevisionId
+    ) {
+      return { ok: false, reason: 'missing-cas' };
+    }
+
+    versionActionRequestSeq += 1;
+    const requestId = versionActionRequestSeq;
+    set({ versionActionStatus: 'loading', versionActionError: '' });
+    try {
+      const durable = await restoreRevisionRequest(projectId, normalizedId, {
+        branch_id: cas.activeBranchId,
+        expected_active_branch_id: cas.activeBranchId,
+        expected_working_version: cas.workingVersion,
+        expected_head_revision_id: cas.currentRevisionId,
+      });
+      if (requestId !== versionActionRequestSeq || get().currentProjectId !== projectId) {
+        return { ok: false, reason: 'stale' };
+      }
+      console.info('[musicStore] Version restore completed', {
+        projectId,
+        revisionId: normalizedId,
+        createdRevisionId: durable?.created_revision_ids?.[0] || null,
+      });
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: false,
+        markSaved: true,
+        action: 'revision-restore',
+      });
+      set({
+        versionActionStatus: 'idle',
+        versionActionError: '',
+        versionAuditionActive: false,
+        versionRestoreBlockReason: null,
+      });
+      await get().loadVersionRevisions({ reset: true });
+      return { ok: true, durable };
+    } catch (error) {
+      if (requestId !== versionActionRequestSeq) {
+        return { ok: false, reason: 'stale' };
+      }
+      if (error instanceof ProjectRevisionConflictError) {
+        set({
+          versionActionStatus: 'error',
+          versionActionError: 'Revision conflict',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      console.warn('[musicStore] Version restore failed', {
+        projectId,
+        revisionId: normalizedId,
+        status: error.status || null,
+      });
+      set({
+        versionActionStatus: 'error',
+        versionActionError: error.message || 'Failed to restore revision',
+      });
+      throw error;
+    }
+  },
+
+  applyCompositionAsBranch: async ({
+    name,
+    composition,
+    clearComposition = false,
+    operationType = 'generate-apply',
+    declaredScope = null,
+    ai = null,
+  } = {}) => {
+    const state = get();
+    const projectId = state.currentProjectId;
+    if (
+      !projectId
+      || !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+      || !state.workingFingerprint
+    ) {
+      return null;
+    }
+    versionActionRequestSeq += 1;
+    const requestId = versionActionRequestSeq;
+    set({ versionActionStatus: 'loading', versionActionError: '' });
+    try {
+      const durable = await applyAsBranchRequest(projectId, {
+        name: String(name || '').trim(),
+        source_branch_id: state.activeBranchId,
+        expected_active_branch_id: state.activeBranchId,
+        expected_working_version: state.workingVersion,
+        expected_head_revision_id: state.currentRevisionId,
+        expected_source_fingerprint: state.workingFingerprint,
+        composition: clearComposition ? undefined : composition,
+        clear_composition: Boolean(clearComposition),
+        operation_type: operationType,
+        declared_scope: declaredScope || undefined,
+        ai: ai || undefined,
+      });
+      if (requestId !== versionActionRequestSeq || get().currentProjectId !== projectId) {
+        return null;
+      }
+      console.info('[musicStore] Apply-as-branch completed', {
+        projectId,
+        branchId: durable?.active_branch_id,
+        operationType,
+      });
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: true,
+        markSaved: true,
+        action: 'apply-as-branch',
+      });
+      set({
+        versionActionStatus: 'idle',
+        versionActionError: '',
+        ...clearedVersionHistoryState(),
+      });
+      await get().loadVersionBranches();
+      await get().loadVersionRevisions({ reset: true });
+      return durable;
+    } catch (error) {
+      if (requestId !== versionActionRequestSeq) {
+        return null;
+      }
+      if (error instanceof ProjectRevisionConflictError) {
+        set({
+          versionActionStatus: 'error',
+          versionActionError: 'Revision conflict',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      console.warn('[musicStore] Apply-as-branch failed', {
+        projectId,
+        status: error.status || null,
+      });
+      set({
+        versionActionStatus: 'error',
+        versionActionError: error.message || 'Failed to apply as branch',
+      });
       throw error;
     }
   },
@@ -4530,6 +5415,9 @@ export const useMusicStore = create((set, get) => ({
     });
     set({
       developmentAuditionActive: enabled,
+      ...(enabled
+        ? exclusiveAuditionPatch(PLAYBACK_SOURCE_DEVELOPMENT, ARRANGEMENT_AUDITION_SOURCE)
+        : {}),
       playbackStatus: 'idle',
       playbackSeconds: 0,
       playbackBar: 1,
@@ -4960,7 +5848,7 @@ export const useMusicStore = create((set, get) => ({
       set({
         arrangementAuditionMode: nextMode,
         arrangementCandidateTrackControls: nextControls,
-        developmentAuditionActive: false,
+        ...exclusiveAuditionPatch(PLAYBACK_SOURCE_ARRANGEMENT, ARRANGEMENT_AUDITION_SOURCE),
         playbackStatus: 'idle',
         playbackSeconds: 0,
         playbackBar: 1,
@@ -6156,6 +7044,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     currentProjectName: project.name,
     ...historyFields,
     saveConflict: null,
+    ...clearedVersionHistoryState(),
     activeView: openComposer ? 'composer' : get().activeView,
     generatedMusicJson: composition,
     editedMusicJson: composition,
@@ -6353,6 +7242,148 @@ function clearedDevelopmentPreviewState({ preserveControls = false } = {}) {
     developmentProvider: null,
     developmentModel: null,
   };
+}
+
+function clearedVersionHistoryState() {
+  return { ...initialVersionHistoryState };
+}
+
+function pruneVersionRevisionDetails(details, keepIds) {
+  const next = {};
+  for (const id of keepIds) {
+    if (details?.[id]) {
+      next[id] = details[id];
+    }
+  }
+  return next;
+}
+
+function computeVersionRestoreBlockReason(state) {
+  if (!state?.currentProjectId) {
+    return 'no-project';
+  }
+  if (state.saveStatus === 'conflict') {
+    return 'conflict';
+  }
+  if (state.saveStatus === 'saving' || state.saveStatus === 'unsaved') {
+    return 'dirty-draft';
+  }
+  const persistRevision = projectPersistRevisionKey(state.editedMusicJson, state.generationMeta);
+  if (persistRevision !== state.lastSavedPersistRevision) {
+    return 'dirty-draft';
+  }
+  const headId = state.currentRevisionId;
+  const headMeta = (state.versionRevisions || []).find((row) => row.id === headId);
+  if (
+    headMeta?.snapshot_fingerprint
+    && state.workingFingerprint
+    && headMeta.snapshot_fingerprint !== state.workingFingerprint
+  ) {
+    return 'draft-diverged';
+  }
+  return null;
+}
+
+function installDurableHistoryResult(set, get, durable, {
+  clearUndo = false,
+  markSaved = true,
+  action = 'history-durable',
+} = {}) {
+  const historyFields = historyStateFromDurable(durable);
+  const rawComposition = durable?.composition
+    ? ensureCompositionNoteIds(durable.composition).composition
+    : null;
+  const composition = rawComposition ? prepareCompositionForStore(rawComposition) : null;
+  const state = get();
+
+  if (clearUndo || composition == null) {
+    cancelAutosaveTimer();
+    const undoStack = clearUndo
+      ? []
+      : [...(state.compositionEditUndoStack || []), snapshotCompositionEditState(state)]
+        .slice(-MAX_UNDO_HISTORY);
+    const persistRevision = projectPersistRevisionKey(composition, state.generationMeta);
+    const revision = compositionRevisionKey(composition);
+    const notationRev = notationRevisionKey(composition);
+    set({
+      ...historyFields,
+      saveConflict: null,
+      generatedMusicJson: composition,
+      editedMusicJson: composition,
+      musicXml: '',
+      compositionRevision: revision,
+      notationRevision: notationRev,
+      lastSavedPersistRevision: markSaved ? persistRevision : state.lastSavedPersistRevision,
+      saveStatus: markSaved ? 'saved' : 'unsaved',
+      saveError: '',
+      trackControls: buildDefaultTrackControls(composition),
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+      pianoRollTrackId: pickDefaultTrackId(composition),
+      pianoRollNoteId: null,
+      pianoRollNoteIds: [],
+      editorSelectionRefs: [],
+      editorSelectionPrimary: null,
+      editCursorTick: 0,
+      compositionEditUndoStack: undoStack,
+      compositionEditRedoStack: [],
+      versionAuditionActive: false,
+      versionAuditionTrackControls: {},
+      playbackLoop: reconcilePlaybackLoop(state.playbackLoop, composition),
+      ...editorPrefsForCompositionReplace(state, composition),
+      ...clearedAnalysisState(),
+      ...clearedMotifUiState(),
+      ...clearedReharmonizePreviewState(),
+      ...clearedDevelopmentPreviewState(),
+      ...clearedArrangementPreviewState(),
+      ...initialHarmonyUiState,
+    });
+    console.info('[musicStore] Durable history result installed', {
+      action,
+      clearUndo: Boolean(clearUndo),
+      hasComposition: composition != null,
+      undoDepth: undoStack.length,
+    });
+    return;
+  }
+
+  const ok = commitCompositionTransaction(set, get, {
+    nextComposition: composition,
+    selectedTrackId: state.pianoRollTrackId,
+    selectedNoteId: state.pianoRollNoteId,
+    selectedNoteIds: state.pianoRollNoteIds,
+    action,
+    noteSummary: null,
+    statePatch: {
+      ...historyFields,
+      saveConflict: null,
+      generatedMusicJson: composition,
+      versionAuditionActive: false,
+      versionAuditionTrackControls: {},
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
+    },
+  });
+  if (!ok) {
+    console.warn('[musicStore] Durable history install rejected by transaction', { action });
+    return;
+  }
+  if (markSaved) {
+    cancelAutosaveTimer();
+    const persistRevision = projectPersistRevisionKey(get().editedMusicJson, get().generationMeta);
+    set({
+      lastSavedPersistRevision: persistRevision,
+      saveStatus: 'saved',
+      saveError: '',
+    });
+  }
+  console.info('[musicStore] Durable history result installed', {
+    action,
+    clearUndo: false,
+    hasComposition: true,
+    undoDepth: get().compositionEditUndoStack?.length || 0,
+  });
 }
 
 function clearedArrangementPreviewState({ preserveControls = false } = {}) {

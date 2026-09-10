@@ -11,6 +11,7 @@ import HarmonyTimelinePanel from './HarmonyTimelinePanel.jsx';
 import MotifPanel from './MotifPanel.jsx';
 import CompositionDevelopmentPanel from './CompositionDevelopmentPanel.jsx';
 import ArrangementPanel from './ArrangementPanel.jsx';
+import ProjectVersionsPanel from './ProjectVersionsPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const Workspace = styled.div`
@@ -82,6 +83,7 @@ const SideActions = styled.div`
 const TABS = [
   { id: 'piano', label: 'Piano roll' },
   { id: 'notation', label: 'Notation' },
+  { id: 'versions', label: 'Versions' },
   { id: 'develop', label: 'Develop' },
   { id: 'arrange', label: 'Arrange' },
   { id: 'motifs', label: 'Motifs' },
@@ -227,6 +229,7 @@ const ComposerWorkspace = () => {
                 <PromptJsonEditor />
               </>
             ) : null}
+            {tab.id === 'versions' && selected ? <ProjectVersionsPanel /> : null}
             {tab.id === 'analysis' && selected ? <CompositionAnalysisPanel /> : null}
             {tab.id === 'develop' && selected ? <CompositionDevelopmentPanel /> : null}
             {tab.id === 'arrange' && selected ? <ArrangementPanel /> : null}
