@@ -714,7 +714,74 @@ test('completeImport installs V2, clears generation, and marks open project dirt
   });
 
   const composition = structuredClone(COMPOSITION);
-  const ok = useMusicStore.getState().completeImport({
+  const ok = await useMusicStore.getState().completeImport({
+    composition,
+    musicxml: '<score/>',
+    import_report: {
+      status: 'approximated',
+      issues: [{ code: 'tempo_defaulted', action: 'defaulted', severity: 'warning', message: 'tempo', count: 1 }],
+      summary: { detected_format: 'midi', display_filename: 'x.mid', input_bytes: 1, target_ppq: 480, source_track_count: 1, result_track_count: 1, source_note_count: 1, result_note_count: 1, bar_count: 1, duration_ticks: 1920 },
+    },
+    notation_report: { status: 'exact' },
+  });
+  assert.equal(ok, false);
+  assert.match(useMusicStore.getState().importError, /Missing branch history/i);
+});
+
+test('completeImport durable commit for open project with CAS', async (t) => {
+  const commits = [];
+  const restore = installAxiosStub(async (config) => {
+    if (String(config.url || '').includes('/revisions') && (config.method === 'post' || config.method === 'POST')) {
+      const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+      commits.push(body);
+      return {
+        data: {
+          project_id: 'p1',
+          active_branch_id: 'b1',
+          active_branch_name: 'Original',
+          current_revision_id: 'r2',
+          current_revision_sequence: 2,
+          working_version: 2,
+          working_fingerprint: 'composition.snapshot.v1:imported',
+          composition: body.composition,
+          revision_created: true,
+          created_revision_ids: ['r2'],
+          operation_type: 'import',
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
+  });
+  t.after(restore);
+
+  resetProjectState({
+    currentProjectId: 'p1',
+    currentProjectName: 'Open',
+    activeView: 'composer',
+    activeBranchId: 'b1',
+    activeBranchName: 'Original',
+    currentRevisionId: 'r1',
+    currentRevisionSequence: 1,
+    workingVersion: 1,
+    workingFingerprint: 'composition.snapshot.v1:before',
+    generationMeta: {
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      prompt: { genre: 'ambient' },
+    },
+    lastSavedPersistRevision: 'rev-saved',
+    saveStatus: 'saved',
+    aiEditStartBar: 1,
+    aiEditEndBar: 2,
+    compositionEditUndoStack: [{ kind: 'edit' }],
+  });
+
+  const composition = structuredClone(COMPOSITION);
+  const ok = await useMusicStore.getState().completeImport({
     composition,
     musicxml: '<score/>',
     import_report: {
@@ -725,17 +792,19 @@ test('completeImport installs V2, clears generation, and marks open project dirt
     notation_report: { status: 'exact' },
   });
   assert.equal(ok, true);
+  assert.equal(commits.length, 1);
+  assert.equal(commits[0].operation_type, 'import');
   const state = useMusicStore.getState();
   assert.equal(state.importStatus, 'success');
   assert.equal(state.editedMusicJson.schema_version, 'composition.v2');
-  assert.equal(state.generatedMusicJson.schema_version, 'composition.v2');
   assert.equal(state.musicXml, '<score/>');
   assert.equal(state.generationMeta, null);
   assert.equal(state.aiEditStartBar, null);
   assert.deepEqual(state.compositionEditUndoStack, []);
   assert.equal(state.importReport.status, 'approximated');
   assert.equal(state.notationReport.status, 'exact');
-  assert.equal(state.saveStatus, 'unsaved');
+  assert.equal(state.saveStatus, 'saved');
+  assert.equal(state.currentRevisionId, 'r2');
 });
 
 test('createImportedProject parses before create and skips create on parse failure', async (t) => {

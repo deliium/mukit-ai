@@ -23,7 +23,7 @@ from app.harmony_schemas import (
     ReharmonizePreviewResponse,
     TrackChangeSummary,
 )
-from app.services.composition_fingerprint import composition_source_fingerprint
+from app.services.composition_edit_fingerprint import composition_edit_fingerprint
 from app.services.composition_harmony_compatibility import analyze_harmony_compatibility
 from app.services.composition_harmony_timeline import apply_harmony_timeline_operation
 from app.services.composition_import import midi_number_to_pitch
@@ -119,7 +119,7 @@ def preview_reharmonization(request: ReharmonizePreviewRequest) -> ReharmonizePr
     authorized = _authorize_targets(composition, request)
     _ensure_realizable_targets(composition, request, authorized)
 
-    base_fingerprint = composition_source_fingerprint(composition)
+    base_fingerprint = composition_edit_fingerprint(composition)
     bounds = RegionTickBounds(
         start_bar=request.selection.start_bar,
         end_bar=request.selection.end_bar,
@@ -224,7 +224,7 @@ def preview_reharmonization(request: ReharmonizePreviewRequest) -> ReharmonizePr
             details={"failed": [item.kind for item in preservation if not item.satisfied][:8]},
         )
 
-    proposal_fingerprint = composition_source_fingerprint(candidate)
+    proposal_fingerprint = composition_edit_fingerprint(candidate)
     logger.info(
         "Reharmonization preview complete",
         extra={

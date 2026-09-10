@@ -260,9 +260,9 @@ test('empty models leave llmReady false after setAvailableLlmModels', () => {
   assert.equal(state.availableLlmModels.length, 0);
 });
 
-test('startAiEdit is ignored while already loading', () => {
+test('startAiEdit is ignored while already loading', async () => {
   resetGenerationState({ aiEditStatus: 'loading' });
-  const started = useMusicStore.getState().startAiEdit();
+  const started = await useMusicStore.getState().startAiEdit();
   assert.equal(started, false);
   assert.equal(useMusicStore.getState().aiEditStatus, 'loading');
 });

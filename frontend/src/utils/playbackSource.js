@@ -53,6 +53,20 @@ export function resolvePlaybackSource(state, deps = {}) {
     };
   }
 
+  if (state?.motifAuditionActive && state?.motifCandidate?.composition) {
+    return {
+      source: PLAYBACK_SOURCE_GENERATION,
+      composition: state.motifCandidate.composition,
+    };
+  }
+
+  if (state?.reharmonizeAuditionActive && state?.reharmonizeCandidate) {
+    return {
+      source: PLAYBACK_SOURCE_GENERATION,
+      composition: state.reharmonizeCandidate,
+    };
+  }
+
   if (state?.versionAuditionActive) {
     const revisionId = state.versionSelectedRevisionId;
     const detail = revisionId ? state.versionRevisionDetails?.[revisionId] : null;
@@ -90,12 +104,17 @@ export function resolvePlaybackSource(state, deps = {}) {
  * @returns {object}
  */
 export function exclusiveAuditionPatch(source, arrangementSourceMode = 'source') {
+  const clearAiPreviews = {
+    generationAuditionActive: false,
+    aiEditAuditionActive: false,
+    motifAuditionActive: false,
+    reharmonizeAuditionActive: false,
+  };
   if (source === PLAYBACK_SOURCE_ARRANGEMENT) {
     return {
       developmentAuditionActive: false,
       versionAuditionActive: false,
-      generationAuditionActive: false,
-      aiEditAuditionActive: false,
+      ...clearAiPreviews,
     };
   }
   if (source === PLAYBACK_SOURCE_GENERATION) {
@@ -103,30 +122,30 @@ export function exclusiveAuditionPatch(source, arrangementSourceMode = 'source')
       developmentAuditionActive: false,
       arrangementAuditionMode: arrangementSourceMode,
       versionAuditionActive: false,
+      // Caller enables the specific generation/ai-edit/motif/reharm audition flag.
       aiEditAuditionActive: false,
+      motifAuditionActive: false,
+      reharmonizeAuditionActive: false,
     };
   }
   if (source === PLAYBACK_SOURCE_DEVELOPMENT) {
     return {
       arrangementAuditionMode: arrangementSourceMode,
       versionAuditionActive: false,
-      generationAuditionActive: false,
-      aiEditAuditionActive: false,
+      ...clearAiPreviews,
     };
   }
   if (source === PLAYBACK_SOURCE_VERSION) {
     return {
       developmentAuditionActive: false,
       arrangementAuditionMode: arrangementSourceMode,
-      generationAuditionActive: false,
-      aiEditAuditionActive: false,
+      ...clearAiPreviews,
     };
   }
   return {
     developmentAuditionActive: false,
     arrangementAuditionMode: arrangementSourceMode,
     versionAuditionActive: false,
-    generationAuditionActive: false,
-    aiEditAuditionActive: false,
+    ...clearAiPreviews,
   };
 }

@@ -224,6 +224,10 @@ const initialMotifUiState = {
   motifApplyError: '',
   motifApplyWarnings: [],
   motifReconcileWarnings: [],
+  motifCandidate: null,
+  motifAuditionActive: false,
+  motifCompareResult: null,
+  motifRequestCapture: null,
 };
 
 export const DEFAULT_REHARMONIZE_OPERATION = 'increase_tension';
@@ -255,6 +259,8 @@ const initialReharmonizePreviewState = {
   reharmonizeEndTick: null,
   reharmonizeActiveKey: null,
   reharmonizeRecommendedTargetTrackIds: [],
+  reharmonizeAuditionActive: false,
+  reharmonizeCompareResult: null,
   reharmonizeOperation: DEFAULT_REHARMONIZE_OPERATION,
   reharmonizeContentPolicy: DEFAULT_REHARMONIZE_CONTENT_POLICY,
   reharmonizeEngine: DEFAULT_REHARMONIZE_ENGINE,
@@ -330,6 +336,7 @@ const initialDevelopmentPreviewState = {
   developmentCandidates: [],
   developmentSelectedCandidateId: null,
   developmentAuditionActive: false,
+  developmentCompareResult: null,
   developmentProvider: null,
   developmentModel: null,
 };
@@ -368,6 +375,7 @@ const initialArrangementPreviewState = {
   arrangementSelectedCandidateId: null,
   arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
   arrangementCandidateTrackControls: {},
+  arrangementCompareResult: null,
   arrangementProvider: null,
   arrangementModel: null,
 };
@@ -1103,7 +1111,7 @@ export const useMusicStore = create((set, get) => ({
     return true;
   },
 
-  completeImport: ({
+  completeImport: async ({
     composition,
     musicxml = '',
     import_report: importReport = null,
@@ -1130,6 +1138,7 @@ export const useMusicStore = create((set, get) => ({
     const notationRev = notationRevisionKey(nextComposition);
     const eventCount = countEvents(nextComposition);
     const featureSummary = countV2FeatureSummary(nextComposition);
+    const projectId = get().currentProjectId;
     console.info('[musicStore] Composition import completed', {
       schemaVersion: nextComposition.schema_version,
       trackCount: nextComposition.tracks?.length || 0,
@@ -1137,10 +1146,11 @@ export const useMusicStore = create((set, get) => ({
       barCount: nextComposition.bar_count || 0,
       importStatus: importReport?.status || null,
       importIssueCount: importReport?.issues?.length || 0,
-      projectId: get().currentProjectId,
+      projectId,
+      durable: Boolean(projectId),
       ...featureSummary,
     });
-    console.debug('[musicStore] Import state installed', {
+    console.debug('[musicStore] Import state install starting', {
       compositionRevision: revision.slice(0, 48),
       musicXmlLength: musicxml?.length || 0,
       hasNotationReport: Boolean(notationReport),
@@ -1148,7 +1158,7 @@ export const useMusicStore = create((set, get) => ({
 
     cancelAnalysisLifecycle();
     const prev = get();
-    set({
+    const localInstallPatch = {
       generatedMusicJson: nextComposition,
       editedMusicJson: nextComposition,
       musicXml: musicxml || '',
@@ -1179,6 +1189,13 @@ export const useMusicStore = create((set, get) => ({
       aiEditStatus: 'idle',
       aiEditError: '',
       aiEditWarnings: [],
+      aiEditCandidate: null,
+      aiEditAuditionActive: false,
+      aiEditCompareResult: null,
+      aiEditRequestCapture: null,
+      generationCandidate: null,
+      generationAuditionActive: false,
+      generationCompareResult: null,
       generationMeta: null,
       importStatus: 'success',
       importError: '',
@@ -1191,9 +1208,99 @@ export const useMusicStore = create((set, get) => ({
       ...clearedDevelopmentPreviewState(),
       ...clearedArrangementPreviewState(),
       ...initialHarmonyUiState,
-    });
-    markProjectDirty(set, get);
-    return true;
+    };
+
+    // No open project: local-only replace (no durable history claim).
+    if (!projectId) {
+      set(localInstallPatch);
+      markProjectDirty(set, get);
+      return true;
+    }
+
+    if (
+      !prev.activeBranchId
+      || prev.workingVersion == null
+      || !prev.currentRevisionId
+      || !prev.workingFingerprint
+    ) {
+      console.error('[musicStore] Open-project import missing CAS fields');
+      set({
+        importStatus: 'error',
+        importError: 'Missing branch history fields for durable import; reload the project',
+      });
+      return false;
+    }
+
+    try {
+      const durable = await commitRevisionRequest(projectId, {
+        branch_id: prev.activeBranchId,
+        expected_active_branch_id: prev.activeBranchId,
+        expected_working_version: prev.workingVersion,
+        expected_head_revision_id: prev.currentRevisionId,
+        expected_source_fingerprint: prev.workingFingerprint,
+        composition: nextComposition,
+        operation_type: 'import',
+        checkpoint_dirty_draft: true,
+      });
+      if (get().currentProjectId !== projectId) {
+        console.warn('[musicStore] Import durable result ignored after project switch');
+        return false;
+      }
+      console.info('[musicStore] Durable import revision committed', {
+        projectId,
+        revisionCreated: Boolean(durable?.revision_created),
+      });
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: true,
+        markSaved: true,
+        action: 'import',
+      });
+      set({
+        musicXml: musicxml || '',
+        importStatus: 'success',
+        importError: '',
+        importReport: importReport || null,
+        notationReport: notationReport || null,
+        generationMeta: null,
+        generationCandidate: null,
+        generationAuditionActive: false,
+        generationCompareResult: null,
+        aiEditStartBar: null,
+        aiEditEndBar: null,
+        aiEditTrackMode: 'current',
+        aiEditTrackIds: null,
+        aiEditInstruction: '',
+        aiEditStatus: 'idle',
+        aiEditError: '',
+        aiEditWarnings: [],
+        aiEditCandidate: null,
+        aiEditAuditionActive: false,
+        aiEditCompareResult: null,
+        aiEditRequestCapture: null,
+        ...clearedVersionHistoryState(),
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof ProjectRevisionConflictError) {
+        console.warn('[musicStore] Durable import conflict', { projectId });
+        set({
+          importStatus: 'error',
+          importError: 'Revision conflict during import; reload or retry',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        return false;
+      }
+      console.error('[musicStore] Durable import failed', {
+        projectId,
+        message: error.message,
+      });
+      set({
+        importStatus: 'error',
+        importError: error.message || 'Import commit failed',
+      });
+      return false;
+    }
   },
 
   failImport: (message, { code = null } = {}) => {
@@ -5597,7 +5704,7 @@ export const useMusicStore = create((set, get) => ({
     set(clearedMotifUiState());
   },
 
-  startMotifApply: () => {
+  startMotifApply: async () => {
     const state = get();
     if (state.motifApplyStatus === 'loading') {
       console.warn('[musicStore] Duplicate motif apply blocked', {
@@ -5627,17 +5734,37 @@ export const useMusicStore = create((set, get) => ({
       });
       return false;
     }
+    const creative = isCreativeMotifOperation(state.motifOperation);
+    const capture = captureAiRequestContext(state);
+    const sourceFingerprint = await fingerprintCompositionOrNull(state.editedMusicJson);
     console.info('[musicStore] Motif apply started', {
       motifId: state.motifSelectedMotifId,
       occurrenceId: state.motifSelectedOccurrenceId,
       operation: state.motifOperation,
+      creative,
       destinationTrackId: state.motifDestinationTrackId,
       destinationStartBar: state.motifDestinationStartBar,
+      sourcePrefix: editFingerprintLogPrefix(sourceFingerprint),
     });
     set({
       motifApplyStatus: 'loading',
       motifApplyError: '',
       motifApplyWarnings: [],
+      motifCandidate: creative ? null : state.motifCandidate,
+      motifAuditionActive: false,
+      motifCompareResult: creative ? null : state.motifCompareResult,
+      motifRequestCapture: {
+        ...capture,
+        sourceFingerprint,
+        creative,
+        operation: state.motifOperation,
+        motifId: state.motifSelectedMotifId,
+        occurrenceId: state.motifSelectedOccurrenceId,
+        destinationTrackId: state.motifDestinationTrackId,
+        destinationStartBar: state.motifDestinationStartBar,
+        destinationStartTick: state.motifDestinationStartTick,
+        variationStrength: state.motifVariationStrength,
+      },
     });
     return true;
   },
@@ -5649,16 +5776,24 @@ export const useMusicStore = create((set, get) => ({
       motifApplyStatus: 'error',
       motifApplyError: safeMessage,
       motifApplyWarnings: [],
+      motifAuditionActive: false,
     });
   },
 
-  completeMotifApply: ({
+  completeMotifApply: async ({
     composition,
     musicxml = '',
     warnings = [],
     result = null,
+    provider = null,
+    model = null,
   } = {}) => {
-    const state = get();
+    const capture = get().motifRequestCapture;
+    if (!capture || get().motifApplyStatus !== 'loading') {
+      console.warn('[musicStore] Ignoring motif apply response without active request');
+      return false;
+    }
+
     const prepared = prepareCompositionForStore(ensureCompositionNoteIds(composition).composition);
     const validation = validateMusicJson(prepared);
     const motifValidation = validateMotifDefinitions(prepared);
@@ -5672,6 +5807,59 @@ export const useMusicStore = create((set, get) => ({
       return false;
     }
 
+    // Creative AI motif: stage preview candidate; do not mutate working composition.
+    if (capture.creative) {
+      const stale = detectAiRequestStale(capture, get());
+      if (stale.stale) {
+        console.warn('[musicStore] Creative motif response rejected as stale', { reason: stale.reason });
+        set({
+          motifApplyStatus: 'error',
+          motifApplyError: 'Composition or project changed during motif preview; request again',
+          motifCandidate: null,
+        });
+        return false;
+      }
+      const candidateFingerprint = await compositionEditFingerprint(prepared);
+      if (get().motifRequestCapture !== capture) {
+        return false;
+      }
+      const endBar = Number(capture.destinationStartBar) || 1;
+      const candidate = buildAiCandidateEnvelope({
+        candidateId: makeAiCandidateId('motif'),
+        operationType: 'creative-motif-apply',
+        composition: prepared,
+        sourceFingerprint: capture.sourceFingerprint,
+        candidateFingerprint,
+        provider: provider || get().selectedProvider || null,
+        model: model || get().selectedModel || null,
+        instruction: null,
+        warnings,
+        declaredRanges: [{ start_bar: endBar, end_bar: endBar }],
+        declaredTrackIds: capture.destinationTrackId ? [capture.destinationTrackId] : [],
+        musicXml: musicxml || '',
+        extras: {
+          motif_result: result,
+          motif_operation: capture.operation,
+          variation_strength: capture.variationStrength,
+        },
+      });
+      console.info('[musicStore] Creative motif candidate staged', {
+        ...aiCandidateLogFields(candidate),
+        operation: capture.operation,
+      });
+      set({
+        motifCandidate: candidate,
+        motifAuditionActive: false,
+        motifCompareResult: null,
+        motifApplyStatus: 'success',
+        motifApplyError: '',
+        motifApplyWarnings: Array.isArray(warnings) ? warnings : [],
+      });
+      return true;
+    }
+
+    // Mechanical motif: direct undoable edit (not AI experimentation).
+    const state = get();
     const newOccurrenceId = result?.new_occurrence_id || null;
     const createdEventIds = Array.isArray(result?.created_event_ids) ? result.created_event_ids : [];
     const destinationTrackId = pickDefaultTrackId(
@@ -5701,6 +5889,10 @@ export const useMusicStore = create((set, get) => ({
         motifHighlightedUsageKey: result?.motif_id && newOccurrenceId
           ? `canonical:${result.motif_id}:${newOccurrenceId}`
           : state.motifHighlightedUsageKey,
+        motifCandidate: null,
+        motifAuditionActive: false,
+        motifCompareResult: null,
+        motifRequestCapture: null,
         ...clearedReharmonizePreviewState({ preserveControls: true }),
         ...clearedDevelopmentPreviewState({ preserveControls: true }),
         ...clearedArrangementPreviewState({ preserveControls: true }),
@@ -5716,8 +5908,261 @@ export const useMusicStore = create((set, get) => ({
     return true;
   },
 
+  rejectMotifCandidate: () => {
+    console.info('[musicStore] Creative motif candidate rejected', {
+      ...aiCandidateLogFields(get().motifCandidate),
+    });
+    set({
+      motifCandidate: null,
+      motifAuditionActive: false,
+      motifCompareResult: null,
+      motifApplyStatus: 'idle',
+      motifApplyError: '',
+      motifApplyWarnings: [],
+      motifRequestCapture: null,
+    });
+    return true;
+  },
+
+  setMotifAuditionActive: (active) => {
+    const enabled = Boolean(active);
+    const candidate = get().motifCandidate;
+    if (enabled && (!candidate || candidate.status !== AI_CANDIDATE_STATUS.READY)) {
+      return false;
+    }
+    set({
+      motifAuditionActive: enabled,
+      ...(enabled
+        ? {
+          ...exclusiveAuditionPatch(PLAYBACK_SOURCE_GENERATION, ARRANGEMENT_AUDITION_SOURCE),
+          generationAuditionActive: false,
+          aiEditAuditionActive: false,
+          motifAuditionActive: true,
+        }
+        : {}),
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  refreshMotifComparison: () => {
+    const candidate = get().motifCandidate;
+    if (!candidate) {
+      set({ motifCompareResult: null });
+      return null;
+    }
+    const result = compareCompositions(get().editedMusicJson, candidate.composition, {
+      leftLabel: 'working',
+      rightLabel: 'motif-candidate',
+    });
+    set({ motifCompareResult: result });
+    return result;
+  },
+
+  applyMotifCandidate: async ({ asNewBranch = false, branchName = null } = {}) => {
+    const state = get();
+    const candidate = state.motifCandidate;
+    if (!candidate || candidate.status !== AI_CANDIDATE_STATUS.READY) {
+      return false;
+    }
+    const stale = detectAiRequestStale(state.motifRequestCapture, state);
+    if (stale.stale) {
+      set({
+        motifCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.STALE },
+        motifApplyStatus: 'error',
+        motifApplyError: 'Source changed; request a new motif preview',
+      });
+      return false;
+    }
+    const liveSourceFp = await fingerprintCompositionOrNull(state.editedMusicJson);
+    const liveCandidateFp = await compositionEditFingerprint(candidate.composition);
+    if (
+      liveSourceFp !== candidate.source_fingerprint
+      || liveCandidateFp !== candidate.candidate_fingerprint
+    ) {
+      set({
+        motifCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.STALE },
+        motifApplyStatus: 'error',
+        motifApplyError: 'Candidate fingerprints no longer match; request a new preview',
+      });
+      return false;
+    }
+
+    const prepared = prepareCompositionForStore(
+      ensureCompositionNoteIds(candidate.composition).composition,
+    );
+    const validation = validateMusicJson(prepared);
+    const motifValidation = validateMotifDefinitions(prepared);
+    if (!validation.valid || !isCanonicalComposition(prepared) || !motifValidation.valid) {
+      set({
+        motifApplyStatus: 'error',
+        motifApplyError: validation.message || motifValidation.message || 'Candidate invalid',
+      });
+      return false;
+    }
+
+    set({ motifCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.APPLYING } });
+
+    const motifResult = candidate.motif_result || null;
+    const createdEventIds = Array.isArray(motifResult?.created_event_ids)
+      ? motifResult.created_event_ids
+      : [];
+    const destinationTrackId = pickDefaultTrackId(
+      prepared,
+      motifResult?.destination_track_id || candidate.declared_track_ids?.[0] || state.motifDestinationTrackId,
+    );
+    const newOccurrenceId = motifResult?.new_occurrence_id || null;
+
+    const aiPayload = {
+      provider: normalizeAiProvider(candidate.provider),
+      model: candidate.model,
+      candidate_id: candidate.candidate_id,
+      candidate_fingerprint: candidate.candidate_fingerprint,
+      warning_codes: (candidate.warnings || [])
+        .map((item) => (typeof item === 'string' ? item : item?.code))
+        .filter(Boolean)
+        .slice(0, 32),
+    };
+
+    const localStatePatch = {
+      musicXml: candidate.music_xml || state.musicXml || '',
+      motifApplyStatus: 'idle',
+      motifApplyError: '',
+      motifApplyWarnings: candidate.warnings || [],
+      motifSelectedMotifId: motifResult?.motif_id || state.motifSelectedMotifId,
+      motifSelectedOccurrenceId: newOccurrenceId || state.motifSelectedOccurrenceId,
+      motifHighlightedUsageKey: motifResult?.motif_id && newOccurrenceId
+        ? `canonical:${motifResult.motif_id}:${newOccurrenceId}`
+        : state.motifHighlightedUsageKey,
+      motifCandidate: null,
+      motifAuditionActive: false,
+      motifCompareResult: null,
+      motifRequestCapture: null,
+      ...clearedReharmonizePreviewState({ preserveControls: true }),
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
+    };
+
+    if (!state.currentProjectId) {
+      console.info('[musicStore] Creative motif apply local-only (no project)', {
+        ...aiCandidateLogFields(candidate),
+      });
+      return commitCompositionTransaction(set, get, {
+        nextComposition: prepared,
+        selectedTrackId: destinationTrackId,
+        selectedNoteId: null,
+        selectedNoteIds: createdEventIds,
+        action: 'creative-motif-apply',
+        noteSummary: {
+          motifId: motifResult?.motif_id || state.motifSelectedMotifId,
+          newOccurrenceId,
+          createdEventCount: createdEventIds.length,
+        },
+        affectedNoteCount: createdEventIds.length,
+        affectedTrackCount: 1,
+        statePatch: localStatePatch,
+      });
+    }
+
+    if (
+      !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+      || !state.workingFingerprint
+    ) {
+      set({
+        motifCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+        motifApplyStatus: 'error',
+        motifApplyError: 'Missing branch CAS fields for durable motif apply',
+      });
+      return false;
+    }
+
+    try {
+      let durable;
+      if (asNewBranch) {
+        const name = String(branchName || '').trim();
+        if (!name) {
+          set({
+            motifCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+            motifApplyStatus: 'error',
+            motifApplyError: 'Branch name required for Apply as new branch',
+          });
+          return false;
+        }
+        durable = await applyAsBranchRequest(state.currentProjectId, {
+          name,
+          source_branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'creative-motif-apply',
+          declared_scope: {
+            ranges: candidate.declared_ranges || [],
+            track_ids: candidate.declared_track_ids || [],
+          },
+          ai: aiPayload,
+        });
+      } else {
+        durable = await commitRevisionRequest(state.currentProjectId, {
+          branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'creative-motif-apply',
+          checkpoint_dirty_draft: true,
+          declared_scope: {
+            ranges: candidate.declared_ranges || [],
+            track_ids: candidate.declared_track_ids || [],
+          },
+          ai: aiPayload,
+        });
+      }
+      if (get().currentProjectId !== state.currentProjectId) {
+        return false;
+      }
+      console.info('[musicStore] Creative motif candidate applied', {
+        ...aiCandidateLogFields(candidate),
+        asNewBranch: Boolean(asNewBranch),
+      });
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: Boolean(asNewBranch),
+        markSaved: true,
+        action: 'creative-motif-apply',
+      });
+      set({
+        ...localStatePatch,
+        ...(asNewBranch ? clearedVersionHistoryState() : {}),
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof ProjectRevisionConflictError) {
+        set({
+          motifCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+          motifApplyStatus: 'error',
+          motifApplyError: 'Revision conflict; reload or retry apply',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      set({
+        motifCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.READY },
+        motifApplyStatus: 'error',
+        motifApplyError: error.message || 'Motif apply failed',
+      });
+      throw error;
+    }
+  },
+
   applyMotifTransformation: async () => {
-    const started = get().startMotifApply();
+    const started = await get().startMotifApply();
     if (!started) {
       return false;
     }
@@ -5729,6 +6174,8 @@ export const useMusicStore = create((set, get) => ({
         musicxml: response.musicxml,
         warnings: response.warnings,
         result: response.result,
+        provider: response.provider,
+        model: response.model,
       });
     } catch (error) {
       const message = error instanceof MotifApiError
@@ -6089,7 +6536,50 @@ export const useMusicStore = create((set, get) => ({
     console.info('[musicStore] Development candidates discarded');
     set({
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      developmentCompareResult: null,
     });
+  },
+
+  rejectDevelopmentCandidate: (candidateId) => {
+    const state = get();
+    const id = candidateId || state.developmentSelectedCandidateId;
+    const next = (state.developmentCandidates || []).filter((item) => item.candidate_id !== id);
+    console.info('[musicStore] Development candidate rejected', {
+      candidateIdSuffix: String(id || '').slice(-8),
+      remaining: next.length,
+    });
+    const selectedStill = next.some((item) => item.candidate_id === state.developmentSelectedCandidateId);
+    set({
+      developmentCandidates: next,
+      developmentSelectedCandidateId: selectedStill
+        ? state.developmentSelectedCandidateId
+        : (next[0]?.candidate_id || null),
+      developmentAuditionActive: false,
+      developmentCompareResult: null,
+      developmentStatus: next.length ? state.developmentStatus : 'idle',
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  refreshDevelopmentComparison: () => {
+    const state = get();
+    const candidate = findDevelopmentCandidateById(
+      state.developmentCandidates,
+      state.developmentSelectedCandidateId,
+    );
+    if (!candidate) {
+      set({ developmentCompareResult: null });
+      return null;
+    }
+    const result = compareCompositions(state.editedMusicJson, candidate.composition, {
+      leftLabel: 'working',
+      rightLabel: 'development-candidate',
+    });
+    set({ developmentCompareResult: result });
+    return result;
   },
 
   startDevelopmentPreview: async () => {
@@ -6227,7 +6717,7 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
-  applySelectedDevelopmentCandidate: async () => {
+  applySelectedDevelopmentCandidate: async ({ asNewBranch = false, branchName = null } = {}) => {
     const state = get();
     if (state.developmentStatus !== 'ready') {
       return false;
@@ -6250,6 +6740,7 @@ export const useMusicStore = create((set, get) => ({
         developmentCandidates: [],
         developmentSelectedCandidateId: null,
         developmentAuditionActive: false,
+        developmentCompareResult: null,
       });
       return false;
     }
@@ -6282,26 +6773,126 @@ export const useMusicStore = create((set, get) => ({
       return false;
     }
 
+    const outputRange = candidate.output_range || {};
+    const declaredRanges = Number.isInteger(outputRange.start_bar) && Number.isInteger(outputRange.end_bar)
+      ? [{ start_bar: outputRange.start_bar, end_bar: outputRange.end_bar }]
+      : [];
+    const aiPayload = {
+      provider: normalizeAiProvider(state.developmentProvider || state.selectedProvider),
+      model: state.developmentModel || state.selectedModel || null,
+      user_instruction: state.developmentInstruction || undefined,
+      candidate_id: candidate.candidate_id,
+      candidate_fingerprint: candidate.candidate_fingerprint,
+      warning_codes: (state.developmentWarnings || []).slice(0, 32),
+    };
+
     console.info('[musicStore] Development candidate apply', {
       operation: state.developmentOperation,
       candidateIdSuffix: candidate.candidate_id.slice(-8),
       editSourcePrefix: editFingerprintLogPrefix(verification.localSourceFingerprint),
       barCount: prepared.bar_count,
+      asNewBranch: Boolean(asNewBranch),
+      durable: Boolean(state.currentProjectId),
     });
 
-    commitCompositionTransaction(set, get, {
-      nextComposition: prepared,
-      selectedTrackId: state.pianoRollTrackId,
-      selectedNoteId: state.pianoRollNoteId,
-      selectedNoteIds: state.pianoRollNoteIds,
-      action: 'development-apply',
-      noteSummary: null,
-      statePatch: {
+    if (!state.currentProjectId) {
+      commitCompositionTransaction(set, get, {
+        nextComposition: prepared,
+        selectedTrackId: state.pianoRollTrackId,
+        selectedNoteId: state.pianoRollNoteId,
+        selectedNoteIds: state.pianoRollNoteIds,
+        action: 'development-apply',
+        noteSummary: null,
+        statePatch: {
+          ...clearedDevelopmentPreviewState({ preserveControls: true }),
+          developmentAuditionActive: false,
+          developmentCompareResult: null,
+        },
+      });
+      return true;
+    }
+
+    if (
+      !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+      || !state.workingFingerprint
+    ) {
+      set({
+        developmentStatus: 'error',
+        developmentError: 'Missing branch CAS fields for durable development apply',
+      });
+      return false;
+    }
+
+    try {
+      let durable;
+      if (asNewBranch) {
+        const name = String(branchName || '').trim();
+        if (!name) {
+          set({
+            developmentStatus: 'error',
+            developmentError: 'Branch name required for Apply as new branch',
+          });
+          return false;
+        }
+        durable = await applyAsBranchRequest(state.currentProjectId, {
+          name,
+          source_branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'development-apply',
+          declared_scope: { ranges: declaredRanges, track_ids: [] },
+          ai: aiPayload,
+        });
+      } else {
+        durable = await commitRevisionRequest(state.currentProjectId, {
+          branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'development-apply',
+          checkpoint_dirty_draft: true,
+          declared_scope: { ranges: declaredRanges, track_ids: [] },
+          ai: aiPayload,
+        });
+      }
+      if (get().currentProjectId !== state.currentProjectId) {
+        return false;
+      }
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: Boolean(asNewBranch),
+        markSaved: true,
+        action: 'development-apply',
+      });
+      set({
         ...clearedDevelopmentPreviewState({ preserveControls: true }),
         developmentAuditionActive: false,
-      },
-    });
-    return true;
+        developmentCompareResult: null,
+        ...(asNewBranch ? clearedVersionHistoryState() : {}),
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof ProjectRevisionConflictError) {
+        set({
+          developmentStatus: 'error',
+          developmentError: 'Revision conflict; reload or retry apply',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      set({
+        developmentStatus: 'error',
+        developmentError: error.message || 'Development apply failed',
+      });
+      throw error;
+    }
   },
 
   loadArrangementCatalog: async ({ forceRefresh = false } = {}) => {
@@ -6739,7 +7330,7 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
-  applySelectedArrangementCandidate: async () => {
+  applySelectedArrangementCandidate: async ({ asNewBranch = false, branchName = null } = {}) => {
     const state = get();
     if (state.arrangementStatus !== 'ready') {
       return false;
@@ -6768,6 +7359,7 @@ export const useMusicStore = create((set, get) => ({
         arrangementSelectedCandidateId: null,
         arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
         arrangementCandidateTrackControls: {},
+        arrangementCompareResult: null,
       });
       return false;
     }
@@ -6819,9 +7411,6 @@ export const useMusicStore = create((set, get) => ({
         candidateIdSuffix: candidate.candidate_id.slice(-8),
         assertionCodeCount: failureCodes.length,
       });
-      arrangementLogger.debug('Arrangement verification failure codes', {
-        codes: failureCodes,
-      });
       set({
         arrangementStatus: 'error',
         arrangementError: 'Candidate failed fingerprint or topology checks',
@@ -6847,6 +7436,23 @@ export const useMusicStore = create((set, get) => ({
     );
     const historySnapshot = snapshotCompositionEditState(state);
     const nextTrackControls = mergeTrackControls(state.trackControls, prepared);
+    const aiPayload = {
+      provider: normalizeAiProvider(state.arrangementProvider || state.selectedProvider),
+      model: state.arrangementModel || state.selectedModel || null,
+      user_instruction: state.arrangementInstruction || undefined,
+      candidate_id: candidate.candidate_id,
+      candidate_fingerprint: candidate.candidate_fingerprint,
+      warning_codes: (state.arrangementWarnings || []).slice(0, 32),
+    };
+    const localStatePatch = {
+      trackControls: nextTrackControls,
+      ...reconcileMotifUiAfterCompositionChange(state, prepared),
+      ...clearedArrangementPreviewState({ preserveControls: true }),
+      ...clearedDevelopmentPreviewState({ preserveControls: true }),
+      ...clearedReharmonizePreviewState({ preserveControls: true }),
+      arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+      arrangementCompareResult: null,
+    };
 
     arrangementLogger.info('Arrangement candidate apply', {
       operation: state.arrangementOperation,
@@ -6855,29 +7461,153 @@ export const useMusicStore = create((set, get) => ({
       revision: String(state.arrangementBaseRevision || '').slice(0, 48),
       trackCount: prepared.tracks?.length || 0,
       status: 'apply',
+      asNewBranch: Boolean(asNewBranch),
+      durable: Boolean(state.currentProjectId),
     });
 
-    commitCompositionTransaction(set, get, {
-      nextComposition: prepared,
-      selectedTrackId: selection.trackId,
-      selectedNoteId: selection.noteId,
-      selectedNoteIds: selection.noteIds,
-      action: 'arrangement-apply',
-      noteSummary: null,
-      historySnapshot,
-      statePatch: {
-        trackControls: nextTrackControls,
-        ...reconcileMotifUiAfterCompositionChange(state, prepared),
-        ...clearedArrangementPreviewState({ preserveControls: true }),
-        ...clearedDevelopmentPreviewState({ preserveControls: true }),
-        ...clearedReharmonizePreviewState({ preserveControls: true }),
-        arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
-      },
-    });
+    if (!state.currentProjectId) {
+      commitCompositionTransaction(set, get, {
+        nextComposition: prepared,
+        selectedTrackId: selection.trackId,
+        selectedNoteId: selection.noteId,
+        selectedNoteIds: selection.noteIds,
+        action: 'arrangement-apply',
+        noteSummary: null,
+        historySnapshot,
+        statePatch: localStatePatch,
+      });
+      void get().refreshMusicXmlFromEditedComposition();
+      return true;
+    }
 
-    // Explicit notation refresh after topology apply (do not await for store return).
-    void get().refreshMusicXmlFromEditedComposition();
+    if (
+      !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+      || !state.workingFingerprint
+    ) {
+      set({
+        arrangementStatus: 'error',
+        arrangementError: 'Missing branch CAS fields for durable arrangement apply',
+      });
+      return false;
+    }
+
+    try {
+      let durable;
+      if (asNewBranch) {
+        const name = String(branchName || '').trim();
+        if (!name) {
+          set({
+            arrangementStatus: 'error',
+            arrangementError: 'Branch name required for Apply as new branch',
+          });
+          return false;
+        }
+        durable = await applyAsBranchRequest(state.currentProjectId, {
+          name,
+          source_branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'arrangement-apply',
+          declared_scope: {
+            ranges: [],
+            track_ids: state.arrangementSourceTrackIds || [],
+          },
+          ai: aiPayload,
+        });
+      } else {
+        durable = await commitRevisionRequest(state.currentProjectId, {
+          branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'arrangement-apply',
+          checkpoint_dirty_draft: true,
+          declared_scope: {
+            ranges: [],
+            track_ids: state.arrangementSourceTrackIds || [],
+          },
+          ai: aiPayload,
+        });
+      }
+      if (get().currentProjectId !== state.currentProjectId) {
+        return false;
+      }
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: Boolean(asNewBranch),
+        markSaved: true,
+        action: 'arrangement-apply',
+      });
+      set({
+        ...localStatePatch,
+        ...(asNewBranch ? clearedVersionHistoryState() : {}),
+      });
+      void get().refreshMusicXmlFromEditedComposition();
+      return true;
+    } catch (error) {
+      if (error instanceof ProjectRevisionConflictError) {
+        set({
+          arrangementStatus: 'error',
+          arrangementError: 'Revision conflict; reload or retry apply',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      set({
+        arrangementStatus: 'error',
+        arrangementError: error.message || 'Arrangement apply failed',
+      });
+      throw error;
+    }
+  },
+
+  rejectArrangementCandidate: (candidateId) => {
+    const state = get();
+    const id = candidateId || state.arrangementSelectedCandidateId;
+    const next = (state.arrangementCandidates || []).filter((item) => item.candidate_id !== id);
+    arrangementLogger.info('Arrangement candidate rejected', {
+      candidateIdSuffix: String(id || '').slice(-8),
+      remaining: next.length,
+    });
+    const selectedStill = next.some((item) => item.candidate_id === state.arrangementSelectedCandidateId);
+    set({
+      arrangementCandidates: next,
+      arrangementSelectedCandidateId: selectedStill
+        ? state.arrangementSelectedCandidateId
+        : (next[0]?.candidate_id || null),
+      arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+      arrangementCompareResult: null,
+      arrangementStatus: next.length ? state.arrangementStatus : 'idle',
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
     return true;
+  },
+
+  refreshArrangementComparison: () => {
+    const state = get();
+    const candidate = findArrangementCandidateById(
+      state.arrangementCandidates,
+      state.arrangementSelectedCandidateId,
+    );
+    if (!candidate) {
+      set({ arrangementCompareResult: null });
+      return null;
+    }
+    const result = compareCompositions(state.editedMusicJson, candidate.composition, {
+      leftLabel: 'working',
+      rightLabel: 'arrangement-candidate',
+    });
+    set({ arrangementCompareResult: result });
+    return result;
   },
 
   startReharmonizePreview: async () => {
@@ -7014,7 +7744,7 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
-  applyReharmonizePreview: async () => {
+  applyReharmonizePreview: async ({ asNewBranch = false, branchName = null } = {}) => {
     const state = get();
     if (state.reharmonizeStatus !== 'ready' || !state.reharmonizeCandidate) {
       console.warn('[musicStore] applyReharmonizePreview ignored; no ready candidate');
@@ -7028,7 +7758,8 @@ export const useMusicStore = create((set, get) => ({
       return false;
     }
 
-    const currentFingerprint = await compositionSourceFingerprint(state.editedMusicJson);
+    const currentFingerprint = await compositionEditFingerprint(state.editedMusicJson);
+    const liveProposalFingerprint = await compositionEditFingerprint(state.reharmonizeCandidate);
     const verification = verifyReharmonizationCandidate({
       baseComposition: state.editedMusicJson,
       candidateComposition: state.reharmonizeCandidate,
@@ -7039,7 +7770,7 @@ export const useMusicStore = create((set, get) => ({
       preserveHarmony: state.reharmonizeContentPolicy !== 'preserve_melody_adapt_harmony',
       baseFingerprint: currentFingerprint,
       responseBaseFingerprint: state.reharmonizeBaseFingerprint,
-      proposalFingerprint: state.reharmonizeProposalFingerprint,
+      proposalFingerprint: liveProposalFingerprint,
       responseProposalFingerprint: state.reharmonizeProposalFingerprint,
     });
     if (!verification.ok) {
@@ -7063,27 +7794,192 @@ export const useMusicStore = create((set, get) => ({
       return false;
     }
 
+    // Deterministic engine remains honest: only claim AI provider when engine used one.
+    const usedAiEngine = state.reharmonizeEngine !== 'deterministic';
+    const aiPayload = {
+      provider: usedAiEngine
+        ? normalizeAiProvider(state.reharmonizeProvider || state.selectedProvider)
+        : null,
+      model: usedAiEngine ? (state.reharmonizeModel || state.selectedModel || null) : null,
+      user_instruction: state.reharmonizeInstruction || undefined,
+      candidate_fingerprint: liveProposalFingerprint,
+      warning_codes: (state.reharmonizeWarnings || [])
+        .map((item) => (typeof item === 'string' ? item : item?.code))
+        .filter(Boolean)
+        .slice(0, 32),
+    };
+    const declaredRanges = state.harmonySelectionStartBar && state.harmonySelectionEndBar
+      ? [{ start_bar: state.harmonySelectionStartBar, end_bar: state.harmonySelectionEndBar }]
+      : [];
+
     console.info('[musicStore] Reharmonize preview applied', {
       operation: state.reharmonizeOperation,
       contentPolicy: state.reharmonizeContentPolicy,
+      engine: state.reharmonizeEngine,
       changedSpanCount: state.reharmonizeHarmonyChanges.length,
       changedTrackCount: state.reharmonizeTrackChanges.filter((item) => item.events_changed > 0).length,
+      asNewBranch: Boolean(asNewBranch),
+      durable: Boolean(state.currentProjectId),
+      aiAttributed: usedAiEngine,
     });
-    commitCompositionTransaction(set, get, {
-      nextComposition: prepared,
-      selectedTrackId: state.pianoRollTrackId,
-      selectedNoteId: null,
-      selectedNoteIds: [],
-      action: 'reharmonize-apply',
-      noteSummary: null,
-      statePatch: {
-        ...clearedReharmonizePreviewState({ preserveControls: true }),
+
+    const clearPatch = {
+      ...clearedReharmonizePreviewState({ preserveControls: true }),
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
       ...clearedArrangementPreviewState({ preserveControls: true }),
-        reharmonizeStatus: 'idle',
-      },
+      reharmonizeStatus: 'idle',
+      reharmonizeAuditionActive: false,
+      reharmonizeCompareResult: null,
+    };
+
+    if (!state.currentProjectId) {
+      commitCompositionTransaction(set, get, {
+        nextComposition: prepared,
+        selectedTrackId: state.pianoRollTrackId,
+        selectedNoteId: null,
+        selectedNoteIds: [],
+        action: 'reharmonize-apply',
+        noteSummary: null,
+        statePatch: clearPatch,
+      });
+      return true;
+    }
+
+    if (
+      !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+      || !state.workingFingerprint
+    ) {
+      set({
+        reharmonizeStatus: 'error',
+        reharmonizeError: 'Missing branch CAS fields for durable reharmonize apply',
+      });
+      return false;
+    }
+
+    try {
+      let durable;
+      if (asNewBranch) {
+        const name = String(branchName || '').trim();
+        if (!name) {
+          set({
+            reharmonizeStatus: 'error',
+            reharmonizeError: 'Branch name required for Apply as new branch',
+          });
+          return false;
+        }
+        durable = await applyAsBranchRequest(state.currentProjectId, {
+          name,
+          source_branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'reharmonize-apply',
+          declared_scope: {
+            ranges: declaredRanges,
+            track_ids: state.reharmonizeTargetTrackIds || [],
+          },
+          ai: aiPayload,
+        });
+      } else {
+        durable = await commitRevisionRequest(state.currentProjectId, {
+          branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'reharmonize-apply',
+          checkpoint_dirty_draft: true,
+          declared_scope: {
+            ranges: declaredRanges,
+            track_ids: state.reharmonizeTargetTrackIds || [],
+          },
+          ai: aiPayload,
+        });
+      }
+      if (get().currentProjectId !== state.currentProjectId) {
+        return false;
+      }
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: Boolean(asNewBranch),
+        markSaved: true,
+        action: 'reharmonize-apply',
+      });
+      set({
+        ...clearPatch,
+        ...(asNewBranch ? clearedVersionHistoryState() : {}),
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof ProjectRevisionConflictError) {
+        set({
+          reharmonizeStatus: 'error',
+          reharmonizeError: 'Revision conflict; reload or retry apply',
+          saveStatus: 'conflict',
+          saveConflict: error.conflict,
+        });
+        throw error;
+      }
+      set({
+        reharmonizeStatus: 'error',
+        reharmonizeError: error.message || 'Reharmonize apply failed',
+      });
+      throw error;
+    }
+  },
+
+  rejectReharmonizePreview: () => {
+    console.info('[musicStore] Reharmonize candidate rejected');
+    set({
+      ...clearedReharmonizePreviewState({ preserveControls: true }),
+      reharmonizeAuditionActive: false,
+      reharmonizeCompareResult: null,
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
     });
     return true;
+  },
+
+  setReharmonizeAuditionActive: (active) => {
+    const enabled = Boolean(active);
+    if (enabled && !get().reharmonizeCandidate) {
+      return false;
+    }
+    set({
+      reharmonizeAuditionActive: enabled,
+      ...(enabled
+        ? {
+          ...exclusiveAuditionPatch(PLAYBACK_SOURCE_GENERATION, ARRANGEMENT_AUDITION_SOURCE),
+          generationAuditionActive: false,
+          aiEditAuditionActive: false,
+          motifAuditionActive: false,
+          reharmonizeAuditionActive: true,
+        }
+        : {}),
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  refreshReharmonizeComparison: () => {
+    const candidate = get().reharmonizeCandidate;
+    if (!candidate) {
+      set({ reharmonizeCompareResult: null });
+      return null;
+    }
+    const result = compareCompositions(get().editedMusicJson, candidate, {
+      leftLabel: 'working',
+      rightLabel: 'reharmonize-candidate',
+    });
+    set({ reharmonizeCompareResult: result });
+    return result;
   },
 }));
 
@@ -7887,6 +8783,8 @@ function clearedReharmonizePreviewState({ preserveControls = false } = {}) {
     reharmonizeEndTick: null,
     reharmonizeActiveKey: null,
     reharmonizeRecommendedTargetTrackIds: [],
+    reharmonizeAuditionActive: false,
+    reharmonizeCompareResult: null,
   };
 }
 
@@ -7904,6 +8802,7 @@ function clearedDevelopmentPreviewState({ preserveControls = false } = {}) {
     developmentCandidates: [],
     developmentSelectedCandidateId: null,
     developmentAuditionActive: false,
+    developmentCompareResult: null,
     developmentProvider: null,
     developmentModel: null,
   };
@@ -8070,6 +8969,7 @@ function clearedArrangementPreviewState({ preserveControls = false } = {}) {
     arrangementSelectedCandidateId: null,
     arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
     arrangementCandidateTrackControls: {},
+    arrangementCompareResult: null,
     arrangementProvider: null,
     arrangementModel: null,
   };

@@ -430,8 +430,23 @@ export async function verifyDevelopmentCandidate({
     (item) => item && (item.required === true || item.severity === 'required'),
   );
   for (const assertion of requiredAssertions) {
-    if (assertion.passed === false || assertion.ok === false || assertion.status === 'failed') {
-      failures.push({ code: assertion.code || 'required_assertion_failed' });
+    if (
+      assertion.satisfied === false
+      || assertion.passed === false
+      || assertion.ok === false
+      || assertion.status === 'failed'
+    ) {
+      failures.push({ code: assertion.code || assertion.assertion || 'required_assertion_failed' });
+    }
+  }
+
+  // Any explicit unsatisfied assertion blocks Apply (including non-required diagnostics).
+  for (const assertion of (candidate.preservation || [])) {
+    if (assertion && assertion.satisfied === false) {
+      const code = assertion.code || assertion.assertion || 'assertion_unsatisfied';
+      if (!failures.some((item) => item.code === code)) {
+        failures.push({ code });
+      }
     }
   }
 

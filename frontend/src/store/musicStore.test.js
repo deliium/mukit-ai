@@ -186,13 +186,13 @@ test('updateNote skipHistory does not grow undo stack on every call', () => {
   );
 });
 
-test('AI edit failure leaves composition and history unchanged', () => {
+test('AI edit failure leaves composition and history unchanged', async () => {
   resetStore();
   const before = structuredClone(useMusicStore.getState().editedMusicJson);
   const store = useMusicStore.getState();
   store.setAiEditSelection({ startBar: 1, endBar: 2, trackMode: 'current' });
   store.setAiEditInstruction('make this phrase more dramatic but keep the harmony');
-  assert.equal(store.startAiEdit(), true);
+  assert.equal(await store.startAiEdit(), true);
   store.failAiEdit('provider failed');
   const after = useMusicStore.getState();
   assert.deepEqual(after.editedMusicJson, before);
@@ -202,24 +202,32 @@ test('AI edit failure leaves composition and history unchanged', () => {
   assert.match(after.aiEditError, /provider failed/);
 });
 
-test('AI edit success pushes one undo snapshot and supports undo/redo', () => {
+test('AI edit success stages candidate then Apply pushes one undo snapshot', async () => {
   resetStore();
+  useMusicStore.setState({ currentProjectId: null });
   const store = useMusicStore.getState();
   const before = structuredClone(useMusicStore.getState().editedMusicJson);
   store.setAiEditSelection({ startBar: 1, endBar: 1, trackMode: 'current' });
   store.setAiEditInstruction('make this phrase more dramatic but keep the harmony');
-  store.startAiEdit();
+  assert.equal(await store.startAiEdit(), true);
 
   const edited = structuredClone(before);
   edited.tracks[0].events = [
     { type: 'note', id: 'n1', pitch: 'G4', start_tick: 0, duration_ticks: 480, velocity: 100 },
     { type: 'note', id: 'n2', pitch: 'E4', start_tick: 0, duration_ticks: 480, velocity: 88 },
   ];
-  assert.equal(store.completeAiEdit({ composition: edited, musicxml: '<score/>', warnings: ['ok'] }), true);
+  assert.equal(await store.completeAiEdit({ composition: edited, musicxml: '<score/>', warnings: ['ok'] }), true);
 
+  const staged = useMusicStore.getState();
+  assert.deepEqual(staged.editedMusicJson, before);
+  assert.equal(staged.aiEditStatus, 'success');
+  assert.ok(staged.aiEditCandidate);
+  assert.equal(staged.compositionEditUndoStack.length, 0);
+
+  assert.equal(await store.applyAiEditCandidate(), true);
   const afterApply = useMusicStore.getState();
   assert.equal(afterApply.compositionEditUndoStack.length, 1);
-  assert.equal(afterApply.aiEditStatus, 'success');
+  assert.equal(afterApply.aiEditCandidate, null);
   assert.equal(afterApply.editedMusicJson.tracks[0].events[0].pitch, 'G4');
   assert.equal(afterApply.playbackStatus, 'idle');
 
@@ -412,7 +420,7 @@ test('reharmonize preview does not dirty composition; apply preserves melody and
   resetStore(composition);
   useMusicStore.setState({
     compositionRevision: revision,
-    currentProjectId: 'project-harmony',
+    currentProjectId: null,
     lastSavedPersistRevision: 'persist-clean',
     saveStatus: 'saved',
     harmonySelectionStartBar: 9,
@@ -425,9 +433,9 @@ test('reharmonize preview does not dirty composition; apply preserves melody and
     reharmonizeStatus: 'idle',
   });
 
-  const { compositionSourceFingerprint } = await import('../utils/compositionAnalysis.js');
+  const { compositionEditFingerprint } = await import('../utils/compositionCandidates.js');
   const { compositionRevisionKey } = await import('../utils/playbackPosition.js');
-  const baseFingerprint = await compositionSourceFingerprint(composition);
+  const baseFingerprint = await compositionEditFingerprint(composition);
 
   const candidate = structuredClone(composition);
   for (let bar = 8; bar < 12; bar += 1) {
@@ -439,12 +447,13 @@ test('reharmonize preview does not dirty composition; apply preserves melody and
     const bassEvent = candidate.tracks.find((track) => track.id === 'bass').events[bar];
     bassEvent.pitch = 'E2';
   }
+  const proposalFingerprint = await compositionEditFingerprint(candidate);
 
   const previousAdapter = axios.defaults.adapter;
   axios.defaults.adapter = async () => ({
     data: {
       base_fingerprint: baseFingerprint,
-      proposal_fingerprint: 'd'.repeat(64),
+      proposal_fingerprint: proposalFingerprint,
       composition: candidate,
       harmony_changes: [{ kind: 'replaced', start_tick: 8 * BAR, duration_ticks: 4 * BAR, chord: 'E7(b9)' }],
       track_changes: [
@@ -484,7 +493,7 @@ test('reharmonize preview does not dirty composition; apply preserves melody and
   assert.equal(applyOk, true);
   const after = useMusicStore.getState();
   assert.equal(after.reharmonizeStatus, 'idle');
-  assert.equal(after.saveStatus, 'unsaved');
+  assert.equal(after.compositionEditUndoStack.length, 1);
   assert.deepEqual(
     after.editedMusicJson.tracks.find((track) => track.id === 'melody').events,
     melodyBefore,
@@ -846,7 +855,7 @@ test('generation apply and import reconcile hidden/locked track prefs', async ()
   });
   const imported = structuredClone(BASE);
   imported.tracks = imported.tracks.filter((track) => track.id === 'bass-1');
-  assert.equal(useMusicStore.getState().completeImport({
+  assert.equal(await useMusicStore.getState().completeImport({
     composition: imported,
     musicxml: '',
   }), true);
@@ -1040,7 +1049,7 @@ test('composition replacement clears viewport request and resets cursor', async 
     editCursorTick: 800,
     viewportScrollRequest: { id: 10, scrollLeft: 10, centerTick: 800, reason: 'gotoBar' },
   });
-  assert.equal(useMusicStore.getState().completeImport({
+  assert.equal(await useMusicStore.getState().completeImport({
     composition: structuredClone(BASE),
     musicxml: '',
   }), true);

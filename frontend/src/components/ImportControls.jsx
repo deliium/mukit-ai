@@ -218,7 +218,7 @@ const ImportControls = ({
       const result = format === 'musicxml'
         ? await importMusicXml(file)
         : await importMidi(file);
-      const ok = completeImport(result);
+      const ok = await completeImport(result);
       if (!ok) {
         setLocalError(useMusicStore.getState().importError || 'Import validation failed');
         return;

@@ -169,6 +169,7 @@ def _build_arrangement_prompt(
         "Reference only provided transient source_note refs. Preserve protected material.\n"
         f"Hard constraints: {hard}\n"
         f"Bounded musical context: {context_payload}\n"
+        f"Optional user instruction (bounded): {(request.instruction or '').strip()[:500]!r}\n"
         f"Optional instruction length={_instruction_meta(request.instruction)['instruction_len']}\n"
         f"{repair_block}"
     )

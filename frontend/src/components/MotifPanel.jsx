@@ -223,6 +223,10 @@ const MotifPanel = ({ onOpenPianoTab = null }) => {
   const applyStatus = useMusicStore((state) => state.motifApplyStatus);
   const applyError = useMusicStore((state) => state.motifApplyError);
   const applyWarnings = useMusicStore((state) => state.motifApplyWarnings);
+  const motifCandidate = useMusicStore((state) => state.motifCandidate);
+  const motifAuditionActive = useMusicStore((state) => state.motifAuditionActive);
+  const motifCompareResult = useMusicStore((state) => state.motifCompareResult);
+  const currentProjectId = useMusicStore((state) => state.currentProjectId);
   const selectedProvider = useMusicStore((state) => state.selectedProvider);
   const selectedModel = useMusicStore((state) => state.selectedModel);
   const pianoRollTrackId = useMusicStore((state) => state.pianoRollTrackId);
@@ -230,6 +234,8 @@ const MotifPanel = ({ onOpenPianoTab = null }) => {
 
   const [renameDraft, setRenameDraft] = useState('');
   const [confirmReplace, setConfirmReplace] = useState(false);
+  const [branchNameDraft, setBranchNameDraft] = useState('');
+  const [applyBusy, setApplyBusy] = useState(false);
 
   const validation = useMemo(
     () => (composition ? validateMusicJson(composition) : { valid: false, message: 'No composition' }),
@@ -818,7 +824,7 @@ const MotifPanel = ({ onOpenPianoTab = null }) => {
               aria-disabled={Boolean(disabledReason)}
               onClick={onApply}
             >
-              {loading ? 'Applying…' : confirmReplace ? 'Confirm replace & apply' : 'Apply motif'}
+              {loading ? (isCreative ? 'Previewing…' : 'Applying…') : confirmReplace ? 'Confirm replace & apply' : (isCreative ? 'Preview creative motif' : 'Apply motif')}
             </Button>
             <Button
               type="button"
@@ -833,14 +839,146 @@ const MotifPanel = ({ onOpenPianoTab = null }) => {
             </Button>
           </ButtonRow>
 
+          {motifCandidate ? (
+            <div data-testid="motif-candidate-panel" style={{ marginTop: 12 }}>
+              <StatusBanner $tone="ok">
+                Creative motif preview ready
+                {motifCandidate.provider
+                  ? ` · ${motifCandidate.provider}/${motifCandidate.model || '—'}`
+                  : ''}
+                . Working composition is unchanged until Apply.
+              </StatusBanner>
+              {motifCompareResult ? (
+                <StatusBanner data-testid="motif-compare-summary">
+                  Compare vs working:{' '}
+                  {motifCompareResult.identical ? 'identical' : 'differences'}
+                  {' · '}
+                  +{motifCompareResult.events?.added || 0}
+                  {' / -'}
+                  {motifCompareResult.events?.removed || 0}
+                  {' / ~'}
+                  {motifCompareResult.events?.changed || 0}
+                </StatusBanner>
+              ) : null}
+              <ButtonRow>
+                <Button
+                  type="button"
+                  $secondary
+                  data-testid="motif-audition-toggle"
+                  disabled={applyBusy}
+                  onClick={() => {
+                    const next = !motifAuditionActive;
+                    console.debug('[MotifPanel] Toggle motif audition', { active: next });
+                    useMusicStore.getState().setMotifAuditionActive(next);
+                  }}
+                >
+                  {motifAuditionActive ? 'Play working' : 'Audition candidate'}
+                </Button>
+                <Button
+                  type="button"
+                  $secondary
+                  data-testid="motif-compare"
+                  disabled={applyBusy}
+                  onClick={() => {
+                    console.debug('[MotifPanel] Compare motif candidate');
+                    useMusicStore.getState().refreshMotifComparison();
+                  }}
+                >
+                  Compare
+                </Button>
+                <Button
+                  type="button"
+                  data-testid="motif-candidate-apply"
+                  disabled={applyBusy}
+                  onClick={async () => {
+                    setApplyBusy(true);
+                    try {
+                      console.info('[MotifPanel] Apply creative motif candidate');
+                      await useMusicStore.getState().applyMotifCandidate();
+                    } catch {
+                      // store records motifApplyError
+                    } finally {
+                      setApplyBusy(false);
+                    }
+                  }}
+                >
+                  Apply
+                </Button>
+                <Button
+                  type="button"
+                  $secondary
+                  data-testid="motif-candidate-reject"
+                  disabled={applyBusy}
+                  onClick={() => {
+                    console.info('[MotifPanel] Reject creative motif candidate');
+                    useMusicStore.getState().rejectMotifCandidate();
+                  }}
+                >
+                  Reject
+                </Button>
+              </ButtonRow>
+              {currentProjectId ? (
+                <ButtonRow>
+                  <input
+                    aria-label="Apply motif as new branch name"
+                    data-testid="motif-branch-name"
+                    placeholder="New branch name"
+                    value={branchNameDraft}
+                    disabled={applyBusy}
+                    onChange={(event) => setBranchNameDraft(event.target.value)}
+                    style={{
+                      flex: '1 1 160px',
+                      padding: '8px 10px',
+                      border: '1px solid #c7d2fe',
+                      borderRadius: 6,
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    data-testid="motif-apply-as-branch"
+                    disabled={applyBusy || !branchNameDraft.trim()}
+                    onClick={async () => {
+                      setApplyBusy(true);
+                      try {
+                        console.info('[MotifPanel] Apply motif as new branch');
+                        await useMusicStore.getState().applyMotifCandidate({
+                          asNewBranch: true,
+                          branchName: branchNameDraft.trim(),
+                        });
+                        setBranchNameDraft('');
+                      } catch {
+                        // store records motifApplyError
+                      } finally {
+                        setApplyBusy(false);
+                      }
+                    }}
+                  >
+                    Apply as new branch
+                  </Button>
+                </ButtonRow>
+              ) : (
+                <StatusBanner $tone="warn">
+                  No project open: Apply installs locally only (no durable history).
+                </StatusBanner>
+              )}
+            </div>
+          ) : null}
+
           {applyStatus === 'loading' ? (
-            <StatusBanner data-testid="motif-apply-loading">Applying motif transformation…</StatusBanner>
+            <StatusBanner data-testid="motif-apply-loading">
+              {isCreative ? 'Generating motif preview…' : 'Applying motif transformation…'}
+            </StatusBanner>
           ) : null}
           {applyError ? (
             <StatusBanner $tone="error" data-testid="motif-apply-error">{applyError}</StatusBanner>
           ) : null}
-          {applyStatus === 'success' ? (
+          {applyStatus === 'success' && !motifCandidate ? (
             <StatusBanner $tone="ok" data-testid="motif-apply-success">Motif applied successfully.</StatusBanner>
+          ) : null}
+          {applyStatus === 'success' && motifCandidate ? (
+            <StatusBanner data-testid="motif-apply-success">
+              Preview staged. Apply to update the working composition.
+            </StatusBanner>
           ) : null}
           {Array.isArray(applyWarnings) && applyWarnings.length > 0 ? (
             <WarningList data-testid="motif-apply-warnings">

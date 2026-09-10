@@ -314,23 +314,31 @@ test('verifyDevelopmentCandidate accepts exact append prefix', async () => {
   assert.equal(result.ok, true, JSON.stringify(result.failures));
 });
 
-test('verifyDevelopmentCandidate rejects tampered candidate fingerprint', async () => {
+test('verifyDevelopmentCandidate rejects satisfied=false preservation assertion', async () => {
   const base = sixteenBarA();
   const candidateComposition = structuredClone(base);
   const sourceFp = await compositionEditFingerprint(base);
+  const candidateFp = await compositionEditFingerprint(candidateComposition);
   const result = await verifyDevelopmentCandidate({
     baseComposition: base,
     candidate: {
       candidate_id: 'x',
-      candidate_fingerprint: '0'.repeat(64),
+      candidate_fingerprint: candidateFp,
       edit_source_fingerprint: sourceFp,
       composition: candidateComposition,
-      preservation: [],
+      preservation: [{
+        assertion: 'melody_events_exact',
+        satisfied: false,
+        severity: 'required',
+        required: true,
+      }],
       output_range: { start_tick: 0, end_tick: 1920 },
     },
     operation: 'vary_section',
     responseSourceFingerprint: sourceFp,
   });
   assert.equal(result.ok, false);
-  assert.ok(result.failures.some((item) => item.code === 'candidate_fingerprint_mismatch'));
+  assert.ok(result.failures.some((item) => (
+    item.code === 'melody_events_exact' || item.code === 'required_assertion_failed'
+  )));
 });

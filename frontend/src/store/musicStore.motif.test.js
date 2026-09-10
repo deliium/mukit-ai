@@ -75,6 +75,10 @@ function resetMotifStore(composition = motifAuthoringComposition()) {
     motifApplyError: '',
     motifApplyWarnings: [],
     motifReconcileWarnings: [],
+    motifCandidate: null,
+    motifAuditionActive: false,
+    motifCompareResult: null,
+    motifRequestCapture: null,
     analysisResult: null,
     analysisStatus: 'idle',
   });
@@ -142,7 +146,7 @@ test('deleteNote reconciles motif references when original source note is remove
   assert.ok(after.motifReconcileWarnings.length >= 1);
 });
 
-test('completeMotifApply and failMotifApply manage request status without mutating on failure', () => {
+test('completeMotifApply and failMotifApply manage request status without mutating on failure', async () => {
   resetMotifStore();
   const store = useMusicStore.getState();
   store.selectPianoRollNote('n1');
@@ -158,7 +162,7 @@ test('completeMotifApply and failMotifApply manage request status without mutati
   });
 
   const before = structuredClone(useMusicStore.getState().editedMusicJson);
-  assert.equal(store.startMotifApply(), true);
+  assert.equal(await store.startMotifApply(), true);
   store.failMotifApply('provider unavailable', { code: 'motif_creative_unavailable' });
   const failed = useMusicStore.getState();
   assert.deepEqual(failed.editedMusicJson, before);
@@ -176,7 +180,8 @@ test('completeMotifApply and failMotifApply manage request status without mutati
     { type: 'note', id: 'n5', pitch: 'G4', start_tick: 4320, duration_ticks: 480, velocity: 85 },
     { type: 'note', id: 'n6', pitch: 'A4', start_tick: 4800, duration_ticks: 480, velocity: 84 },
   );
-  assert.equal(store.completeMotifApply({
+  assert.equal(await store.startMotifApply(), true);
+  assert.equal(await store.completeMotifApply({
     composition: applied,
     musicxml: '<score/>',
     warnings: ['motif_overlap_replaced'],
@@ -193,6 +198,92 @@ test('completeMotifApply and failMotifApply manage request status without mutati
   assert.equal(success.motifApplyWarnings.length, 1);
   assert.equal(success.compositionEditUndoStack.length, 2);
   assert.equal(success.playbackStatus, 'idle');
+  assert.equal(success.motifCandidate, null);
+});
+
+test('creative motif stages candidate without mutating working composition', async (t) => {
+  const restore = installAxiosStub(async (config) => {
+    assert.equal(config.url, '/motifs/apply');
+    const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+    assert.equal(body.operation, 'melodic_variation');
+    const composition = structuredClone(body.composition);
+    composition.tracks[0].events.push(
+      { type: 'note', id: 'n5', pitch: 'B4', start_tick: 4320, duration_ticks: 480, velocity: 85 },
+      { type: 'note', id: 'n6', pitch: 'C5', start_tick: 4800, duration_ticks: 480, velocity: 84 },
+      { type: 'note', id: 'n7', pitch: 'D5', start_tick: 5280, duration_ticks: 480, velocity: 83 },
+    );
+    composition.motifs[0].occurrences.push({
+      id: 'occ-creative',
+      track_id: 'melody-1',
+      event_ids: ['n5', 'n6', 'n7'],
+      relationship: 'melodic_variation',
+      transform: { operation: 'melodic_variation', variation_strength: 0.5 },
+    });
+    return {
+      data: {
+        composition,
+        musicxml: '<score/>',
+        warnings: [],
+        provider: 'fake',
+        model: 'fake-motif',
+        result: {
+          motif_id: composition.motifs[0].id,
+          source_occurrence_id: composition.motifs[0].occurrences[0].id,
+          destination_section_id: 'chorus',
+          destination_track_id: 'melody-1',
+          destination_start_bar: 3,
+          destination_start_tick: 3840,
+          created_event_ids: ['n5', 'n6', 'n7'],
+          new_occurrence_id: 'occ-creative',
+          relationship: 'melodic_variation',
+          identity_score: 0.8,
+          transform: { operation: 'melodic_variation', variation_strength: 0.5 },
+          diagnostics: {
+            source_event_count: 3,
+            created_event_count: 3,
+            replaced_event_count: 0,
+            destination_span_ticks: 1440,
+            warning_codes: [],
+          },
+        },
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  resetMotifStore();
+  useMusicStore.setState({ currentProjectId: null });
+  const store = useMusicStore.getState();
+  store.selectPianoRollNote('n1');
+  store.selectPianoRollNote('n2', { extend: true });
+  store.selectPianoRollNote('n3', { extend: true });
+  const marked = store.markMotifFromSelection();
+  store.selectMotif(marked.motifId);
+  store.configureMotifDestination({
+    sectionId: 'chorus',
+    trackId: 'melody-1',
+    startBar: 3,
+    startTick: 3840,
+  });
+  store.configureMotifTransformation({ operation: 'melodic_variation', variationStrength: 0.5 });
+
+  const before = structuredClone(useMusicStore.getState().editedMusicJson);
+  assert.equal(await store.applyMotifTransformation(), true);
+  const after = useMusicStore.getState();
+  assert.deepEqual(after.editedMusicJson, before);
+  assert.equal(after.motifApplyStatus, 'success');
+  assert.ok(after.motifCandidate);
+  assert.equal(after.motifCandidate.operation_type, 'creative-motif-apply');
+  assert.equal(after.motifCandidate.status, 'ready');
+
+  assert.equal(await store.applyMotifCandidate(), true);
+  const applied = useMusicStore.getState();
+  assert.equal(applied.motifCandidate, null);
+  assert.ok(applied.editedMusicJson.motifs[0].occurrences.length >= 2);
 });
 
 test('applyMotifTransformation calls API and completes atomically', async (t) => {

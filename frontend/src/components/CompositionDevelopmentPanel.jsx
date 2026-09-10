@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
 import {
@@ -191,9 +191,15 @@ const CompositionDevelopmentPanel = () => {
   const selectDevelopmentCandidate = useMusicStore((state) => state.selectDevelopmentCandidate);
   const setDevelopmentAuditionActive = useMusicStore((state) => state.setDevelopmentAuditionActive);
   const discardDevelopmentCandidates = useMusicStore((state) => state.discardDevelopmentCandidates);
+  const rejectDevelopmentCandidate = useMusicStore((state) => state.rejectDevelopmentCandidate);
+  const refreshDevelopmentComparison = useMusicStore((state) => state.refreshDevelopmentComparison);
+  const developmentCompareResult = useMusicStore((state) => state.developmentCompareResult);
+  const currentProjectId = useMusicStore((state) => state.currentProjectId);
   const applySelectedDevelopmentCandidate = useMusicStore(
     (state) => state.applySelectedDevelopmentCandidate,
   );
+  const [branchNameDraft, setBranchNameDraft] = useState('');
+  const [applyBusy, setApplyBusy] = useState(false);
 
   useEffect(() => {
     if (isCanonicalComposition(composition) && sourceStartBar == null) {
@@ -245,6 +251,9 @@ const CompositionDevelopmentPanel = () => {
   };
 
   const handleApply = async () => {
+    if (!canApply || applyBusy) {
+      return;
+    }
     if (operation === 'vary_section') {
       const confirmed = window.confirm(
         `Replace bars ${sourceStartBar}–${sourceEndBar} with the selected candidate? This cannot be undone except via Undo.`,
@@ -253,7 +262,15 @@ const CompositionDevelopmentPanel = () => {
         return;
       }
     }
-    await applySelectedDevelopmentCandidate();
+    setApplyBusy(true);
+    try {
+      console.info('[CompositionDevelopmentPanel] Apply selected development candidate');
+      await applySelectedDevelopmentCandidate();
+    } catch {
+      // store records developmentError
+    } finally {
+      setApplyBusy(false);
+    }
   };
 
   return (
@@ -528,20 +545,96 @@ const CompositionDevelopmentPanel = () => {
               type="button"
               $variant="secondary"
               data-testid="develop-audition"
-              disabled={!selectedCandidate}
+              disabled={!selectedCandidate || applyBusy}
               onClick={() => setDevelopmentAuditionActive(!auditionActive)}
             >
               {auditionActive ? 'Stop audition source' : 'Audition selected'}
             </Button>
             <Button
               type="button"
+              $variant="secondary"
+              data-testid="develop-compare"
+              disabled={!selectedCandidate || applyBusy}
+              onClick={() => {
+                console.debug('[CompositionDevelopmentPanel] Compare development candidate');
+                refreshDevelopmentComparison();
+              }}
+            >
+              Compare
+            </Button>
+            <Button
+              type="button"
               data-testid="develop-apply"
-              disabled={!canApply}
+              disabled={!canApply || applyBusy}
               onClick={handleApply}
             >
               Apply selected
             </Button>
+            <Button
+              type="button"
+              $variant="secondary"
+              data-testid="develop-reject"
+              disabled={!selectedCandidate || applyBusy}
+              onClick={() => {
+                console.info('[CompositionDevelopmentPanel] Reject development candidate');
+                rejectDevelopmentCandidate(selectedCandidateId);
+              }}
+            >
+              Reject
+            </Button>
           </ButtonRow>
+          {developmentCompareResult ? (
+            <Hint data-testid="develop-compare-summary">
+              Compare vs working:{' '}
+              {developmentCompareResult.identical ? 'identical' : 'differences'}
+              {' · '}
+              +{developmentCompareResult.events?.added || 0}
+              {' / -'}
+              {developmentCompareResult.events?.removed || 0}
+              {' / ~'}
+              {developmentCompareResult.events?.changed || 0}
+            </Hint>
+          ) : null}
+          {currentProjectId ? (
+            <ButtonRow>
+              <input
+                aria-label="Apply development as new branch name"
+                data-testid="develop-branch-name"
+                placeholder="New branch name"
+                value={branchNameDraft}
+                disabled={applyBusy}
+                onChange={(event) => setBranchNameDraft(event.target.value)}
+                style={{
+                  flex: '1 1 160px',
+                  padding: '8px 10px',
+                  border: '1px solid #c7d2fe',
+                  borderRadius: 6,
+                }}
+              />
+              <Button
+                type="button"
+                data-testid="develop-apply-as-branch"
+                disabled={!canApply || applyBusy || !branchNameDraft.trim()}
+                onClick={async () => {
+                  setApplyBusy(true);
+                  try {
+                    console.info('[CompositionDevelopmentPanel] Apply development as new branch');
+                    await applySelectedDevelopmentCandidate({
+                      asNewBranch: true,
+                      branchName: branchNameDraft.trim(),
+                    });
+                    setBranchNameDraft('');
+                  } catch {
+                    // store records developmentError
+                  } finally {
+                    setApplyBusy(false);
+                  }
+                }}
+              >
+                Apply as new branch
+              </Button>
+            </ButtonRow>
+          ) : null}
           {auditionActive && (
             <Hint data-testid="develop-audition-active">
               Transport plays the selected candidate. Working composition is unchanged until Apply.

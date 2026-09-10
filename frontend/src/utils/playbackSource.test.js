@@ -105,12 +105,16 @@ test('exclusiveAuditionPatch clears competitors', () => {
     arrangementAuditionMode: 'source',
     generationAuditionActive: false,
     aiEditAuditionActive: false,
+    motifAuditionActive: false,
+    reharmonizeAuditionActive: false,
   });
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_DEVELOPMENT, 'source'), {
     arrangementAuditionMode: 'source',
     versionAuditionActive: false,
     generationAuditionActive: false,
     aiEditAuditionActive: false,
+    motifAuditionActive: false,
+    reharmonizeAuditionActive: false,
   });
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_WORKING, 'source'), {
     developmentAuditionActive: false,
@@ -118,6 +122,8 @@ test('exclusiveAuditionPatch clears competitors', () => {
     versionAuditionActive: false,
     generationAuditionActive: false,
     aiEditAuditionActive: false,
+    motifAuditionActive: false,
+    reharmonizeAuditionActive: false,
   });
 });
 

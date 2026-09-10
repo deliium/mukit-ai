@@ -659,6 +659,28 @@ test('apply/undo/redo restores topology and mixer; autosave only after apply', a
         config,
       };
     }
+    if (String(config.url || '').includes('/revisions') && (config.method === 'post' || config.method === 'POST')) {
+      const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+      return {
+        data: {
+          project_id: 'proj-1',
+          active_branch_id: 'b1',
+          active_branch_name: 'Original',
+          current_revision_id: 'r2',
+          current_revision_sequence: 2,
+          working_version: 2,
+          working_fingerprint: 'composition.snapshot.v1:arr-after',
+          composition: body.composition,
+          revision_created: true,
+          created_revision_ids: ['r2'],
+          operation_type: 'arrangement-apply',
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
     if (String(config.url || '').includes('/projects/')) {
       patchCount += 1;
       return {
@@ -696,6 +718,12 @@ test('apply/undo/redo restores topology and mixer; autosave only after apply', a
   resetStore(source, {
     currentProjectId: 'proj-1',
     currentProjectName: 'Demo',
+    activeBranchId: 'b1',
+    activeBranchName: 'Original',
+    currentRevisionId: 'r1',
+    currentRevisionSequence: 1,
+    workingVersion: 1,
+    workingFingerprint: 'composition.snapshot.v1:arr-before',
     lastSavedPersistRevision: 'saved-before',
     saveStatus: 'saved',
     developmentStatus: 'ready',
@@ -722,7 +750,8 @@ test('apply/undo/redo restores topology and mixer; autosave only after apply', a
   assert.equal(useMusicStore.getState().trackControls['bass-1'].solo, true);
   assert.equal(useMusicStore.getState().arrangementStatus, 'idle');
   assert.equal(useMusicStore.getState().developmentStatus, 'idle');
-  assert.equal(useMusicStore.getState().saveStatus, 'unsaved');
+  assert.equal(useMusicStore.getState().saveStatus, 'saved');
+  assert.equal(useMusicStore.getState().currentRevisionId, 'r2');
 
   assert.equal(useMusicStore.getState().undoCompositionEdit(), true);
   assert.equal(useMusicStore.getState().editedMusicJson.tracks.length, 3);
@@ -1007,7 +1036,7 @@ test('generation and import fully clear arrangement candidate state', async () =
     arrangementSelectedCandidateId: 'arr-y',
     arrangementInstruction: 'again',
   });
-  assert.equal(useMusicStore.getState().completeImport({
+  assert.equal(await useMusicStore.getState().completeImport({
     composition: source,
     musicxml: '<score/>',
     import_report: { status: 'ok', issues: [] },
@@ -1071,8 +1100,8 @@ test('apply refreshes notation and strips arrangement keys from save payloads', 
   t.after(restore);
 
   resetStore(source, {
-    currentProjectId: 'proj-notation',
-    currentProjectName: 'Notation',
+    currentProjectId: null,
+    currentProjectName: '',
     lastSavedPersistRevision: 'dirty',
     saveStatus: 'unsaved',
     generationMeta: null,
@@ -1084,6 +1113,11 @@ test('apply refreshes notation and strips arrangement keys from save payloads', 
   assert.ok(renderCalls >= 1);
   assert.equal(useMusicStore.getState().musicXml, '<score-applied/>');
 
+  useMusicStore.setState({
+    currentProjectId: 'proj-notation',
+    currentProjectName: 'Notation',
+    saveStatus: 'unsaved',
+  });
   await useMusicStore.getState().saveCurrentProject({ reason: 'manual' });
   assert.ok(savedPayload);
   for (const key of [
