@@ -45,6 +45,8 @@ function App() {
         defaultProvider: modelResponse.default_provider,
         defaultModel: modelResponse.default_model,
       });
+      // Clear stale banner errors (e.g. prior generate "Network Error") once API is reachable again.
+      setUiError('');
       console.debug('[App] Startup health/model discovery completed', {
         modelCount: modelResponse.models?.length || 0,
         llmReady: Boolean(modelResponse.models?.length),

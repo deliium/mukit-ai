@@ -4333,7 +4333,7 @@ export const useMusicStore = create((set, get) => ({
       const response = await listProjectsRequest();
       const projects = response?.projects || [];
       console.info('[musicStore] Project list loaded', { count: projects.length });
-      set({ projectList: projects, projectListStatus: 'success' });
+      set({ projectList: projects, projectListStatus: 'success', uiError: '' });
       return projects;
     } catch (error) {
       console.error('[musicStore] Project list failed', { message: error.message });

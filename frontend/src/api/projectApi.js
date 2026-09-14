@@ -146,16 +146,29 @@ async function request(method, endpoint, data) {
         conflict,
       );
     }
-    const detail = formatDetail(rawDetail) || error.message || 'Unknown request failure';
+    const detail = formatDetail(rawDetail) || formatNetworkFailure(error) || 'Unknown request failure';
     console.warn('[projectApi] Request failed', {
       method,
       endpoint,
       status,
+      code: error.code || null,
     });
     const err = new Error(detail);
     err.status = status;
     throw err;
   }
+}
+
+function formatNetworkFailure(error) {
+  const message = typeof error?.message === 'string' ? error.message : '';
+  const code = typeof error?.code === 'string' ? error.code : '';
+  if (!error?.response && (message === 'Network Error' || code === 'ERR_NETWORK' || code === 'ECONNABORTED')) {
+    return (
+      'Network Error: no HTTP response (connection reset, proxy idle timeout, or browser abort). '
+      + 'Hard-refresh after restarting Vite/backend if the API chips show healthy.'
+    );
+  }
+  return message;
 }
 
 function isProjectRevisionConflict(detail) {

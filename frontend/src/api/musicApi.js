@@ -1227,13 +1227,38 @@ async function request(method, endpoint, data, config = {}) {
     console.debug('[musicApi] Request completed', { method, endpoint, status: response.status });
     return response.data;
   } catch (error) {
-    const detail = error.response?.data?.detail || error.message || 'Unknown request failure';
+    const detail = formatAxiosFailureDetail(error);
     console.error('[musicApi] Request failed', {
       method,
       endpoint,
       status: error.response?.status,
+      code: error.code || null,
       detail,
     });
     throw new Error(detail);
   }
+}
+
+/** Prefer API detail; make bare axios "Network Error" actionable. */
+function formatAxiosFailureDetail(error) {
+  const apiDetail = error?.response?.data?.detail;
+  if (typeof apiDetail === 'string' && apiDetail.trim()) {
+    return apiDetail;
+  }
+  if (apiDetail != null) {
+    try {
+      return JSON.stringify(apiDetail);
+    } catch {
+      return String(apiDetail);
+    }
+  }
+  const message = typeof error?.message === 'string' ? error.message : '';
+  const code = typeof error?.code === 'string' ? error.code : '';
+  if (!error?.response && (message === 'Network Error' || code === 'ERR_NETWORK' || code === 'ECONNABORTED')) {
+    return (
+      'Network Error: no HTTP response (connection reset, proxy idle timeout, or browser abort). '
+      + 'If generation was in progress, check backend logs; hard-refresh after restarting Vite/backend.'
+    );
+  }
+  return message || 'Unknown request failure';
 }
