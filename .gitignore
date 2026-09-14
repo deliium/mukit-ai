@@ -44,9 +44,7 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Model files
-backend/models/*.h5
-backend/models/*.pkl
+# Training data leftovers
 backend/training_data/*.mid
 backend/training_data/*.midi
 
