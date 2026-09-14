@@ -21,7 +21,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 
 - **Programming language:** Python 3.14+ (backend), JavaScript (frontend)
 - **Framework:** FastAPI + Uvicorn; React 18 + Vite
-- **Database:** SQLite (`PROJECT_DB_PATH`) with numbered SQL migrations
+- **Database:** SQLite (`PROJECT_DB_PATH`) with Alembic schema migrations
 - **ORM:** None — raw SQL via `sqlite3` helpers in `backend/app/db/` and `project_store`
 - **LLM:** LangChain / LangGraph with OpenAI-compatible providers (OpenAI, DeepSeek) plus optional `LLM_FAKE_MODE` deterministic fixture provider for demos/E2E
 - **Music processing:** music21 (MusicXML render + import), mido (MIDI import/export), defusedxml (import preflight), FluidSynth + SoundFont (WAV)

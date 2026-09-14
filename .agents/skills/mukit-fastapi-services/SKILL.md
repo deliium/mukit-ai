@@ -30,7 +30,7 @@ Backend layout under `backend/app/`: HTTP surface (`main.py`, `routers/`) → `s
 ### Persistence
 
 - SQLite via `PROJECT_DB_PATH`; connection helpers in `db/connection.py`
-- Schema changes: numbered SQL migrations under `db/migrations/`
+- Schema changes: Alembic revisions under `db/alembic/versions/` (DDL only; stores keep raw `sqlite3`)
 - Opening projects re-runs composition normalization before returning to clients
 
 ### Logging

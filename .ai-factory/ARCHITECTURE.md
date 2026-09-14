@@ -79,9 +79,10 @@ mukit-ai/
 │   │   │   ├── composition_snapshot_encoding.py  # composition.snapshot.v1 zlib encoding
 │   │   │   └── project_composition.py   # Project ↔ composition mapping
 │   │   ├── fixtures/               # composition.v1 + composition_v2_expressive + arrangement_instruments.v1.json
-│   │   └── db/                     # Shared infrastructure: connection + SQL migrations
+│   │   └── db/                     # Shared infrastructure: connection + Alembic
 │   │       ├── connection.py
-│   │       └── migrations/         # 001_projects, 002_composition_history
+│   │       └── alembic/            # env.py + versions (baseline final schema)
+│   ├── alembic.ini
 │   ├── tests/
 │   ├── requirements.txt
 │   └── Dockerfile

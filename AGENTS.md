@@ -10,7 +10,7 @@ Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2
 
 - **Programming language:** Python 3.14+ (backend), JavaScript (frontend)
 - **Framework:** FastAPI + Uvicorn; React 18 + Vite
-- **Database:** SQLite (`PROJECT_DB_PATH`) with numbered SQL migrations
+- **Database:** SQLite (`PROJECT_DB_PATH`) with Alembic schema migrations
 - **ORM:** None (raw `sqlite3`)
 
 ## Project Structure
@@ -31,7 +31,7 @@ mukit-ai/
 │   │   ├── import_schemas.py       # Import DTOs, issue/error codes
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── fixtures/        # Canonical composition JSON (V1 + V2 expressive) + arrangement_instruments.v1.json
-│   │   ├── db/              # SQLite connection + migrations (001 projects, 002 composition history)
+│   │   ├── db/              # SQLite connection + Alembic (alembic/versions baseline)
 │   │   └── schemas.py       # LLM models + composition re-exports
 │   └── tests/
 ├── frontend/                # React + Vite SPA

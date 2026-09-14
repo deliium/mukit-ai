@@ -43,10 +43,20 @@ Duplication starts a new project with one root snapshot and `Original`; it does 
 | `PROJECT_DB_PATH` | `backend/data/projects.db` | `/data/projects.db` |
 
 - Named volume: `mukit_project_data` mounted at `/data` on the backend service.
-- Schema migrations run on startup (`schema_migrations` + numbered SQL under `backend/app/db/migrations/`, including `002_create_composition_history.sql`). Each migration’s DDL and registry insert run in one SQLite transaction.
+- Schema upgrades run on startup via **Alembic** (`alembic upgrade head`). Revisions live under `backend/app/db/alembic/versions/`; the applied revision is recorded in SQLite table `alembic_version`. App init calls the same upgrade programmatically from `ensure_database()` / `initialize_database()`.
+- Local CLI (from `backend/`): `PROJECT_DB_PATH=/path/to/projects.db alembic upgrade head`
 - Provider **API keys stay in environment variables only** — never accepted or stored in the project DB. Free-text fields that look like credentials are rejected with `422` (`forbidden_secret_value`).
 - Generation metadata stores provider, model id, and a sanitized prompt snapshot.
 - Arrangement / development / reharmonize / generation / AI region / creative-motif **previews are session-only** and never write revisions. Only an explicitly **applied** (or checkpointed/imported/restored) composition becomes durable history. Catalog `instrument_id` and range metadata are not project columns or V2 fields.
+
+### Breaking change: wipe before first Alembic apply
+
+There is **no** automatic upgrade from the legacy `schema_migrations` numbered-SQL runner. Before deploying this stack, delete existing project DBs:
+
+- Local: remove `backend/data/projects.db` (or whatever `PROJECT_DB_PATH` points to)
+- Docker: `docker compose down -v` to drop volume `mukit_project_data` (this permanently deletes saved projects)
+
+Fresh empty files receive the baseline revision (`20260914_0001`: projects + history tables + locality triggers) on next startup.
 
 ### Volume caveat
 
@@ -94,7 +104,7 @@ Payloads that include API-key-like fields are rejected with `422`. History list 
 
 Useful structured fields (never API keys, full instructions, snapshot JSON, or event arrays):
 
-- Startup: `project_db_path`, applied migration versions
+- Startup: `project_db_path`, `alembic_revision` / `alembic_head` (confirm upgrades via app INFO logs)
 - CRUD / history: `project_id`, branch/revision IDs, sequences, operation types, fingerprint prefixes, working_version, compression byte sizes
 - Open migration: `source_version`, `target_version` (`composition.v2`), `migration_path`, `rewritten`
 - Autosave (frontend console): dirty → saving → saved, debounce schedule/cancel/fire

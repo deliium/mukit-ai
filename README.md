@@ -23,7 +23,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 
 - **Backend**: FastAPI with Python
 - **Frontend**: React with styled-components
-- **Persistence**: SQLite project store (`PROJECT_DB_PATH`) with numbered SQL migrations, zlib content-addressed composition snapshots, revisions/branches, and Docker named volume `mukit_project_data`
+- **Persistence**: SQLite project store (`PROJECT_DB_PATH`) with Alembic schema upgrades, zlib content-addressed composition snapshots, revisions/branches, and Docker named volume `mukit_project_data`
 - **Music Processing**: music21 library for MusicXML rendering
 - **LLM Orchestration**: LangChain/LangGraph with OpenAI-compatible chat providers
 - **Frontend State**: Zustand store for API status, LLM models, project browser/save status, generation output, piano-roll edit state, notation, playback transport state, per-source ephemeral mixer controls, and derived analysis report cache
@@ -94,7 +94,7 @@ export OPENAI_MODEL="gpt-4o-mini"
 export DEEPSEEK_API_KEY="..."
 export DEEPSEEK_MODEL="deepseek-chat"
 export DEFAULT_LLM_PROVIDER="openai"
-export LLM_REQUEST_TIMEOUT_SECONDS="60"
+export LLM_REQUEST_TIMEOUT_SECONDS="180"
 export LLM_TEMPERATURE="0.7"
 # Optional local SQLite path (default: backend/data/projects.db)
 export PROJECT_DB_PATH="/absolute/path/to/projects.db"

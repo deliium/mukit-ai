@@ -1,4 +1,4 @@
-"""Tests for composition history schema, bootstrap, and migration atomicity."""
+"""Tests for composition history schema, bootstrap, and Alembic upgrades."""
 
 from __future__ import annotations
 
@@ -9,12 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.db import initialize_database, reset_database_initialization_cache
-from app.db.connection import (
-    MIGRATIONS_DIR,
-    apply_migrations,
-    get_connection,
-    split_sql_statements,
-)
+from app.db.connection import get_connection
 from app.services import project_store as store
 from app.services.composition_snapshot_encoding import (
     NULL_SNAPSHOT_FINGERPRINT,
@@ -50,11 +45,11 @@ def expressive_payload() -> dict:
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
-def test_migration_002_registered_and_tables_exist(project_db):
+def test_alembic_baseline_creates_history_schema(project_db):
     with get_connection(project_db) as conn:
-        versions = {
-            row["version"]
-            for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
+        alembic_revisions = {
+            row["version_num"]
+            for row in conn.execute("SELECT version_num FROM alembic_version").fetchall()
         }
         tables = {
             row[0]
@@ -72,103 +67,51 @@ def test_migration_002_registered_and_tables_exist(project_db):
             row["name"] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
         }
 
-    assert "001_create_projects" in versions
-    assert "002_create_composition_history" in versions
+    assert "20260914_0001" in alembic_revisions
     assert "composition_snapshots" in tables
     assert "project_revisions" in tables
     assert "project_branches" in tables
     assert "active_branch_id" in columns
     assert "current_revision_id" in columns
+    assert "projects_active_branch_insert_check" in triggers
     assert "projects_active_branch_update_check" in triggers
+    assert "projects_current_revision_insert_check" in triggers
     assert "projects_current_revision_update_check" in triggers
 
 
-def test_migration_failure_rolls_back_and_retries(tmp_path, monkeypatch):
-    db_path = tmp_path / "partial.db"
+def test_alembic_upgrade_idempotent_on_second_init(tmp_path, monkeypatch, caplog):
+    db_path = tmp_path / "projects.db"
     monkeypatch.setenv("PROJECT_DB_PATH", str(db_path))
     reset_database_initialization_cache()
 
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
-    (migrations_dir / "001_create_projects.sql").write_text(
-        (MIGRATIONS_DIR / "001_create_projects.sql").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    boom_sql = """
-CREATE TABLE IF NOT EXISTS composition_snapshots (
-    fingerprint TEXT PRIMARY KEY,
-    encoding_profile TEXT NOT NULL,
-    compression_profile TEXT NOT NULL,
-    payload_zlib BLOB NOT NULL,
-    uncompressed_byte_size INTEGER NOT NULL,
-    compressed_byte_size INTEGER NOT NULL,
-    created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS this_should_fail (
-    id TEXT PRIMARY KEY,
-    bad INTEGER NOT NULL,
-    CHECK (bad > 0)
-);
-INSERT INTO this_should_fail (id, bad) VALUES ('x', 0);
-"""
-    (migrations_dir / "002_create_composition_history.sql").write_text(
-        boom_sql,
-        encoding="utf-8",
-    )
+    with caplog.at_level("INFO"):
+        initialize_database()
+        reset_database_initialization_cache()
+        initialize_database()
 
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        with pytest.raises(sqlite3.IntegrityError):
-            apply_migrations(conn, migrations_dir)
-
-        versions = {
-            row["version"]
-            for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
-        }
+    with get_connection(db_path) as conn:
+        revisions = [
+            row["version_num"] for row in conn.execute("SELECT version_num FROM alembic_version")
+        ]
         tables = {
             row[0]
             for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        assert "001_create_projects" in versions
-        assert "002_create_composition_history" not in versions
-        assert "composition_snapshots" not in tables
-        assert "this_should_fail" not in tables
-
-        # Replace with valid migration and retry.
-        (migrations_dir / "002_create_composition_history.sql").write_text(
-            (MIGRATIONS_DIR / "002_create_composition_history.sql").read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
-        applied = apply_migrations(conn, migrations_dir)
-        assert "002_create_composition_history" in applied
-        versions = {
-            row["version"]
-            for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
-        }
-        tables = {
+        triggers = {
             row[0]
             for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
+                "SELECT name FROM sqlite_master WHERE type='trigger'"
             ).fetchall()
         }
-        assert "002_create_composition_history" in versions
-        assert "composition_snapshots" in tables
-    finally:
-        conn.close()
 
-
-def test_split_sql_keeps_trigger_bodies_intact():
-    sql = (MIGRATIONS_DIR / "002_create_composition_history.sql").read_text(encoding="utf-8")
-    statements = split_sql_statements(sql)
-    triggers = [stmt for stmt in statements if stmt.upper().startswith("CREATE TRIGGER")]
-    assert len(triggers) == 4
-    for trigger in triggers:
-        assert "BEGIN" in trigger.upper()
-        assert trigger.rstrip().upper().endswith("END;")
+    assert revisions == ["20260914_0001"]
+    assert "projects" in tables
+    assert "project_branches" in tables
+    assert "projects_active_branch_update_check" in triggers
+    assert caplog.text.count("Project database ready") >= 2
+    assert "Alembic upgrade complete" in caplog.text
 
 
 def test_empty_project_bootstraps_null_root(project_db):

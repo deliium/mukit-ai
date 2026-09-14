@@ -23,7 +23,9 @@ def test_migrations_apply_cleanly(project_db, caplog):
         initialize_database()
 
     with get_connection(project_db) as conn:
-        versions = [row["version"] for row in conn.execute("SELECT version FROM schema_migrations")]
+        alembic_revisions = [
+            row["version_num"] for row in conn.execute("SELECT version_num FROM alembic_version")
+        ]
         tables = {
             row[0]
             for row in conn.execute(
@@ -31,14 +33,14 @@ def test_migrations_apply_cleanly(project_db, caplog):
             ).fetchall()
         }
 
-    assert "001_create_projects" in versions
-    assert "002_create_composition_history" in versions
+    assert alembic_revisions == ["20260914_0001"]
     assert "projects" in tables
     assert "composition_snapshots" in tables
     assert "project_revisions" in tables
     assert "project_branches" in tables
-    assert "schema_migrations" in tables
-    assert "Project database ready" in caplog.text or "Database migration applied" in caplog.text
+    assert "alembic_version" in tables
+    assert "schema_migrations" not in tables
+    assert "Project database ready" in caplog.text or "Alembic upgrade complete" in caplog.text
 
 
 def test_create_empty_project_initializes_original_branch(project_db):
