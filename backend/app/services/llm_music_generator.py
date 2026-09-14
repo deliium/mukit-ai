@@ -30,6 +30,7 @@ from .composition_planner import (
     ComposerHarmonyPlan,
     ComposerThemePlan,
     ComposerTrackDraft,
+    MECHANICAL_THEME_OPERATIONS,
     OversizedLLMGenerationRequestError,
     ValidationDiagnostic,
     coerce_instrumentation_labels,
@@ -55,7 +56,10 @@ from .composition_theme import (
     validate_theme_plan_against_form,
 )
 from .composition_timing import bar_duration_ticks, derive_section_boundaries
-from .composition_validator import validate_composition_integrity
+from .composition_validator import (
+    _min_events_for_complexity,
+    validate_composition_integrity,
+)
 from .composition_analysis import analyze_composition, build_llm_analysis_context
 from ..analysis_schemas import CompositionAnalysisError
 from .generation_constraints import (
@@ -279,6 +283,22 @@ async def generate_music_json(
             raise InvalidLLMOutputError(
                 f"LLM returned invalid composition schema: {str(exc)[:200]}"
             ) from exc
+        except (KeyError, AttributeError, TypeError, ValueError) as exc:
+            # Local stage/assemble bugs (e.g. missing dict keys) must not look like provider outages.
+            logger.error(
+                "[FIX] Unexpected local generation error remapped to InvalidLLMOutputError",
+                extra={
+                    "error_type": type(exc).__name__,
+                    "error_detail": repr(exc)[:300],
+                    "stage": state.get("current_stage"),
+                    "retry_count": state.get("retry_count", 0),
+                },
+                exc_info=True,
+            )
+            raise InvalidLLMOutputError(
+                f"Staged generation failed locally during '{state.get('current_stage')}': "
+                f"{type(exc).__name__}: {repr(exc)[:200]}"
+            ) from exc
         except LLMGenerationError:
             raise
         except Exception as exc:
@@ -286,12 +306,15 @@ async def generate_music_json(
                 "LLM provider/API failure",
                 extra={
                     "error_type": type(exc).__name__,
-                    "error_detail": str(exc)[:200],
+                    "error_detail": repr(exc)[:300],
                     "stage": state.get("current_stage"),
                     "retry_count": state.get("retry_count", 0),
                 },
+                exc_info=True,
             )
-            raise LLMGenerationError(f"LLM provider request failed: {type(exc).__name__}") from exc
+            raise LLMGenerationError(
+                f"LLM provider request failed: {type(exc).__name__}: {repr(exc)[:200]}"
+            ) from exc
 
         music = result.get("music")
         validation_report = result.get("validation_report")
@@ -603,12 +626,20 @@ def _realize_themes(state: _GenerationState) -> _GenerationState:
             "motif_count": len(result.motifs),
         },
     )
+    # Drop resolved theme errors so validate cannot resurrect theme_target_missing
+    # from an earlier failed attempt after a clean re-realize.
+    remaining_diagnostics = [
+        item
+        for item in (state.get("validation_diagnostics") or [])
+        if item.code not in THEME_DIAGNOSTIC_CODES
+    ]
     return {
         **state,
         "melody_draft": result.melody_draft,
         "theme_plan": result.theme_plan,
         "theme_motifs": list(result.motifs),
         "theme_outcomes": thematic_report_payload(result.outcomes),
+        "validation_diagnostics": remaining_diagnostics,
         "current_stage": stage,
         "failed_stage": "",
     }
@@ -1261,6 +1292,10 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
         "current_stage": stage,
         "warnings": warnings,
         "validation_ok": False,
+        # Keep the failing diagnostics for the repair-stage prompt; successful
+        # realize_themes / stage completion must strip resolved codes so validate
+        # does not resurrect them via the prior-theme merge.
+        "validation_diagnostics": list(diagnostics),
         "repair_actions": repair_actions,
         "repair_analysis_context": repair_analysis_context,
     }
@@ -1324,20 +1359,20 @@ async def _run_json_stage(
     try:
         parsed = _extract_json(raw_output)
         parsed_model = parser(parsed, state)
-    except (json.JSONDecodeError, ValidationError, ValueError, TypeError) as exc:
+        updated = on_success(state, parsed_model, parsed)
+    except (json.JSONDecodeError, ValidationError, ValueError, TypeError, KeyError, AttributeError) as exc:
         logger.warning(
             "Composer stage validation failed",
             extra={
                 **_stage_log_extra(state, stage, attempt=attempt),
                 "error_type": type(exc).__name__,
-                "error_detail": str(exc)[:300],
+                "error_detail": repr(exc)[:300],
             },
         )
         raise InvalidLLMOutputError(
-            f"LLM stage '{stage}' returned invalid JSON: {str(exc)[:200]}"
+            f"LLM stage '{stage}' returned invalid JSON: {type(exc).__name__}: {repr(exc)[:200]}"
         ) from exc
 
-    updated = on_success(state, parsed_model, parsed)
     updated = {
         **updated,
         "raw_output": raw_output,
@@ -1359,56 +1394,57 @@ async def _run_json_stage(
 
 
 async def _invoke_chat(state: _GenerationState, prompt: str) -> str:
+    from .llm_chat_client import ainvoke_chat_text, build_chat_openai
+
     request = state["request"]
     provider = state["provider"]
-    try:
-        from langchain_openai import ChatOpenAI
-    except ImportError as exc:
-        raise LLMGenerationError("LangChain OpenAI dependencies are not installed") from exc
 
     timeout_seconds = request.options.timeout_seconds or load_llm_settings().request_timeout_seconds
     temperature = request.options.temperature
     if temperature is None:
         temperature = load_llm_settings().temperature
 
-    client = ChatOpenAI(
-        api_key=provider.api_key,
-        base_url=provider.base_url,
-        model=_selected_model(request, provider),
-        temperature=temperature,
-        timeout=timeout_seconds,
-    )
+    model_name = _selected_model(request, provider)
+    try:
+        client = build_chat_openai(
+            api_key=provider.api_key,
+            base_url=provider.base_url,
+            model=model_name,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
+            purpose="music_generation",
+        )
+    except ImportError as exc:
+        raise LLMGenerationError("LangChain OpenAI dependencies are not installed") from exc
     logger.debug(
         "Calling LLM provider",
         extra={
             "provider": provider.provider,
-            "model": _selected_model(request, provider),
+            "model": model_name,
             "stage": state.get("current_stage"),
+            "timeout_seconds": timeout_seconds,
             "prompt_length": len(prompt),
         },
     )
     try:
-        response = await client.ainvoke(prompt)
+        return await ainvoke_chat_text(client, prompt, purpose="music_generation")
     except Exception as exc:
         logger.error(
-            "LLM provider call failed",
+            "[FIX] LLM provider call failed",
             extra={
                 "provider": provider.provider,
-                "model": _selected_model(request, provider),
+                "model": model_name,
                 "stage": state.get("current_stage"),
                 "retry_count": state.get("retry_count", 0),
+                "timeout_seconds": timeout_seconds,
                 "error_type": type(exc).__name__,
                 "error_detail": str(exc)[:200],
             },
         )
         raise LLMGenerationError(
-            f"LLM provider request failed during stage '{state.get('current_stage')}': {type(exc).__name__}"
+            f"LLM provider request failed during stage '{state.get('current_stage')}': "
+            f"{type(exc).__name__} (timeout_seconds={timeout_seconds})"
         ) from exc
-
-    raw_output = getattr(response, "content", str(response))
-    if isinstance(raw_output, list):
-        raw_output = "".join(str(part) for part in raw_output)
-    return str(raw_output)
 
 
 def _parse_form_plan(parsed: dict[str, Any], state: _GenerationState) -> ComposerFormPlan:
@@ -1560,12 +1596,103 @@ def _after_harmony_plan(
 def _parse_theme_plan(parsed: dict[str, Any], state: _GenerationState) -> ComposerThemePlan:
     if "theme_plan" in parsed and isinstance(parsed["theme_plan"], dict):
         parsed = parsed["theme_plan"]
+    coerced = _coerce_theme_plan_payload(parsed, state)
     try:
-        return ComposerThemePlan.model_validate(parsed)
+        return ComposerThemePlan.model_validate(coerced)
     except ValidationError:
-        if parsed.get("enabled") is False or parsed.get("no_theme"):
-            return empty_theme_plan(reason=str(parsed.get("no_theme_reason") or "provider_disabled"))
+        if coerced.get("enabled") is False or coerced.get("no_theme"):
+            return empty_theme_plan(reason=str(coerced.get("no_theme_reason") or "provider_disabled"))
         raise
+
+
+def _coerce_theme_plan_payload(parsed: dict[str, Any], state: _GenerationState) -> dict[str, Any]:
+    """Fill missing mechanical deployment params so incomplete LLM plans still validate."""
+    del state  # reserved for future form-aware defaults
+    if not isinstance(parsed, dict):
+        return parsed
+    deployments = parsed.get("deployments")
+    if not isinstance(deployments, list) or not deployments:
+        return parsed
+
+    coerced_ops: list[str] = []
+    fixed: list[Any] = []
+    for item in deployments:
+        if not isinstance(item, dict):
+            fixed.append(item)
+            continue
+        deployment = dict(item)
+        operation = str(deployment.get("operation") or "").strip().lower()
+        params_raw = deployment.get("parameters")
+        params = dict(params_raw) if isinstance(params_raw, dict) else {}
+
+        # LLMs sometimes put mechanical knobs on the deployment root.
+        for key in (
+            "transpose_semitones",
+            "inversion_axis_pitch",
+            "time_scale_numerator",
+            "time_scale_denominator",
+            "sequence_steps",
+            "sequence_interval_semitones",
+            "sequence_step_ticks",
+        ):
+            if params.get(key) is None and deployment.get(key) is not None:
+                params[key] = deployment.get(key)
+
+        if operation in MECHANICAL_THEME_OPERATIONS and deployment.get("variation_strength") is not None:
+            deployment["variation_strength"] = None
+            coerced_ops.append(f"{operation}:strip_variation_strength")
+
+        if operation == "transpose" and params.get("transpose_semitones") is None:
+            params["transpose_semitones"] = 5
+            coerced_ops.append("transpose:default_semitones")
+        elif operation == "augmentation" and (
+            params.get("time_scale_numerator") is None or params.get("time_scale_denominator") is None
+        ):
+            params["time_scale_numerator"] = 2
+            params["time_scale_denominator"] = 1
+            coerced_ops.append("augmentation:default_time_scale")
+        elif operation == "diminution" and (
+            params.get("time_scale_numerator") is None or params.get("time_scale_denominator") is None
+        ):
+            params["time_scale_numerator"] = 1
+            params["time_scale_denominator"] = 2
+            coerced_ops.append("diminution:default_time_scale")
+        elif operation == "sequence" and (
+            params.get("sequence_steps") is None
+            or params.get("sequence_interval_semitones") is None
+            or params.get("sequence_step_ticks") is None
+        ):
+            # Incomplete sequence params often overflow short forms when defaulted
+            # aggressively; demote to repeat so plan_themes still succeeds.
+            deployment["operation"] = "repeat"
+            params = {
+                key: value
+                for key, value in params.items()
+                if key
+                not in {
+                    "sequence_steps",
+                    "sequence_interval_semitones",
+                    "sequence_step_ticks",
+                }
+            }
+            coerced_ops.append("sequence:demote_repeat")
+            operation = "repeat"
+
+        deployment["parameters"] = params
+        fixed.append(deployment)
+
+    if not coerced_ops:
+        return parsed
+
+    logger.info(
+        "[FIX] Coerced incomplete theme deployment parameters",
+        extra={
+            "coercion_count": len(coerced_ops),
+            "coercions": coerced_ops[:12],
+            "deployment_count": len(fixed),
+        },
+    )
+    return {**parsed, "deployments": fixed}
 
 
 def _after_theme_plan(
@@ -1784,8 +1911,13 @@ def _parse_accompaniment_stage(parsed: dict[str, Any], state: _GenerationState) 
 def _after_accompaniment_stage(
     state: _GenerationState, payload: dict[str, Any], parsed: dict[str, Any]
 ) -> _GenerationState:
-    tracks: list[ComposerTrackDraft] = payload["tracks"]
+    tracks_raw = payload.get("tracks")
+    if not isinstance(tracks_raw, list):
+        raise ValueError("Accompaniment stage payload missing tracks list")
+    tracks: list[ComposerTrackDraft] = tracks_raw
     skipped = payload.get("skipped") or []
+    if not isinstance(skipped, list):
+        skipped = []
     diagnostics = list(state.get("validation_diagnostics") or [])
     constraints = state.get("constraints")
     assignment = _resolve_upstream_instrument_assignments(state)
@@ -1868,11 +2000,13 @@ def _after_accompaniment_stage(
         logger.info(
             "Accompaniment stage constraint check",
             extra={
-                "pass": not missing and not unexpected and not analysis.actionable_duplicate_groups,
+                "check_passed": not missing
+                and not unexpected
+                and not analysis.actionable_duplicate_groups,
                 "missing_families": missing,
                 "unexpected_families": unexpected,
                 "actionable_duplicate_count": len(analysis.actionable_duplicate_groups),
-                "already_satisfied": assignment["already_satisfied"],
+                "already_satisfied": assignment.get("already_satisfied") or [],
                 "instrument_assignments": [track.instrument for track in all_tracks],
             },
         )
@@ -2121,6 +2255,7 @@ def _build_theme_prompt(state: _GenerationState) -> str:
     constraints = state["constraints"]
     hard_block = prompt_parameters_hard_block(constraints)
     instructions = bounded_user_instructions_for_prompt(request)
+    bar_ticks = bar_duration_ticks(form.time_signature, DEFAULT_TICKS_PER_QUARTER)
     section_summary = [
         {
             "index": index,
@@ -2162,6 +2297,19 @@ Return JSON only:
       "operation": "transpose",
       "parameters": {{"transpose_semitones": 5}},
       "variation_strength": null
+    }},
+    {{
+      "id": "dep-2",
+      "target_section_index": 1,
+      "target_track_role": "melody",
+      "start_bar_offset": 0,
+      "operation": "sequence",
+      "parameters": {{
+        "sequence_steps": 3,
+        "sequence_interval_semitones": 2,
+        "sequence_step_ticks": {bar_ticks}
+      }},
+      "variation_strength": null
     }}
   ],
   "truncated": false,
@@ -2172,6 +2320,9 @@ Rules:
 - if the form has only one section or thematic recurrence is unsuitable, return enabled=false with no_theme_reason
 - when enabled, choose a seed section and at least one later recurrence target
 - mechanical operations: repeat, transpose, inversion, augmentation, diminution, sequence
+- sequence REQUIRES parameters.sequence_steps, parameters.sequence_interval_semitones, and parameters.sequence_step_ticks (use one bar = {bar_ticks} ticks when unsure)
+- transpose REQUIRES parameters.transpose_semitones; augmentation/diminution REQUIRE time_scale_numerator+denominator
+- mechanical operations must set variation_strength to null
 - creative operations: rhythmic_variation, melodic_variation, answer, counterphrase (require variation_strength 0..1)
 - do not invent note events; relative cells are filled after melody seed composition
 - honor user instructions about motif/theme when present (e.g. invert opening motif in the bridge)
@@ -2211,6 +2362,11 @@ Rules:
 """.strip()
 
 
+def _melody_min_events(bar_count: int, complexity: str) -> int:
+    """Integrity density floor for melody/lead prompts (matches composition_validator)."""
+    return _min_events_for_complexity(bar_count, complexity)
+
+
 def _build_melody_prompt(state: _GenerationState) -> str:
     form = state["form_plan"]
     harmony = state["harmony_plan"]
@@ -2221,6 +2377,7 @@ def _build_melody_prompt(state: _GenerationState) -> str:
     bar_ticks = bar_duration_ticks(form.time_signature, ticks)
     locked_key = constraints.key or form.key
     theme_ctx = theme_plan_prompt_projection(state.get("theme_plan"))
+    min_melody_events = _melody_min_events(form.bar_count, request.prompt.complexity)
     return f"""
 You are composing the primary melody track in canonical tick timing.
 IMMUTABLE HARD CONSTRAINTS:
@@ -2249,7 +2406,8 @@ Return JSON only:
 Rules:
 - ticks_per_quarter={ticks}; one bar = {bar_ticks} ticks for {form.time_signature}
 - events must stay within 0..{form.bar_count * bar_ticks - 1} start and not exceed composition end
-- include enough melody notes for immediate playback across sections (at least ~1 event per bar on average)
+- MUST include at least {min_melody_events} melody note events across the full {form.bar_count}-bar form (integrity rejects fewer)
+- cover every section with playable notes; do not leave long empty stretches for later theme realization
 - when a theme plan is enabled, state the seed clearly in the seed section (at least 3 notes in the seed bar span)
 - melody pitch range commonly C4-C6 unless instrument requires otherwise
 - tonal center MUST remain {locked_key}; chromatic passing tones are allowed
@@ -2317,6 +2475,7 @@ def _build_melody_continuation_prompt(state: _GenerationState) -> str:
     bar_ticks = bar_duration_ticks(form.time_signature, ticks)
     locked_key = constraints.key or form.key
     theme_ctx = theme_plan_prompt_projection(theme)
+    min_melody_events = _melody_min_events(form.bar_count, request.prompt.complexity)
     return f"""
 You are composing the remaining melody sections AFTER an immutable theme seed.
 IMMUTABLE HARD CONSTRAINTS:
@@ -2344,9 +2503,10 @@ Return JSON only for the full melody track (seed bars may be omitted or repeated
 
 Rules:
 - do NOT alter the immutable relative_cell of the seed; treat it as fixed thematic identity
-- for mechanical deployments, leave target regions sparse or clearly related; deterministic realization may overwrite them
-- for creative deployments (rhythmic_variation, melodic_variation, answer, counterphrase), write recognizable variants in the target section
-- cover non-seed sections with playable notes (~1 event per bar)
+- mechanical theme deployments may overwrite target bars; still write playable notes across the full form
+- for creative deployments (rhythmic_variation, melodic_variation, answer, counterphrase), write recognizable variants in the target section (target bars must not be empty)
+- MUST include at least {min_melody_events} melody note events across the full {form.bar_count}-bar form (integrity rejects fewer)
+- cover every non-seed section with playable notes (~1+ event per bar)
 - ticks_per_quarter={ticks}; bar length={bar_ticks}; duration ticks={form.bar_count * bar_ticks}
 - tonal center MUST remain {locked_key}
 - instruments: {", ".join(request.prompt.instruments)}
@@ -2475,6 +2635,7 @@ Rules:
 - do NOT emit another track with a reserved_instrument_roles pair (same normalized instrument + role)
 - use instrument-qualified display names (e.g. "Piano Accompaniment", "Strings Pad"); names are UI metadata only
 - for piano accompaniment prefer one piano track with staff "grand" and per-note staff treble/bass
+- pad/harmony may use sustained whole/half notes (~1 event every 2 bars is enough); still cover the form
 - do NOT add unrequested instrument identities unless allow_extra_instrument_families is true
 - if a non-required color instrument is skipped, list it under skipped with a short reason
 - track ids must be unique within this response and must not reuse reserved melody/bass ids
@@ -2730,6 +2891,14 @@ def _infer_failed_stage(errors: list[ValidationDiagnostic]) -> str:
         return "compose_accompaniment"
     if "constraint_normalization_rewrite" in codes or "normalization_failed" in codes:
         return "assemble_composition"
+    # Theme failures before empty-track heuristics: empty_required_track messages often
+    # mention "melody" and would otherwise steal routing from theme_target_missing.
+    if codes & THEME_DIAGNOSTIC_CODES:
+        if codes & {THEME_SOURCE_EMPTY, THEME_TARGET_MISSING, THEME_TARGET_OUT_OF_BOUNDS}:
+            return "plan_themes"
+        if THEME_IDENTITY_BELOW_THRESHOLD in codes:
+            return "compose_melody"
+        return "realize_themes"
     if "missing_required_track" in codes or "empty_required_track" in codes:
         if "melody" in role_haystack or "lead" in role_haystack:
             return "compose_melody"
@@ -2740,12 +2909,6 @@ def _infer_failed_stage(errors: list[ValidationDiagnostic]) -> str:
         return "compose_accompaniment"
     if "sparse_harmony" in codes:
         return "plan_harmony"
-    if codes & THEME_DIAGNOSTIC_CODES:
-        if codes & {THEME_SOURCE_EMPTY, THEME_TARGET_MISSING, THEME_TARGET_OUT_OF_BOUNDS}:
-            return "plan_themes"
-        if THEME_IDENTITY_BELOW_THRESHOLD in codes:
-            return "compose_melody"
-        return "realize_themes"
     if "bar_overflow" in codes or "event_out_of_range" in codes:
         if "melody" in role_haystack or "lead" in role_haystack:
             return "compose_melody"

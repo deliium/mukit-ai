@@ -149,7 +149,7 @@ def test_validator_allows_strings_cello_register():
 
 def test_validator_bass_density_softer_than_melody_for_complex():
     payload = _base_composition()
-    # 4 bars, complex melody/harmony need 6 events; bass only needs ~2 (0.5/bar).
+    # 4 bars complex: melody needs 6 events; bass/harmony only need ~2 (0.5/bar).
     payload["tracks"][0]["events"] = [
         {"pitch": "A4", "start_tick": i * 480, "duration_ticks": 480, "velocity": 80} for i in range(6)
     ]
@@ -160,6 +160,26 @@ def test_validator_bass_density_softer_than_melody_for_complex():
     payload["tracks"][2]["events"] = [
         {"pitch": "A3", "start_tick": i * 480, "duration_ticks": 480, "velocity": 70, "staff": "bass"}
         for i in range(6)
+    ]
+    result = validate_composition_integrity(payload, complexity="complex")
+    assert result.ok
+    assert "empty_required_track" not in result.error_codes()
+
+
+def test_validator_harmony_pad_density_softer_than_melody():
+    """Sustained harmony/pad may use ~0.5 events/bar like bass."""
+    payload = _base_composition()
+    # 4 bars complex: melody still needs 6; harmony/pad need only 2.
+    payload["tracks"][0]["events"] = [
+        {"pitch": "A4", "start_tick": i * 480, "duration_ticks": 480, "velocity": 80} for i in range(6)
+    ]
+    payload["tracks"][1]["events"] = [
+        {"pitch": "A2", "start_tick": 0, "duration_ticks": 3840, "velocity": 84},
+        {"pitch": "E2", "start_tick": 3840, "duration_ticks": 3840, "velocity": 84},
+    ]
+    payload["tracks"][2]["events"] = [
+        {"pitch": "A3", "start_tick": 0, "duration_ticks": 3840, "velocity": 70, "staff": "bass"},
+        {"pitch": "E3", "start_tick": 3840, "duration_ticks": 3840, "velocity": 70, "staff": "bass"},
     ]
     result = validate_composition_integrity(payload, complexity="complex")
     assert result.ok

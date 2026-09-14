@@ -550,9 +550,9 @@ def _min_events_for_complexity(bar_count: int, complexity: str) -> int:
 
 
 def _min_events_for_track(bar_count: int, complexity: str, role: str) -> int:
-    """Bass often sustains whole/half notes; do not require melody-like density."""
+    """Bass/pad/harmony often sustain whole/half notes; do not require melody-like density."""
     base = _min_events_for_complexity(bar_count, complexity)
-    if role in REQUIRED_BASS_ROLES:
+    if role in REQUIRED_BASS_ROLES or role in {"harmony", "pad", "rhythm"}:
         return max(1, min(base, int(bar_count * 0.5)))
     return base
 

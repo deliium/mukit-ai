@@ -698,6 +698,33 @@ def test_invalid_draft_pitch_is_not_provider_failure(monkeypatch, caplog):
     assert "LLM provider/API failure" not in caplog.text
 
 
+def test_accompaniment_post_stream_keyerror_is_not_provider_failure(monkeypatch, caplog):
+    """KeyError after a successful accompaniment LLM call must not be labeled as provider outage."""
+    caplog.set_level(logging.WARNING)
+    payloads = _stage_payloads()
+    _install_stage_mock(monkeypatch, payloads)
+
+    original = llm_music_generator._after_accompaniment_stage
+
+    def boom(state, payload, parsed):
+        raise KeyError("tracks")
+
+    monkeypatch.setattr(llm_music_generator, "_after_accompaniment_stage", boom)
+    request = LLMMusicGenerationRequest.model_validate(
+        {**_request().model_dump(), "options": {"max_retries": 0}}
+    )
+    with pytest.raises(InvalidLLMOutputError) as exc_info:
+        asyncio.run(generate_music_json(request, _settings()))
+    message = str(exc_info.value)
+    assert "LLM provider request failed" not in message
+    assert "KeyError" in message
+    assert "compose_accompaniment" in message
+    assert "LLM provider/API failure" not in caplog.text
+    assert "Composer stage validation failed" in caplog.text
+    # Keep the original handler referenced so refactors do not drop the patch target silently.
+    assert original is not None
+
+
 def test_assemble_clamps_slightly_overflowing_events(monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     # Disable thematic realization so the intentional overflow reaches assemble unchanged.
@@ -1049,6 +1076,104 @@ def test_name_independent_matching_in_staged_report(monkeypatch):
     assert validation.ok
     piano = next(item for item in validation.instrumentation.satisfied if item.key == "piano")
     assert piano.track_ids
+
+
+def test_infer_failed_stage_prefers_theme_over_sparse_melody():
+    """theme_target_missing must not lose to empty_required_track melody heuristics."""
+    from app.services.composition_planner import ValidationDiagnostic
+    from app.services.composition_theme import THEME_TARGET_MISSING
+    from app.services.llm_music_generator import _infer_failed_stage
+
+    errors = [
+        ValidationDiagnostic(
+            code=THEME_TARGET_MISSING,
+            message="Creative theme target region is empty",
+            context={"stage": "realize_themes"},
+        ),
+        ValidationDiagnostic(
+            code="empty_required_track",
+            message="Required track melody-1 (melody) is too sparse (16 events for 20 bars)",
+            context={"track_id": "melody-1", "role": "melody"},
+        ),
+        ValidationDiagnostic(
+            code="empty_required_track",
+            message="Required track violin-harmony-1 (harmony) is too sparse (20 events for 20 bars)",
+            context={"track_id": "violin-harmony-1", "role": "harmony"},
+        ),
+    ]
+    assert _infer_failed_stage(errors) == "plan_themes"
+
+
+def test_parse_theme_plan_coerces_incomplete_sequence(caplog):
+    """Missing sequence params demote to repeat instead of aborting plan_themes."""
+    from app.services.composition_planner import ComposerFormPlan
+    from app.services.llm_music_generator import _parse_theme_plan
+
+    caplog.set_level(logging.INFO)
+    form = ComposerFormPlan.model_validate(
+        {
+            "tempo": 100,
+            "key": "A minor",
+            "time_signature": "4/4",
+            "bar_count": 8,
+            "sections": [
+                {"type": "intro", "start_bar": 1, "bar_count": 2},
+                {"type": "verse", "start_bar": 3, "bar_count": 4},
+                {"type": "outro", "start_bar": 7, "bar_count": 2},
+            ],
+            "instrumentation": ["piano", "bass", "strings"],
+        }
+    )
+    raw = {
+        "enabled": True,
+        "motif_id": "motif-a",
+        "motif_label": "Motif A",
+        "seed": {"section_index": 0, "track_role": "melody", "start_bar_offset": 0, "bar_span": 1},
+        "deployments": [
+            {
+                "id": "dep-2",
+                "target_section_index": 1,
+                "operation": "sequence",
+                "parameters": {},
+                "variation_strength": 0.4,
+            }
+        ],
+    }
+    plan = _parse_theme_plan(raw, {"form_plan": form})
+    assert plan.enabled
+    assert len(plan.deployments) == 1
+    assert plan.deployments[0].operation == "repeat"
+    assert plan.deployments[0].variation_strength is None
+    assert "[FIX] Coerced incomplete theme deployment parameters" in caplog.text
+
+
+def test_successful_realize_strips_stale_theme_diagnostics(monkeypatch):
+    """After a clean re-realize, prior theme_target_missing must not fail validate."""
+    from app.services.composition_planner import ValidationDiagnostic
+    from app.services.composition_theme import THEME_TARGET_MISSING
+
+    payloads = _stage_payloads()
+    calls = _install_stage_mock(monkeypatch, payloads)
+
+    original_plan_themes = llm_music_generator._plan_themes
+
+    async def plan_themes_with_stale(state):
+        updated = await original_plan_themes(state)
+        stale = ValidationDiagnostic(
+            code=THEME_TARGET_MISSING,
+            message="Creative theme target region is empty",
+            context={"stage": "realize_themes"},
+        )
+        return {
+            **updated,
+            "validation_diagnostics": list(updated.get("validation_diagnostics") or []) + [stale],
+        }
+
+    monkeypatch.setattr(llm_music_generator, "_plan_themes", plan_themes_with_stale)
+    music, _, _, validation = asyncio.run(generate_music_json(_request(), _settings()))
+    assert validation is not None and validation.ok
+    assert music.tracks
+    assert "compose_melody" in calls or "compose_melody_seed" in calls
 
 
 def test_legitimate_same_instrument_different_roles_pass(monkeypatch):

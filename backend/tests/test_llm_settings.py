@@ -35,5 +35,15 @@ def test_load_llm_settings_prefers_requested_default():
 def test_invalid_numeric_settings_are_defaulted():
     settings = load_llm_settings({"LLM_REQUEST_TIMEOUT_SECONDS": "bad", "LLM_TEMPERATURE": "bad"})
 
-    assert settings.request_timeout_seconds == 60
+    assert settings.request_timeout_seconds == 180
     assert settings.temperature == 0.7
+
+
+def test_default_request_timeout_seconds_is_180():
+    settings = load_llm_settings({})
+    assert settings.request_timeout_seconds == 180
+
+
+def test_request_timeout_seconds_can_be_overridden():
+    settings = load_llm_settings({"LLM_REQUEST_TIMEOUT_SECONDS": "90"})
+    assert settings.request_timeout_seconds == 90

@@ -134,7 +134,8 @@ def load_llm_settings(env: Mapping[str, str] | None = None) -> LLMSettings:
     return LLMSettings(
         providers=providers_with_default,
         default_provider=default_provider,
-        request_timeout_seconds=_int_env(source, "LLM_REQUEST_TIMEOUT_SECONDS", 60, 1, 300),
+        # Staged DeepSeek/OpenAI calls often exceed 60s after headers (body still streaming).
+        request_timeout_seconds=_int_env(source, "LLM_REQUEST_TIMEOUT_SECONDS", 180, 1, 300),
         temperature=_float_env(source, "LLM_TEMPERATURE", 0.7, 0, 2),
     )
 

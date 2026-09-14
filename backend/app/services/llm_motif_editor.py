@@ -761,12 +761,10 @@ def _route_after_validation(state: _MotifEditState) -> str:
 
 
 async def _invoke_motif_chat(state: _MotifEditState, prompt: str) -> str:
+    from .llm_chat_client import ainvoke_chat_text, build_chat_openai
+
     provider = state["provider"]
     options = state["options"]
-    try:
-        from langchain_openai import ChatOpenAI
-    except ImportError as exc:
-        raise LLMGenerationError("LangChain OpenAI dependencies are not installed") from exc
 
     active_settings = load_llm_settings()
     timeout_seconds = options.timeout_seconds or active_settings.request_timeout_seconds
@@ -775,13 +773,17 @@ async def _invoke_motif_chat(state: _MotifEditState, prompt: str) -> str:
         temperature = active_settings.temperature
 
     model_name = provider.model
-    client = ChatOpenAI(
-        api_key=provider.api_key,
-        base_url=provider.base_url,
-        model=model_name,
-        temperature=temperature,
-        timeout=timeout_seconds,
-    )
+    try:
+        client = build_chat_openai(
+            api_key=provider.api_key,
+            base_url=provider.base_url,
+            model=model_name,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
+            purpose="motif_edit",
+        )
+    except ImportError as exc:
+        raise LLMGenerationError("LangChain OpenAI dependencies are not installed") from exc
     logger.debug(
         "Calling LLM provider for creative motif draft",
         extra={
@@ -789,29 +791,26 @@ async def _invoke_motif_chat(state: _MotifEditState, prompt: str) -> str:
             "model": model_name,
             "stage": state.get("current_stage"),
             "operation": state.get("operation"),
+            "timeout_seconds": timeout_seconds,
             "prompt_length": len(prompt),
             "attempt": int(state.get("repair_count") or 0) + 1,
         },
     )
     try:
-        response = await client.ainvoke(prompt)
+        return await ainvoke_chat_text(client, prompt, purpose="motif_edit")
     except Exception as exc:
         logger.error(
-            "LLM provider call failed during creative motif draft",
+            "[FIX] LLM provider call failed during creative motif draft",
             extra={
                 "provider": provider.provider,
                 "model": model_name,
                 "stage": state.get("current_stage"),
                 "operation": state.get("operation"),
+                "timeout_seconds": timeout_seconds,
                 "error_type": type(exc).__name__,
             },
         )
         raise LLMGenerationError(f"LLM provider call failed: {type(exc).__name__}") from exc
-
-    content = getattr(response, "content", response)
-    if isinstance(content, list):
-        content = "".join(str(part) for part in content)
-    return str(content)
 
 
 __all__ = [

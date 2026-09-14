@@ -682,12 +682,10 @@ def _build_draft_prompt(
 
 
 async def _invoke_edit_chat(state: _EditState, prompt: str) -> str:
+    from .llm_chat_client import ainvoke_chat_text, build_chat_openai
+
     request = state["request"]
     provider = state["provider"]
-    try:
-        from langchain_openai import ChatOpenAI
-    except ImportError as exc:
-        raise LLMGenerationError("LangChain OpenAI dependencies are not installed") from exc
 
     timeout_seconds = request.options.timeout_seconds or load_llm_settings().request_timeout_seconds
     temperature = request.options.temperature
@@ -695,37 +693,38 @@ async def _invoke_edit_chat(state: _EditState, prompt: str) -> str:
         temperature = load_llm_settings().temperature
 
     model_name = _selected_edit_model(request, provider)
-    client = ChatOpenAI(
-        api_key=provider.api_key,
-        base_url=provider.base_url,
-        model=model_name,
-        temperature=temperature,
-        timeout=timeout_seconds,
-    )
+    try:
+        client = build_chat_openai(
+            api_key=provider.api_key,
+            base_url=provider.base_url,
+            model=model_name,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
+            purpose="region_edit",
+        )
+    except ImportError as exc:
+        raise LLMGenerationError("LangChain OpenAI dependencies are not installed") from exc
     logger.debug(
         "Calling LLM provider for region edit",
         extra={
             "provider": provider.provider,
             "model": model_name,
             "stage": state.get("current_stage"),
+            "timeout_seconds": timeout_seconds,
             "prompt_length": len(prompt),
         },
     )
     try:
-        response = await client.ainvoke(prompt)
+        return await ainvoke_chat_text(client, prompt, purpose="region_edit")
     except Exception as exc:
         logger.error(
-            "LLM provider call failed during region edit",
+            "[FIX] LLM provider call failed during region edit",
             extra={
                 "provider": provider.provider,
                 "model": model_name,
                 "stage": state.get("current_stage"),
+                "timeout_seconds": timeout_seconds,
                 "error_type": type(exc).__name__,
             },
         )
         raise LLMGenerationError(f"LLM provider call failed: {type(exc).__name__}") from exc
-
-    content = getattr(response, "content", response)
-    if isinstance(content, list):
-        content = "".join(str(part) for part in content)
-    return str(content)

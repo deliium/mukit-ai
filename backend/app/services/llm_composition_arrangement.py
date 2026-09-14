@@ -182,24 +182,26 @@ async def _invoke_structured_draft(
     temperature: float | None,
     timeout_seconds: int,
 ) -> CompositionArrangementDraft:
+    from .llm_chat_client import build_chat_openai
+
     try:
-        from langchain_openai import ChatOpenAI
+        client = build_chat_openai(
+            api_key=provider.api_key,
+            base_url=provider.base_url,
+            model=provider.model,
+            temperature=0.35 if temperature is None else temperature,
+            timeout_seconds=timeout_seconds,
+            purpose="composition_arrangement",
+        )
     except ImportError as exc:
         raise LLMGenerationError("LangChain OpenAI dependencies are not installed") from exc
-
-    client = ChatOpenAI(
-        api_key=provider.api_key,
-        base_url=provider.base_url,
-        model=provider.model,
-        temperature=0.35 if temperature is None else temperature,
-        timeout=timeout_seconds,
-    )
     structured = client.with_structured_output(CompositionArrangementDraft)
     logger.debug(
         "Calling arrangement LLM provider",
         extra={
             "provider": provider.provider,
             "model": provider.model,
+            "timeout_seconds": timeout_seconds,
             "prompt_chars": len(prompt),
             "prompt_bytes": len(prompt.encode("utf-8")),
         },
@@ -207,6 +209,15 @@ async def _invoke_structured_draft(
     try:
         result = await structured.ainvoke(prompt)
     except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "[FIX] LLM provider call failed during composition arrangement",
+            extra={
+                "provider": provider.provider,
+                "model": provider.model,
+                "timeout_seconds": timeout_seconds,
+                "error_type": type(exc).__name__,
+            },
+        )
         raise LLMGenerationError(
             f"LLM provider request failed during composition arrangement: {type(exc).__name__}"
         ) from exc
