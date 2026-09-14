@@ -41,7 +41,7 @@ mukit-ai/
 │       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews)
 │       └── utils/           # validation, editor selection/ops/nav, viewport, playback, analysis, motif, harmony, arrangement helpers
-├── scripts/                 # e.g. v1/v2_docker_acceptance.sh
+├── scripts/                 # run_tests.sh, v1/v2_docker_acceptance.sh
 ├── docs/                    # composition.v2/v1, editor, analysis, arrangement, import, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
@@ -55,6 +55,7 @@ mukit-ai/
 | File | Purpose |
 |------|---------|
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
+| `scripts/run_tests.sh` | Local quality gate: ESLint + backend pytest + frontend unit tests |
 | `backend/app/composition_schemas.py` | Strict V1/V2 document models and timeline helpers |
 | `backend/app/analysis_schemas.py` | `composition.analysis.v1` DTOs, scopes, warning codes |
 | `backend/app/motif_schemas.py` | Motif apply request/response DTOs |

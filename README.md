@@ -65,7 +65,7 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Optional arrangement catalog override: set `ARRANGEMENT_INSTRUMENT_CATALOG_PATH` to an **absolute path inside the backend container** (see `.env.example` and the read-only bind example in `compose.dev.yml`). Details: [docs/composition-arrangement.md](docs/composition-arrangement.md).
 - Logging: set `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` (default `INFO`). Never expect keys/prompts/raw MusicXML/MIDI/WAV or upload bytes in logs.
 - Import limits: `IMPORT_*` in `.env.example` (default upload 5 MiB). Details: [docs/import.md](docs/import.md).
-- Acceptance commands: see `docs/testing.md` (pytest, Playwright, Docker persistence script).
+- Acceptance commands: see `docs/testing.md` (`./scripts/run_tests.sh`, pytest, Playwright, Docker persistence scripts).
 
 ## Installation (host-local optional)
 
@@ -317,22 +317,13 @@ mukit-ai/
 
 ## ✅ Testing
 
-Backend tests:
+From the repository root, run ESLint plus backend and frontend unit tests:
 
 ```bash
-cd backend
-../.venv/bin/python -m pytest
+./scripts/run_tests.sh
 ```
 
-Frontend tests and build:
-
-```bash
-cd frontend
-npm test
-npm run build
-```
-
-Additional manual smoke checks are documented in `docs/testing.md`.
+Add `--build` for the frontend production build, or `--e2e` for Playwright when a fake-LLM stack is already running. Details and focused suites: [docs/testing.md](docs/testing.md).
 
 ## Logging And Secret Handling
 

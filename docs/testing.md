@@ -2,6 +2,25 @@
 
 # Testing
 
+## Local quality gate
+
+From the repository root, run frontend ESLint plus backend and frontend unit tests:
+
+```bash
+./scripts/run_tests.sh
+```
+
+Optional extras (`--e2e` still needs a running stack with `LLM_FAKE_MODE=1`):
+
+```bash
+./scripts/run_tests.sh --build
+./scripts/run_tests.sh --e2e
+./scripts/run_tests.sh --lint-only
+./scripts/run_tests.sh --backend-only -- tests/test_arrangement_schemas.py
+```
+
+The script does not start servers, spend API credits, or run Docker/FluidSynth smokes. Those stay opt-in via the env flags below. Backend has no separate linter; pytest is the backend gate. Frontend lint is ESLint (`npm run lint`).
+
 ## Backend
 
 Run backend unit tests from the `backend/` directory:
