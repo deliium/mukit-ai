@@ -1,92 +1,35 @@
-"""SQLite connection helpers and numbered schema migrations."""
+"""SQLite connection helpers and Alembic schema upgrades."""
 
 from __future__ import annotations
 
 import logging
 import os
-import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Mapping
+
+from alembic import command
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine
 
 logger = logging.getLogger(__name__)
 
 # backend/app/db/connection.py → parents[2] == backend/
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROJECT_DB_PATH = _BACKEND_ROOT / "data" / "projects.db"
-MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
-
-_SCHEMA_MIGRATIONS_DDL = """
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version TEXT PRIMARY KEY,
-    applied_at TEXT NOT NULL
-);
-"""
-
-_CREATE_TRIGGER_HEAD = re.compile(r"CREATE\s+TRIGGER\b", re.IGNORECASE)
-_TRIGGER_END = re.compile(r"\bEND\s*;", re.IGNORECASE)
+ALEMBIC_INI_PATH = _BACKEND_ROOT / "alembic.ini"
+ALEMBIC_SCRIPT_LOCATION = Path(__file__).resolve().parent / "alembic"
 
 _initialized_paths: set[str] = set()
 
 
-def split_sql_statements(script: str) -> list[str]:
-    """Split a SQL script into executable statements.
-
-    Handles ``CREATE TRIGGER ... BEGIN ... END;`` blocks that contain internal
-    semicolons. Line comments starting with ``--`` are stripped outside strings.
-    """
-    statements: list[str] = []
-    length = len(script)
-    index = 0
-
-    while index < length:
-        while index < length and script[index].isspace():
-            index += 1
-        if index >= length:
-            break
-
-        if script.startswith("--", index):
-            newline = script.find("\n", index)
-            index = length if newline < 0 else newline + 1
-            continue
-
-        trigger_match = _CREATE_TRIGGER_HEAD.match(script, index)
-        if trigger_match is not None:
-            end_match = _TRIGGER_END.search(script, trigger_match.end())
-            if end_match is None:
-                raise ValueError("Unterminated CREATE TRIGGER in migration SQL")
-            statement = script[index : end_match.end()].strip()
-            if statement:
-                statements.append(statement)
-            index = end_match.end()
-            continue
-
-        start = index
-        in_single = False
-        in_double = False
-        while index < length:
-            char = script[index]
-            if char == "'" and not in_double:
-                if in_single and index + 1 < length and script[index + 1] == "'":
-                    index += 2
-                    continue
-                in_single = not in_single
-            elif char == '"' and not in_single:
-                in_double = not in_double
-            elif char == ";" and not in_single and not in_double:
-                statement = script[start:index].strip()
-                if statement:
-                    statements.append(statement)
-                index += 1
-                break
-            index += 1
-        else:
-            statement = script[start:].strip()
-            if statement:
-                statements.append(statement)
-
-    return statements
+def sqlite_url_for_path(db_path: Path) -> str:
+    """Build a SQLAlchemy SQLite URL for an absolute filesystem path."""
+    resolved = Path(db_path).resolve()
+    return f"sqlite:///{resolved.as_posix()}"
 
 
 def get_project_db_path(env: Mapping[str, str] | None = None) -> Path:
@@ -105,6 +48,93 @@ def get_project_db_path(env: Mapping[str, str] | None = None) -> Path:
         extra={"project_db_path": str(DEFAULT_PROJECT_DB_PATH), "source": "default"},
     )
     return DEFAULT_PROJECT_DB_PATH
+
+
+def _alembic_config(db_path: Path) -> Config:
+    """Build an Alembic Config bound to ``db_path``."""
+    if not ALEMBIC_INI_PATH.is_file():
+        raise FileNotFoundError(f"Alembic config not found: {ALEMBIC_INI_PATH}")
+    cfg = Config(str(ALEMBIC_INI_PATH))
+    cfg.set_main_option("script_location", str(ALEMBIC_SCRIPT_LOCATION))
+    url = sqlite_url_for_path(db_path)
+    cfg.set_main_option("sqlalchemy.url", url)
+    # Do not let alembic.ini fileConfig reset app/pytest LOG_LEVEL handlers.
+    cfg.attributes["configure_logger"] = False
+    logger.debug(
+        "Built Alembic config",
+        extra={
+            "project_db_path": str(db_path.resolve()),
+            "alembic_ini": str(ALEMBIC_INI_PATH),
+            "script_location": str(ALEMBIC_SCRIPT_LOCATION),
+        },
+    )
+    return cfg
+
+
+def _current_revision(db_path: Path) -> str | None:
+    """Return the current alembic_version revision for ``db_path``, if any."""
+    engine = create_engine(sqlite_url_for_path(db_path))
+    try:
+        with engine.connect() as conn:
+            context = MigrationContext.configure(conn)
+            return context.get_current_revision()
+    finally:
+        engine.dispose()
+
+
+def run_alembic_upgrade(db_path: Path) -> str:
+    """Upgrade ``db_path`` to Alembic head; return the head revision id.
+
+    Empty databases receive the full baseline schema. Databases already at head
+    are a no-op. There is no migration path from the legacy ``schema_migrations``
+    registry — wipe the SQLite file before first Alembic apply.
+    """
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = _alembic_config(path)
+    script = ScriptDirectory.from_config(cfg)
+    head = script.get_current_head()
+    if head is None:
+        raise RuntimeError("No Alembic head revision found")
+
+    before = _current_revision(path)
+    logger.info(
+        "Running Alembic upgrade to head",
+        extra={
+            "project_db_path": str(path.resolve()),
+            "alembic_revision_before": before,
+            "alembic_head": head,
+        },
+    )
+    try:
+        command.upgrade(cfg, "head")
+    except Exception as exc:
+        logger.error(
+            "Alembic upgrade failed",
+            extra={
+                "project_db_path": str(path.resolve()),
+                "alembic_head": head,
+                "error_type": type(exc).__name__,
+                "error_detail": str(exc)[:300],
+            },
+        )
+        raise
+
+    after = _current_revision(path)
+    logger.info(
+        "Alembic upgrade complete",
+        extra={
+            "project_db_path": str(path.resolve()),
+            "alembic_revision": after,
+            "alembic_head": head,
+            "upgraded": before != after,
+        },
+    )
+    if after != head:
+        raise RuntimeError(
+            f"Alembic upgrade left database at {after!r}, expected head {head!r}"
+        )
+    return head
 
 
 def ensure_database(env: Mapping[str, str] | None = None) -> Path:
@@ -127,7 +157,7 @@ def reset_database_initialization_cache() -> None:
 
 
 def initialize_database(env: Mapping[str, str] | None = None) -> Path:
-    """Ensure parent dirs exist, open SQLite, and apply pending migrations."""
+    """Ensure parent dirs exist and upgrade the SQLite schema to Alembic head."""
     db_path = get_project_db_path(env)
     logger.info(
         "Initializing project database",
@@ -139,15 +169,13 @@ def initialize_database(env: Mapping[str, str] | None = None) -> Path:
             "Ensured project DB parent directory exists",
             extra={"parent_dir": str(db_path.parent)},
         )
-        with get_connection(db_path, ensure_initialized=False) as conn:
-            applied = apply_migrations(conn)
+        revision = run_alembic_upgrade(db_path)
         _initialized_paths.add(str(db_path))
         logger.info(
             "Project database ready",
             extra={
                 "project_db_path": str(db_path),
-                "applied_migrations": applied,
-                "applied_count": len(applied),
+                "alembic_revision": revision,
             },
         )
         return db_path
@@ -176,13 +204,7 @@ def get_connection(
         path = Path(db_path)
         if ensure_initialized and str(path) not in _initialized_paths:
             path.parent.mkdir(parents=True, exist_ok=True)
-            bootstrap = sqlite3.connect(str(path))
-            try:
-                bootstrap.row_factory = sqlite3.Row
-                apply_migrations(bootstrap)
-                bootstrap.commit()
-            finally:
-                bootstrap.close()
+            run_alembic_upgrade(path)
             _initialized_paths.add(str(path))
 
     logger.debug("Opening SQLite connection", extra={"project_db_path": str(path)})
@@ -208,107 +230,3 @@ def close_connection(conn: sqlite3.Connection) -> None:
     """Close a SQLite connection."""
     logger.debug("Closing SQLite connection")
     conn.close()
-
-
-def list_migration_files(migrations_dir: Path | None = None) -> list[Path]:
-    """Return numbered ``*.sql`` migration files sorted by filename."""
-    directory = migrations_dir if migrations_dir is not None else MIGRATIONS_DIR
-    files = sorted(directory.glob("*.sql"))
-    logger.debug(
-        "Discovered SQL migration files",
-        extra={"migrations_dir": str(directory), "count": len(files)},
-    )
-    return files
-
-
-def apply_migrations(
-    conn: sqlite3.Connection,
-    migrations_dir: Path | None = None,
-) -> list[str]:
-    """Apply pending numbered SQL migrations; return versions applied this run.
-
-    Each migration's DDL statements and its ``schema_migrations`` registry insert
-    run in one explicit SQLite transaction so a mid-migration failure rolls back
-    cleanly and can be retried.
-    """
-    # Ensure the registry table exists outside per-migration transactions.
-    if conn.in_transaction:
-        conn.commit()
-    conn.execute(_SCHEMA_MIGRATIONS_DDL)
-    conn.commit()
-
-    already = {
-        row["version"]
-        for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
-    }
-    logger.debug(
-        "Loaded applied migration versions",
-        extra={"applied_count": len(already), "versions": sorted(already)},
-    )
-
-    applied_now: list[str] = []
-    for migration_path in list_migration_files(migrations_dir):
-        version = migration_path.stem
-        if version in already:
-            logger.debug(
-                "Skipping already-applied migration",
-                extra={"migration_version": version},
-            )
-            continue
-
-        sql = migration_path.read_text(encoding="utf-8")
-        statements = split_sql_statements(sql)
-        logger.info(
-            "Applying database migration",
-            extra={
-                "migration_version": version,
-                "sql_length": len(sql),
-                "statement_count": len(statements),
-            },
-        )
-        stage = "begin"
-        try:
-            if conn.in_transaction:
-                conn.commit()
-            conn.execute("BEGIN IMMEDIATE")
-            for index, statement in enumerate(statements):
-                stage = f"statement:{index}"
-                logger.debug(
-                    "Executing migration statement",
-                    extra={
-                        "migration_version": version,
-                        "statement_index": index,
-                        "statement_length": len(statement),
-                    },
-                )
-                conn.execute(statement)
-            stage = "registry_insert"
-            conn.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, datetime('now'))",
-                (version,),
-            )
-            stage = "commit"
-            conn.commit()
-            applied_now.append(version)
-            logger.info(
-                "Database migration applied",
-                extra={
-                    "migration_version": version,
-                    "statement_count": len(statements),
-                },
-            )
-        except Exception as exc:
-            if conn.in_transaction:
-                conn.rollback()
-            logger.error(
-                "Database migration failed",
-                extra={
-                    "migration_version": version,
-                    "migration_stage": stage,
-                    "error_type": type(exc).__name__,
-                    "error_detail": str(exc)[:300],
-                },
-            )
-            raise
-
-    return applied_now
