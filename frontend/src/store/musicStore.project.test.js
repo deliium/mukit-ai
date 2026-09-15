@@ -364,7 +364,7 @@ test('metadata-only JSON edit marks dirty and Save patches', async (t) => {
     const payload = patchPayload(patchCalls[0]);
     assert.equal(payload.composition.harmony[0].chord, 'Am');
     assert.equal(payload.composition.key, 'A minor');
-    assert.equal(payload.clear_generation, true);
+    assert.equal(payload.clear_generation, undefined);
     assert.equal(payload.generation, undefined);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
@@ -692,8 +692,62 @@ test('open project without generation keeps generationMeta null', async (t) => {
   assert.equal(state.saveStatus, 'saved');
 
   useMusicStore.getState().updatePrompt('genre', 'jazz');
-  assert.equal(useMusicStore.getState().generationMeta, null);
-  assert.equal(useMusicStore.getState().saveStatus, 'saved');
+  useMusicStore.getState().updatePrompt('mood', 'dreamy');
+  assert.equal(useMusicStore.getState().generationMeta.prompt.genre, 'jazz');
+  assert.equal(useMusicStore.getState().generationMeta.prompt.mood, 'dreamy');
+  assert.equal(useMusicStore.getState().saveStatus, 'unsaved');
+});
+
+test('prompt-only edits on project without generation persist via Save', async (t) => {
+  const patchCalls = [];
+  const restore = installAxiosStub(async (config) => {
+    if (config.method === 'patch' || config.method === 'PATCH') {
+      patchCalls.push(config);
+      return {
+        data: { id: 'p1', name: 'Imported', composition: structuredClone(COMPOSITION) },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    return {
+      data: {
+        id: 'p1',
+        name: 'Imported',
+        composition: structuredClone(COMPOSITION),
+        generation_provider: null,
+        generation_model: null,
+        generation_prompt: null,
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    };
+  });
+  t.after(restore);
+
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = () => ({ cleared: false });
+  globalThis.clearTimeout = () => {};
+
+  try {
+    resetProjectState();
+    await useMusicStore.getState().openProject('p1');
+    useMusicStore.getState().updatePrompt('genre', 'jazz');
+    useMusicStore.getState().updatePrompt('mood', 'dreamy');
+    await useMusicStore.getState().saveCurrentProject({ reason: 'manual-force' });
+    assert.equal(patchCalls.length, 1);
+    const payload = patchPayload(patchCalls[0]);
+    assert.equal(payload.generation.prompt.genre, 'jazz');
+    assert.equal(payload.generation.prompt.mood, 'dreamy');
+    assert.equal(payload.clear_generation, undefined);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
 });
 
 test('completeImport installs V2, clears generation, and marks open project dirty', async () => {

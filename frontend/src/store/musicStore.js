@@ -4622,9 +4622,7 @@ export const useMusicStore = create((set, get) => ({
       const draftPayload = {
         composition: composition || undefined,
         clear_composition: !composition,
-        ...(hasGenerationMeta
-          ? { generation: generationForSave }
-          : { clear_generation: true }),
+        ...(hasGenerationMeta ? { generation: generationForSave } : {}),
       };
       if (hasCas) {
         draftPayload.branch_id = captureBranchId;
@@ -8808,13 +8806,12 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
 
 function syncGenerationMetaFromPrompt(set, get, { reason = 'prompt-edit' } = {}) {
   const state = get();
-  if (!state.currentProjectId || !state.generationMeta) {
-    // Do not fabricate generation metadata for imported / never-generated projects.
+  if (!state.currentProjectId) {
     return;
   }
   const nextMeta = {
-    provider: state.generationMeta.provider || state.selectedProvider || null,
-    model: state.generationMeta.model || state.selectedModel || null,
+    provider: state.generationMeta?.provider ?? state.selectedProvider ?? null,
+    model: state.generationMeta?.model ?? state.selectedModel ?? null,
     prompt: buildPromptSnapshot(state.prompt),
   };
   const prev = state.generationMeta;
