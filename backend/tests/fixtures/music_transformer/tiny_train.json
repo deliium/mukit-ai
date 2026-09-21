@@ -1,0 +1,10 @@
+{
+  "schema_version": "music_transformer.train_config.v1",
+  "lr": 0.001,
+  "batch_size": 1,
+  "steps": 3,
+  "seed": 7,
+  "max_seq_len": 128,
+  "grad_clip": 1.0,
+  "log_every": 1
+}

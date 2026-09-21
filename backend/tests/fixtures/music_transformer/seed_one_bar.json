@@ -1,0 +1,71 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 120,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "duration_ticks": 1920,
+  "bar_count": 1,
+  "sections": [
+    {
+      "id": "section-1",
+      "type": "intro",
+      "label": "Seed",
+      "start_bar": 1,
+      "bar_count": 1,
+      "start_tick": 0,
+      "duration_ticks": 1920
+    }
+  ],
+  "tracks": [
+    {
+      "id": "melody-1",
+      "name": "Melody",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "is_drum": false,
+      "volume": 100,
+      "pan": 0,
+      "expression": 127,
+      "staff": "treble",
+      "events": [
+        {
+          "type": "note",
+          "pitch": "C4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 90
+        },
+        {
+          "type": "note",
+          "pitch": "E4",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 88
+        },
+        {
+          "type": "note",
+          "pitch": "G4",
+          "start_tick": 960,
+          "duration_ticks": 480,
+          "velocity": 86
+        },
+        {
+          "type": "note",
+          "pitch": "C5",
+          "start_tick": 1440,
+          "duration_ticks": 480,
+          "velocity": 92
+        }
+      ]
+    }
+  ],
+  "harmony": [],
+  "tempo_changes": [],
+  "time_signature_changes": [],
+  "key_changes": [],
+  "markers": [],
+  "motifs": []
+}

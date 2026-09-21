@@ -1,0 +1,15 @@
+{
+  "schema_version": "music_transformer.config.v1",
+  "n_layers": 2,
+  "d_model": 64,
+  "n_heads": 2,
+  "d_ff": 128,
+  "ff_mult": 2,
+  "dropout": 0.0,
+  "max_seq_len": 128,
+  "vocab_size": 1075,
+  "tie_embeddings": true,
+  "norm": "pre",
+  "pos_encoding": "learned",
+  "pad_id": 0
+}
