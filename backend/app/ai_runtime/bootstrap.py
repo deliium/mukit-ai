@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from app.llm_settings import FAKE_PROVIDER, load_llm_settings
+from app.local_llm_settings import LOCAL_PROVIDER, LOCAL_RUNTIME_ID, load_local_llm_settings
 
 from .capabilities import ModelCapability
+from .local_health import health_from_probe, probe_local_llm_health, public_limits
 from .operations import AiOperation, creative_chat_operations
 from .types import ModelDescriptor, ModelHealth
 
@@ -52,6 +54,9 @@ def build_registry_from_env(
             locality = "local"
             display = f"Fake ({provider.model})"
             version = provider.model
+        elif provider.provider == LOCAL_PROVIDER:
+            # Registered below with a live health probe (avoids duplicate ids).
+            continue
         else:
             runtime = "openai_compatible_chat"
             locality = "remote"
@@ -91,6 +96,42 @@ def build_registry_from_env(
         )
         if provider.is_default:
             default_model_id = model_id
+
+    local_settings = load_local_llm_settings(source)
+    if local_settings.enabled and local_settings.model:
+        model_id = local_settings.model_id
+        assert model_id is not None
+        if model_id in models:
+            logger.warning("Duplicate local model id while bootstrapping", extra={"model_id": model_id})
+        else:
+            probe = probe_local_llm_health(local_settings)
+            health = health_from_probe(probe)
+            models[model_id] = ModelDescriptor(
+                id=model_id,
+                display_name=local_settings.display_name,
+                provider=LOCAL_PROVIDER,
+                runtime=LOCAL_RUNTIME_ID,  # type: ignore[arg-type]
+                primary_capability=ModelCapability.LANGUAGE_PLANNER,
+                locality="local",
+                model_version=local_settings.model,
+                supported_operations=creative_ops,
+                status=probe.status,
+                health=health,
+                limits=public_limits(local_settings),
+                provider_model=local_settings.model,
+            )
+            logger.info(
+                "Bootstrapped local OpenAI-compatible chat model",
+                extra={
+                    "model_id": model_id,
+                    "runtime": LOCAL_RUNTIME_ID,
+                    "status": probe.status,
+                    "detail": probe.detail,
+                    "locality": "local",
+                },
+            )
+            if settings.default_provider == LOCAL_PROVIDER:
+                default_model_id = model_id
 
     for stub_id, display_name, capability, operation in _STUB_MODELS:
         if stub_id in models:

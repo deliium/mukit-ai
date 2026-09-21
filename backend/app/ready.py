@@ -125,6 +125,12 @@ def build_readiness_report() -> dict[str, Any]:
         },
     )
 
+    from app.local_llm_settings import load_local_llm_settings
+    from app.ai_runtime.local_health import local_ai_readiness_block
+
+    local_settings = load_local_llm_settings()
+    local_ai_block = local_ai_readiness_block(local_settings)
+
     wav_config = load_wav_renderer_config()
     wav_ready = bool(wav_config.fluidsynth_exists and wav_config.soundfont_exists)
     logger.info(
@@ -205,6 +211,7 @@ def build_readiness_report() -> dict[str, Any]:
             "providers": provider_names,
             "default_provider": llm_settings.default_provider,
         },
+        "local_ai": local_ai_block,
         "ai": ai_summary,
         "wav": {
             "ready": wav_ready,
@@ -221,6 +228,8 @@ def build_readiness_report() -> dict[str, Any]:
             "catalog_ok": catalog_ok,
             "llm_configured": bool(provider_names),
             "wav_ready": wav_ready,
+            "local_ai_enabled": bool(local_ai_block.get("enabled")),
+            "local_ai_status": local_ai_block.get("status"),
         },
     )
     return report

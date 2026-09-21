@@ -20,6 +20,7 @@ class AiModelCatalogItem(BaseModel):
     credentials_present: bool = False
     is_default: bool = False
     limits: dict[str, Any] = Field(default_factory=dict)
+    health_detail: str | None = Field(default=None, max_length=64)
 
 
 class AiModelsResponse(BaseModel):
