@@ -13,6 +13,7 @@ import {
   MotifApiError,
   previewCompositionArrangement,
   previewCompositionDevelopment,
+  previewMultiAgentWorkflow,
   previewReharmonization,
   ReharmonizeApiError,
   resolveMusicalReference,
@@ -1105,6 +1106,10 @@ export const useMusicStore = create((set, get) => ({
 
   ...initialHarmonyUiState,
   ...initialReharmonizePreviewState,
+  multiAgentStatus: 'idle',
+  multiAgentError: '',
+  multiAgentCandidate: null,
+  multiAgentRequestId: 0,
   ...initialDevelopmentPreviewState,
   ...initialMusicalReferenceSessionState,
   ...initialArrangementPreviewState,
@@ -9846,6 +9851,206 @@ export const useMusicStore = create((set, get) => ({
     audioLogger.info('Audio transcription discarded');
     set({ ...clearedAudioTranscriptionState() });
     return { ok: true };
+  },
+
+  previewMultiAgentWorkflow: async () => {
+    const state = get();
+    const source = state.editedMusicJson || state.generatedMusicJson;
+    if (!source || !isCanonicalComposition(source)) {
+      set({
+        multiAgentStatus: 'error',
+        multiAgentError: 'Canonical composition.v2 required for multi-agent preview',
+      });
+      return null;
+    }
+    const requestId = (state.multiAgentRequestId || 0) + 1;
+    set({
+      multiAgentStatus: 'loading',
+      multiAgentError: '',
+      multiAgentRequestId: requestId,
+    });
+    try {
+      const response = await previewMultiAgentWorkflow({
+        composition: source,
+        workflow_id: 'agent_spine_v1',
+        max_revisions: 0,
+      });
+      if (get().multiAgentRequestId !== requestId) {
+        return null;
+      }
+      const sourceFingerprint = await compositionEditFingerprint(source);
+      const candidateFingerprint = response.candidate_fingerprint
+        || await compositionEditFingerprint(response.candidate);
+      const envelope = buildAiCandidateEnvelope({
+        candidateId: `multi-agent-${Date.now()}`,
+        operationType: 'multi-agent-apply',
+        composition: response.candidate,
+        sourceFingerprint: response.source_fingerprint || sourceFingerprint,
+        candidateFingerprint,
+        generationParameters: response.generation_parameters || null,
+        warnings: response.warning_codes || [],
+        extras: {
+          agent_sequence: response.agent_sequence || [],
+          stages: response.stages || [],
+          recommendation: response.recommendation || null,
+          artifact_log: response.artifact_log || [],
+          pipeline_id: response.pipeline_id || 'agent_spine_v1',
+        },
+      });
+      // Discard competing session candidates when multi-agent candidate is set.
+      set({
+        multiAgentStatus: 'success',
+        multiAgentError: '',
+        multiAgentCandidate: envelope,
+        arrangementCandidates: [],
+        arrangementSelectedCandidateId: null,
+        developmentCandidates: [],
+        developmentSelectedCandidateId: null,
+        reharmonizeCandidate: null,
+        reharmonizeProposalFingerprint: null,
+        reharmonizeAuditionActive: false,
+      });
+      return envelope;
+    } catch (error) {
+      if (get().multiAgentRequestId !== requestId) {
+        return null;
+      }
+      set({
+        multiAgentStatus: 'error',
+        multiAgentError: error?.message || 'Multi-agent workflow preview failed',
+        multiAgentCandidate: null,
+      });
+      return null;
+    }
+  },
+
+  applyMultiAgentCandidate: async ({ asNewBranch = false, branchName = '' } = {}) => {
+    const state = get();
+    const candidate = state.multiAgentCandidate;
+    if (!candidate?.composition) {
+      set({ multiAgentStatus: 'error', multiAgentError: 'No multi-agent candidate to apply' });
+      return false;
+    }
+    const liveSource = state.editedMusicJson || state.generatedMusicJson;
+    const liveSourceFp = await compositionEditFingerprint(liveSource);
+    if (candidate.source_fingerprint && liveSourceFp !== candidate.source_fingerprint) {
+      set({
+        multiAgentStatus: 'error',
+        multiAgentError: 'Base composition changed; request a new multi-agent preview',
+      });
+      return false;
+    }
+    const prepared = candidate.composition;
+    const historySnapshot = {
+      provider: candidate.provider,
+      model: candidate.model,
+      model_id: candidate.model_id,
+      generation_parameters: candidate.generation_parameters,
+    };
+    const localStatePatch = {
+      multiAgentCandidate: null,
+      multiAgentStatus: 'idle',
+      multiAgentError: '',
+    };
+    const aiPayload = {
+      provider: candidate.provider || null,
+      model: candidate.model || null,
+      model_id: candidate.model_id || null,
+      warning_codes: toHistoryAiWarningCodes(candidate.warnings),
+      generation_parameters: candidate.generation_parameters || null,
+    };
+
+    if (!state.currentProjectId) {
+      commitCompositionTransaction(set, get, {
+        nextComposition: prepared,
+        action: 'multi-agent-apply',
+        noteSummary: null,
+        historySnapshot,
+        statePatch: localStatePatch,
+      });
+      void get().refreshMusicXmlFromEditedComposition();
+      return true;
+    }
+
+    if (
+      !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+      || !state.workingFingerprint
+    ) {
+      set({
+        multiAgentStatus: 'error',
+        multiAgentError: 'Missing branch CAS fields for durable multi-agent apply',
+      });
+      return false;
+    }
+
+    try {
+      let durable;
+      if (asNewBranch) {
+        const name = String(branchName || '').trim();
+        if (!name) {
+          set({
+            multiAgentStatus: 'error',
+            multiAgentError: 'Branch name required for Apply as new branch',
+          });
+          return false;
+        }
+        durable = await applyAsBranchRequest(state.currentProjectId, {
+          name,
+          source_branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'multi-agent-apply',
+          declared_scope: { ranges: [], track_ids: [] },
+          ai: aiPayload,
+        });
+      } else {
+        durable = await commitRevisionRequest(state.currentProjectId, {
+          branch_id: state.activeBranchId,
+          expected_active_branch_id: state.activeBranchId,
+          expected_working_version: state.workingVersion,
+          expected_head_revision_id: state.currentRevisionId,
+          expected_source_fingerprint: state.workingFingerprint,
+          composition: prepared,
+          operation_type: 'multi-agent-apply',
+          checkpoint_dirty_draft: true,
+          declared_scope: { ranges: [], track_ids: [] },
+          ai: aiPayload,
+        });
+      }
+      if (get().currentProjectId !== state.currentProjectId) {
+        return false;
+      }
+      installDurableHistoryResult(set, get, durable, {
+        clearUndo: Boolean(asNewBranch),
+        markSaved: true,
+        action: 'multi-agent-apply',
+      });
+      set({
+        ...localStatePatch,
+        ...(asNewBranch ? clearedVersionHistoryState() : {}),
+      });
+      void get().refreshMusicXmlFromEditedComposition();
+      return true;
+    } catch (error) {
+      set({
+        multiAgentStatus: 'error',
+        multiAgentError: error?.message || 'Multi-agent apply failed',
+      });
+      return false;
+    }
+  },
+
+  discardMultiAgentCandidate: () => {
+    set({
+      multiAgentCandidate: null,
+      multiAgentStatus: 'idle',
+      multiAgentError: '',
+    });
   },
 }));
 

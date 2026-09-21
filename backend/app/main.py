@@ -21,6 +21,7 @@ from .routers.harmony import router as harmony_router
 from .routers.composition_development import router as composition_development_router
 from .routers.arrangement import router as arrangement_router
 from .routers.ai_models import router as ai_models_router
+from .routers.ai_agents import router as ai_agents_router
 from .routers.embeddings import router as embeddings_router
 from .music_transformer.settings import load_music_transformer_settings
 from .schemas import (
@@ -114,6 +115,7 @@ app.include_router(harmony_router)
 app.include_router(composition_development_router)
 app.include_router(arrangement_router)
 app.include_router(ai_models_router)
+app.include_router(ai_agents_router)
 app.include_router(embeddings_router)
 
 _mt_settings = load_music_transformer_settings()

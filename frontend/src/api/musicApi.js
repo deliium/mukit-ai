@@ -1825,3 +1825,53 @@ export async function deleteNeuralAudioRender(renderId) {
     throw new NeuralAudioApiError(parsed.message, parsed);
   }
 }
+
+/**
+ * GET /ai/agents — V4 multi-agent discovery (never exposes secrets).
+ */
+export async function fetchAiAgents(params = {}) {
+  const query = {};
+  if (params.capability) query.capability = params.capability;
+  if (params.status) query.status = params.status;
+  const response = await request('get', '/ai/agents', null, { params: query });
+  console.debug('[musicApi] AI agent catalog loaded', {
+    agentCount: Array.isArray(response?.agents) ? response.agents.length : 0,
+  });
+  return response;
+}
+
+/**
+ * POST /ai/agents/workflows/preview — session candidate only; never mutates a project.
+ */
+export async function previewMultiAgentWorkflow(payload) {
+  const composition = normalizeApiComposition(payload.composition, {
+    context: 'multi-agent-workflow-preview-request',
+  });
+  validateCanonicalForApi(composition, { action: 'multi-agent workflow preview' });
+  console.info('[musicApi] Multi-agent workflow preview started', {
+    workflowId: payload.workflow_id || 'agent_spine_v1',
+    maxRevisions: payload.max_revisions ?? 0,
+  });
+  const axiosResponse = await axios.post('/ai/agents/workflows/preview', {
+    composition,
+    brief: payload.brief || null,
+    workflow_id: payload.workflow_id || 'agent_spine_v1',
+    max_revisions: payload.max_revisions ?? 0,
+    agent_model_overrides: payload.agent_model_overrides || {},
+    selection: payload.selection || {},
+  });
+  const response = axiosResponse.data || {};
+  const candidate = normalizeApiComposition(response.candidate, {
+    context: 'multi-agent-workflow-preview-response',
+  });
+  console.info('[musicApi] Multi-agent workflow preview ready', {
+    workflowId: response.workflow_id,
+    agentSequenceLen: Array.isArray(response.agent_sequence) ? response.agent_sequence.length : 0,
+    recommendation: response.recommendation || null,
+    mutatesComposition: response.mutates_composition === true,
+  });
+  return {
+    ...response,
+    candidate,
+  };
+}

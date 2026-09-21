@@ -38,6 +38,7 @@ class RevisionOperationType(StrEnum):
     REHARMONIZE_APPLY = "reharmonize-apply"
     DEVELOPMENT_APPLY = "development-apply"
     ARRANGEMENT_APPLY = "arrangement-apply"
+    MULTI_AGENT_APPLY = "multi-agent-apply"
     REVISION_RESTORE = "revision-restore"
     IMPORT = "import"
     MIGRATION = "migration"
