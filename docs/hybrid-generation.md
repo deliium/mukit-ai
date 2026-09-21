@@ -13,6 +13,8 @@ Mukit can generate `composition.v2` through a **pipeline-parameterized** LangGra
 
 `composition.plan.v1` is **not** a playable score. Playable notes remain only on `composition.v2` `tracks[].events[]`.
 
+Audio melody transcription (`POST /transcription/audio`) is a separate ingress into V2 and is **not** part of these generation pipelines — see [audio-transcription.md](audio-transcription.md).
+
 ## Request
 
 `POST /llm/generate-music-json` accepts additive options:

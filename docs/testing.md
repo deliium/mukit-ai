@@ -212,6 +212,19 @@ npm run test:e2e -- e2e/import-user-journey.spec.js
 
 Covers multi-track MIDI import, play/edit/notation, save/reopen, fake AI region edit, export downloads, MusicXML/MXL success, no-LLM availability, replace confirmation, failed import non-mutation, and grouped warning summary.
 
+Audio transcription (monophonic; set `AUDIO_FAKE_MODE=1` for CI without optional engines):
+
+```bash
+# Backend
+cd backend && AUDIO_FAKE_MODE=1 pytest tests/test_audio_transcription*.py -q
+# Frontend unit
+node --test frontend/src/utils/audioTranscriptionApply.test.js
+# Playwright panel smoke (no mic)
+npm run test:e2e -- e2e/audio-transcription.spec.js
+```
+
+Details and manual acceptance checklist: [audio-transcription.md](audio-transcription.md).
+
 Analysis panel journey (requires running stack; fake LLM optional for core analysis):
 
 ```bash

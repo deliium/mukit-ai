@@ -6,6 +6,8 @@ Secure multipart ingestion converts uploaded MIDI or MusicXML into strict `compo
 
 Source files are **ingress only**. After conversion, `tracks[].events[]` is the sole playable source. Raw import performs **no** harmony, form, key, or tonal analysis and does **not** call `POST /analysis/composition`. Resulting documents always set `harmony: []`. Optional Analysis-tab reports are derived later from the installed V2 only (see [composition-analysis.md](composition-analysis.md)). Source bytes are not retained on the composition or in project storage.
 
+Audio melody capture is a separate ingress: [audio-transcription.md](audio-transcription.md) (`POST /transcription/audio` → session preview → client Apply). Do not conflate it with symbolic MIDI/MusicXML import.
+
 ## Endpoints
 
 | Method | Path | Accepts (content-detected) |

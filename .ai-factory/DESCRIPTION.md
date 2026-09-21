@@ -19,6 +19,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - Local project CRUD with SQLite persistence, debounced autosave, immutable compressed snapshots, named branches, and restore-as-child revisions
 - Piano-roll and JSON editors sharing the same `editedMusicJson` Zustand state
 - Browser Web MIDI / QWERTY test performance capture into a destination track (session take → one undoable V2 commit; optional quantize; never required at startup)
+- Monophonic audio transcription (mic/file → session `transcription.preview.v1` review → Apply into V2); confidence stays off V2 notes; audio never persisted
 - Notation preview (MusicXML regenerated from V2) and browser playback (Tone.js) from `tracks[].events[]`
 - Deterministic export: MusicXML, MIDI, and server-side FluidSynth WAV
 

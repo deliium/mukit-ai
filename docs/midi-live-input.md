@@ -2,7 +2,7 @@
 
 # MIDI Live Input (Web MIDI Performance Capture)
 
-Browser-only performance capture into canonical `composition.v2`. Play a MIDI keyboard (or QWERTY test input), optionally with count-in and metronome, then commit one undoable take onto a destination track. This is **not** file MIDI import (`POST /imports/midi`).
+Browser-only performance capture into canonical `composition.v2`. Play a MIDI keyboard (or QWERTY test input), optionally with count-in and metronome, then commit one undoable take onto a destination track. This is **not** file MIDI import (`POST /imports/midi`) and **not** audio melody transcription ([audio-transcription.md](audio-transcription.md)).
 
 ## Summary
 

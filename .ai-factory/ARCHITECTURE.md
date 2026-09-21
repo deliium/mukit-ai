@@ -122,6 +122,7 @@ mukit-ai/
 |--------|--------------|---------------|
 | **Projects** | `routers/projects.py`, `project_schemas.py`, `services/project_*` | `ProjectBrowser`, `projectApi.js`, project slice of `musicStore` |
 | **Import** | `routers/imports.py`, `import_schemas.py`, `import_settings.py`, `composition_*_import.py`, `composition_import.py` | `ImportControls`, `importMidi` / `importMusicXml` in `musicApi.js`, import slice of `musicStore` |
+| **Audio transcription** | `routers/transcription.py`, `audio_transcription_schemas.py`, `audio_transcription_settings.py`, `services/audio_transcription/` | `AudioInputPanel`, `transcribeAudio` in `musicApi.js`, audio session slice of `musicStore`, `audioTranscriptionApply.js` |
 | **Datasets (offline)** | `app/dataset/` (`cli`, schemas, store, ingest/normalize/segment/dedup/split/stats); `DATASET_ROOT` filesystem only — never `PROJECT_DB_PATH` | CLI / docs only (no SPA) |
 | **Embeddings** | `app/embeddings/` (schemas/features/vector/cache/index); `routers/embeddings.py`; `services/composition_embedding.py` + style conditioning / invalidation; ready `local:symbolic-features-v1` — affinity ≠ quality; never artist≡style; never silent `DATASET_ROOT` ingest | Develop reference picker + similar sections; Motifs related; `compositionEmbeddingReference.js` |
 | **Tokenizer (offline)** | `app/tokenizer/` (encode/decode/vocab/repair/stats/viz/manifest/cli); Composition V2 ↔ `tokenizer.v1` tokens — never `PROJECT_DB_PATH` / FastAPI / weight load | CLI / docs only (no SPA) |

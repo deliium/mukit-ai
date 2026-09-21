@@ -24,7 +24,7 @@ creative motif — not multiple primary capabilities.
 | `symbolic_composer` | Full/partial symbolic composition generation |
 | `symbolic_editor` | Region edit, arrangement/development drafts, reharmonize AI, creative motifs |
 | `embedding` | Symbolic musical similarity / retrieval (`local:symbolic-features-v1` ready; text stub remains unconfigured) |
-| `audio_transcription` | Audio → text/MIDI-ish (stub) |
+| `audio_transcription` | Local monophonic audio → `transcription.preview.v1` (HTTP primary; discovery may list `local:audio-mono-*`) |
 | `audio_generation` | Neural audio render (stub; distinct from FluidSynth) |
 
 ## Operations (`AiOperation`)
@@ -39,7 +39,7 @@ creative motif — not multiple primary capabilities.
 | `development_preview` | `AI_OP_DEVELOPMENT_PREVIEW` | `symbolic_editor` |
 | `reharmonize_ai` | `AI_OP_REHARMONIZE_AI` | `symbolic_editor` |
 | `creative_motif` | `AI_OP_CREATIVE_MOTIF` | `symbolic_editor` |
-| `transcribe` | `AI_OP_TRANSCRIBE` | `audio_transcription` (stub) |
+| `transcribe` | `AI_OP_TRANSCRIBE` | `audio_transcription` (local mono engines or stub; not LLM generate) |
 | `embed` | `AI_OP_EMBED` | `embedding` (default: `local:symbolic-features-v1`) |
 | `audio_render` | `AI_OP_AUDIO_RENDER` | `audio_generation` (stub) |
 
