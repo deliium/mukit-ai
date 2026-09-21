@@ -48,6 +48,11 @@ Thumbs.db
 backend/training_data/*.mid
 backend/training_data/*.midi
 
+# Offline dataset corpora (DATASET_ROOT); keep root .gitkeep
+# Tiny licensed fixtures under backend/tests/fixtures/dataset/ remain tracked.
+datasets/*
+!datasets/.gitkeep
+
 # Local LLM weights (Compose local-ai / local-ai-vllm bind-mount); keep .gitkeep
 models/llm/*
 !models/llm/.gitkeep

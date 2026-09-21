@@ -115,6 +115,9 @@ services:
           - local-llm-vllm
 
   # --- training stub (PyTorch + ROCm scaffolding; no training loop) ---
+  # Dataset preprocess is offline CLI against a mounted DATASET_ROOT, e.g.:
+  #   python -m app.dataset.cli build --config pipeline.yaml
+  # See docs/datasets.md. This stub does not run preprocess or training.
   local-ai-training-stub:
     image: ${LOCAL_LLM_TRAINING_IMAGE:-busybox:1.36}
     profiles: ["training"]
