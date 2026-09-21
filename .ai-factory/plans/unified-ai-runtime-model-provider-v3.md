@@ -169,7 +169,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Depends on: Task 2
 
 ### Phase 2: Operation routing & service integration
-- [ ] Task 4: Operation resolver + per-operation config + DTO cascade
+- [x] Task 4: Operation resolver + per-operation config + DTO cascade
   - `backend/app/ai_runtime/routing.py` — resolve `(AiOperation, request_selection) → ResolvedModel` using: explicit `model_id` → legacy provider+model → `AI_OP_*` → global default.
   - Document all env keys in `.env.example` (table above + `AI_FALLBACK_*`).
   - Additive `model_id` on `LLMModelSelection`; keep `provider`/`model`.
@@ -185,7 +185,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Files: `routing.py`, settings helper, `.env.example`, listed schema files, tests `backend/tests/test_ai_runtime_routing.py`
   - Depends on: Task 2
 
-- [ ] Task 5: Refactor LLM orchestrators to obtain models via resolver (no composition logic changes)
+- [x] Task 5: Refactor LLM orchestrators to obtain models via resolver (no composition logic changes)
   - Touch: `llm_music_generator.py`, `llm_composition_editor.py`, `llm_composition_arrangement.py`, `llm_composition_development.py`, `llm_reharmonizer.py`, `llm_motif_editor.py`, plus thin callers in `main.py` / `routers/arrangement.py` / `composition_development.py` / `harmony.py` / `motifs.py`.
   - Replace direct `select_llm_provider` + inline client build with `resolve_model_for_operation(...)`; keep `select_llm_provider` as thin deprecated wrapper if needed for tests.
   - **Generate:** resolve **one** model for `AiOperation.generate` per request; do **not** switch models per LangGraph node in this plan (`generate_planner` / `generate_composer` env keys reserved only).
@@ -196,7 +196,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Files: listed services + routers/`main.py` error mapping; regression via existing pytest modules
   - Depends on: Tasks 3, 4
 
-- [ ] Task 6: Ready/health integration
+- [x] Task 6: Ready/health integration
   - Extend `ready.py` with non-secret AI registry summary: counts by capability/status, default op routes (ids only).
   - Remote health = credentials present; stubs = unconfigured; never load weights on `/ready`.
   - LOGGING: DEBUG ready AI summary.

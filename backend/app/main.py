@@ -51,6 +51,13 @@ from .services.music_json_renderer import MusicJsonRenderError, render_musicxml
 
 logger = logging.getLogger(__name__)
 
+
+def _ai_resolution_response_fields() -> dict[str, Any]:
+    from app.ai_runtime.routing import get_current_resolved_model, resolution_public_fields
+
+    return resolution_public_fields(get_current_resolved_model())
+
+
 # Apply LOG_LEVEL before other modules emit startup logs.
 _CONFIGURED_LOG_LEVEL = configure_logging()
 
@@ -252,6 +259,7 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
             musicxml=musicxml,
             warnings=all_warnings,
             validation=validation,
+            **_ai_resolution_response_fields(),
         )
     except OversizedLLMGenerationRequestError as exc:
         logger.warning(
@@ -371,6 +379,7 @@ async def edit_llm_composition_region(request: LLMCompositionEditRequest):
             model=provider.model,
             musicxml=musicxml,
             warnings=all_warnings,
+            **_ai_resolution_response_fields(),
         )
     except NoLLMProviderConfiguredError as exc:
         logger.warning(

@@ -79,6 +79,8 @@ async def run_reharmonize_preview(
             response = preview_reharmonization(
                 request.model_copy(update={"engine": "deterministic"})
             )
+            from app.ai_runtime.routing import get_current_resolved_model, resolution_public_fields
+
             stamped = response.model_copy(
                 update={
                     "provider": provider.provider,
@@ -87,6 +89,7 @@ async def run_reharmonize_preview(
                         *response.warnings,
                         "ai_engine_used_deterministic_realization",
                     ][:32],
+                    **resolution_public_fields(get_current_resolved_model()),
                 }
             )
             logger.info(
@@ -123,22 +126,16 @@ def _select_reharmonize_provider(
     request: ReharmonizePreviewRequest,
     settings: LLMSettings,
 ) -> LLMProviderSettings:
-    if not settings.providers:
-        raise NoLLMProviderConfiguredError("No LLM providers are configured")
-    requested = (request.selection_options.provider or settings.default_provider or "").strip()
-    requested_model = request.selection_options.model
-    for provider in settings.providers:
-        if provider.provider == requested:
-            if requested_model and requested_model != provider.model:
-                return LLMProviderSettings(
-                    provider=provider.provider,
-                    model=requested_model,
-                    api_key=provider.api_key,
-                    base_url=provider.base_url,
-                    is_default=provider.is_default,
-                )
-            return provider
-    raise UnsupportedLLMProviderError(f"Unsupported or unavailable LLM provider: {requested}")
+    from app.ai_runtime.operations import AiOperation
+    from app.services.llm_music_generator import select_llm_provider
+
+    return select_llm_provider(
+        provider=request.selection_options.provider,
+        model=request.selection_options.model,
+        model_id=getattr(request.selection_options, "model_id", None),
+        settings=settings,
+        operation=AiOperation.REHARMONIZE_AI,
+    )
 
 
 def _instruction_meta(instruction: str | None) -> dict[str, Any]:

@@ -281,7 +281,10 @@ class LLMPromptParameters(BaseModel):
 
 
 class LLMModelSelection(BaseModel):
-    provider: Literal["openai", "deepseek", "fake"] | None = None
+    """Provider/model selection. Prefer ``model_id`` (``provider:model``); legacy fields kept."""
+
+    model_id: str | None = Field(default=None, max_length=160)
+    provider: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=120)
 
 
@@ -298,23 +301,32 @@ class LLMMusicGenerationRequest(BaseModel):
 
 
 class LLMProviderModel(BaseModel):
-    provider: Literal["openai", "deepseek", "fake"]
+    provider: str = Field(..., max_length=64)
     model: str
     display_name: str
     is_default: bool = False
+    model_id: str | None = Field(default=None, max_length=160)
 
 
 class LLMModelsResponse(BaseModel):
     models: list[LLMProviderModel]
-    default_provider: Literal["openai", "deepseek", "fake"] | None = None
+    default_provider: str | None = Field(default=None, max_length=64)
     default_model: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
 class LLMMusicGenerationResponse(BaseModel):
     music: CompositionV2
-    provider: Literal["openai", "deepseek", "fake"]
+    provider: str = Field(..., max_length=64)
     model: str
+    model_id: str | None = Field(default=None, max_length=160)
+    requested_model_id: str | None = Field(default=None, max_length=160)
+    resolved_model_id: str | None = Field(default=None, max_length=160)
+    fallback_applied: bool = False
+    runtime: str | None = Field(default=None, max_length=64)
+    capability: str | None = Field(default=None, max_length=64)
+    operation: str | None = Field(default=None, max_length=64)
+    model_version: str | None = Field(default=None, max_length=120)
     musicxml: str | None = None
     musicxml_filename: str | None = None
     warnings: list[str] = Field(default_factory=list)
@@ -716,8 +728,16 @@ class LLMCompositionEditRequest(BaseModel):
 class LLMCompositionEditResponse(BaseModel):
     composition: CompositionV2
     patch: CompositionRegionReplacementPatch
-    provider: Literal["openai", "deepseek", "fake"]
+    provider: str = Field(..., max_length=64)
     model: str
+    model_id: str | None = Field(default=None, max_length=160)
+    requested_model_id: str | None = Field(default=None, max_length=160)
+    resolved_model_id: str | None = Field(default=None, max_length=160)
+    fallback_applied: bool = False
+    runtime: str | None = Field(default=None, max_length=64)
+    capability: str | None = Field(default=None, max_length=64)
+    operation: str | None = Field(default=None, max_length=64)
+    model_version: str | None = Field(default=None, max_length=120)
     musicxml: str | None = None
     musicxml_filename: str | None = None
     warnings: list[str] = Field(default_factory=list)

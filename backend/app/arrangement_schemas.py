@@ -774,8 +774,16 @@ class ArrangementCandidate(BaseModel):
     )
     operation: ArrangementOperation
     composition: CompositionV2
-    provider: Literal["openai", "deepseek", "fake"]
+    provider: str = Field(..., max_length=64)
     model: str | None = Field(default=None, max_length=120)
+    model_id: str | None = Field(default=None, max_length=160)
+    requested_model_id: str | None = Field(default=None, max_length=160)
+    resolved_model_id: str | None = Field(default=None, max_length=160)
+    fallback_applied: bool = False
+    runtime: str | None = Field(default=None, max_length=64)
+    capability: str | None = Field(default=None, max_length=64)
+    ai_operation: str | None = Field(default=None, max_length=64)
+    model_version: str | None = Field(default=None, max_length=120)
     before_inventory: list[ArrangementTrackInventoryItem] = Field(
         default_factory=list,
         max_length=ARRANGEMENT_MAX_TRACK_COUNT,
@@ -1005,8 +1013,16 @@ class CompositionArrangementPreviewResponse(BaseModel):
         max_length=ARRANGEMENT_MAX_REJECTED_ATTEMPTS,
     )
     warning_codes: list[str] = Field(default_factory=list, max_length=ARRANGEMENT_MAX_WARNINGS)
-    provider: Literal["openai", "deepseek", "fake"]
+    provider: str = Field(..., max_length=64)
     model: str | None = Field(default=None, max_length=120)
+    model_id: str | None = Field(default=None, max_length=160)
+    requested_model_id: str | None = Field(default=None, max_length=160)
+    resolved_model_id: str | None = Field(default=None, max_length=160)
+    fallback_applied: bool = False
+    runtime: str | None = Field(default=None, max_length=64)
+    capability: str | None = Field(default=None, max_length=64)
+    ai_operation: str | None = Field(default=None, max_length=64)
+    model_version: str | None = Field(default=None, max_length=120)
 
     @field_validator("warning_codes")
     @classmethod

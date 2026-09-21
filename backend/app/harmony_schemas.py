@@ -419,6 +419,14 @@ class ReharmonizePreviewResponse(BaseModel):
     compatibility: CompatibilityReport
     provider: str
     model: str | None = None
+    model_id: str | None = Field(default=None, max_length=160)
+    requested_model_id: str | None = Field(default=None, max_length=160)
+    resolved_model_id: str | None = Field(default=None, max_length=160)
+    fallback_applied: bool = False
+    runtime: str | None = Field(default=None, max_length=64)
+    capability: str | None = Field(default=None, max_length=64)
+    operation: str | None = Field(default=None, max_length=64)
+    model_version: str | None = Field(default=None, max_length=120)
     warnings: list[str] = Field(default_factory=list, max_length=32)
     recommended_target_track_ids: list[str] = Field(default_factory=list, max_length=64)
     start_tick: int = Field(..., ge=0)

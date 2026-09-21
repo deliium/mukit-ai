@@ -145,7 +145,9 @@ async def edit_composition_region(
     """Edit only the selected region via a replace_region patch graph; returns CompositionV2."""
     active_settings = settings or load_llm_settings()
     # Reuse provider selection from the full-generation service; request shape shares selection fields.
-    provider = _select_provider(request, active_settings)  # type: ignore[arg-type]
+    from app.ai_runtime.operations import AiOperation
+
+    provider = _select_provider(request, active_settings, operation=AiOperation.REGION_EDIT)  # type: ignore[arg-type]
     model_name = _selected_edit_model(request, provider)
 
     from .fake_llm import FakeLLMError, edit_fake_composition_region, is_fake_provider

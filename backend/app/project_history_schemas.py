@@ -83,8 +83,14 @@ class DeclaredScope(BaseModel):
 class AiProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["openai", "deepseek", "fake"] | None = None
+    provider: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=120)
+    model_id: str | None = Field(default=None, max_length=160)
+    model_version: str | None = Field(default=None, max_length=120)
+    runtime: str | None = Field(default=None, max_length=64)
+    capability: str | None = Field(default=None, max_length=64)
+    operation: str | None = Field(default=None, max_length=64)
+    generation_parameters: dict[str, Any] | None = None
     user_instruction: str | None = Field(default=None, max_length=USER_INSTRUCTION_MAX_LENGTH)
     candidate_id: str | None = Field(default=None, max_length=120)
     candidate_fingerprint: str | None = Field(default=None, min_length=16, max_length=128)

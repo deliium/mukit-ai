@@ -81,6 +81,13 @@ def get_default_model_id(env: Mapping[str, str] | None = None) -> str | None:
         return _default_model_id
 
 
+def set_default_model_id(model_id: str | None) -> None:
+    with _lock:
+        global _default_model_id
+        _default_model_id = model_id
+        logger.debug("AI registry default model id set", extra={"default_model_id": model_id})
+
+
 def register_model(descriptor: ModelDescriptor, *, overwrite: bool = False) -> None:
     with _lock:
         if descriptor.id in _registry and not overwrite:

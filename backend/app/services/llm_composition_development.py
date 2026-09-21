@@ -44,6 +44,15 @@ from app.services.llm_music_generator import (
 
 logger = logging.getLogger(__name__)
 
+
+def _ai_resolution_kwargs() -> dict[str, Any]:
+    from app.ai_runtime.routing import get_current_resolved_model, resolution_public_fields
+
+    fields = resolution_public_fields(get_current_resolved_model())
+    if "operation" in fields:
+        fields["ai_operation"] = fields.pop("operation")
+    return fields
+
 CREATIVE_DIRECTIONS = (
     "stay close to the source contour and rhythm",
     "develop motivic cells with moderate rhythmic variation",
@@ -56,10 +65,14 @@ def _select_development_provider(
     request: CompositionDevelopmentPreviewRequest,
     settings: LLMSettings,
 ) -> LLMProviderSettings:
+    from app.ai_runtime.operations import AiOperation
+
     return select_llm_provider(
         provider=request.selection.provider,
         model=request.selection.model,
+        model_id=getattr(request.selection, "model_id", None),
         settings=settings,
+        operation=AiOperation.DEVELOPMENT_PREVIEW,
     )
 
 
@@ -380,6 +393,7 @@ async def run_composition_development_preview(
                         "harmonic_continuity_advisory",
                     }
                 ][:32],
+                **_ai_resolution_kwargs(),
             )
         )
         logger.info(
@@ -422,8 +436,9 @@ async def run_composition_development_preview(
         requested_candidate_count=request.candidate_count,
         candidates=candidates,
         warning_codes=list(dict.fromkeys(warning_codes))[:32],
-        provider=provider.provider,  # type: ignore[arg-type]
+        provider=provider.provider,
         model=model,
+        **_ai_resolution_kwargs(),
     )
     logger.info(
         "Composition development preview completed",

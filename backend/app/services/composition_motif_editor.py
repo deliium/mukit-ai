@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
+from typing import Any
+
 from app.composition_schemas import (
     CompositionV2,
     CompositionV2MotifDefinition,
@@ -222,6 +224,15 @@ async def apply_motif_operation(request: MotifApplyRequest, settings: LLMSetting
         exact_transform_verified=components.exact_transform_verified,
         warning_codes=list(transform_result.warning_codes),
     )
+    resolution_extras: dict[str, Any] = {}
+    if provider is not None:
+        from app.ai_runtime.routing import get_current_resolved_model, resolution_public_fields
+
+        fields = resolution_public_fields(get_current_resolved_model())
+        if "operation" in fields:
+            fields["ai_operation"] = fields.pop("operation")
+        resolution_extras = fields
+
     result = MotifApplyOperationResult(
         motif_id=motif.id,
         source_occurrence_id=source_occurrence.id,
@@ -237,6 +248,7 @@ async def apply_motif_operation(request: MotifApplyRequest, settings: LLMSetting
         model=(request.selection.model or provider.model) if provider else None,
         transform=transform,
         diagnostics=diagnostics,
+        **resolution_extras,
     )
     warnings = (*extra_warnings, *transform_result.warning_codes, *reconcile_warnings)
     # Preserve order while dropping exact duplicates.
@@ -271,32 +283,29 @@ async def apply_motif_operation(request: MotifApplyRequest, settings: LLMSetting
 
 
 def _select_creative_provider(request: MotifApplyRequest, settings: LLMSettings) -> LLMProviderSettings:
-    if not settings.providers:
+    from app.ai_runtime.operations import AiOperation
+    from app.services.llm_music_generator import select_llm_provider
+
+    try:
+        return select_llm_provider(
+            provider=request.selection.provider,
+            model=request.selection.model,
+            model_id=getattr(request.selection, "model_id", None),
+            settings=settings,
+            operation=AiOperation.CREATIVE_MOTIF,
+        )
+    except NoLLMProviderConfiguredError:
         logger.warning(
             "Creative motif apply rejected: no configured providers",
             extra={"operation": request.operation, "code": "motif_creative_provider_required"},
         )
-        raise NoLLMProviderConfiguredError("No LLM providers are configured")
-
-    requested_provider = request.selection.provider or settings.default_provider
-    requested_model = request.selection.model
-    for provider in settings.providers:
-        if provider.provider == requested_provider:
-            if requested_model and requested_model != provider.model:
-                return LLMProviderSettings(
-                    provider=provider.provider,
-                    model=requested_model,
-                    api_key=provider.api_key,
-                    base_url=provider.base_url,
-                    is_default=provider.is_default,
-                )
-            return provider
-
-    logger.warning(
-        "Creative motif apply rejected: unsupported provider",
-        extra={"operation": request.operation, "provider": requested_provider},
-    )
-    raise UnsupportedLLMProviderError(f"Unsupported or unavailable LLM provider: {requested_provider}")
+        raise
+    except UnsupportedLLMProviderError:
+        logger.warning(
+            "Creative motif apply rejected: unsupported provider",
+            extra={"operation": request.operation, "provider": request.selection.provider},
+        )
+        raise
 
 
 def _resolve_source(

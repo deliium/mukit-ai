@@ -361,37 +361,68 @@ def select_llm_provider(
     provider: str | None,
     model: str | None,
     settings: LLMSettings,
+    operation: "AiOperation | None" = None,
+    model_id: str | None = None,
 ) -> LLMProviderSettings:
-    """Resolve a configured provider/model pair shared by generate/edit/arrangement."""
-    if not settings.providers:
-        logger.warning("LLM generation requested without configured providers")
-        raise NoLLMProviderConfiguredError("No LLM providers are configured")
+    """Resolve a configured provider/model pair shared by generate/edit/arrangement.
 
-    requested_provider = provider or settings.default_provider
-    requested_model = model
-    for configured in settings.providers:
-        if configured.provider == requested_provider:
-            if requested_model and requested_model != configured.model:
-                return LLMProviderSettings(
-                    provider=configured.provider,
-                    model=requested_model,
-                    api_key=configured.api_key,
-                    base_url=configured.base_url,
-                    is_default=configured.is_default,
-                )
-            return configured
-
-    logger.warning("Unsupported LLM provider requested", extra={"provider": requested_provider})
-    raise UnsupportedLLMProviderError(
-        f"Unsupported or unavailable LLM provider: {requested_provider}"
+    Deprecated thin wrapper over ``resolve_provider_for_operation`` — prefer calling
+    the AI runtime resolver with an explicit ``AiOperation``.
+    """
+    from app.ai_runtime.errors import (
+        CapabilityMismatchError,
+        FallbackNotConfiguredError,
+        ModelNotFoundError,
+        ModelUnavailableError,
     )
+    from app.ai_runtime.operations import AiOperation
+    from app.ai_runtime.routing import ModelSelectionInput, resolve_provider_for_operation
+
+    op = operation or AiOperation.GENERATE
+    try:
+        provider_settings, resolved = resolve_provider_for_operation(
+            op,
+            ModelSelectionInput(model_id=model_id, provider=provider, model=model),
+            settings,
+        )
+        logger.info(
+            "select_llm_provider resolved via AI runtime",
+            extra={
+                "operation": str(op),
+                "model_id": resolved.resolved_model_id,
+                "runtime": resolved.descriptor.runtime,
+                "primary_capability": resolved.descriptor.primary_capability,
+                "fallback_applied": resolved.fallback_applied,
+            },
+        )
+        return provider_settings
+    except (ModelUnavailableError, FallbackNotConfiguredError) as exc:
+        if not settings.providers:
+            logger.warning("LLM generation requested without configured providers")
+            raise NoLLMProviderConfiguredError("No LLM providers are configured") from exc
+        raise NoLLMProviderConfiguredError(str(exc)) from exc
+    except (ModelNotFoundError, CapabilityMismatchError) as exc:
+        logger.warning(
+            "Unsupported LLM provider/model requested",
+            extra={"provider": provider, "model": model, "model_id": model_id, "error_code": exc.code},
+        )
+        raise UnsupportedLLMProviderError(str(exc)) from exc
 
 
-def _select_provider(request: LLMMusicGenerationRequest, settings: LLMSettings) -> LLMProviderSettings:
+def _select_provider(
+    request: LLMMusicGenerationRequest,
+    settings: LLMSettings,
+    *,
+    operation: "AiOperation | None" = None,
+) -> LLMProviderSettings:
+    from app.ai_runtime.operations import AiOperation
+
     return select_llm_provider(
         provider=request.selection.provider,
         model=request.selection.model,
+        model_id=getattr(request.selection, "model_id", None),
         settings=settings,
+        operation=operation or AiOperation.GENERATE,
     )
 
 

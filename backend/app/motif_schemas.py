@@ -197,8 +197,16 @@ class MotifApplyOperationResult(BaseModel):
     new_occurrence_id: str = Field(..., min_length=1, max_length=120)
     relationship: MotifApplyOperation
     identity_score: float = Field(..., ge=0.0, le=1.0)
-    provider: Literal["openai", "deepseek", "fake"] | None = None
+    provider: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=120)
+    model_id: str | None = Field(default=None, max_length=160)
+    requested_model_id: str | None = Field(default=None, max_length=160)
+    resolved_model_id: str | None = Field(default=None, max_length=160)
+    fallback_applied: bool = False
+    runtime: str | None = Field(default=None, max_length=64)
+    capability: str | None = Field(default=None, max_length=64)
+    ai_operation: str | None = Field(default=None, max_length=64)
+    model_version: str | None = Field(default=None, max_length=120)
     transform: CompositionV2MotifTransformProvenance
     diagnostics: MotifApplyDiagnostics
 
@@ -226,12 +234,20 @@ class MotifApplyRequest(BaseModel):
         if operation in MECHANICAL_OPERATIONS:
             if strength is not None:
                 raise ValueError("variation_strength is not applicable for mechanical motif operations")
-            if self.selection.provider is not None or self.selection.model is not None:
+            if (
+                self.selection.provider is not None
+                or self.selection.model is not None
+                or self.selection.model_id is not None
+            ):
                 raise ValueError("LLM selection must be omitted for mechanical motif operations")
         elif operation in CREATIVE_OPERATIONS:
             if strength is None:
                 raise ValueError("variation_strength is required for creative motif operations")
-            if self.selection.provider is None and self.selection.model is None:
+            if (
+                self.selection.provider is None
+                and self.selection.model is None
+                and self.selection.model_id is None
+            ):
                 raise ValueError("LLM provider or model selection is required for creative motif operations")
         else:
             raise ValueError(f"Unsupported motif apply operation: {operation}")

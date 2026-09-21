@@ -43,6 +43,10 @@ def test_ready_report_has_no_secret_fields(monkeypatch, tmp_path):
     assert "providers" in report["llm"]
     assert "database" in report
     assert "wav" in report
+    assert "ai" in report
+    assert "model_ids" in report["ai"]
+    assert "by_capability" in report["ai"]
+    assert "operation_defaults" in report["ai"]
     assert report["arrangement_catalog"]["ok"] is True
     assert report["arrangement_catalog"]["fingerprint"]
     assert report["arrangement_catalog"]["catalog_version"]

@@ -34,8 +34,14 @@ def _contains_forbidden_secret_fields(payload: Any, *, path: str = "") -> list[s
 
 
 class ProjectGenerationMeta(BaseModel):
-    provider: Literal["openai", "deepseek", "fake"] | None = None
+    provider: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=120)
+    model_id: str | None = Field(default=None, max_length=160)
+    model_version: str | None = Field(default=None, max_length=120)
+    runtime: str | None = Field(default=None, max_length=64)
+    capability: str | None = Field(default=None, max_length=64)
+    operation: str | None = Field(default=None, max_length=64)
+    generation_parameters: dict[str, Any] | None = None
     prompt: LLMPromptParameters | dict[str, Any] | None = None
 
     @model_validator(mode="before")

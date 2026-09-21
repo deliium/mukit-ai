@@ -52,6 +52,16 @@ from app.services.llm_music_generator import (
 
 logger = logging.getLogger(__name__)
 
+
+def _ai_resolution_kwargs() -> dict[str, Any]:
+    from app.ai_runtime.routing import get_current_resolved_model, resolution_public_fields
+
+    fields = resolution_public_fields(get_current_resolved_model())
+    if "operation" in fields:
+        fields["ai_operation"] = fields.pop("operation")
+    return fields
+
+
 CREATIVE_DIRECTIONS = (
     "preserve melody contour; redistribute support across target instruments",
     "favor clearer bass register and restrained accompaniment density",
@@ -103,11 +113,15 @@ def _select_arrangement_provider(
     request: CompositionArrangementPreviewRequest,
     settings: LLMSettings,
 ) -> LLMProviderSettings:
+    from app.ai_runtime.operations import AiOperation
+
     try:
         return select_llm_provider(
             provider=request.selection.provider,
             model=request.selection.model,
+            model_id=getattr(request.selection, "model_id", None),
             settings=settings,
+            operation=AiOperation.ARRANGE_PREVIEW,
         )
     except NoLLMProviderConfiguredError as exc:
         raise CompositionArrangementError(
@@ -515,7 +529,7 @@ async def run_composition_arrangement_preview(
                 target_profile_fingerprints=list(realized.target_profile_fingerprints),
                 operation=request.operation,
                 composition=realized.composition,
-                provider=provider.provider,  # type: ignore[arg-type]
+                provider=provider.provider,
                 model=model,
                 before_inventory=list(realized.before_inventory),
                 after_inventory=list(realized.after_inventory),
@@ -527,6 +541,7 @@ async def run_composition_arrangement_preview(
                 harmony_compatibility=validation.harmony_compatibility,
                 assertions=list(validation.assertions)[:64],
                 warning_codes=merged_warnings,
+                **_ai_resolution_kwargs(),
             )
         )
         logger.info(
@@ -573,8 +588,9 @@ async def run_composition_arrangement_preview(
         candidates=candidates,
         rejected_attempts=rejected_attempts[:16],
         warning_codes=_filter_warning_codes(warning_codes),
-        provider=provider.provider,  # type: ignore[arg-type]
+        provider=provider.provider,
         model=model,
+        **_ai_resolution_kwargs(),
     )
     logger.info(
         "Composition arrangement preview completed",

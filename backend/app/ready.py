@@ -60,6 +60,46 @@ def parse_cors_allow_origins(raw: str | None = None) -> list[str]:
     return origins
 
 
+def _ai_registry_summary() -> dict[str, Any]:
+    """Non-secret AI registry snapshot for /ready (ids and counts only)."""
+    try:
+        from app.ai_runtime.registry import get_default_model_id, list_models, reload_registry
+        from app.ai_runtime.routing import default_operation_routes
+
+        reload_registry()
+        models = list_models()
+        by_capability: dict[str, int] = {}
+        by_status: dict[str, int] = {}
+        for model in models:
+            cap = str(model.primary_capability)
+            by_capability[cap] = by_capability.get(cap, 0) + 1
+            by_status[model.status] = by_status.get(model.status, 0) + 1
+        summary = {
+            "model_count": len(models),
+            "default_model_id": get_default_model_id(),
+            "by_capability": by_capability,
+            "by_status": by_status,
+            "operation_defaults": default_operation_routes(),
+            "model_ids": [m.id for m in models],
+        }
+        logger.debug("Readiness AI registry summary", extra={"model_count": len(models)})
+        return summary
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Readiness AI registry summary failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return {
+            "model_count": 0,
+            "default_model_id": None,
+            "by_capability": {},
+            "by_status": {},
+            "operation_defaults": {},
+            "model_ids": [],
+            "error_type": type(exc).__name__,
+        }
+
+
 def build_readiness_report() -> dict[str, Any]:
     """Collect non-secret readiness flags for GET /ready."""
     logger.info("Readiness check started")
@@ -150,6 +190,7 @@ def build_readiness_report() -> dict[str, Any]:
 
     # App can serve projects/exports without LLM; LLM routes stay 503.
     # Invalid configured arrangement catalog makes the process not ready.
+    ai_summary = _ai_registry_summary()
     ready = bool(db_ok and catalog_ok)
     report = {
         "status": "ready" if ready else "not_ready",
@@ -164,6 +205,7 @@ def build_readiness_report() -> dict[str, Any]:
             "providers": provider_names,
             "default_provider": llm_settings.default_provider,
         },
+        "ai": ai_summary,
         "wav": {
             "ready": wav_ready,
             "fluidsynth_exists": wav_config.fluidsynth_exists,
