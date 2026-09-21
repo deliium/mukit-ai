@@ -21,6 +21,7 @@ MUSIC_TRANSFORMER_VERSION = "music_transformer.v1"
 _DEFAULT_DEVICE = "cpu"
 _DEFAULT_SEED = 42
 _DEFAULT_CHECKPOINT_DIR = "checkpoints/music_transformer"
+_DEFAULT_EXPERIMENT_ROOT = "experiments/music_transformer"
 _DEFAULT_API_ENABLED = False
 _DEFAULT_DEVICE_FALLBACK = ""  # empty = no silent fallback
 
@@ -34,6 +35,7 @@ class MusicTransformerSettings:
     device_fallback: str
     seed: int
     checkpoint_dir: str
+    experiment_root: str
     api_enabled: bool
     default_checkpoint: str | None
 
@@ -49,6 +51,11 @@ def load_music_transformer_settings(
         "MUSIC_TRANSFORMER_CHECKPOINT_DIR",
         _DEFAULT_CHECKPOINT_DIR,
     )
+    experiment_root = _str_env(
+        source,
+        "MUSIC_TRANSFORMER_EXPERIMENT_ROOT",
+        _DEFAULT_EXPERIMENT_ROOT,
+    )
     default_ckpt_raw = source.get("MUSIC_TRANSFORMER_CHECKPOINT")
     default_checkpoint = (
         default_ckpt_raw.strip()
@@ -61,6 +68,7 @@ def load_music_transformer_settings(
         device_fallback=fallback,
         seed=_int_env(source, "MUSIC_TRANSFORMER_SEED", _DEFAULT_SEED, minimum=0, maximum=2**31 - 1),
         checkpoint_dir=checkpoint_dir,
+        experiment_root=experiment_root,
         api_enabled=_bool_env(source, "MUSIC_TRANSFORMER_API_ENABLED", _DEFAULT_API_ENABLED),
         default_checkpoint=default_checkpoint,
     )
@@ -72,6 +80,7 @@ def load_music_transformer_settings(
             "seed": settings.seed,
             "api_enabled": settings.api_enabled,
             "checkpoint_dir_basename": Path(settings.checkpoint_dir).name,
+            "experiment_root_basename": Path(settings.experiment_root).name,
             "has_default_checkpoint": settings.default_checkpoint is not None,
         },
     )

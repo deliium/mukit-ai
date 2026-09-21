@@ -38,6 +38,12 @@ PosEncodingKind = Literal["learned", "sinusoidal"]
 NormKind = Literal["pre"]
 StopReason = Literal["eos", "max_new_tokens", "rejected"]
 GenerateStatus = Literal["ok", "repaired", "rejected"]
+OptimizerKind = Literal["adamw"]
+SchedulerKind = Literal["none", "cosine", "linear_warmup"]
+PrecisionKind = Literal["fp32", "amp_fp16", "amp_bf16"]
+PrecisionFallback = Literal["", "fp32"]
+EarlyStopMetric = Literal["val_loss"]
+EarlyStopMode = Literal["min", "max"]
 
 MusicTransformerIssueCode = Literal[
     "invalid_config",
@@ -54,6 +60,13 @@ MusicTransformerIssueCode = Literal[
     "no_notes",
     "train_data_empty",
     "sequence_truncated",
+    "experiment_exists",
+    "experiment_missing",
+    "resume_mismatch",
+    "precision_unsupported",
+    "val_empty",
+    "scheduler_mismatch",
+    "optimizer_missing",
 ]
 
 
@@ -111,8 +124,22 @@ class MusicTransformerConfigV1(StrictModel):
         return digest
 
 
+class EarlyStoppingConfigV1(StrictModel):
+    """Optional early stop on validation loss (disabled by default for CI)."""
+
+    enabled: bool = False
+    metric: EarlyStopMetric = "val_loss"
+    patience: int = Field(default=5, ge=1, le=10_000)
+    min_delta: float = Field(default=0.0, ge=0.0)
+    mode: EarlyStopMode = "min"
+
+
 class MusicTransformerTrainConfigV1(StrictModel):
-    """``music_transformer.train_config.v1`` — offline train knobs."""
+    """``music_transformer.train_config.v1`` — offline train knobs.
+
+    Backward compatible with minimal fixtures (``tiny_train.json``): new fields
+    have safe defaults so existing configs still validate.
+    """
 
     schema_version: Literal["music_transformer.train_config.v1"] = MT_TRAIN_CONFIG_SCHEMA
     lr: float = Field(default=3e-4, gt=0.0, le=1.0)
@@ -126,6 +153,31 @@ class MusicTransformerTrainConfigV1(StrictModel):
     dataset_dir: str | None = None
     inputs_glob: str | None = None
     architecture: MusicTransformerConfigV1 | None = None
+    # Expanded experiment trainer fields
+    dataset_version_id: str | None = None
+    tokenizer_version: str | None = None
+    tokenizer_vocab_hash: str | None = None
+    optimizer: OptimizerKind = "adamw"
+    weight_decay: float = Field(default=0.01, ge=0.0, le=1.0)
+    scheduler: SchedulerKind = "none"
+    warmup_steps: int = Field(default=0, ge=0, le=1_000_000)
+    precision: PrecisionKind = "fp32"
+    precision_fallback: PrecisionFallback = ""
+    grad_accum_steps: int = Field(default=1, ge=1, le=1024)
+    checkpoint_interval: int = Field(default=0, ge=0, le=10_000_000)
+    eval_interval: int = Field(default=0, ge=0, le=10_000_000)
+    early_stopping: EarlyStoppingConfigV1 = Field(default_factory=EarlyStoppingConfigV1)
+    val_fraction: float | None = Field(default=None, ge=0.0, le=0.5)
+    val_inputs_glob: str | None = None
+
+    def config_digest(self) -> str:
+        payload = self.model_dump(mode="json")
+        digest = hashlib.sha256(canonical_json_dumps(payload).encode("utf-8")).hexdigest()
+        logger.info(
+            "Train config digest computed",
+            extra={"config_digest_prefix": digest[:12], "steps": self.steps},
+        )
+        return digest
 
 
 class MusicTransformerSampleConfigV1(StrictModel):
@@ -154,6 +206,16 @@ class MusicTransformerTrainingCardV1(StrictModel):
     git_commit: str | None = None
     project_version: str | None = None
     final_loss: float | None = None
+    # Resume / experiment metadata
+    experiment_id: str | None = None
+    global_step: int = 0
+    epoch: int = 0
+    optimizer: OptimizerKind = "adamw"
+    scheduler: SchedulerKind = "none"
+    precision: PrecisionKind = "fp32"
+    grad_accum_steps: int = 1
+    weight_decay: float | None = None
+    warmup_steps: int | None = None
 
 
 class MusicTransformerCheckpointCardV1(StrictModel):

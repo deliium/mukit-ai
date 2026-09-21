@@ -22,7 +22,7 @@ class MusicTransformerError(Exception):
 
 
 class MusicTransformerConfigError(MusicTransformerError):
-    """Invalid architecture / train / sample config."""
+    """Invalid architecture / train / sample / experiment config."""
 
 
 class MusicTransformerCheckpointError(MusicTransformerError):
@@ -43,3 +43,15 @@ class MusicTransformerGenerateError(MusicTransformerError):
 
 class MusicTransformerIOError(MusicTransformerError):
     """Filesystem read/write failure for configs or checkpoints."""
+
+
+class MusicTransformerExperimentError(MusicTransformerError):
+    """Experiment directory create/load / collision failures."""
+
+
+class MusicTransformerEvalError(MusicTransformerError):
+    """Symbolic evaluation / listening / compare failures."""
+
+
+class MusicTransformerResumeError(MusicTransformerCheckpointError):
+    """Checkpoint resume mismatch (architecture / tokenizer / experiment)."""
