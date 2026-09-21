@@ -218,7 +218,7 @@ git:
   #   - /aif-commit ends after successful local commit
   #   - no "Push to remote?" prompt is shown
   # Default: false
-  skip_push_after_commit: false
+  skip_push_after_commit: true
 
 # =============================================================================
 # Rules Configuration
