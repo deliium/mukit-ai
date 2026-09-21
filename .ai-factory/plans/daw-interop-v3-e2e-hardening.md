@@ -285,12 +285,12 @@ Rules: truncate prefixes; basenames only for checkpoints; `persistence_secret_gu
   LOGGING: DEBUG fragment keys present; INFO pipeline_id + stage model_ids + seed; never prompts.
   Files: `backend/app/services/llm_music_generator.py` (or new `generation_provenance.py`), `backend/app/schemas.py` (if needed), `persistence_secret_guard.py` (only if new forbidden keys), tests.
 
-- [ ] Task 6: Frontend `generationMeta` + revision commit wiring
+- [x] Task 6: Frontend `generationMeta` + revision commit wiring
   Deliverable: On generate apply and AI commits, persist `pipeline_id`, `stages`, `seed`, `tokenizer_version` (via stages), `generation_parameters.provenance_schema` into `generationMeta` and through `projectPersistRevision.js` → `AiProvenance`. Fix thin `{provider, model, prompt}` apply path. Versions UI: show compact provenance (pipeline, models, seed) on revision detail without dumping prompts. Tests: store + persist revision helpers.
   LOGGING: info apply with pipeline_id + seed + model_ids; debug stage count.
   Files: `frontend/src/store/musicStore.js`, `frontend/src/utils/projectPersistRevision.js`, `frontend/src/api/musicApi.js`, `ProjectVersionsPanel.jsx` (or revision detail component), tests.
 
-- [ ] Task 7: Seeded reproduce path
+- [x] Task 7: Seeded reproduce path
   Deliverable: Documented + tested path: given revision provenance with `pipeline_id=hybrid_plan_symbolic`, `seed`, and ready `fake:symbolic-tiny` (or installed MT), re-invoke generate with same pipeline/seed/models and assert composition fingerprint equality under fake mode. Prefer a small backend test + acceptance script step over a large new UI. Optional thin `POST` helper only if existing generate cannot be driven from provenance cleanly — avoid API sprawl.
   LOGGING: INFO reproduce attempt with revision_id, seed, model_ids, fingerprint_prefix match/mismatch; ERROR sanitized on failure.
   Files: backend tests, `scripts/v3_docker_acceptance.sh` (Task 10), docs snippet.

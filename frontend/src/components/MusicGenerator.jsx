@@ -284,6 +284,18 @@ const MusicGenerator = () => {
         warnings: response.warnings,
         provider: response.provider,
         model: response.model,
+        model_id: response.model_id || response.resolved_model_id || null,
+        model_version: response.model_version || null,
+        runtime: response.runtime || null,
+        capability: response.capability || null,
+        operation: response.operation || 'generate',
+        generation_parameters: response.generation_parameters || null,
+        requested_model_id: response.requested_model_id || null,
+        resolved_model_id: response.resolved_model_id || null,
+        fallback_applied: Boolean(response.fallback_applied),
+        pipeline_id: response.pipeline_id || pipeline,
+        stages: Array.isArray(response.stages) ? response.stages : [],
+        seed: response.seed ?? null,
       });
     } catch (error) {
       failGeneration(error.message);

@@ -230,6 +230,74 @@ def attach_provenance_fragment(
     return enriched
 
 
+def _provenance_mapping(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Prefer nested ``generation_parameters`` when present; else treat ``raw`` as the fragment."""
+    if not raw:
+        return {}
+    nested = raw.get("generation_parameters")
+    if isinstance(nested, Mapping) and nested.get("pipeline_id"):
+        return dict(nested)
+    if raw.get("provenance_schema") or raw.get("pipeline_id") or raw.get("stages"):
+        return dict(raw)
+    return {}
+
+
+def stage_model_ids_from_provenance(raw: Mapping[str, Any] | None) -> list[str]:
+    """Bounded list of stage model_ids from durable provenance (empty if unknown)."""
+    fragment = _provenance_mapping(raw)
+    out: list[str] = []
+    for stage in fragment.get("stages") or []:
+        if not isinstance(stage, Mapping):
+            continue
+        mid = _truncate(stage.get("model_id"), _MAX_MODEL_ID)
+        if mid:
+            out.append(mid)
+    return out
+
+
+def generation_options_overrides_from_provenance(
+    raw: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Extract ``pipeline`` / ``seed`` overrides to re-drive ``/generate`` from revision provenance.
+
+    Does not invent prompts, absolute paths, or model weights. Callers merge the returned
+    dict into ``LLMGenerationOptions`` (or curl query/body) with the same musical prompt.
+    """
+    fragment = _provenance_mapping(raw)
+    overrides: dict[str, Any] = {}
+    pipeline = _truncate(fragment.get("pipeline_id"), 80)
+    if pipeline:
+        overrides["pipeline"] = pipeline
+    if fragment.get("seed") is not None:
+        try:
+            overrides["seed"] = int(fragment["seed"])
+        except (TypeError, ValueError):
+            pass
+    return overrides
+
+
+def log_reproduce_attempt(
+    *,
+    revision_id: str | None,
+    seed: int | None,
+    model_ids: list[str] | None,
+    fingerprint_match: bool | None,
+    fingerprint_prefix: str | None = None,
+) -> None:
+    """INFO-level reproduce attempt (never logs prompts or full fingerprints)."""
+    prefix = (fingerprint_prefix or "")[:16] or None
+    logger.info(
+        "Seeded generation reproduce attempt",
+        extra={
+            "revision_id": (revision_id or "")[:64] or None,
+            "seed": seed,
+            "model_ids": (model_ids or [])[:_MAX_STAGES],
+            "fingerprint_match": fingerprint_match,
+            "fingerprint_prefix": prefix,
+        },
+    )
+
+
 __all__ = [
     "PROVENANCE_SCHEMA",
     "PersistenceSecretError",
@@ -238,5 +306,8 @@ __all__ = [
     "checkpoint_basename_prefix",
     "compact_generation_config",
     "generation_config_from_request",
+    "generation_options_overrides_from_provenance",
     "infer_model_version",
+    "log_reproduce_attempt",
+    "stage_model_ids_from_provenance",
 ]

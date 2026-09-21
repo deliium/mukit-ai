@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
+import { formatRevisionProvenanceSummary } from '../utils/compositionCandidateLifecycle.js';
 
 const Panel = styled.section`
   display: flex;
@@ -464,6 +465,7 @@ const ProjectVersionsPanel = () => {
           const isHead = revision.id === currentRevisionId;
           const instruction = truncateInstruction(revision.summary);
           const ranges = formatRanges(revision.affected_ranges);
+          const provenanceLine = formatRevisionProvenanceSummary(revision.summary);
           return (
             <Item key={revision.id} $selected={selected}>
               <ItemButton
@@ -487,6 +489,9 @@ const ProjectVersionsPanel = () => {
                   <span>{revision.operation_type}</span>
                   <span>{revision.created_at}</span>
                   {revision.ai_provider ? <span>{revision.ai_provider}/{revision.ai_model || '—'}</span> : null}
+                  {provenanceLine ? (
+                    <span data-testid={`version-provenance-${revision.id}`}>{provenanceLine}</span>
+                  ) : null}
                   {ranges ? <span>bars {ranges}</span> : null}
                   {Array.isArray(revision.affected_track_ids) && revision.affected_track_ids.length ? (
                     <span>tracks {revision.affected_track_ids.slice(0, 4).join(', ')}</span>

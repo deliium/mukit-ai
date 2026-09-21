@@ -244,6 +244,82 @@ export function buildHistoryAiProvenance(candidate, overrides = {}) {
 }
 
 /**
+ * Build session `generationMeta` from a generate/apply candidate (durable fields).
+ * Prefer backend `generation.provenance.v1` in generation_parameters; mirror pipeline/seed.
+ * @param {object|null|undefined} candidate
+ * @param {object|null|undefined} promptSnapshot
+ */
+export function buildGenerationMetaFromCandidate(candidate, promptSnapshot = null) {
+  const src = candidate && typeof candidate === 'object' ? candidate : {};
+  const fromApi = src.generation_parameters && typeof src.generation_parameters === 'object'
+    ? { ...src.generation_parameters }
+    : {};
+  if (src.pipeline_id && !fromApi.pipeline_id) {
+    fromApi.pipeline_id = src.pipeline_id;
+  }
+  if (src.seed != null && fromApi.seed == null) {
+    fromApi.seed = src.seed;
+  }
+  if (Array.isArray(src.stages) && src.stages.length && !Array.isArray(fromApi.stages)) {
+    fromApi.stages = src.stages;
+  }
+  if (!fromApi.provenance_schema && (fromApi.pipeline_id || fromApi.stages)) {
+    fromApi.provenance_schema = 'generation.provenance.v1';
+  }
+  const stageModelIds = Array.isArray(fromApi.stages)
+    ? fromApi.stages.map((stage) => stage?.model_id).filter(Boolean)
+    : [];
+  return {
+    provider: src.provider || null,
+    model: src.model || null,
+    model_id: src.model_id || src.resolved_model_id || null,
+    model_version: src.model_version || null,
+    runtime: src.runtime || null,
+    capability: src.capability || null,
+    operation: src.operation || src.operation_type || null,
+    generation_parameters: Object.keys(fromApi).length ? fromApi : null,
+    prompt: promptSnapshot || src.prompt || null,
+    pipeline_id: fromApi.pipeline_id || src.pipeline_id || null,
+    seed: fromApi.seed ?? src.seed ?? null,
+    stage_model_ids: stageModelIds,
+  };
+}
+
+/**
+ * Compact read-only provenance line for Versions UI.
+ * @param {object|null|undefined} summary
+ * @returns {string|null}
+ */
+export function formatRevisionProvenanceSummary(summary) {
+  if (!summary || typeof summary !== 'object') {
+    return null;
+  }
+  const gp = summary.generation_parameters && typeof summary.generation_parameters === 'object'
+    ? summary.generation_parameters
+    : summary;
+  const pipeline = gp.pipeline_id || null;
+  const seed = gp.seed ?? null;
+  const stages = Array.isArray(gp.stages) ? gp.stages : [];
+  const modelIds = stages.map((stage) => stage?.model_id).filter(Boolean);
+  if (!pipeline && seed == null && !modelIds.length && !summary.model_id) {
+    return null;
+  }
+  const parts = [];
+  if (pipeline) {
+    parts.push(pipeline);
+  }
+  if (modelIds.length) {
+    parts.push(modelIds.join(' → '));
+  } else if (summary.model_id) {
+    parts.push(summary.model_id);
+  }
+  if (seed != null) {
+    parts.push(`seed ${seed}`);
+  }
+  return parts.join(' · ') || null;
+}
+
+/**
  * Pick additive AI runtime fields from an operation HTTP response.
  * @param {object|null|undefined} response
  */

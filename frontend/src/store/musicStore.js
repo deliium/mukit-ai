@@ -103,6 +103,7 @@ import {
   fingerprintCompositionOrNull,
   makeAiCandidateId,
   toHistoryAiWarningCodes,
+  buildGenerationMetaFromCandidate,
 } from '../utils/compositionCandidateLifecycle.js';
 import { compareCompositions } from '../utils/compositionVersionComparison.js';
 import {
@@ -1203,6 +1204,9 @@ export const useMusicStore = create((set, get) => ({
     requested_model_id = null,
     resolved_model_id = null,
     fallback_applied = false,
+    pipeline_id = null,
+    stages = null,
+    seed = null,
   }) => {
     const capture = get().generationRequestCapture;
     if (!capture || get().generationStatus !== 'loading') {
@@ -1257,6 +1261,25 @@ export const useMusicStore = create((set, get) => ({
       console.warn('[musicStore] Ignoring superseded generation response', { requestId });
       return false;
     }
+    const enrichedGenerationParameters = (() => {
+      const base = generation_parameters && typeof generation_parameters === 'object'
+        ? { ...generation_parameters }
+        : {};
+      if (pipeline_id && !base.pipeline_id) {
+        base.pipeline_id = pipeline_id;
+      }
+      if (seed != null && base.seed == null) {
+        base.seed = seed;
+      }
+      if (Array.isArray(stages) && stages.length && !Array.isArray(base.stages)) {
+        base.stages = stages;
+      }
+      if (!base.provenance_schema && (base.pipeline_id || base.stages)) {
+        base.provenance_schema = 'generation.provenance.v1';
+      }
+      return Object.keys(base).length ? base : null;
+    })();
+
     const candidate = buildAiCandidateEnvelope({
       candidateId: makeAiCandidateId('gen'),
       operationType: 'generate-apply',
@@ -1271,7 +1294,7 @@ export const useMusicStore = create((set, get) => ({
         runtime,
         capability,
         operation,
-        generation_parameters,
+        generation_parameters: enrichedGenerationParameters,
         requested_model_id,
         resolved_model_id,
         fallback_applied,
@@ -1282,6 +1305,9 @@ export const useMusicStore = create((set, get) => ({
       extras: {
         prompt: capture.promptSnapshot || buildPromptSnapshot(get().prompt),
         request_id: requestId,
+        pipeline_id: enrichedGenerationParameters?.pipeline_id || pipeline_id || null,
+        seed: enrichedGenerationParameters?.seed ?? seed ?? null,
+        stages: enrichedGenerationParameters?.stages || stages || [],
       },
     });
 
@@ -1289,6 +1315,11 @@ export const useMusicStore = create((set, get) => ({
       ...aiCandidateLogFields(candidate),
       requestId,
       barCount: composition.bar_count,
+      pipelineId: candidate.pipeline_id || null,
+      seed: candidate.seed ?? null,
+      stageModelIds: Array.isArray(candidate.stages)
+        ? candidate.stages.map((stage) => stage?.model_id).filter(Boolean)
+        : [],
     });
     set({
       generationCandidate: candidate,
@@ -1431,11 +1462,16 @@ export const useMusicStore = create((set, get) => ({
       generationCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.APPLYING },
     });
 
-    const generationMeta = {
-      provider: candidate.provider || state.selectedProvider || null,
-      model: candidate.model || state.selectedModel || null,
-      prompt: candidate.prompt || buildPromptSnapshot(state.prompt),
-    };
+    const generationMeta = buildGenerationMetaFromCandidate(
+      candidate,
+      candidate.prompt || buildPromptSnapshot(state.prompt),
+    );
+    console.info('[musicStore] Generation apply provenance', {
+      pipelineId: generationMeta.pipeline_id,
+      seed: generationMeta.seed,
+      modelIds: generationMeta.stage_model_ids,
+      ...aiCandidateLogFields(candidate),
+    });
 
     // No open project: documented local-only install (no durable history claim).
     if (!state.currentProjectId) {

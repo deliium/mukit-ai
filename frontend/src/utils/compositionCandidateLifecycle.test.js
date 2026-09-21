@@ -6,9 +6,11 @@ import {
   aiCandidateLogFields,
   aiRuntimeFieldsFromResponse,
   buildAiCandidateEnvelope,
+  buildGenerationMetaFromCandidate,
   buildHistoryAiProvenance,
   captureAiRequestContext,
   detectAiRequestStale,
+  formatRevisionProvenanceSummary,
   makeAiCandidateId,
   toHistoryAiWarningCodes,
 } from './compositionCandidateLifecycle.js';
@@ -158,4 +160,37 @@ test('aiRuntimeFieldsFromResponse and buildHistoryAiProvenance map response → 
   assert.equal(provenance.runtime, 'openai_compatible_chat');
   assert.equal(provenance.user_instruction, 'write a motif');
   assert.deepEqual(provenance.warning_codes, ['fake_llm_mode']);
+});
+
+test('buildGenerationMetaFromCandidate mirrors pipeline seed and stages', () => {
+  const meta = buildGenerationMetaFromCandidate({
+    provider: 'fake',
+    model: 'fake-v1',
+    model_id: 'fake:fake-v1',
+    pipeline_id: 'hybrid_plan_symbolic',
+    seed: 42,
+    stages: [
+      { model_id: 'fake:fake-v1' },
+      { model_id: 'fake:symbolic-tiny' },
+    ],
+    generation_parameters: {
+      provenance_schema: 'generation.provenance.v1',
+      pipeline_id: 'hybrid_plan_symbolic',
+      seed: 42,
+      stages: [
+        { model_id: 'fake:fake-v1' },
+        { model_id: 'fake:symbolic-tiny' },
+      ],
+    },
+  }, { genre: 'pop' });
+  assert.equal(meta.pipeline_id, 'hybrid_plan_symbolic');
+  assert.equal(meta.seed, 42);
+  assert.deepEqual(meta.stage_model_ids, ['fake:fake-v1', 'fake:symbolic-tiny']);
+  assert.equal(meta.generation_parameters.provenance_schema, 'generation.provenance.v1');
+  const line = formatRevisionProvenanceSummary({
+    generation_parameters: meta.generation_parameters,
+  });
+  assert.match(line, /hybrid_plan_symbolic/);
+  assert.match(line, /seed 42/);
+  assert.match(line, /fake:symbolic-tiny/);
 });

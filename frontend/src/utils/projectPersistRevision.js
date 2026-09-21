@@ -61,6 +61,8 @@ function normalizeGenerationMeta(generationMeta) {
     operation: generationMeta.operation ?? null,
     generation_parameters: generationMeta.generation_parameters ?? null,
     prompt: generationMeta.prompt ?? null,
+    pipeline_id: generationMeta.pipeline_id ?? null,
+    seed: generationMeta.seed ?? null,
   };
 }
 
