@@ -114,15 +114,25 @@ services:
         aliases:
           - local-llm-vllm
 
-  # --- training stub (PyTorch + ROCm scaffolding; no training loop) ---
-  # Dataset preprocess is offline CLI against a mounted DATASET_ROOT, e.g.:
-  #   python -m app.dataset.cli build --config pipeline.yaml
-  # See docs/datasets.md. This stub does not run preprocess or training.
+  # --- training profile (offline Music Transformer CLI; never the web API) ---
+  # Host/venv with torch extras:
+  #   pip install -r backend/requirements-music-transformer.txt
+  #   python -m app.music_transformer.cli train --experiment-config … 
+  #   python -m app.music_transformer.cli eval|listen|compare …
+  # Dataset preprocess remains offline: python -m app.dataset.cli build …
+  # See docs/music-transformer.md and docs/local-ai.md.
+  # Default `docker compose up` does NOT pull torch/ROCm.
   local-ai-training-stub:
     image: ${LOCAL_LLM_TRAINING_IMAGE:-busybox:1.36}
     profiles: ["training"]
-    # Placeholder: does not start a trainer. See docs/local-ai.md for future PyTorch+ROCm notes.
-    command: ["sh", "-c", "echo 'training profile stub — no-op'; sleep infinity"]
+    # Placeholder image: prints install + CLI hints. Replace LOCAL_LLM_TRAINING_IMAGE
+    # with a torch+ROCm image to run real train jobs in this profile.
+    command:
+      [
+        "sh",
+        "-c",
+        "echo 'training profile: install backend/requirements-music-transformer.txt then run: python -m app.music_transformer.cli train --help (offline; not the web API)'; sleep infinity",
+      ]
     restart: "no"
 
   # Soft linkage: when this override is used with local-ai, backend can reach local-llm

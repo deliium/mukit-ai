@@ -8,8 +8,8 @@ Offline pipeline that turns licensed MIDI, MusicXML/MXL, and Composition V2 JSON
 |---------|------|
 | [Import](import.md) | HTTP multipart → workspace `composition.v2`; reused as parsers here |
 | [Tokenizer](tokenizer.md) | REMI-style Composition V2 ↔ token ids (`python -m app.tokenizer.cli`); consumes examples/splits read-only |
-| [Music Transformer](music-transformer.md) | PyTorch decoder-only LM trains on examples via tokenizer encode; checkpoint binds `tokenizer.v1` |
-| [Local AI](local-ai.md) | Optional inference sidecars; Compose `--profile training` stub — preprocess is this CLI + tokenizer; Music Transformer trains in a host/venv |
+| [Music Transformer](music-transformer.md) | Experiment train/eval/listen/compare over tokenizer-encoded examples; never `PROJECT_DB_PATH`; metrics ≠ musical quality |
+| [Local AI](local-ai.md) | Optional inference sidecars; Compose `--profile training` points at offline Music Transformer CLI (not the web API) |
 | Projects / revisions | Never used; corpora are filesystem-only |
 
 ## Layout

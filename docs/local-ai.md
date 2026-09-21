@@ -27,7 +27,7 @@ Frontend → FastAPI (ai_runtime) → LocalLanguageModel → HTTP OpenAI chat AP
 | *(default — no profile)* | — | Normal app; fake mode or cloud keys |
 | `local-ai` | **llama.cpp** OpenAI server | Default local chat (single-user, UMA-friendly GGUF) |
 | `local-ai-vllm` | **vLLM + ROCm** | Throughput / multi-request experiments |
-| `training` | Stub only | Compose stub for future ROCm image notes — **not** the Music Transformer train loop. Dataset preprocess: [datasets.md](datasets.md). Token contract: [tokenizer.md](tokenizer.md). Offline PyTorch train/generate: [music-transformer.md](music-transformer.md) (`python -m app.music_transformer.cli`). |
+| `training` | Stub / host CLI | Prints install + `python -m app.music_transformer.cli train` hints; does **not** start training inside the web API. Use a torch+ROCm image via `LOCAL_LLM_TRAINING_IMAGE` for real jobs. Dataset preprocess: [datasets.md](datasets.md). Token contract: [tokenizer.md](tokenizer.md). Experiments/eval/listen/compare: [music-transformer.md](music-transformer.md). |
 
 Application code does **not** branch on llama.cpp vs vLLM. Profiles differ only in sidecar image, command, port, and `LOCAL_LLM_BASE_URL`.
 

@@ -35,7 +35,7 @@ mukit-ai/
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── dataset/         # Offline symbolic corpus pipeline (CLI; DATASET_ROOT only)
 │   │   ├── tokenizer/       # Composition V2 ↔ tokens codec (CLI; no PROJECT_DB_PATH)
-│   │   ├── music_transformer/ # PyTorch decoder-only LM (CLI; optional torch; no PROJECT_DB_PATH)
+│   │   ├── music_transformer/ # PyTorch decoder-only LM (CLI experiments/train/eval; optional torch; no PROJECT_DB_PATH)
 │   │   ├── fixtures/        # Canonical composition JSON (V1 + V2 expressive) + arrangement_instruments.v1.json
 │   │   ├── db/              # SQLite connection + Alembic (alembic/versions baseline)
 │   │   └── schemas.py       # LLM models + composition re-exports
@@ -66,7 +66,7 @@ mukit-ai/
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
 | `backend/app/dataset/cli.py` | Offline dataset CLI (`python -m app.dataset.cli`) |
 | `backend/app/tokenizer/cli.py` | Offline tokenizer CLI (`python -m app.tokenizer.cli`) |
-| `backend/app/music_transformer/cli.py` | Offline Music Transformer train/generate CLI (`python -m app.music_transformer.cli`) |
+| `backend/app/music_transformer/cli.py` | Offline Music Transformer train/generate/eval/listen/compare CLI (`python -m app.music_transformer.cli`) |
 | `scripts/run_tests.sh` | Local quality gate: ESLint + backend pytest + frontend unit tests |
 | `backend/app/composition_schemas.py` | Strict V1/V2 document models and timeline helpers |
 | `backend/app/analysis_schemas.py` | `composition.analysis.v1` DTOs, scopes, warning codes |
