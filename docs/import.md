@@ -162,6 +162,7 @@ Import → edit → export is fidelity within documented approximations. Re-expo
 ## See Also
 
 - [Composition V2](composition-v2.md) — canonical contract and export fidelity
+- [Symbolic datasets](datasets.md) — offline batch corpus pipeline reusing these parsers (`DATASET_ROOT`)
 - [Composition Analysis](composition-analysis.md) — optional post-import sidecar (not run during import)
 - [Testing](testing.md) — import fixtures, fidelity/security tests, E2E
 - [Project persistence](project-persistence.md) — save/reopen after import

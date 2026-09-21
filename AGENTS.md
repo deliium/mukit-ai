@@ -33,6 +33,7 @@ mukit-ai/
 │   │   ├── harmony_schemas.py      # Harmony timeline + reharmonize preview DTOs
 │   │   ├── import_schemas.py       # Import DTOs, issue/error codes
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
+│   │   ├── dataset/         # Offline symbolic corpus pipeline (CLI; DATASET_ROOT only)
 │   │   ├── fixtures/        # Canonical composition JSON (V1 + V2 expressive) + arrangement_instruments.v1.json
 │   │   ├── db/              # SQLite connection + Alembic (alembic/versions baseline)
 │   │   └── schemas.py       # LLM models + composition re-exports
@@ -44,8 +45,9 @@ mukit-ai/
 │       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews)
 │       └── utils/           # validation, editor selection/ops/nav, viewport, playback, analysis, motif, harmony, arrangement helpers
-├── scripts/                 # run_tests.sh, v1/v2_docker_acceptance.sh
-├── docs/                    # composition.v2/v1, ai-runtime, editor, analysis, arrangement, import, persistence, testing, codebase map
+├── scripts/                 # run_tests.sh, v1/v2_docker_acceptance.sh, dataset_build.sh
+├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
+├── docs/                    # composition.v2/v1, ai-runtime, editor, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -60,6 +62,7 @@ mukit-ai/
 | File | Purpose |
 |------|---------|
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
+| `backend/app/dataset/cli.py` | Offline dataset CLI (`python -m app.dataset.cli`) |
 | `scripts/run_tests.sh` | Local quality gate: ESLint + backend pytest + frontend unit tests |
 | `backend/app/composition_schemas.py` | Strict V1/V2 document models and timeline helpers |
 | `backend/app/analysis_schemas.py` | `composition.analysis.v1` DTOs, scopes, warning codes |
@@ -149,6 +152,7 @@ mukit-ai/
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |
 | MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
+| Symbolic datasets | `docs/datasets.md` | Offline `DATASET_ROOT` corpus pipeline, provenance, CLI |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |
 | Project persistence | `docs/project-persistence.md` | SQLite projects and migrations |
 | Testing | `docs/testing.md` | How to run backend/frontend tests |

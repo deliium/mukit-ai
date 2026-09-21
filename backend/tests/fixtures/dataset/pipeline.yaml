@@ -1,0 +1,33 @@
+schema_version: dataset.pipeline.v1
+dataset_name: fixture_mini
+output_root: null
+sources:
+  - path: sources
+    glob: "*"
+segmentation:
+  modes: [bars, sections, token_limit]
+  token_limit: 64
+  token_proxy: note_events
+  phrase_fallback: bars
+  skip_trivial_unsectioned: true
+split_seed: 20260921
+train_ratio: 0.5
+val_ratio: 0.25
+test_ratio: 0.25
+normalization:
+  target_ppq: 480
+  collapse_dup_notes: true
+  embed_composition_in_item: true
+  store_cas_blob: true
+near_dup:
+  enabled: true
+  onset_grid_ticks: 120
+  sequence_jaccard_threshold: 0.85
+eligibility:
+  train_statuses:
+    - verified_redistributable
+    - user_owned
+    - public_domain
+  include_non_trainable_in_eval: false
+  allow_unsafe_train_pollution: false
+retain_sources: false

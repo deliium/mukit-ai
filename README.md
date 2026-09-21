@@ -316,6 +316,7 @@ mukit-ai/
 | [Composition Arrangement](docs/composition-arrangement.md) | Instrumentation / texture redistribution; catalog + preview + Apply |
 | [Composition Analysis](docs/composition-analysis.md) | Deterministic sidecar, scopes, warnings, Analysis tab |
 | [MIDI / MusicXML import](docs/import.md) | Ingestion mappings, limits, issue codes, security |
+| [Symbolic datasets](docs/datasets.md) | Offline licensed corpus pipeline (`DATASET_ROOT`, CLI build/verify) |
 | [Composition V1](docs/composition-v1.md) | V1 compatibility, staged generation, region editing |
 | [Project persistence](docs/project-persistence.md) | SQLite projects, migrate-on-open, autosave |
 | [Testing](docs/testing.md) | Backend/frontend tests, fixtures, acceptance scripts |
