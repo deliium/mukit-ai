@@ -57,3 +57,45 @@ def test_get_ai_model_missing(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(get_ai_model("missing:model"))
     assert exc.value.status_code == 404
+
+
+def test_list_ai_models_includes_local_when_ready(monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    monkeypatch.setenv("LOCAL_LLM_ENABLED", "1")
+    monkeypatch.setenv("LOCAL_LLM_MODEL", "instruct-q4")
+    monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://local-llm:8080/v1")
+    response = MagicMock()
+    response.status = 200
+    response.read.return_value = b'{"data":[]}'
+    response.__enter__.return_value = response
+    response.__exit__.return_value = False
+    with patch("app.ai_runtime.local_health.urlopen", return_value=response):
+        registry_mod.reload_registry(dict(**{k: v for k, v in __import__("os").environ.items()}))
+        result = asyncio.run(list_ai_models())
+    local = next(m for m in result.models if m.id == "local:instruct-q4")
+    assert local.provider == "local"
+    assert local.runtime == "local_openai_compatible"
+    assert local.status == "ready"
+    assert local.health_detail == "loaded"
+    assert local.locality == "local"
+    assert "context_size" in local.limits
+    text = str(result.model_dump()).lower()
+    assert "/home/" not in text
+    assert "api_key" not in text
+
+
+def test_list_ai_models_warns_when_local_not_ready(monkeypatch):
+    from unittest.mock import patch
+    from urllib.error import URLError
+
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    monkeypatch.setenv("LOCAL_LLM_ENABLED", "1")
+    monkeypatch.setenv("LOCAL_LLM_MODEL", "instruct-q4")
+    with patch("app.ai_runtime.local_health.urlopen", side_effect=URLError("down")):
+        registry_mod.reload_registry(dict(**{k: v for k, v in __import__("os").environ.items()}))
+        result = asyncio.run(list_ai_models())
+    assert any("local" in w.lower() and "profile" in w.lower() for w in result.warnings) or any(
+        "sidecar" in w.lower() for w in result.warnings
+    )

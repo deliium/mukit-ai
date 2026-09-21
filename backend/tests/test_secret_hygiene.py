@@ -36,6 +36,42 @@ def test_ready_and_models_omit_secrets(monkeypatch, tmp_path):
     ai_models = asyncio.run(list_ai_models())
     assert_no_secret_leakage(ai_models.model_dump(mode="json"), context="/ai/models")
     assert "sk-this-must-never-leak" not in ai_models.model_dump_json()
+    assert "local_ai" in ready
+    assert "/home/" not in str(ready.get("local_ai", {}))
+
+
+def test_local_ai_discovery_omits_weight_paths(monkeypatch, tmp_path):
+    from unittest.mock import MagicMock, patch
+
+    from app.ai_runtime import registry as registry_mod
+    from app.routers.ai_models import list_ai_models
+
+    monkeypatch.setenv("PROJECT_DB_PATH", str(tmp_path / "local-sec.db"))
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    monkeypatch.setenv("LOCAL_LLM_ENABLED", "1")
+    monkeypatch.setenv("LOCAL_LLM_MODEL", "instruct-q4")
+    monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://local-llm:8080/v1")
+    monkeypatch.setenv("LOCAL_LLM_MODELS_HOST_PATH", "/home/user/secret-weights/models/llm")
+    reset_database_initialization_cache()
+
+    response = MagicMock()
+    response.status = 200
+    response.read.return_value = b'{"data":[]}'
+    response.__enter__.return_value = response
+    response.__exit__.return_value = False
+
+    with patch("app.ai_runtime.local_health.urlopen", return_value=response):
+        registry_mod.clear_registry_for_tests()
+        registry_mod.reload_registry()
+        ready = asyncio.run(readiness_check())
+        ai_models = asyncio.run(list_ai_models())
+
+    blob = str(ready) + str(ai_models.model_dump(mode="json"))
+    assert_no_secret_leakage(blob, context="local AI discovery")
+    assert "/home/user" not in blob
+    assert "secret-weights" not in blob
+    local = next(m for m in ai_models.models if m.id == "local:instruct-q4")
+    assert "path" not in str(local.limits).lower()
 
 
 def test_project_crud_omits_secrets(monkeypatch, tmp_path):

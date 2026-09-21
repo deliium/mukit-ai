@@ -51,6 +51,9 @@ def test_ready_report_has_no_secret_fields(monkeypatch, tmp_path):
     assert report["arrangement_catalog"]["fingerprint"]
     assert report["arrangement_catalog"]["catalog_version"]
     assert "path" not in report["arrangement_catalog"]
+    assert "local_ai" in report
+    assert report["local_ai"]["enabled"] is False
+    assert report["local_ai"]["status"] == "disabled"
 
 
 def test_ready_endpoint_ok_without_llm(monkeypatch, tmp_path):
