@@ -1,0 +1,19 @@
+# Optional extras for the symbolic Music Transformer package.
+# Core backend (requirements.txt) stays free of torch.
+#
+# Install (CPU wheel — recommended for tests / CI):
+#   pip install -r backend/requirements-music-transformer.txt
+#
+# Or pin explicitly:
+#   pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+#
+# ROCm / HIP (AMD): install the matching torch ROCm wheel for your stack, e.g.
+#   https://pytorch.org/get-started/locally/
+# Then set MUSIC_TRANSFORMER_DEVICE=cuda  (HIP builds expose cuda device API)
+# or MUSIC_TRANSFORMER_DEVICE=rocm (mapped to cuda:0 inside this package).
+#
+# Supported Python: 3.11–3.14 with official torch wheels (verify for your OS).
+# If wheels are missing for your minor, use a venv on a supported Python and
+# keep pytest skip when ImportError("torch").
+
+torch>=2.12.0,<2.15
