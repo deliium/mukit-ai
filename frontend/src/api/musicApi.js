@@ -228,12 +228,13 @@ export async function editCompositionRegion(payload) {
   }
 }
 
-export async function exportMusicXml(composition) {
+export async function exportMusicXml(composition, options = {}) {
   return exportComposition(composition, {
     endpoint: '/export/musicxml',
     format: 'musicxml',
     fallbackFilename: 'composition.musicxml',
     expectedType: 'application/vnd.recordare.musicxml+xml',
+    download: options.download !== false,
   });
 }
 
@@ -275,12 +276,13 @@ export async function renderMusicXmlPreview(composition) {
   }
 }
 
-export async function exportMidi(composition) {
+export async function exportMidi(composition, options = {}) {
   return exportComposition(composition, {
     endpoint: '/export/midi',
     format: 'midi',
     fallbackFilename: 'composition.mid',
     expectedType: 'audio/midi',
+    download: options.download !== false,
   });
 }
 
@@ -1291,7 +1293,7 @@ function parseImportErrorDetail(detail) {
   return { code: null, message: String(detail), details: null };
 }
 
-async function exportComposition(composition, { endpoint, format, fallbackFilename, expectedType }) {
+async function exportComposition(composition, { endpoint, format, fallbackFilename, expectedType, download = true }) {
   const normalized = normalizeApiComposition(composition, { context: `${format}-export` });
   validateCanonicalForApi(normalized, { action: `${format} export` });
   const eventCount = Array.isArray(normalized.tracks)
@@ -1302,6 +1304,7 @@ async function exportComposition(composition, { endpoint, format, fallbackFilena
     schemaVersion: normalized.schema_version,
     trackCount: normalized.tracks?.length || 0,
     eventCount,
+    download,
   });
 
   try {
@@ -1324,8 +1327,11 @@ async function exportComposition(composition, { endpoint, format, fallbackFilena
       filename,
       projectionStatus: projection.status,
       projectionIssueCount: projection.issues.length,
+      download,
     });
-    downloadBlob(blob, filename);
+    if (download) {
+      downloadBlob(blob, filename);
+    }
     return { blob, filename, contentType, projection, warnings };
   } catch (error) {
     const detail = await extractBlobErrorDetail(error);

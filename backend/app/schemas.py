@@ -369,6 +369,8 @@ class LLMMusicGenerationResponse(BaseModel):
     plan_schema_version: str | None = Field(default=None, max_length=64)
     constraints_digest_prefix: str | None = Field(default=None, max_length=40)
     seed: int | None = None
+    # Durable generation.provenance.v1 fragment (secret-safe).
+    generation_parameters: dict[str, Any] | None = None
 
 
 class GenerationValidationIssue(BaseModel):

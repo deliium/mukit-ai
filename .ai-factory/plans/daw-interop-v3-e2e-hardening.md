@@ -273,14 +273,14 @@ Rules: truncate prefixes; basenames only for checkpoints; `persistence_secret_gu
   LOGGING: INFO format, byte_size, projection_status, code list compact; no payload bytes.
   Files: `backend/app/main.py` (export handlers only as needed), tests for headers/filename.
 
-- [ ] Task 4: Frontend drag + download UX
+- [x] Task 4: Frontend drag + download UX
   Deliverable: Extend `ExportControls.jsx` + `downloadFile.js` (or new `exportDrag.js`) so MIDI (and MusicXML if practical) support: (a) existing download, (b) HTML5 drag of a File/Blob with `.mid` and MIME `audio/midi` (fallback `application/octet-stream`). Copy: “For Ableton / Reaper / any DAW — drag or download Standard MIDI”. Keep Deterministic WAV and Neural Audio visually distinct (do not overload Export). Unit tests for drag payload helpers (jsdom-friendly).
   LOGGING: `appLogger` / console debug phases only (format, size, dragstart); never composition JSON.
   Files: `frontend/src/components/ExportControls.jsx`, `frontend/src/utils/downloadFile.js` and/or `exportDrag.js`, tests, light CSS in existing styled-components.
 
 ### Phase 2: Provenance & reproducibility
 
-- [ ] Task 5: Bound `generation.provenance.v1` on generate responses → store helpers
+- [x] Task 5: Bound `generation.provenance.v1` on generate responses → store helpers
   Deliverable: Backend helper to build secret-safe provenance fragment from existing `_build_generation_provenance` + generation_config scalars. Ensure `LLMMusicGenerationResponse` stages include `model_version` when known. Add unit tests for truncation, basename-only checkpoint, secret rejection via `persistence_secret_guard`.
   LOGGING: DEBUG fragment keys present; INFO pipeline_id + stage model_ids + seed; never prompts.
   Files: `backend/app/services/llm_music_generator.py` (or new `generation_provenance.py`), `backend/app/schemas.py` (if needed), `persistence_secret_guard.py` (only if new forbidden keys), tests.

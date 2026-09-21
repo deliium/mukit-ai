@@ -319,20 +319,28 @@ async def generate_music_json(
             music, warnings, provider, validation = await generate_fake_music_json(
                 request, provider, constraints=constraints
             )
-            return music, warnings, provider, validation, {
-                "pipeline_id": pipeline_id,
-                "stages": [
-                    {
-                        "operation": "generate",
-                        "model_id": f"{provider.provider}:{provider.model}",
-                        "capability": "language_planner",
-                        "runtime": "fake",
-                    }
-                ],
-                "plan_schema_version": None,
-                "constraints_digest_prefix": None,
-                "seed": seed,
-            }
+            from app.services.generation_provenance import (
+                attach_provenance_fragment,
+                generation_config_from_request,
+            )
+
+            return music, warnings, provider, validation, attach_provenance_fragment(
+                {
+                    "pipeline_id": pipeline_id,
+                    "stages": [
+                        {
+                            "operation": "generate",
+                            "model_id": f"{provider.provider}:{provider.model}",
+                            "capability": "language_planner",
+                            "runtime": "fake",
+                        }
+                    ],
+                    "plan_schema_version": None,
+                    "constraints_digest_prefix": None,
+                    "seed": seed,
+                },
+                generation_config=generation_config_from_request(request),
+            )
         except FakeLLMError as exc:
             raise InvalidLLMOutputError(str(exc)) from exc
 
@@ -519,12 +527,15 @@ async def generate_music_json(
                 "seed": result.get("seed", seed),
             },
         )
+        from app.services.generation_provenance import generation_config_from_request
+
         provenance = _build_generation_provenance(
             result,
             pipeline_id=pipeline_id,
             seed=seed,
             provider=provider,
             composer_model_id=composer_model_id,
+            generation_config=generation_config_from_request(request),
         )
         return music, warnings, provider, validation_report, provenance
 
@@ -536,7 +547,10 @@ def _build_generation_provenance(
     seed: int | None,
     provider: LLMProviderSettings,
     composer_model_id: str | None = None,
+    generation_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from app.services.generation_provenance import attach_provenance_fragment
+
     stages: list[dict[str, Any]] = []
     planner_id = f"{provider.provider}:{provider.model}"
     stages.append(
@@ -572,13 +586,14 @@ def _build_generation_provenance(
         ]
     plan = result.get("composition_plan")
     digest = getattr(plan, "constraints_digest", None) if plan is not None else None
-    return {
+    base = {
         "pipeline_id": pipeline_id,
         "stages": stages,
         "plan_schema_version": getattr(plan, "schema_version", None) if plan is not None else None,
         "constraints_digest_prefix": (digest or "")[:20] or None,
         "seed": seed,
     }
+    return attach_provenance_fragment(base, generation_config=generation_config)
 
 
 def select_llm_provider(

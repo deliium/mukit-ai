@@ -811,6 +811,15 @@ async def generate_fake_hybrid_music_json(
         "constraints_digest_prefix": (locked.constraints_digest or "")[:20] or None,
         "seed": seed,
     }
+    from app.services.generation_provenance import (
+        attach_provenance_fragment,
+        generation_config_from_request,
+    )
+
+    provenance = attach_provenance_fragment(
+        provenance,
+        generation_config=generation_config_from_request(request),
+    )
     logger.info(
         "Fake hybrid generation completed",
         extra={

@@ -374,6 +374,7 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
             plan_schema_version=provenance.get("plan_schema_version"),
             constraints_digest_prefix=provenance.get("constraints_digest_prefix"),
             seed=provenance.get("seed"),
+            generation_parameters=provenance.get("generation_parameters"),
             **_ai_resolution_response_fields(),
         )
     except OversizedLLMGenerationRequestError as exc:
