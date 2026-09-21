@@ -1,0 +1,46 @@
+# Optional MusicGen-shaped neural audio sidecar.
+# Default `docker compose up` does NOT load this file and never pulls this image.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f compose.neural-audio.yml --profile neural-audio up --build
+#
+# Host weights: place accepted MusicGen / AudioCraft weights under ./models/neural-audio/
+# (gitignored). FastAPI talks only via NEURAL_AUDIO_SIDECAR_BASE_URL — never imports torch.
+#
+# Operators must accept upstream model licenses before downloading weights.
+# See docs/neural-audio-rendering.md (license table). Do not bake weights into
+# the default Mukit image.
+
+services:
+  neural-audio:
+    # Placeholder image — replace with an operator-built MusicGen HTTP sidecar
+    # that exposes GET /health and POST /v1/audio/render (JSON + base64 audio).
+    image: ${NEURAL_AUDIO_SIDECAR_IMAGE:-ghcr.io/mukit-ai/neural-audio-musicgen:placeholder}
+    profiles: ["neural-audio"]
+    ports:
+      - "${NEURAL_AUDIO_HOST_PORT:-8090}:8090"
+    volumes:
+      - ${NEURAL_AUDIO_MODELS_HOST_PATH:-./models/neural-audio}:/models:ro
+    environment:
+      NEURAL_AUDIO_DEVICE: ${NEURAL_AUDIO_DEVICE:-cpu}
+      NEURAL_AUDIO_MAX_AUDIO_SECONDS: ${NEURAL_AUDIO_MAX_AUDIO_SECONDS:-120}
+    # Health endpoint required for Mukit soft readiness (no weight download in FastAPI).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8090/health || curl -sf http://127.0.0.1:8090/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - neural-audio
+
+  backend:
+    environment:
+      NEURAL_AUDIO_SIDECAR_BASE_URL: ${NEURAL_AUDIO_SIDECAR_BASE_URL:-http://neural-audio:8090}
+      NEURAL_AUDIO_ENGINE: ${NEURAL_AUDIO_ENGINE:-auto}
+      # Keep fake mode off when using a real sidecar unless CI needs both.
+      NEURAL_AUDIO_FAKE_MODE: ${NEURAL_AUDIO_FAKE_MODE:-0}
+      AI_OP_AUDIO_RENDER: ${AI_OP_AUDIO_RENDER:-sidecar:musicgen}

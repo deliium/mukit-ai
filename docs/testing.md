@@ -225,6 +225,19 @@ npm run test:e2e -- e2e/audio-transcription.spec.js
 
 Details and manual acceptance checklist: [audio-transcription.md](audio-transcription.md).
 
+Optional neural audio render (egress only; set `NEURAL_AUDIO_FAKE_MODE=1` — never loads MusicGen weights):
+
+```bash
+# Backend
+cd backend && NEURAL_AUDIO_FAKE_MODE=1 pytest tests/test_neural_audio_*.py -q
+# Frontend unit
+node --test frontend/src/utils/neuralAudioRenderUi.test.js
+# Playwright fake enqueue → complete → download (requires running stack)
+NEURAL_AUDIO_FAKE_MODE=1 LLM_FAKE_MODE=1 npm run test:e2e -- e2e/neural-audio-render.spec.js
+```
+
+Details and license notes: [neural-audio-rendering.md](neural-audio-rendering.md).
+
 Analysis panel journey (requires running stack; fake LLM optional for core analysis):
 
 ```bash

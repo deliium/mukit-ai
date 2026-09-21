@@ -56,6 +56,8 @@ datasets/*
 # Local LLM weights (Compose local-ai / local-ai-vllm bind-mount); keep .gitkeep
 models/llm/*
 !models/llm/.gitkeep
+models/neural-audio/*
+!models/neural-audio/.gitkeep
 *.gguf
 *.safetensors
 

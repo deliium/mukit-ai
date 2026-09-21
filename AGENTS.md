@@ -23,8 +23,8 @@ mukit-ai/
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
 │   │   ├── ai_runtime/      # Capability registry, operation routing, typed model adapters
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
-│   │   ├── routers/         # Projects + imports + transcription + analysis + motifs + harmony + arrangement + development + embeddings + ai_models HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. import, audio_transcription, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
+│   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + motifs + harmony + arrangement + development + embeddings + ai_models HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. import, audio_transcription, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
@@ -35,6 +35,8 @@ mukit-ai/
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── audio_transcription_settings.py  # AUDIO_* limits / engine policy
 │   │   ├── audio_transcription_schemas.py   # transcription.preview.v1 DTOs
+│   │   ├── neural_audio_settings.py         # NEURAL_AUDIO_* render root / engine / quotas
+│   │   ├── neural_audio_schemas.py          # neural_audio_render.job.v1 DTOs / fidelity / adapters
 │   │   ├── embeddings/      # Handcrafted symbolic feature embeddings (cache/index; no torch; never DATASET_ROOT ingest)
 │   │   ├── dataset/         # Offline symbolic corpus pipeline (CLI; DATASET_ROOT only)
 │   │   ├── tokenizer/       # Composition V2 ↔ tokens codec (CLI; no PROJECT_DB_PATH)
@@ -44,20 +46,22 @@ mukit-ai/
 │   │   └── schemas.py       # LLM models + composition re-exports
 │   └── tests/
 ├── frontend/                # React + Vite SPA
-│   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement/editor acceptance journeys
+│   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement/editor/neural-audio acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, AudioInputPanel, …
+│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, AudioInputPanel, NeuralAudioRenderPanel, …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI/audio sessions)
 │       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture helpers
 ├── scripts/                 # run_tests.sh, v1/v2_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
-├── docs/                    # composition.v2/v1, ai-runtime, hybrid-generation, editor, midi-live-input, audio-transcription, analysis, arrangement, import, datasets, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, hybrid-generation, editor, midi-live-input, audio-transcription, neural-audio-rendering, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
 ├── compose.local-ai.yml   # Optional --profile local-ai / local-ai-vllm / training
+├── compose.neural-audio.yml # Optional --profile neural-audio (MusicGen sidecar)
 ├── models/llm/            # Host GGUF/weights bind-mount (gitignored; .gitkeep only)
+├── models/neural-audio/   # Host neural audio weights bind-mount (gitignored; .gitkeep only)
 ├── .env.example
 └── start-servers.sh
 ```
@@ -69,6 +73,7 @@ mukit-ai/
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
 | `frontend/src/components/MidiInputPanel.jsx` | Live MIDI / QWERTY record panel (sticky transport) |
 | `frontend/src/components/AudioInputPanel.jsx` | Monophonic mic/file transcription review → Apply |
+| `frontend/src/components/NeuralAudioRenderPanel.jsx` | Render with AI jobs / download (egress only) |
 | `frontend/src/utils/midiInputAccess.js` | Lazy Web MIDI access + device registry |
 | `frontend/src/utils/midiPerformanceCapture.js` | Session take buffer (raw ticks) |
 | `frontend/src/utils/midiTakeApply.js` | Timeline extend + batch commit into V2 |
@@ -102,6 +107,8 @@ mukit-ai/
 | `backend/app/services/composition_theme.py` | Structured theme plan + generation recurrence |
 | `backend/app/routers/imports.py` | `POST /imports/midi` and `/imports/musicxml` |
 | `backend/app/routers/transcription.py` | `POST /transcription/audio` → `transcription.preview.v1` only |
+| `backend/app/routers/neural_audio.py` | `POST/GET/DELETE /neural-audio/renders` (+ `/audio` download) |
+| `backend/app/services/neural_audio_render.py` | Job orchestration; read-only composition; never mutates V2 |
 | `backend/app/services/composition_import.py` | Shared source → V2 canonicalization |
 | `backend/app/services/composition_midi_import.py` | Deterministic MIDI parse |
 | `backend/app/services/composition_musicxml_import.py` | Hardened MusicXML/MXL parse |
@@ -169,6 +176,7 @@ mukit-ai/
 | Browser playback | `docs/browser-playback.md` | Tone.js instruments/mixer/transport; ephemeral session state |
 | MIDI live input | `docs/midi-live-input.md` | Web MIDI / QWERTY performance capture into V2 |
 | Audio transcription | `docs/audio-transcription.md` | Monophonic mic/file → preview → Apply into V2 |
+| Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument jobs; licenses; Compose profile |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |

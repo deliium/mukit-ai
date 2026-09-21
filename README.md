@@ -12,6 +12,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Piano-Roll Editor**: Multi-note V2 editing on `tracks[].events[]` — box/range selection, clipboard, bulk transpose/velocity/quantize/length/humanize, articulations, dynamics, track hide/lock, edit cursor, bar/section navigation, zoom, play-from-cursor and selection loop; composition-level undo/redo shares `editedMusicJson` with the JSON editor
 - **MIDI Live Input**: Record from a MIDI keyboard or QWERTY test input into a destination track (count-in, metronome, optional quantize, timeline extend); Web MIDI is never required at startup (details: [docs/midi-live-input.md](docs/midi-live-input.md))
 - **Audio transcription (mono)**: Hum/whistle/monophonic instrument → reviewable `transcription.preview.v1` → Apply into V2 with confidence gates and expressive/quantize choice; never persists audio (details: [docs/audio-transcription.md](docs/audio-transcription.md))
+- **Optional neural audio rendering**: Render with AI jobs (generative / neural instrument) from a pinned revision; downloadable WAV; never mutates V2 or replaces FluidSynth Export WAV (details: [docs/neural-audio-rendering.md](docs/neural-audio-rendering.md))
 - **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (sampled/synth voices, velocity/expression, mute/solo/trim/pan/reverb send, pause/resume, seek, play-from-cursor, loop, activity meters). Browser mixer state is ephemeral and never changes export.
 - **Composition Analysis**: Deterministic `composition.analysis.v1` sidecar for tonal context, inferred harmony, phrases/density, derived motif families, and stable warnings over current V2 (Analysis tab; optional bounded advisory context for LLM edit/repair — not persisted, not required for import/playback)
 - **Motif Authoring**: Mark a 1–2 bar pitched selection as a named motif, inspect usages, and apply mechanical or creative transforms via `POST /motifs/apply`; creative AI results stage as candidates until Apply; mechanical transforms remain direct undoable edits (Motifs tab)
@@ -73,6 +74,7 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Logging: set `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` (default `INFO`). Never expect keys/prompts/raw MusicXML/MIDI/WAV or upload bytes in logs.
 - Import limits: `IMPORT_*` in `.env.example` (default upload 5 MiB). Details: [docs/import.md](docs/import.md).
 - Audio transcription limits: `AUDIO_*` in `.env.example` (default upload 10 MiB, 60s). Details: [docs/audio-transcription.md](docs/audio-transcription.md).
+- Neural audio render: `NEURAL_AUDIO_*` + optional `compose.neural-audio.yml --profile neural-audio`. Details: [docs/neural-audio-rendering.md](docs/neural-audio-rendering.md).
 - Acceptance commands: see `docs/testing.md` (`./scripts/run_tests.sh`, pytest, Playwright, Docker persistence scripts).
 
 ## Installation (host-local optional)
@@ -302,6 +304,7 @@ mukit-ai/
 │   ├── composition-analysis.md
 │   ├── import.md
 │   ├── audio-transcription.md
+│   ├── neural-audio-rendering.md
 │   ├── composition-v1.md
 │   ├── project-persistence.md
 │   ├── testing.md
@@ -320,6 +323,7 @@ mukit-ai/
 | [Browser playback](docs/browser-playback.md) | Tone.js projection, mixer, samples vs FluidSynth export |
 | [MIDI live input](docs/midi-live-input.md) | Web MIDI / QWERTY performance capture into V2 |
 | [Audio transcription](docs/audio-transcription.md) | Monophonic mic/file → preview → Apply into V2 |
+| [Neural audio rendering](docs/neural-audio-rendering.md) | Optional generative/neural instrument jobs; fidelity labels; Compose profile |
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |
 | [Symbolic embeddings](docs/embeddings.md) | Handcrafted musical feature embeddings, similarity, reference conditioning |
 | [Composition Arrangement](docs/composition-arrangement.md) | Instrumentation / texture redistribution; catalog + preview + Apply |

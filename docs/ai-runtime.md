@@ -25,7 +25,7 @@ creative motif — not multiple primary capabilities.
 | `symbolic_editor` | Region edit, arrangement/development drafts, reharmonize AI, creative motifs |
 | `embedding` | Symbolic musical similarity / retrieval (`local:symbolic-features-v1` ready; text stub remains unconfigured) |
 | `audio_transcription` | Local monophonic audio → `transcription.preview.v1` (HTTP primary; discovery may list `local:audio-mono-*`) |
-| `audio_generation` | Neural audio render (stub; distinct from FluidSynth) |
+| `audio_generation` | Neural audio render (`fake:neural-audio` when fake mode; optional MusicGen sidecar / MIDI-DDSP; stub when unconfigured). Distinct from FluidSynth WAV. |
 
 ## Operations (`AiOperation`)
 
@@ -41,7 +41,7 @@ creative motif — not multiple primary capabilities.
 | `creative_motif` | `AI_OP_CREATIVE_MOTIF` | `symbolic_editor` |
 | `transcribe` | `AI_OP_TRANSCRIBE` | `audio_transcription` (local mono engines or stub; not LLM generate) |
 | `embed` | `AI_OP_EMBED` | `embedding` (default: `local:symbolic-features-v1`) |
-| `audio_render` | `AI_OP_AUDIO_RENDER` | `audio_generation` (stub) |
+| `audio_render` | `AI_OP_AUDIO_RENDER` | `audio_generation` (`fake:neural-audio`, `sidecar:musicgen`, optional `local:midi-ddsp`; stub → 503) |
 
 Fallback: `AI_FALLBACK_<OPERATION>=id1,id2` (comma-separated model ids). Never silent.
 
@@ -54,7 +54,7 @@ Canonical **`model_id`**: `provider:model` (e.g. `openai:gpt-4o-mini`, `fake:fak
 | `id` | Canonical `provider:model` |
 | `display_name` | UI label |
 | `provider` | Vendor/org id |
-| `runtime` | `openai_compatible_chat` \| `fake` \| `stub` \| `local_openai_compatible` \| `symbolic_features` |
+| `runtime` | `openai_compatible_chat` \| `fake` \| `stub` \| `local_openai_compatible` \| `symbolic_features` \| `fake_neural_audio` \| `sidecar_musicgen` \| `local_midi_ddsp` |
 | `primary_capability` | Discovery group |
 | `locality` | `local` \| `remote` |
 | `model_version` | Optional version string |

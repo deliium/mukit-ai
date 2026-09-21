@@ -20,6 +20,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - Piano-roll and JSON editors sharing the same `editedMusicJson` Zustand state
 - Browser Web MIDI / QWERTY test performance capture into a destination track (session take → one undoable V2 commit; optional quantize; never required at startup)
 - Monophonic audio transcription (mic/file → session `transcription.preview.v1` review → Apply into V2); confidence stays off V2 notes; audio never persisted
+- Optional neural audio rendering (job-based generative/neural-instrument egress via `/neural-audio/renders`); never mutates V2; optional MusicGen Compose profile; distinct from FluidSynth Export WAV
 - Notation preview (MusicXML regenerated from V2) and browser playback (Tone.js) from `tracks[].events[]`
 - Deterministic export: MusicXML, MIDI, and server-side FluidSynth WAV
 
@@ -32,7 +33,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - **LLM:** LangChain / LangGraph with OpenAI-compatible providers (OpenAI, DeepSeek) plus optional `LLM_FAKE_MODE` deterministic fixture provider for demos/E2E; optional local OpenAI-compatible sidecar (`LOCAL_LLM_*`, Compose `--profile local-ai` / `local-ai-vllm`) via `LocalLanguageModel` — app never loads weights; capability-aware `ai_runtime/` registry routes generate/edit/arrange/develop/reharmonize/motif by `AiOperation` (`GET /ai/models`, compat `/llm/models`); hybrid generation uncollapses `generate_planner` / `generate_composer` onto language vs `symbolic_composer` without silent LLM note fallback
 - **Music processing:** music21 (MusicXML render + import), mido (MIDI import/export), defusedxml (import preflight), FluidSynth + SoundFont (WAV)
 - **Frontend libraries:** Zustand, styled-components, Tone.js, OpenSheetMusicDisplay, axios
-- **Integrations:** Docker Compose production-local stack (`backend` + nginx `frontend`); optional `compose.local-ai.yml` profiles for local inference sidecars; optional LLM API keys via `.env` / Compose (backend-only); `IMPORT_*` byte/complexity limits
+- **Integrations:** Docker Compose production-local stack (`backend` + nginx `frontend`); optional `compose.local-ai.yml` profiles for local inference sidecars; optional `compose.neural-audio.yml` `--profile neural-audio` for MusicGen-shaped render sidecar; optional LLM API keys via `.env` / Compose (backend-only); `IMPORT_*` / `AUDIO_*` / `NEURAL_AUDIO_*` limits
 
 ## Architecture Notes
 
