@@ -30,6 +30,7 @@ mukit-ai/
 │   │   ├── import_schemas.py       # Import response/report/issue DTOs
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── llm_settings.py         # Provider config from environment
+│   │   ├── ai_runtime/             # Capability registry, routing, typed model adapters (provider boundary)
 │   │   ├── routers/
 │   │   │   ├── projects.py         # Projects module HTTP routes
 │   │   │   ├── imports.py          # MIDI / MusicXML multipart import
@@ -115,6 +116,7 @@ mukit-ai/
 | **Arrangement** | `routers/arrangement.py`, `arrangement_schemas.py`, `instrument_catalog.py`, `composition_arrangement_*`, `llm_composition_arrangement.py` | `ArrangementPanel`, arrangement APIs in `musicApi.js`, `compositionArrangementCandidates.js`, arrangement slice of `musicStore` |
 | **Harmony / reharmonize** | `routers/harmony.py`, `harmony_schemas.py`, `composition_harmony_*`, `composition_reharmonization.py`, `llm_reharmonizer.py` | `HarmonyTimelinePanel`, `previewReharmonization` in `musicApi.js`, `compositionHarmony*.js`, reharmonize slice of `musicStore` |
 | **Composition / LLM** | `main.py` LLM routes, `schemas.py`, `llm_*`, `composition_*` (plan/validate/normalize/patch); bounded analysis advisory via `build_llm_analysis_context` | `MusicGenerator`, `PromptJsonEditor`, `AiRegionEditPanel`, `musicApi.js` |
+| **AI runtime** | `ai_runtime/` (capability registry, operation routing, typed protocols/adapters); discovery via `/ai/models` (compat `/llm/models`); FluidSynth stays outside | `musicApi.js` model catalog clients; global selector remains `/llm/models` until per-op UX |
 | **Rendering / Export** | `music_json_renderer`, `composition_midi`, `composition_wav` | `NotationViewer`, `ExportControls`, playback components + `utils/playback*` / `tonePlaybackEngine` |
 | **Shared infrastructure** | `db/`, `llm_settings.py`, CORS/lifespan in `main.py` | `api/*`, shared store fields, `utils/downloadFile.js` |
 
@@ -128,6 +130,8 @@ Backend flow is strict downward: **HTTP handlers → services → persistence / 
 routers / main.py handlers
         ↓
    services/  (orchestration + composition rules)
+        ↓
+   ai_runtime/  (model registry + typed adapters; not FluidSynth)
         ↓
    db/ + external (SQLite, LLM APIs, music21, FluidSynth)
 ```
@@ -169,6 +173,7 @@ FastAPI backend
 4. **Application services orchestrate:** Services coordinate LLM calls, validation, and I/O. Push invariants into schema validation and dedicated composition helpers rather than scattering rules across handlers and React components.
 5. **Frontend purity where it matters:** Keep event math, validation mirrors, and Tone.js engine code in `utils/` with unit tests; keep UI in `components/`.
 6. **Infrastructure stays small and shared:** `db/`, env-based `llm_settings`, Docker, and CORS belong to shared infrastructure — not copied per feature.
+7. **AI provider boundary:** Orchestrators resolve models via `ai_runtime` (capability + operation), not by constructing LangChain clients inline. Remote chat must use `llm_chat_client`; FluidSynth WAV export is not an AI runtime.
 
 ## Code Organization Note
 
