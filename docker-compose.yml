@@ -7,6 +7,9 @@ version: '3.8'
 # Optional local AI (llama.cpp / vLLM / training stub) — never required for default up:
 #   docker compose -f docker-compose.yml -f compose.local-ai.yml --profile local-ai up --build
 # See docs/local-ai.md.
+# Optional neural audio sidecar — never required for default up:
+#   docker compose -f docker-compose.yml -f compose.neural-audio.yml --profile neural-audio up --build
+# See docs/neural-audio-rendering.md.
 
 services:
   backend:
@@ -82,6 +85,18 @@ services:
       AUDIO_CONFIDENCE_INCLUDE_THRESHOLD: ${AUDIO_CONFIDENCE_INCLUDE_THRESHOLD:-0.5}
       AUDIO_TRANSCRIPTION_ENGINE: ${AUDIO_TRANSCRIPTION_ENGINE:-auto}
       AUDIO_FAKE_MODE: ${AUDIO_FAKE_MODE:-0}
+      # Optional neural audio render egress (never mutates V2). See docs/neural-audio-rendering.md.
+      NEURAL_AUDIO_RENDER_ROOT: ${NEURAL_AUDIO_RENDER_ROOT:-/data/neural_audio_renders}
+      NEURAL_AUDIO_ENGINE: ${NEURAL_AUDIO_ENGINE:-auto}
+      NEURAL_AUDIO_FAKE_MODE: ${NEURAL_AUDIO_FAKE_MODE:-0}
+      NEURAL_AUDIO_SIDECAR_BASE_URL: ${NEURAL_AUDIO_SIDECAR_BASE_URL:-http://neural-audio:8090}
+      NEURAL_AUDIO_MAX_CONCURRENCY: ${NEURAL_AUDIO_MAX_CONCURRENCY:-1}
+      NEURAL_AUDIO_MAX_RENDERS_PER_PROJECT: ${NEURAL_AUDIO_MAX_RENDERS_PER_PROJECT:-20}
+      NEURAL_AUDIO_MAX_PROMPT_CHARS: ${NEURAL_AUDIO_MAX_PROMPT_CHARS:-2000}
+      NEURAL_AUDIO_JOB_TIMEOUT_SECONDS: ${NEURAL_AUDIO_JOB_TIMEOUT_SECONDS:-600}
+      NEURAL_AUDIO_MAX_AUDIO_SECONDS: ${NEURAL_AUDIO_MAX_AUDIO_SECONDS:-120}
+      NEURAL_AUDIO_MAX_TOTAL_BYTES: ${NEURAL_AUDIO_MAX_TOTAL_BYTES:-524288000}
+      AI_FALLBACK_AUDIO_RENDER: ${AI_FALLBACK_AUDIO_RENDER:-}
       # Optional: absolute path *inside this container* to arrangement.instruments.v1 JSON.
       # Bind-mount the file first (see compose.dev.yml). Empty = packaged fixture.
       ARRANGEMENT_INSTRUMENT_CATALOG_PATH: ${ARRANGEMENT_INSTRUMENT_CATALOG_PATH:-}
