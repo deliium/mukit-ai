@@ -34,6 +34,7 @@ def _to_catalog_item(descriptor, *, default_model_id: str | None) -> AiModelCata
         credentials_present=bool(descriptor.health.credentials_present),
         is_default=descriptor.id == default_model_id,
         limits=dict(descriptor.limits or {}),
+        health_detail=descriptor.health.detail,
     )
 
 
@@ -69,7 +70,20 @@ async def list_ai_models(
     if not any(m.status == "ready" for m in models):
         warnings.append(
             "No ready AI models configured. Set OPENAI_API_KEY or DEEPSEEK_API_KEY, "
-            "or enable LLM_FAKE_MODE=1 for credit-free demos/tests."
+            "enable LLM_FAKE_MODE=1 for credit-free demos/tests, "
+            "or start optional local AI (`docker compose -f docker-compose.yml "
+            "-f compose.local-ai.yml --profile local-ai up`) with LOCAL_LLM_ENABLED=1."
+        )
+    elif not any(
+        m.status == "ready" and m.runtime != "stub" and not m.id.endswith("-stub")
+        for m in models
+    ):
+        pass
+    local_models = [m for m in models if m.provider == "local" and m.runtime == "local_openai_compatible"]
+    if local_models and not any(m.status == "ready" for m in local_models):
+        warnings.append(
+            "Local LLM is enabled but not ready. Ensure the sidecar is up "
+            "(--profile local-ai) and LOCAL_LLM_BASE_URL is reachable."
         )
     return AiModelsResponse(
         models=items,

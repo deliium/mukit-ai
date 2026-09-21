@@ -48,6 +48,12 @@ Thumbs.db
 backend/training_data/*.mid
 backend/training_data/*.midi
 
+# Local LLM weights (Compose local-ai / local-ai-vllm bind-mount); keep .gitkeep
+models/llm/*
+!models/llm/.gitkeep
+*.gguf
+*.safetensors
+
 # Local SQLite project database
 backend/data/
 

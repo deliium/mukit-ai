@@ -1,0 +1,140 @@
+# Optional local AI sidecars (OpenAI-compatible HTTP only).
+# Default `docker compose up` does NOT load this file and never pulls these images.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f compose.local-ai.yml --profile local-ai up --build
+#   docker compose -f docker-compose.yml -f compose.local-ai.yml --profile local-ai-vllm up --build
+#   docker compose -f docker-compose.yml -f compose.local-ai.yml --profile training up --build
+#
+# Host weights: place a small instruct GGUF under ./models/llm/ (gitignored).
+# Backend talks only via LOCAL_LLM_BASE_URL — never imports llama.cpp / vLLM.
+#
+# AMD gfx1152 (Ryzen AI APU): prefer ROCm device mounts below; if ROCm is incomplete,
+# set LOCAL_LLM_DEVICE=vulkan and use a Vulkan-capable llama.cpp build (see docs/local-ai.md).
+# NPU is not required.
+
+services:
+  # --- llama.cpp (default local profile) ---
+  local-llm:
+    # Pin may need host-specific retag for gfx1152 ROCm; operators may switch to a
+    # Vulkan/CPU server image without changing application code.
+    image: ${LOCAL_LLM_LLAMACPP_IMAGE:-ghcr.io/ggerganov/llama.cpp:server}
+    profiles: ["local-ai"]
+    ports:
+      - "${LOCAL_LLM_HOST_PORT:-8080}:8080"
+    volumes:
+      - ${LOCAL_LLM_MODELS_HOST_PATH:-./models/llm}:/models:ro
+    environment:
+      # Sidecar-only; never returned by Mukit discovery APIs.
+      LOCAL_LLM_GGUF_FILE: ${LOCAL_LLM_GGUF_FILE:-model.gguf}
+      LOCAL_LLM_CONTEXT_SIZE: ${LOCAL_LLM_CONTEXT_SIZE:-4096}
+      LOCAL_LLM_N_GPU_LAYERS: ${LOCAL_LLM_N_GPU_LAYERS:-99}
+      LOCAL_LLM_DEVICE: ${LOCAL_LLM_DEVICE:-rocm}
+    # OpenAI-compatible server on :8080. Adjust --n-gpu-layers / device flags for Vulkan:
+    #   e.g. replace ROCm args with Vulkan-capable binary flags (docs/local-ai.md).
+    command:
+      - -m
+      - /models/${LOCAL_LLM_GGUF_FILE:-model.gguf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - -c
+      - ${LOCAL_LLM_CONTEXT_SIZE:-4096}
+      - -ngl
+      - ${LOCAL_LLM_N_GPU_LAYERS:-99}
+      - --parallel
+      - ${LOCAL_LLM_MAX_CONCURRENCY:-1}
+    # ROCm / DRM passthrough (omit on CPU-only hosts — service may still start with -ngl 0).
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    # Uncomment if your ROCm image requires render group / insecure opts:
+    # security_opt:
+    #   - seccomp=unconfined
+    shm_size: ${LOCAL_LLM_SHM_SIZE:-1gb}
+    healthcheck:
+      # llama.cpp exposes GET /health; image may lack python — prefer wget/curl if present.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health || curl -sf http://127.0.0.1:8080/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - local-llm
+
+  # --- vLLM + ROCm (optional throughput profile) ---
+  local-llm-vllm:
+    # Heavy image — only pulled when this profile is requested.
+    # Confirm ROCm tag support for gfx1152 before production use; unsupported →
+    # Mukit reports unsupported_device via probe (app does not silently fall back).
+    image: ${LOCAL_LLM_VLLM_IMAGE:-vllm/vllm-openai:latest}
+    profiles: ["local-ai-vllm"]
+    ports:
+      - "${LOCAL_LLM_VLLM_HOST_PORT:-8081}:8000"
+    volumes:
+      - ${LOCAL_LLM_MODELS_HOST_PATH:-./models/llm}:/models:ro
+    environment:
+      LOCAL_LLM_VLLM_MODEL: ${LOCAL_LLM_VLLM_MODEL:-/models/instruct}
+      LOCAL_LLM_MEMORY_LIMIT_MB: ${LOCAL_LLM_MEMORY_LIMIT_MB:-12288}
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+    command:
+      - --model
+      - ${LOCAL_LLM_VLLM_MODEL:-/models/instruct}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --max-model-len
+      - ${LOCAL_LLM_CONTEXT_SIZE:-4096}
+      - --gpu-memory-utilization
+      - ${LOCAL_LLM_VLLM_GPU_MEM_UTIL:-0.45}
+      - --max-num-seqs
+      - ${LOCAL_LLM_MAX_CONCURRENCY:-1}
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    shm_size: ${LOCAL_LLM_SHM_SIZE:-2gb}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/v1/models || curl -sf http://127.0.0.1:8000/v1/models || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - local-llm-vllm
+
+  # --- training stub (PyTorch + ROCm scaffolding; no training loop) ---
+  local-ai-training-stub:
+    image: ${LOCAL_LLM_TRAINING_IMAGE:-busybox:1.36}
+    profiles: ["training"]
+    # Placeholder: does not start a trainer. See docs/local-ai.md for future PyTorch+ROCm notes.
+    command: ["sh", "-c", "echo 'training profile stub — no-op'; sleep infinity"]
+    restart: "no"
+
+  # Soft linkage: when this override is used with local-ai, backend can reach local-llm
+  # by hostname. Default compose (without this file) never waits on local AI.
+  backend:
+    environment:
+      LOCAL_LLM_ENABLED: ${LOCAL_LLM_ENABLED:-0}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://local-llm:8080/v1}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_LLM_CONTEXT_SIZE: ${LOCAL_LLM_CONTEXT_SIZE:-4096}
+      LOCAL_LLM_QUANTIZATION: ${LOCAL_LLM_QUANTIZATION:-Q4_K_M}
+      LOCAL_LLM_DEVICE: ${LOCAL_LLM_DEVICE:-rocm}
+      LOCAL_LLM_MEMORY_LIMIT_MB: ${LOCAL_LLM_MEMORY_LIMIT_MB:-12288}
+      LOCAL_LLM_MAX_CONCURRENCY: ${LOCAL_LLM_MAX_CONCURRENCY:-1}
+      LOCAL_LLM_TIMEOUT_SECONDS: ${LOCAL_LLM_TIMEOUT_SECONDS:-180}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-local}
+    # Do NOT add hard depends_on on local-llm here — profile may be off; soft start order
+    # is documented in docs/local-ai.md (start sidecar first or use profile compose).

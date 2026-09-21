@@ -176,34 +176,72 @@ async def get_llm_models():
     )
 
     from .services.fake_llm import FAKE_DISPLAY_NAME, is_fake_provider
+    from .local_llm_settings import LOCAL_PROVIDER, load_local_llm_settings
+    from .ai_runtime.registry import get_model, reload_registry
+    from .ai_runtime.errors import ModelNotFoundError
 
-    models = [
-        LLMProviderModel(
-            provider=provider.provider,
-            model=provider.model,
-            display_name=(
-                FAKE_DISPLAY_NAME
-                if is_fake_provider(provider)
-                else f"{provider.provider.title()} ({provider.model})"
-            ),
-            is_default=provider.is_default,
-            model_id=f"{provider.provider}:{provider.model}",
+    reload_registry()
+    local_settings = load_local_llm_settings()
+    models: list[LLMProviderModel] = []
+    for provider in settings.providers:
+        model_id = f"{provider.provider}:{provider.model}"
+        if provider.provider == LOCAL_PROVIDER:
+            # Only list selectable local models when registry status is usable (ready).
+            try:
+                descriptor = get_model(model_id)
+            except ModelNotFoundError:
+                logger.info(
+                    "Skipping local LLM in /llm/models; not in registry",
+                    extra={"model_id": model_id},
+                )
+                continue
+            if descriptor.status != "ready":
+                logger.info(
+                    "Skipping local LLM in /llm/models; not ready",
+                    extra={"model_id": model_id, "status": descriptor.status},
+                )
+                continue
+            display_name = local_settings.display_name
+        elif is_fake_provider(provider):
+            display_name = FAKE_DISPLAY_NAME
+        else:
+            display_name = f"{provider.provider.title()} ({provider.model})"
+        models.append(
+            LLMProviderModel(
+                provider=provider.provider,
+                model=provider.model,
+                display_name=display_name,
+                is_default=provider.is_default,
+                model_id=model_id,
+            )
         )
-        for provider in settings.providers
-    ]
-    default_model = next((provider.model for provider in settings.providers if provider.is_default), None)
+
+    default_model = next((m.model for m in models if m.is_default), None)
+    if default_model is None and models:
+        default_model = models[0].model
     warnings = (
         []
         if models
         else [
             "No LLM providers configured. Set OPENAI_API_KEY or DEEPSEEK_API_KEY, "
-            "or enable LLM_FAKE_MODE=1 for credit-free demos/tests."
+            "enable LLM_FAKE_MODE=1 for credit-free demos/tests, "
+            "or use optional local AI (--profile local-ai) with LOCAL_LLM_ENABLED=1."
         ]
+    )
+    logger.info(
+        "LLM model discovery complete",
+        extra={
+            "model_count": len(models),
+            "local_enabled": local_settings.enabled,
+            "model_ids": [m.model_id for m in models],
+        },
     )
 
     return LLMModelsResponse(
         models=models,
-        default_provider=settings.default_provider,
+        default_provider=settings.default_provider if any(
+            m.provider == settings.default_provider for m in models
+        ) else (models[0].provider if models else None),
         default_model=default_model,
         warnings=warnings,
     )

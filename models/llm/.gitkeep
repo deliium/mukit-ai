@@ -1,0 +1,2 @@
+# Place instruct GGUF (or vLLM model dirs) here for Compose local-ai profiles.
+# Large weights are gitignored — see docs/local-ai.md.

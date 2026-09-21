@@ -262,12 +262,14 @@ const MusicGenerator = () => {
               <ol>
                 <li>Copy <code>.env.example</code> → <code>.env</code></li>
                 <li>
-                  Set <code>LLM_FAKE_MODE=1</code> for credit-free demos/tests, or set
-                  <code>OPENAI_API_KEY</code> / <code>DEEPSEEK_API_KEY</code> for real providers
+                  Set <code>LLM_FAKE_MODE=1</code> for credit-free demos/tests, set
+                  <code>OPENAI_API_KEY</code> / <code>DEEPSEEK_API_KEY</code> for cloud providers,
+                  or enable optional local AI (<code>LOCAL_LLM_ENABLED=1</code> +{' '}
+                  <code>docker compose -f docker-compose.yml -f compose.local-ai.yml --profile local-ai up</code>)
                 </li>
-                <li>Run <code>docker compose up --build</code></li>
+                <li>Run <code>docker compose up --build</code> (local AI profile only when using a sidecar)</li>
               </ol>
-              Secrets stay on the backend only.
+              Secrets and weight paths stay on the backend / host only. See <code>docs/local-ai.md</code>.
             </StatusMessage>
           )}
 
@@ -280,7 +282,10 @@ const MusicGenerator = () => {
                 value={`${selectedProvider}:${selectedModel}`}
                 disabled={generating}
                 onChange={(event) => {
-                  const [provider, model] = event.target.value.split(':');
+                  const value = event.target.value;
+                  const sep = value.indexOf(':');
+                  const provider = sep >= 0 ? value.slice(0, sep) : value;
+                  const model = sep >= 0 ? value.slice(sep + 1) : '';
                   setSelectedLlmModel(provider, model);
                 }}
               >

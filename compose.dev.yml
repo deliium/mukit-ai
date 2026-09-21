@@ -4,6 +4,12 @@
 # Prefer host-local `npm run dev` + backend uvicorn for day-to-day UI work;
 # this file keeps a containerized reload path when needed.
 #
+# Optional local AI + GPU passthrough: also include compose.local-ai.yml and a profile:
+#   docker compose -f docker-compose.yml -f compose.dev.yml -f compose.local-ai.yml \
+#     --profile local-ai up --build
+# Device mounts (/dev/kfd, /dev/dri) are defined on the sidecar services only —
+# the FastAPI backend does not need GPU devices.
+#
 # Arrangement catalog override (optional):
 # 1) Uncomment the bind below so the JSON is visible inside the backend container.
 # 2) Set ARRANGEMENT_INSTRUMENT_CATALOG_PATH=/data/arrangement_instruments.v1.json

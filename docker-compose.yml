@@ -3,6 +3,10 @@ version: '3.8'
 # Production-local stack. Copy `.env.example` → `.env`, set at least one LLM API key,
 # then: docker compose up --build
 # See README for first-run walkthrough (Task 11 docs).
+#
+# Optional local AI (llama.cpp / vLLM / training stub) — never required for default up:
+#   docker compose -f docker-compose.yml -f compose.local-ai.yml --profile local-ai up --build
+# See docs/local-ai.md.
 
 services:
   backend:
@@ -48,6 +52,18 @@ services:
       AI_FALLBACK_REHARMONIZE_AI: ${AI_FALLBACK_REHARMONIZE_AI:-}
       AI_FALLBACK_CREATIVE_MOTIF: ${AI_FALLBACK_CREATIVE_MOTIF:-}
       AI_MODEL_REGISTRY_PATH: ${AI_MODEL_REGISTRY_PATH:-}
+      # Optional local OpenAI-compatible sidecar (ignored when LOCAL_LLM_ENABLED=0).
+      # Sidecar images/devices live only under compose.local-ai.yml profiles.
+      LOCAL_LLM_ENABLED: ${LOCAL_LLM_ENABLED:-0}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://local-llm:8080/v1}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_LLM_CONTEXT_SIZE: ${LOCAL_LLM_CONTEXT_SIZE:-4096}
+      LOCAL_LLM_QUANTIZATION: ${LOCAL_LLM_QUANTIZATION:-Q4_K_M}
+      LOCAL_LLM_DEVICE: ${LOCAL_LLM_DEVICE:-rocm}
+      LOCAL_LLM_MEMORY_LIMIT_MB: ${LOCAL_LLM_MEMORY_LIMIT_MB:-12288}
+      LOCAL_LLM_MAX_CONCURRENCY: ${LOCAL_LLM_MAX_CONCURRENCY:-1}
+      LOCAL_LLM_TIMEOUT_SECONDS: ${LOCAL_LLM_TIMEOUT_SECONDS:-180}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-local}
       IMPORT_MAX_UPLOAD_BYTES: ${IMPORT_MAX_UPLOAD_BYTES:-5242880}
       IMPORT_MAX_EXPANDED_BYTES: ${IMPORT_MAX_EXPANDED_BYTES:-26214400}
       IMPORT_MAX_COMPRESSION_RATIO: ${IMPORT_MAX_COMPRESSION_RATIO:-50}
