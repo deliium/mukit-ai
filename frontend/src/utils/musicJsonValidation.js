@@ -45,6 +45,9 @@ const NOTE_TO_SEMITONE = {
   'D#': 3,
   Eb: 3,
   E: 4,
+  // Single-accidental enharmonics (B#/Cb use octave-crossing offsets: B#3==C4, Cb4==B3).
+  'E#': 5,
+  Fb: 4,
   F: 5,
   'F#': 6,
   Gb: 6,
@@ -55,6 +58,8 @@ const NOTE_TO_SEMITONE = {
   'A#': 10,
   Bb: 10,
   B: 11,
+  'B#': 12,
+  Cb: -1,
 };
 
 export function validateMusicJson(value) {
@@ -654,6 +659,9 @@ function isValidPitch(value) {
   }
   const noteName = `${match[1]}${match[2]}`;
   const octave = Number(match[3]);
+  if (!(noteName in NOTE_TO_SEMITONE) || !Number.isInteger(octave)) {
+    return false;
+  }
   const midi = (octave + 1) * 12 + NOTE_TO_SEMITONE[noteName];
   return Number.isInteger(midi) && midi >= 0 && midi <= 127;
 }

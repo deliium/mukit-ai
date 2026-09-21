@@ -15,6 +15,9 @@ const NOTE_TO_SEMITONE = {
   'D#': 3,
   Eb: 3,
   E: 4,
+  // Single-accidental enharmonics (B#/Cb use octave-crossing offsets: B#3==C4, Cb4==B3).
+  'E#': 5,
+  Fb: 4,
   F: 5,
   'F#': 6,
   Gb: 6,
@@ -25,6 +28,8 @@ const NOTE_TO_SEMITONE = {
   'A#': 10,
   Bb: 10,
   B: 11,
+  'B#': 12,
+  Cb: -1,
 };
 const PITCH_PATTERN = /^([A-G])([#b]?)(-?\d+)$/;
 export const ARTICULATION_VALUES = Object.freeze(['staccato', 'staccatissimo', 'tenuto', 'accent', 'marcato']);

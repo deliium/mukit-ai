@@ -129,6 +129,10 @@ test('pitchToMidi and midiToPitch round-trip common pitches', () => {
   assert.equal(pitchToMidi('C4').midi, 60);
   assert.equal(pitchToMidi('A4').midi, 69);
   assert.equal(pitchToMidi('Bb3').midi, 58);
+  assert.equal(pitchToMidi('E#4').midi, 65);
+  assert.equal(pitchToMidi('B#3').midi, 60);
+  assert.equal(pitchToMidi('Fb4').midi, 64);
+  assert.equal(pitchToMidi('Cb4').midi, 59);
   assert.equal(midiToPitch(60).pitch, 'C4');
   assert.equal(midiToPitch(61).pitch, 'C#4');
   assert.equal(pitchToMidi('invalid').midi, null);

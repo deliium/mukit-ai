@@ -666,7 +666,7 @@ def test_api_invalid_output_returns_actionable_502(monkeypatch):
     )
 
 
-@pytest.mark.parametrize("pitch", ["C4", "F#3", "Bb2"])
+@pytest.mark.parametrize("pitch", ["C4", "F#3", "Bb2", "E#4", "B#3", "Fb4", "Cb4"])
 def test_composer_draft_note_accepts_scientific_pitch(pitch):
     note = ComposerDraftNote.model_validate(
         {"pitch": pitch, "start_tick": 0, "duration_ticks": TICKS, "velocity": 80}

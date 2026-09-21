@@ -1,5 +1,6 @@
 import pytest
 
+from app.composition_schemas import midi_pitch_number
 from app.schemas import Composition
 
 
@@ -33,6 +34,26 @@ def valid_composition(**overrides):
     }
     data.update(overrides)
     return data
+
+
+@pytest.mark.parametrize(
+    ("pitch", "midi"),
+    [
+        ("E#4", 65),  # F4
+        ("Fb4", 64),  # E4
+        ("B#3", 60),  # C4
+        ("Cb4", 59),  # B3
+    ],
+)
+def test_midi_pitch_number_accepts_single_accidental_enharmonics(pitch, midi):
+    assert midi_pitch_number(pitch) == midi
+
+
+def test_composition_schema_accepts_enharmonic_melody_pitch():
+    data = valid_composition()
+    data["tracks"][0]["events"][0]["pitch"] = "E#4"
+    composition = Composition.model_validate(data)
+    assert composition.tracks[0].events[0].pitch == "E#4"
 
 
 def test_composition_schema_accepts_polyphony_and_logs_summary(caplog):

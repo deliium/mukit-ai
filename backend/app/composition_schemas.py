@@ -61,6 +61,10 @@ NOTE_TO_SEMITONE = {
     "D#": 3,
     "Eb": 3,
     "E": 4,
+    # Single-accidental enharmonics allowed by NOTE_PITCH_PATTERN / COMPOSITION_PITCH_PATTERN.
+    # B# / Cb use octave-crossing offsets so scientific spelling matches MIDI (B#3==C4, Cb4==B3).
+    "E#": 5,
+    "Fb": 4,
     "F": 5,
     "F#": 6,
     "Gb": 6,
@@ -71,6 +75,8 @@ NOTE_TO_SEMITONE = {
     "A#": 10,
     "Bb": 10,
     "B": 11,
+    "B#": 12,
+    "Cb": -1,
 }
 
 SUPPORTED_TIME_SIGNATURE_DENOMINATORS = {1, 2, 4, 8, 16, 32}
@@ -175,7 +181,26 @@ def midi_pitch_number(pitch: str) -> int:
 
     note_name = f"{match.group(1)}{match.group(2)}"
     octave = int(match.group(3))
-    midi_number = (octave + 1) * 12 + NOTE_TO_SEMITONE[note_name]
+    try:
+        semitone = NOTE_TO_SEMITONE[note_name]
+    except KeyError as exc:
+        logger.warning(
+            "[FIX] Unsupported pitch spelling",
+            extra={
+                "pitch": pitch[:32],
+                "note_name": note_name,
+                "reason": "missing_note_to_semitone",
+            },
+        )
+        raise ValueError(
+            f"Unsupported pitch spelling {note_name!r}; use scientific notation like C4, F#3, E#4, or Bb2"
+        ) from exc
+    if note_name in {"E#", "Fb", "B#", "Cb"}:
+        logger.debug(
+            "[FIX] Resolved uncommon enharmonic pitch",
+            extra={"pitch": pitch[:32], "note_name": note_name, "semitone_offset": semitone},
+        )
+    midi_number = (octave + 1) * 12 + semitone
     if midi_number < 0 or midi_number > 127:
         raise ValueError("Pitch must be within MIDI range C-1 through G9")
     return midi_number
