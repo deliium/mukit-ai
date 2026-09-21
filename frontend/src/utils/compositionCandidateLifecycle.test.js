@@ -4,7 +4,9 @@ import test from 'node:test';
 import {
   AI_CANDIDATE_STATUS,
   aiCandidateLogFields,
+  aiRuntimeFieldsFromResponse,
   buildAiCandidateEnvelope,
+  buildHistoryAiProvenance,
   captureAiRequestContext,
   detectAiRequestStale,
   makeAiCandidateId,
@@ -94,4 +96,66 @@ test('aiCandidateLogFields never includes instruction text', () => {
   });
   assert.equal(fields.candidateIdSuffix, 'ijklmnop');
   assert.ok(!JSON.stringify(fields).includes('secret'));
+});
+
+test('buildAiCandidateEnvelope stores additive runtime provenance and fallback flags', () => {
+  const envelope = buildAiCandidateEnvelope({
+    candidateId: 'gen-deadbeef',
+    operationType: 'arrangement-preview',
+    composition: { schema_version: 'composition.v2' },
+    sourceFingerprint: 'a'.repeat(64),
+    candidateFingerprint: 'b'.repeat(64),
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    modelId: 'openai:gpt-4o-mini',
+    runtime: 'openai_compatible_chat',
+    capability: 'language_planner',
+    operation: 'arrangement_preview',
+    requestedModelId: 'openai:gpt-4o',
+    resolvedModelId: 'openai:gpt-4o-mini',
+    fallbackApplied: true,
+    generationParameters: { temperature: 0.2 },
+  });
+  assert.equal(envelope.model_id, 'openai:gpt-4o-mini');
+  assert.equal(envelope.runtime, 'openai_compatible_chat');
+  assert.equal(envelope.capability, 'language_planner');
+  assert.equal(envelope.requested_model_id, 'openai:gpt-4o');
+  assert.equal(envelope.fallback_applied, true);
+  assert.deepEqual(envelope.generation_parameters, { temperature: 0.2 });
+});
+
+test('aiRuntimeFieldsFromResponse and buildHistoryAiProvenance map response → durable AiProvenance', () => {
+  const fields = aiRuntimeFieldsFromResponse({
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    model_id: 'openai:gpt-4o-mini',
+    model_version: '2024-08',
+    runtime: 'openai_compatible_chat',
+    capability: 'language_planner',
+    operation: 'generate',
+    requested_model_id: 'openai:gpt-4o',
+    resolved_model_id: 'openai:gpt-4o-mini',
+    fallback_applied: true,
+    generation_parameters: { max_tokens: 100 },
+  });
+  assert.equal(fields.modelId, 'openai:gpt-4o-mini');
+  assert.equal(fields.fallbackApplied, true);
+  assert.equal(fields.resolvedModelId, 'openai:gpt-4o-mini');
+
+  const provenance = buildHistoryAiProvenance({
+    candidate_id: 'gen-1',
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    model_id: 'openai:gpt-4o-mini',
+    runtime: 'openai_compatible_chat',
+    capability: 'language_planner',
+    operation: 'generate',
+    generation_parameters: { max_tokens: 100 },
+    instruction: 'write a motif',
+    warnings: ['fake_llm_mode'],
+  });
+  assert.equal(provenance.model_id, 'openai:gpt-4o-mini');
+  assert.equal(provenance.runtime, 'openai_compatible_chat');
+  assert.equal(provenance.user_instruction, 'write a motif');
+  assert.deepEqual(provenance.warning_codes, ['fake_llm_mode']);
 });
