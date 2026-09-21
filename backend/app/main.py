@@ -18,6 +18,7 @@ from .routers.motifs import router as motifs_router
 from .routers.harmony import router as harmony_router
 from .routers.composition_development import router as composition_development_router
 from .routers.arrangement import router as arrangement_router
+from .routers.ai_models import router as ai_models_router
 from .schemas import (
     Composition,
     LLMCompositionEditRequest,
@@ -105,6 +106,7 @@ app.include_router(motifs_router)
 app.include_router(harmony_router)
 app.include_router(composition_development_router)
 app.include_router(arrangement_router)
+app.include_router(ai_models_router)
 
 
 def _composition_export_summary(composition: CompositionV2) -> dict:
@@ -185,6 +187,7 @@ async def get_llm_models():
                 else f"{provider.provider.title()} ({provider.model})"
             ),
             is_default=provider.is_default,
+            model_id=f"{provider.provider}:{provider.model}",
         )
         for provider in settings.providers
     ]

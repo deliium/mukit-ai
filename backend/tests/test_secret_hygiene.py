@@ -31,6 +31,12 @@ def test_ready_and_models_omit_secrets(monkeypatch, tmp_path):
     assert_no_secret_leakage(models.model_dump(mode="json"), context="/llm/models")
     assert "sk-this-must-never-leak" not in models.model_dump_json()
 
+    from app.routers.ai_models import list_ai_models
+
+    ai_models = asyncio.run(list_ai_models())
+    assert_no_secret_leakage(ai_models.model_dump(mode="json"), context="/ai/models")
+    assert "sk-this-must-never-leak" not in ai_models.model_dump_json()
+
 
 def test_project_crud_omits_secrets(monkeypatch, tmp_path):
     monkeypatch.setenv("PROJECT_DB_PATH", str(tmp_path / "proj.db"))

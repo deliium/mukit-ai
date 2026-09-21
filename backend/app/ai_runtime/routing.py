@@ -250,6 +250,8 @@ def resolve_provider_for_operation(
 ) -> tuple[LLMProviderSettings, ResolvedModel]:
     """Resolve operation selection to ``(LLMProviderSettings, ResolvedModel)`` and stash on ContextVar."""
     active = settings or load_llm_settings(env)
+    # Always rebuild from env so monkeypatched keys/tests see a fresh catalog.
+    reload_registry(env)
     _ensure_settings_models_registered(active, env=env)
     resolved = resolve_model_for_operation(
         operation,
