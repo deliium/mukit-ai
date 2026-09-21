@@ -1686,3 +1686,136 @@ export async function resolveMusicalReference(styleReference, modelId = null) {
     });
   }
 }
+
+const neuralAudioLogger = createAppLogger('musicApi.neuralAudio');
+
+function parseNeuralAudioError(error) {
+  const status = error?.response?.status ?? null;
+  const detail = error?.response?.data?.detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    return {
+      status,
+      code: typeof detail.code === 'string' ? detail.code : 'neural_audio_error',
+      message: typeof detail.message === 'string' ? detail.message : 'Neural audio request failed',
+      details: detail.details && typeof detail.details === 'object' ? detail.details : {},
+    };
+  }
+  if (typeof detail === 'string' && detail.trim()) {
+    return { status, code: 'neural_audio_error', message: detail, details: {} };
+  }
+  return {
+    status,
+    code: 'neural_audio_error',
+    message: error?.message || 'Neural audio request failed',
+    details: {},
+  };
+}
+
+export class NeuralAudioApiError extends Error {
+  constructor(message, { status = null, code = 'neural_audio_error', details = {} } = {}) {
+    super(message);
+    this.name = 'NeuralAudioApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+/**
+ * Enqueue a neural audio render. Never mutates composition on the server.
+ * Prefer project_id + source_revision_id when Versions exist.
+ */
+export async function enqueueNeuralAudioRender(payload) {
+  const body = {
+    instructions: typeof payload?.instructions === 'string' ? payload.instructions : '',
+    genre: payload?.genre || null,
+    mood: payload?.mood || null,
+    model_id: payload?.model_id || null,
+    adapter_kind: payload?.adapter_kind || null,
+    tempo_bpm: payload?.tempo_bpm ?? null,
+    instrumentation_summary: payload?.instrumentation_summary || null,
+    seed: payload?.seed ?? null,
+  };
+  if (payload?.project_id && payload?.source_revision_id) {
+    body.project_id = payload.project_id;
+    body.source_revision_id = payload.source_revision_id;
+  }
+  if (payload?.composition) {
+    validateCanonicalForApi(payload.composition, { action: 'neural-audio-render' });
+    body.composition = payload.composition;
+  }
+  neuralAudioLogger.info('Enqueue neural audio render', {
+    hasProjectId: Boolean(body.project_id),
+    hasRevision: Boolean(body.source_revision_id),
+    hasComposition: Boolean(body.composition),
+    modelId: body.model_id,
+    adapterKind: body.adapter_kind,
+    instructionChars: body.instructions.length,
+  });
+  try {
+    const job = await request('post', '/neural-audio/renders', body);
+    neuralAudioLogger.info('Neural audio enqueue response', {
+      renderId: job?.id || null,
+      status: job?.status || null,
+      fidelityClass: job?.fidelity_class || null,
+      modelId: job?.model_id || null,
+    });
+    return job;
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    neuralAudioLogger.error('Neural audio enqueue failed', {
+      status: parsed.status,
+      code: parsed.code,
+    });
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
+export async function listNeuralAudioRenders(projectId) {
+  neuralAudioLogger.info('List neural audio renders', { projectId });
+  try {
+    return await request('get', '/neural-audio/renders', null, {
+      params: { project_id: projectId },
+    });
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
+export async function getNeuralAudioRender(renderId) {
+  try {
+    return await request('get', `/neural-audio/renders/${encodeURIComponent(renderId)}`);
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
+export async function downloadNeuralAudioRender(renderId) {
+  neuralAudioLogger.info('Download neural audio render', { renderId });
+  try {
+    const response = await axios.get(
+      `/neural-audio/renders/${encodeURIComponent(renderId)}/audio`,
+      { responseType: 'blob' },
+    );
+    const filename =
+      filenameFromContentDisposition(response.headers?.['content-disposition'])
+      || `neural-audio-${renderId}.wav`;
+    downloadBlob(response.data, filename);
+    return { filename, byteSize: response.data?.size ?? null };
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
+export async function deleteNeuralAudioRender(renderId) {
+  neuralAudioLogger.info('Delete neural audio render', { renderId });
+  try {
+    await request('delete', `/neural-audio/renders/${encodeURIComponent(renderId)}`);
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}

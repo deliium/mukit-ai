@@ -150,9 +150,12 @@ const ExportControls = () => {
         disabled={!canExport}
         onClick={() => runExport('wav')}
       >
-        {exportStatus === 'loading' ? 'Exporting...' : 'Export WAV'}
+        {exportStatus === 'loading' ? 'Exporting...' : 'Export WAV (deterministic)'}
       </ExportButton>
-      <Hint>WAV is a server-side render/export, not browser preview playback.</Hint>
+      <Hint>
+        Deterministic WAV uses FluidSynth (note-faithful). Neural AI renders are a separate
+        action below and are not note-perfect.
+      </Hint>
       {statusMessage && <Status $error={exportStatus === 'error'}>{statusMessage}</Status>}
     </Controls>
   );

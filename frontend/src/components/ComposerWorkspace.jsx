@@ -6,6 +6,7 @@ import MidiInputPanel from './MidiInputPanel.jsx';
 import AudioInputPanel from './AudioInputPanel.jsx';
 import PromptJsonEditor from './PromptJsonEditor.jsx';
 import ExportControls from './ExportControls.jsx';
+import NeuralAudioRenderPanel from './NeuralAudioRenderPanel.jsx';
 import PianoRollEditor from './PianoRollEditor.jsx';
 import AiRegionEditPanel from './AiRegionEditPanel.jsx';
 import CompositionAnalysisPanel from './CompositionAnalysisPanel.jsx';
@@ -253,6 +254,7 @@ const ComposerWorkspace = () => {
         <div>
           <SectionTitle>Export</SectionTitle>
           <ExportControls />
+          <NeuralAudioRenderPanel />
         </div>
       </SideActions>
     </Workspace>

@@ -23,6 +23,21 @@ export default defineConfig({
       '/llm': {
         ...LONG_LLM_PROXY,
       },
+      '/ai': {
+        ...LONG_LLM_PROXY,
+      },
+      '/neural-audio': {
+        ...LONG_LLM_PROXY,
+      },
+      '/transcription': {
+        target: 'http://localhost:8888',
+        changeOrigin: true,
+        proxyTimeout: 120_000,
+      },
+      '/embeddings': {
+        target: 'http://localhost:8888',
+        changeOrigin: true,
+      },
       '/export': {
         target: 'http://localhost:8888',
         changeOrigin: true

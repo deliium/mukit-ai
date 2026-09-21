@@ -586,6 +586,18 @@ def delete_project(project_id: str, *, db_path: Path | str | None = None) -> Non
     try:
         with get_connection(path) as conn:
             conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        try:
+            from app.services.neural_audio_render import cleanup_project_neural_audio
+
+            cleanup_project_neural_audio(project_id)
+        except Exception as cleanup_exc:  # noqa: BLE001
+            logger.warning(
+                "Neural audio cleanup after project delete failed",
+                extra={
+                    "project_id": project_id,
+                    "error_type": type(cleanup_exc).__name__,
+                },
+            )
         logger.info("Project deleted", extra={"project_id": project_id})
     except Exception as exc:
         logger.error(
