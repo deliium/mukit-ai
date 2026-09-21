@@ -11,6 +11,11 @@ import {
   listDevelopmentSectionOptions,
   resolveDevelopmentDefaults,
 } from '../utils/compositionCandidates.js';
+import {
+  formatSimilarityHitLabel,
+  formatSimilarityScore,
+} from '../utils/compositionEmbeddingReference.js';
+import { listAnalysisSectionOptions } from '../utils/compositionAnalysis.js';
 import { isCanonicalComposition } from '../utils/musicJsonValidation.js';
 
 const Panel = styled.section`
@@ -152,6 +157,25 @@ const Meta = styled.div`
   color: #475569;
 `;
 
+const HitList = styled.ul`
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 140px;
+  overflow-y: auto;
+`;
+
+const HitItem = styled.li`
+  font-size: 0.8rem;
+  color: #334155;
+  padding: 4px 6px;
+  background: #f8fafc;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+`;
+
 const STRENGTH_HELP = {
   conservative: 'Stay close to the source contour and identity anchors.',
   balanced: 'Moderate development while preserving seam continuity.',
@@ -198,6 +222,21 @@ const CompositionDevelopmentPanel = () => {
   const applySelectedDevelopmentCandidate = useMusicStore(
     (state) => state.applySelectedDevelopmentCandidate,
   );
+  const musicalReferenceEnabled = useMusicStore((state) => state.musicalReferenceEnabled);
+  const musicalReference = useMusicStore((state) => state.musicalReference);
+  const musicalReferenceComposition = useMusicStore((state) => state.musicalReferenceComposition);
+  const musicalReferenceStatus = useMusicStore((state) => state.musicalReferenceStatus);
+  const musicalReferenceError = useMusicStore((state) => state.musicalReferenceError);
+  const similarityHits = useMusicStore((state) => state.similarityHits);
+  const similarityStatus = useMusicStore((state) => state.similarityStatus);
+  const similarityError = useMusicStore((state) => state.similarityError);
+  const projectList = useMusicStore((state) => state.projectList);
+  const setMusicalReferenceEnabled = useMusicStore((state) => state.setMusicalReferenceEnabled);
+  const selectMusicalReferenceProject = useMusicStore((state) => state.selectMusicalReferenceProject);
+  const selectMusicalReferenceSection = useMusicStore((state) => state.selectMusicalReferenceSection);
+  const clearMusicalReference = useMusicStore((state) => state.clearMusicalReference);
+  const searchSimilarSections = useMusicStore((state) => state.searchSimilarSections);
+  const loadProjectList = useMusicStore((state) => state.loadProjectList);
   const [branchNameDraft, setBranchNameDraft] = useState('');
   const [applyBusy, setApplyBusy] = useState(false);
 
@@ -207,9 +246,37 @@ const CompositionDevelopmentPanel = () => {
     }
   }, [composition, sourceStartBar, syncDevelopmentDefaultsFromComposition]);
 
+  useEffect(() => {
+    if (musicalReferenceEnabled && !projectList?.length) {
+      loadProjectList().catch(() => {});
+    }
+  }, [musicalReferenceEnabled, projectList?.length, loadProjectList]);
+
   const sectionOptions = useMemo(
     () => listDevelopmentSectionOptions(composition),
     [composition],
+  );
+
+  const referenceSectionOptions = useMemo(
+    () => listAnalysisSectionOptions(musicalReferenceComposition),
+    [musicalReferenceComposition],
+  );
+
+  const projectNameById = useMemo(() => {
+    const map = {};
+    for (const project of projectList || []) {
+      if (project?.id) {
+        map[project.id] = project.name || project.id;
+      }
+    }
+    return map;
+  }, [projectList]);
+
+  const referenceProjects = useMemo(
+    () => (projectList || []).filter(
+      (project) => project.has_composition && project.id !== currentProjectId,
+    ),
+    [projectList, currentProjectId],
   );
 
   const selectedCandidate = useMemo(
@@ -452,6 +519,120 @@ const CompositionDevelopmentPanel = () => {
               placeholder="e.g. continue into a brighter chorus while keeping the bass groove"
             />
           </Field>
+
+          <div data-testid="develop-musical-reference" style={{ marginBottom: 8, background: '#f8fafc', padding: 10, border: '1px solid #e2e8f0', borderRadius: 8 }}>
+            <Field>
+              <span>
+                <input
+                  data-testid="develop-musical-reference-toggle"
+                  type="checkbox"
+                  checked={Boolean(musicalReferenceEnabled)}
+                  onChange={(event) => setMusicalReferenceEnabled(event.target.checked)}
+                />
+                {' '}Use musical reference
+              </span>
+            </Field>
+            <Hint>
+              Condition previews on similar material from another project section.
+              Affinity scores show structural similarity only — not musical quality.
+            </Hint>
+            {musicalReferenceEnabled && (
+              <>
+                <Field>
+                  Reference project
+                  <Select
+                    data-testid="develop-reference-project"
+                    value={musicalReference?.projectId || ''}
+                    onChange={(event) => {
+                      const nextId = event.target.value;
+                      if (!nextId) {
+                        clearMusicalReference();
+                        setMusicalReferenceEnabled(true);
+                        return;
+                      }
+                      selectMusicalReferenceProject(nextId);
+                    }}
+                    aria-label="Musical reference project"
+                  >
+                    <option value="">Select project…</option>
+                    {referenceProjects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.name || project.id}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                {referenceSectionOptions.length > 0 && (
+                  <Field>
+                    Reference section
+                    <Select
+                      data-testid="develop-reference-section"
+                      value={musicalReference?.sectionKey || ''}
+                      onChange={(event) => selectMusicalReferenceSection(event.target.value)}
+                      aria-label="Musical reference section"
+                      disabled={musicalReferenceStatus === 'loading'}
+                    >
+                      <option value="">Select section…</option>
+                      {referenceSectionOptions.map((option) => (
+                        <option key={option.key} value={option.key}>{option.label}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                )}
+                <Meta data-testid="develop-reference-score">
+                  <span>
+                    Similar material:
+                    {' '}
+                    {musicalReferenceStatus === 'loading'
+                      ? 'scoring…'
+                      : formatSimilarityScore(musicalReference?.scoreVsCurrent)}
+                  </span>
+                  {musicalReference?.fingerprintPrefix && (
+                    <span>Ref {musicalReference.fingerprintPrefix}…</span>
+                  )}
+                </Meta>
+                {musicalReferenceError && (
+                  <Status $tone="error" role="status">{musicalReferenceError}</Status>
+                )}
+                <ButtonRow>
+                  <Button
+                    type="button"
+                    $variant="ghost"
+                    data-testid="develop-similar-sections"
+                    onClick={() => searchSimilarSections()}
+                    disabled={similarityStatus === 'loading'}
+                  >
+                    {similarityStatus === 'loading' ? 'Searching…' : 'Find similar sections'}
+                  </Button>
+                  <Button
+                    type="button"
+                    $variant="ghost"
+                    data-testid="develop-clear-reference"
+                    onClick={() => clearMusicalReference()}
+                  >
+                    Clear reference
+                  </Button>
+                </ButtonRow>
+                {(similarityHits.length > 0 || similarityError) && (
+                  <div data-testid="develop-similar-hits">
+                    <Hint>Similar sections (affinity only)</Hint>
+                    {similarityError && (
+                      <Status $tone="error" role="status">{similarityError}</Status>
+                    )}
+                    <HitList aria-label="Similar sections">
+                      {similarityHits.map((hit) => (
+                        <HitItem key={`${hit.projectId}-${hit.rank}-${hit.fingerprintPrefix}`}>
+                          {formatSimilarityHitLabel(hit, { projectNameById })}
+                          {' · '}
+                          {formatSimilarityScore(hit.score)}
+                        </HitItem>
+                      ))}
+                    </HitList>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
 
           <Meta>
             <span>Provider: {selectedProvider || '—'}</span>

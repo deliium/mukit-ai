@@ -226,6 +226,9 @@ const MotifPanel = ({ onOpenPianoTab = null }) => {
   const motifCandidate = useMusicStore((state) => state.motifCandidate);
   const motifAuditionActive = useMusicStore((state) => state.motifAuditionActive);
   const motifCompareResult = useMusicStore((state) => state.motifCompareResult);
+  const relatedMotifHits = useMusicStore((state) => state.relatedMotifHits);
+  const relatedMotifStatus = useMusicStore((state) => state.relatedMotifStatus);
+  const relatedMotifError = useMusicStore((state) => state.relatedMotifError);
   const currentProjectId = useMusicStore((state) => state.currentProjectId);
   const selectedProvider = useMusicStore((state) => state.selectedProvider);
   const selectedModel = useMusicStore((state) => state.selectedModel);
@@ -530,6 +533,57 @@ const MotifPanel = ({ onOpenPianoTab = null }) => {
               >
                 Save name
               </Button>
+              <ButtonRow style={{ marginTop: 8 }}>
+                <Button
+                  type="button"
+                  $secondary
+                  data-testid="motif-related-button"
+                  disabled={relatedMotifStatus === 'loading' || !selectedMotifId}
+                  onClick={() => {
+                    console.debug('[MotifPanel] Related motifs search', {
+                      motifId: selectedMotifId,
+                    });
+                    useMusicStore.getState().searchRelatedMotifsForCurrent();
+                  }}
+                >
+                  {relatedMotifStatus === 'loading' ? 'Finding…' : 'Related motifs'}
+                </Button>
+              </ButtonRow>
+              {relatedMotifError ? (
+                <StatusBanner $tone="error" data-testid="motif-related-error">
+                  {relatedMotifError}
+                </StatusBanner>
+              ) : null}
+              {relatedMotifHits.length > 0 ? (
+                <div data-testid="motif-related-hits" style={{ marginTop: 8 }}>
+                  <Hint>Similar material (affinity only — not musical quality)</Hint>
+                  <List aria-label="Related motifs">
+                    {relatedMotifHits.map((hit) => (
+                      <ListItem
+                        key={`${hit.projectId || 'local'}-${hit.rank}-${hit.fingerprintPrefix}`}
+                        $active={false}
+                        $clickable={false}
+                      >
+                        <Meta>
+                          <span>
+                            {hit.scope?.kind === 'motif'
+                              ? `motif ${hit.scope.motif_id}`
+                              : hit.scope?.kind || 'scope'}
+                          </span>
+                          <span>
+                            {Number.isFinite(hit.score)
+                              ? `${Math.round(hit.score * 100)}% affinity`
+                              : '—'}
+                          </span>
+                          {hit.fingerprintPrefix ? (
+                            <span>{hit.fingerprintPrefix}…</span>
+                          ) : null}
+                        </Meta>
+                      </ListItem>
+                    ))}
+                  </List>
+                </div>
+              ) : null}
             </div>
           ) : null}
 

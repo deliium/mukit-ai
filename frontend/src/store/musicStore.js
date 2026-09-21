@@ -4,7 +4,9 @@ import {
   AnalysisApiError,
   applyMotif,
   ArrangementApiError,
+  computeEmbedding,
   DevelopmentApiError,
+  EmbeddingApiError,
   importMidi,
   importMusicXml,
   loadArrangementInstruments,
@@ -13,12 +15,27 @@ import {
   previewCompositionDevelopment,
   previewReharmonization,
   ReharmonizeApiError,
+  resolveMusicalReference,
   REHARMONIZE_CONTENT_POLICIES,
   REHARMONIZE_ENGINES,
   REHARMONIZE_OPERATIONS,
   renderMusicXmlPreview,
+  searchRelatedMotifs,
+  searchSimilarEmbeddings,
 } from '../api/musicApi.js';
 import { createAppLogger } from '../utils/appLogger.js';
+import {
+  buildCurrentEmbedScope,
+  buildSectionEmbedScope,
+  buildSimilarityQueryPayload,
+  buildStyleReferenceFromMusicalReference,
+  cosineSimilarity,
+  fingerprintPrefix,
+  normalizeMusicalReferenceSession,
+  RELATED_MOTIFS_DEFAULT_TOP_K,
+  SIMILARITY_DEFAULT_TOP_K,
+} from '../utils/compositionEmbeddingReference.js';
+import { listAnalysisSectionOptions } from '../utils/compositionAnalysis.js';
 import {
   activityLevelsMateriallyChanged,
   buildDefaultMixerControls,
@@ -319,6 +336,7 @@ const initialVersionHistoryState = {
 
 const logger = createAppLogger('musicStore');
 const arrangementLogger = createAppLogger('musicStore.arrangement');
+const embeddingLogger = createAppLogger('musicStore.embeddings');
 
 let playbackTransportSeq = 0;
 function nextPlaybackTransportSeq() {
@@ -341,6 +359,24 @@ const initialDevelopmentControlsState = {
   developmentSourceSectionKey: null,
 };
 
+/** Ephemeral musical-reference / similarity session (never persisted). */
+const initialMusicalReferenceSessionState = {
+  musicalReferenceEnabled: false,
+  musicalReference: null,
+  musicalReferenceComposition: null,
+  musicalReferenceStatus: 'idle',
+  musicalReferenceError: '',
+  musicalReferenceRequestId: 0,
+  similarityHits: [],
+  similarityStatus: 'idle',
+  similarityError: '',
+  similarityRequestId: 0,
+  relatedMotifHits: [],
+  relatedMotifStatus: 'idle',
+  relatedMotifError: '',
+  relatedMotifRequestId: 0,
+};
+
 const initialDevelopmentPreviewState = {
   ...initialDevelopmentControlsState,
   developmentStatus: 'idle',
@@ -355,6 +391,7 @@ const initialDevelopmentPreviewState = {
   developmentCompareResult: null,
   developmentProvider: null,
   developmentModel: null,
+  developmentReferenceProvenance: null,
 };
 
 const initialArrangementControlsState = {
@@ -479,6 +516,9 @@ let reharmonizeRequestSeq = 0;
 let developmentRequestSeq = 0;
 let arrangementRequestSeq = 0;
 let arrangementCatalogRequestSeq = 0;
+let musicalReferenceRequestSeq = 0;
+let similarityRequestSeq = 0;
+let relatedMotifRequestSeq = 0;
 let versionBranchesRequestSeq = 0;
 let versionRevisionsRequestSeq = 0;
 let versionDetailRequestSeq = 0;
@@ -650,6 +690,7 @@ export const useMusicStore = create((set, get) => ({
   ...initialHarmonyUiState,
   ...initialReharmonizePreviewState,
   ...initialDevelopmentPreviewState,
+  ...initialMusicalReferenceSessionState,
   ...initialArrangementPreviewState,
   composerTabRequest: null,
   composerTabRequestSeq: 0,
@@ -6760,6 +6801,450 @@ export const useMusicStore = create((set, get) => ({
     });
   },
 
+  setMusicalReferenceEnabled: (enabled) => {
+    const next = Boolean(enabled);
+    embeddingLogger.debug('Musical reference toggle', { enabled: next });
+    if (!next) {
+      set({
+        musicalReferenceEnabled: false,
+        musicalReferenceError: '',
+        musicalReferenceStatus: 'idle',
+      });
+      return;
+    }
+    set({ musicalReferenceEnabled: true });
+    if (!get().projectList?.length) {
+      get().loadProjectList().catch(() => {});
+    }
+  },
+
+  clearMusicalReference: () => {
+    embeddingLogger.debug('Musical reference cleared');
+    set({
+      ...initialMusicalReferenceSessionState,
+    });
+  },
+
+  clearSimilarityHits: () => {
+    embeddingLogger.debug('Similarity hits cleared');
+    set({
+      similarityHits: [],
+      similarityStatus: 'idle',
+      similarityError: '',
+      similarityRequestId: 0,
+    });
+  },
+
+  clearRelatedMotifHits: () => {
+    set({
+      relatedMotifHits: [],
+      relatedMotifStatus: 'idle',
+      relatedMotifError: '',
+      relatedMotifRequestId: 0,
+    });
+  },
+
+  /**
+   * Load another project's composition as musical reference (ephemeral).
+   * Does not open/switch the working project.
+   */
+  selectMusicalReferenceProject: async (projectId) => {
+    const id = typeof projectId === 'string' ? projectId.trim() : '';
+    if (!id) {
+      set({
+        musicalReference: null,
+        musicalReferenceComposition: null,
+        musicalReferenceStatus: 'idle',
+        musicalReferenceError: '',
+      });
+      return false;
+    }
+
+    musicalReferenceRequestSeq += 1;
+    const requestId = musicalReferenceRequestSeq;
+    const listed = (get().projectList || []).find((item) => item.id === id);
+    set({
+      musicalReferenceEnabled: true,
+      musicalReferenceStatus: 'loading',
+      musicalReferenceError: '',
+      musicalReferenceRequestId: requestId,
+      musicalReference: normalizeMusicalReferenceSession({
+        projectId: id,
+        projectName: listed?.name || null,
+        scope: { kind: 'composition' },
+        scoreVsCurrent: null,
+      }),
+      musicalReferenceComposition: null,
+      similarityHits: [],
+      similarityStatus: 'idle',
+      similarityError: '',
+    });
+
+    embeddingLogger.debug('Musical reference project load started', {
+      projectId: id,
+      requestId,
+    });
+
+    try {
+      const project = await getProjectRequest(id);
+      if (requestId !== get().musicalReferenceRequestId) {
+        return false;
+      }
+      const composition = project?.composition
+        ? prepareCompositionForStore(project.composition)
+        : null;
+      if (!composition || !isCanonicalComposition(composition)) {
+        set({
+          musicalReferenceStatus: 'error',
+          musicalReferenceError: 'Reference project has no canonical composition.v2',
+          musicalReferenceComposition: null,
+        });
+        return false;
+      }
+      const sections = listAnalysisSectionOptions(composition);
+      const firstSection = sections[0] || null;
+      const scopeResult = firstSection
+        ? buildSectionEmbedScope(firstSection)
+        : { ok: true, scope: { kind: 'composition' } };
+      if (!scopeResult.ok) {
+        set({
+          musicalReferenceStatus: 'error',
+          musicalReferenceError: scopeResult.message,
+        });
+        return false;
+      }
+      const session = normalizeMusicalReferenceSession({
+        projectId: id,
+        projectName: project.name || listed?.name || null,
+        sectionIndex: firstSection?.index ?? null,
+        sectionKey: firstSection?.key ?? null,
+        sectionLabel: firstSection?.label ?? null,
+        scope: scopeResult.scope,
+        scoreVsCurrent: null,
+      });
+      set({
+        musicalReference: session,
+        musicalReferenceComposition: composition,
+        musicalReferenceStatus: 'ready',
+        musicalReferenceError: '',
+      });
+      embeddingLogger.debug('Musical reference project ready', {
+        projectId: id,
+        sectionCount: sections.length,
+        requestId,
+      });
+      await get().refreshMusicalReferenceScore();
+      return true;
+    } catch (error) {
+      if (requestId !== get().musicalReferenceRequestId) {
+        return false;
+      }
+      embeddingLogger.error('Musical reference project load failed', {
+        projectId: id,
+        message: error.message || null,
+      });
+      set({
+        musicalReferenceStatus: 'error',
+        musicalReferenceError: error.message || 'Failed to load reference project',
+        musicalReferenceComposition: null,
+      });
+      return false;
+    }
+  },
+
+  selectMusicalReferenceSection: async (sectionKey) => {
+    const state = get();
+    const composition = state.musicalReferenceComposition;
+    if (!composition || !state.musicalReference?.projectId) {
+      return false;
+    }
+    const options = listAnalysisSectionOptions(composition);
+    const option = options.find((item) => item.key === sectionKey);
+    if (!option) {
+      set({ musicalReferenceError: 'Section not found on reference composition' });
+      return false;
+    }
+    const scopeResult = buildSectionEmbedScope(option);
+    if (!scopeResult.ok) {
+      set({ musicalReferenceError: scopeResult.message });
+      return false;
+    }
+    const session = normalizeMusicalReferenceSession({
+      ...state.musicalReference,
+      sectionIndex: option.index,
+      sectionKey: option.key,
+      sectionLabel: option.label,
+      scope: scopeResult.scope,
+      scoreVsCurrent: null,
+      sourceFingerprint: null,
+      fingerprintPrefix: null,
+    });
+    embeddingLogger.debug('Musical reference section selected', {
+      projectId: session?.projectId || null,
+      sectionIndex: option.index,
+    });
+    set({
+      musicalReference: session,
+      musicalReferenceEnabled: true,
+      musicalReferenceError: '',
+      musicalReferenceStatus: 'ready',
+    });
+    await get().refreshMusicalReferenceScore();
+    return true;
+  },
+
+  /**
+   * Advisory affinity between current development scope and the selected musical reference.
+   * Score is structural affinity — not musical quality.
+   */
+  refreshMusicalReferenceScore: async () => {
+    const state = get();
+    const reference = state.musicalReference;
+    const refComposition = state.musicalReferenceComposition;
+    const working = state.editedMusicJson;
+    if (
+      !state.musicalReferenceEnabled
+      || !reference?.scope
+      || !refComposition
+      || !isCanonicalComposition(working)
+      || !isCanonicalComposition(refComposition)
+    ) {
+      return null;
+    }
+
+    musicalReferenceRequestSeq += 1;
+    const requestId = musicalReferenceRequestSeq;
+    set({ musicalReferenceRequestId: requestId, musicalReferenceError: '' });
+
+    try {
+      const currentScope = buildCurrentEmbedScope({
+        composition: working,
+        sourceStartBar: state.developmentSourceStartBar,
+        sourceEndBar: state.developmentSourceEndBar,
+        sourceSectionKey: state.developmentSourceSectionKey,
+      });
+      if (!currentScope.ok) {
+        return null;
+      }
+
+      const [currentResult, resolved] = await Promise.all([
+        computeEmbedding(working, currentScope.scope),
+        resolveMusicalReference({
+          project_id: reference.projectId,
+          scope: reference.scope,
+          expected_fingerprint: reference.sourceFingerprint || undefined,
+          mode: reference.mode || 'prompt_features',
+        }).catch(async () => {
+          // Fallback: embed the already-loaded reference composition inline.
+          const embedded = await computeEmbedding(refComposition, reference.scope);
+          return {
+            embedding: embedded.embedding,
+            provenance: {
+              source_fingerprint: embedded.embedding.source_fingerprint,
+              project_id: reference.projectId,
+              scope: reference.scope,
+            },
+          };
+        }),
+      ]);
+
+      if (requestId !== get().musicalReferenceRequestId) {
+        return null;
+      }
+
+      const score = cosineSimilarity(
+        currentResult.embedding?.vector,
+        resolved.embedding?.vector,
+      );
+      const sourceFingerprint = resolved.provenance?.source_fingerprint
+        || resolved.embedding?.source_fingerprint
+        || null;
+      const next = normalizeMusicalReferenceSession({
+        ...get().musicalReference,
+        sourceFingerprint,
+        fingerprintPrefix: fingerprintPrefix(sourceFingerprint),
+        scoreVsCurrent: score,
+      });
+      set({ musicalReference: next, musicalReferenceStatus: 'ready' });
+      embeddingLogger.debug('Musical reference score updated', {
+        projectId: next?.projectId || null,
+        fingerprintPrefix: next?.fingerprintPrefix || null,
+        hasScore: score != null,
+      });
+      return score;
+    } catch (error) {
+      if (requestId !== get().musicalReferenceRequestId) {
+        return null;
+      }
+      const message = error instanceof EmbeddingApiError
+        ? error.message
+        : (error.message || 'Failed to score musical reference');
+      embeddingLogger.error('Musical reference score failed', {
+        code: error.code || null,
+      });
+      set({ musicalReferenceError: message });
+      return null;
+    }
+  },
+
+  /**
+   * Compact top-k similar sections across workspace projects (advisory).
+   */
+  searchSimilarSections: async ({ topK = SIMILARITY_DEFAULT_TOP_K } = {}) => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    if (!isCanonicalComposition(composition)) {
+      set({
+        similarityStatus: 'error',
+        similarityError: 'Canonical composition.v2 required for similar sections',
+      });
+      return [];
+    }
+
+    const scopeResult = buildCurrentEmbedScope({
+      composition,
+      sourceStartBar: state.developmentSourceStartBar,
+      sourceEndBar: state.developmentSourceEndBar,
+      sourceSectionKey: state.developmentSourceSectionKey,
+    });
+    if (!scopeResult.ok) {
+      set({ similarityStatus: 'error', similarityError: scopeResult.message });
+      return [];
+    }
+
+    const queryBuilt = buildSimilarityQueryPayload({
+      composition,
+      scope: scopeResult.scope,
+      topK,
+      excludeProjectId: state.currentProjectId || null,
+    });
+    if (!queryBuilt.ok) {
+      set({ similarityStatus: 'error', similarityError: queryBuilt.message });
+      return [];
+    }
+
+    similarityRequestSeq += 1;
+    const requestId = similarityRequestSeq;
+    set({
+      similarityStatus: 'loading',
+      similarityError: '',
+      similarityRequestId: requestId,
+      similarityHits: [],
+    });
+    embeddingLogger.debug('Similar sections search started', {
+      requestId,
+      scopeKind: scopeResult.scope.kind,
+      topK,
+    });
+
+    try {
+      const response = await searchSimilarEmbeddings(queryBuilt.query);
+      if (requestId !== get().similarityRequestId) {
+        return [];
+      }
+      set({
+        similarityHits: response.hits,
+        similarityStatus: 'ready',
+        similarityError: '',
+      });
+      embeddingLogger.debug('Similar sections ready', {
+        requestId,
+        hitCount: response.hits.length,
+        queryFingerprintPrefix: response.query_fingerprint_prefix || null,
+      });
+      return response.hits;
+    } catch (error) {
+      if (requestId !== get().similarityRequestId) {
+        return [];
+      }
+      const message = error instanceof EmbeddingApiError
+        ? error.message
+        : (error.message || 'Similar sections search failed');
+      embeddingLogger.error('Similar sections failed', {
+        code: error.code || null,
+        status: error.status || null,
+      });
+      set({
+        similarityStatus: 'error',
+        similarityError: message,
+        similarityHits: [],
+      });
+      return [];
+    }
+  },
+
+  /**
+   * Light Motifs-tab helper: related motifs for the currently selected motif.
+   */
+  searchRelatedMotifsForCurrent: async ({
+    topK = RELATED_MOTIFS_DEFAULT_TOP_K,
+    searchCrossProject = false,
+  } = {}) => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    const motifId = state.motifSelectedMotifId;
+    if (!isCanonicalComposition(composition) || !motifId) {
+      set({
+        relatedMotifStatus: 'error',
+        relatedMotifError: 'Select a motif on a canonical composition',
+      });
+      return [];
+    }
+
+    relatedMotifRequestSeq += 1;
+    const requestId = relatedMotifRequestSeq;
+    set({
+      relatedMotifStatus: 'loading',
+      relatedMotifError: '',
+      relatedMotifRequestId: requestId,
+      relatedMotifHits: [],
+    });
+    embeddingLogger.debug('Related motifs search started', {
+      requestId,
+      motifId,
+      occurrenceId: state.motifSelectedOccurrenceId || null,
+    });
+
+    try {
+      const response = await searchRelatedMotifs({
+        composition,
+        motifId,
+        occurrenceId: state.motifSelectedOccurrenceId || null,
+        topK,
+        searchCrossProject,
+      });
+      if (requestId !== get().relatedMotifRequestId) {
+        return [];
+      }
+      set({
+        relatedMotifHits: response.hits,
+        relatedMotifStatus: 'ready',
+        relatedMotifError: '',
+      });
+      embeddingLogger.debug('Related motifs ready', {
+        requestId,
+        hitCount: response.hits.length,
+      });
+      return response.hits;
+    } catch (error) {
+      if (requestId !== get().relatedMotifRequestId) {
+        return [];
+      }
+      const message = error instanceof EmbeddingApiError
+        ? error.message
+        : (error.message || 'Related motifs search failed');
+      embeddingLogger.error('Related motifs failed', {
+        code: error.code || null,
+      });
+      set({
+        relatedMotifStatus: 'error',
+        relatedMotifError: message,
+        relatedMotifHits: [],
+      });
+      return [];
+    }
+  },
+
   rejectDevelopmentCandidate: (candidateId) => {
     const state = get();
     const id = candidateId || state.developmentSelectedCandidateId;
@@ -6844,6 +7329,11 @@ export const useMusicStore = create((set, get) => ({
       outputBars: state.developmentOutputBars,
       sourceStartBar: state.developmentSourceStartBar,
       sourceEndBar: state.developmentSourceEndBar,
+      hasMusicalReference: Boolean(
+        state.musicalReferenceEnabled && state.musicalReference?.projectId,
+      ),
+      musicalReferenceProjectId: state.musicalReference?.projectId || null,
+      musicalReferenceScopeKind: state.musicalReference?.scope?.kind || null,
     });
 
     set({
@@ -6856,9 +7346,23 @@ export const useMusicStore = create((set, get) => ({
       developmentSelectedCandidateId: null,
       developmentAuditionActive: false,
       developmentEditSourceFingerprint: null,
+      developmentReferenceProvenance: null,
     });
 
     try {
+      let styleReference;
+      if (state.musicalReferenceEnabled && state.musicalReference) {
+        const built = buildStyleReferenceFromMusicalReference(state.musicalReference);
+        if (!built.ok) {
+          set({
+            developmentStatus: 'error',
+            developmentError: built.message || 'Invalid musical reference',
+          });
+          return false;
+        }
+        styleReference = built.styleReference || undefined;
+      }
+
       const response = await previewCompositionDevelopment({
         composition,
         operation,
@@ -6877,6 +7381,7 @@ export const useMusicStore = create((set, get) => ({
           provider: state.selectedProvider || null,
           model: state.selectedModel || null,
         },
+        ...(styleReference ? { style_reference: styleReference } : {}),
       });
 
       const latest = get();
@@ -6891,11 +7396,15 @@ export const useMusicStore = create((set, get) => ({
           developmentCandidates: [],
           developmentSelectedCandidateId: null,
           developmentAuditionActive: false,
+          developmentReferenceProvenance: null,
         });
         return false;
       }
 
       const selectedId = response.candidates[0]?.candidate_id || null;
+      const provenance = response.reference_provenance && typeof response.reference_provenance === 'object'
+        ? response.reference_provenance
+        : null;
       set({
         developmentStatus: 'ready',
         developmentError: '',
@@ -6906,12 +7415,15 @@ export const useMusicStore = create((set, get) => ({
         developmentAuditionActive: false,
         developmentProvider: response.provider || null,
         developmentModel: response.model || null,
+        developmentReferenceProvenance: provenance,
       });
       console.info('[musicStore] Development preview ready', {
         requestId,
         returnedCandidateCount: response.candidates.length,
         editSourcePrefix: editFingerprintLogPrefix(response.edit_source_fingerprint),
         warningCodeCount: (response.warning_codes || []).length,
+        hasReferenceProvenance: Boolean(provenance),
+        referenceFingerprintPrefix: fingerprintPrefix(provenance?.source_fingerprint),
       });
       return true;
     } catch (error) {
@@ -6932,6 +7444,7 @@ export const useMusicStore = create((set, get) => ({
         developmentCandidates: [],
         developmentSelectedCandidateId: null,
         developmentAuditionActive: false,
+        developmentReferenceProvenance: null,
       });
       return false;
     }
@@ -7001,6 +7514,25 @@ export const useMusicStore = create((set, get) => ({
     // Apply. Do not send a tight declared_scope here: fake/real drafts may rewrite
     // harmony/section metadata whose derived bar spans fall outside the vary window and
     // would falsely trip server scope_escape_bars while event preservation still holds.
+    const provenance = state.developmentReferenceProvenance;
+    const generationParameters = provenance && typeof provenance === 'object'
+      ? {
+          reference_provenance: {
+            schema_version: provenance.schema_version || 'composition.reference_provenance.v1',
+            project_id: provenance.project_id ?? null,
+            revision_id: provenance.revision_id ?? null,
+            scope_kind: provenance.scope?.kind || null,
+            scope_digest_prefix: typeof provenance.scope_digest === 'string'
+              ? provenance.scope_digest.slice(0, 12)
+              : null,
+            source_fingerprint_prefix: fingerprintPrefix(provenance.source_fingerprint),
+            embedding_model_id: provenance.embedding_model_id || null,
+            profile_id: provenance.profile_id || null,
+            algorithm_version: provenance.algorithm_version || null,
+            artist_label_used: false,
+          },
+        }
+      : undefined;
     const aiPayload = {
       provider: normalizeAiProvider(state.developmentProvider || state.selectedProvider),
       model: state.developmentModel || state.selectedModel || null,
@@ -7008,6 +7540,7 @@ export const useMusicStore = create((set, get) => ({
       candidate_id: candidate.candidate_id,
       candidate_fingerprint: candidate.candidate_fingerprint,
       warning_codes: toHistoryAiWarningCodes(state.developmentWarnings),
+      ...(generationParameters ? { generation_parameters: generationParameters } : {}),
     };
 
     console.info('[musicStore] Development candidate apply', {
@@ -8783,6 +9316,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     ...historyFields,
     saveConflict: null,
     ...clearedVersionHistoryState(),
+    ...initialMusicalReferenceSessionState,
     activeView: openComposer ? 'composer' : get().activeView,
     generatedMusicJson: composition,
     editedMusicJson: composition,
@@ -8986,6 +9520,7 @@ function clearedDevelopmentPreviewState({ preserveControls = false } = {}) {
     developmentCompareResult: null,
     developmentProvider: null,
     developmentModel: null,
+    developmentReferenceProvenance: null,
   };
 }
 

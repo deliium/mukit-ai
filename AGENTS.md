@@ -23,8 +23,8 @@ mukit-ai/
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
 │   │   ├── ai_runtime/      # Capability registry, operation routing, typed model adapters
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
-│   │   ├── routers/         # Projects + imports + analysis + motifs + harmony + arrangement + development + ai_models HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. import, analysis, motifs, theme, harmony, reharmonization, arrangement, fake_llm)
+│   │   ├── routers/         # Projects + imports + analysis + motifs + harmony + arrangement + development + embeddings + ai_models HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. import, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
@@ -33,6 +33,7 @@ mukit-ai/
 │   │   ├── harmony_schemas.py      # Harmony timeline + reharmonize preview DTOs
 │   │   ├── import_schemas.py       # Import DTOs, issue/error codes
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
+│   │   ├── embeddings/      # Handcrafted symbolic feature embeddings (cache/index; no torch; never DATASET_ROOT ingest)
 │   │   ├── dataset/         # Offline symbolic corpus pipeline (CLI; DATASET_ROOT only)
 │   │   ├── tokenizer/       # Composition V2 ↔ tokens codec (CLI; no PROJECT_DB_PATH)
 │   │   ├── music_transformer/ # PyTorch decoder-only LM (CLI experiments/train/eval; optional torch; no PROJECT_DB_PATH)
@@ -66,7 +67,9 @@ mukit-ai/
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
 | `backend/app/dataset/cli.py` | Offline dataset CLI (`python -m app.dataset.cli`) |
 | `backend/app/tokenizer/cli.py` | Offline tokenizer CLI (`python -m app.tokenizer.cli`) |
+| `backend/app/embeddings/cli.py` | Offline embedding eval CLI (`python -m app.embeddings.cli`) |
 | `backend/app/music_transformer/cli.py` | Offline Music Transformer train/generate/eval/listen/compare CLI (`python -m app.music_transformer.cli`) |
+| `backend/app/routers/embeddings.py` | `POST /embeddings/compute`, `/similarity`, `/related-motifs`, `/reference/resolve` |
 | `scripts/run_tests.sh` | Local quality gate: ESLint + backend pytest + frontend unit tests |
 | `backend/app/composition_schemas.py` | Strict V1/V2 document models and timeline helpers |
 | `backend/app/analysis_schemas.py` | `composition.analysis.v1` DTOs, scopes, warning codes |
@@ -158,6 +161,7 @@ mukit-ai/
 | MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
 | Symbolic datasets | `docs/datasets.md` | Offline `DATASET_ROOT` corpus pipeline, provenance, CLI |
 | Symbolic tokenizer | `docs/tokenizer.md` | Composition V2 ↔ token ids, quantization, CLI, versioning |
+| Symbolic embeddings | `docs/embeddings.md` | Handcrafted musical feature embeddings, similarity, reference conditioning |
 | Symbolic Music Transformer | `docs/music-transformer.md` | PyTorch decoder-only LM, train/generate CLI, checkpoint card, optional API |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |
 | Project persistence | `docs/project-persistence.md` | SQLite projects and migrations |
@@ -180,6 +184,6 @@ mukit-ai/
 - Decompose shell command chains; do not combine unrelated git operations with `&&` when a failure mid-chain is confusing
   - Incorrect: `git checkout main && git pull`
   - Correct: First `git checkout main`, then `git pull origin main`
-- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data. Arrangement catalog IDs/ranges are not V2 fields; only applied V2 is persisted.
+- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data. Arrangement catalog IDs/ranges are not V2 fields; only applied V2 is persisted. Symbolic embeddings measure affinity from note material — never artist≡style ids; never auto-export projects into `DATASET_ROOT`.
 - Prefer extending `routers/` + `services/` over growing unrelated logic in `main.py`
 - Never log API keys, full prompts, raw MusicXML/MIDI/WAV payloads, uploaded import source bytes, full analysis reports, event arrays, or arrangement catalog override contents

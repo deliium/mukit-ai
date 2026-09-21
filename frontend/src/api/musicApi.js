@@ -25,9 +25,16 @@ import {
   normalizeArrangementPreviewResponse,
   normalizeArrangementRequest,
 } from '../utils/compositionArrangementCandidates.js';
+import {
+  fingerprintPrefix,
+  normalizeEmbedScope,
+  normalizeSimilarityHits,
+  normalizeStyleReference,
+} from '../utils/compositionEmbeddingReference.js';
 import { createAppLogger } from '../utils/appLogger.js';
 
 const arrangementLogger = createAppLogger('musicApi.arrangement');
+const embeddingLogger = createAppLogger('musicApi.embeddings');
 
 export const PROJECTION_HEADER_NAMES = {
   status: 'x-mukit-projection-status',
@@ -341,6 +348,16 @@ export class ArrangementApiError extends Error {
   }
 }
 
+export class EmbeddingApiError extends Error {
+  constructor(message, { status = null, code = null, details = null } = {}) {
+    super(message);
+    this.name = 'EmbeddingApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
 export const REHARMONIZE_OPERATIONS = Object.freeze([
   'suggest_progression',
   'reharmonize',
@@ -629,6 +646,9 @@ export async function previewCompositionDevelopment(payload) {
     provider: requestBody.selection?.provider || null,
     model: requestBody.selection?.model || null,
     instructionLen: typeof requestBody.instruction === 'string' ? requestBody.instruction.length : 0,
+    hasStyleReference: Boolean(requestBody.style_reference),
+    styleReferenceProjectId: requestBody.style_reference?.project_id || null,
+    styleReferenceScopeKind: requestBody.style_reference?.scope?.kind || null,
   });
 
   const inboundComposition = normalizeApiComposition(requestBody.composition, {
@@ -1281,4 +1301,293 @@ function formatAxiosFailureDetail(error) {
     );
   }
   return message || 'Unknown request failure';
+}
+
+/**
+ * POST /embeddings/compute — symbolic embedding card for a composition scope.
+ * Never logs full vectors.
+ */
+export async function computeEmbedding(composition, scope = { kind: 'composition' }, modelId = null) {
+  const inboundComposition = normalizeApiComposition(composition, {
+    context: 'embedding-compute-request',
+  });
+  validateCanonicalForApi(inboundComposition, { action: 'embedding compute' });
+  if (!isCanonicalComposition(inboundComposition)) {
+    throw new EmbeddingApiError('Embedding accepts only composition.v2 documents', {
+      code: 'embed_invalid_composition',
+    });
+  }
+  const scopeResult = normalizeEmbedScope(scope);
+  if (!scopeResult.ok) {
+    throw new EmbeddingApiError(scopeResult.message, { code: scopeResult.code });
+  }
+
+  embeddingLogger.debug('Embedding compute started', {
+    scopeKind: scopeResult.scope.kind,
+    modelId: modelId || null,
+  });
+
+  try {
+    const body = {
+      composition: inboundComposition,
+      scope: scopeResult.scope,
+    };
+    if (typeof modelId === 'string' && modelId.trim()) {
+      body.model_id = modelId.trim();
+    }
+    const axiosResponse = await axios.post('/embeddings/compute', body);
+    const response = axiosResponse.data || {};
+    const embedding = response.embedding;
+    if (!embedding || typeof embedding !== 'object' || !Array.isArray(embedding.vector)) {
+      throw new EmbeddingApiError('Invalid embedding compute response', {
+        code: 'embed_invalid_response',
+      });
+    }
+    embeddingLogger.debug('Embedding compute ready', {
+      dims: embedding.dims,
+      noteCount: embedding.note_count,
+      fingerprintPrefix: fingerprintPrefix(embedding.source_fingerprint),
+      warningCodeCount: Array.isArray(response.warning_codes) ? response.warning_codes.length : 0,
+    });
+    return {
+      embedding,
+      warning_codes: Array.isArray(response.warning_codes) ? response.warning_codes.slice(0, 32) : [],
+    };
+  } catch (error) {
+    if (error instanceof EmbeddingApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseMotifErrorDetail(error.response?.data?.detail ?? error.message);
+    embeddingLogger.error('Embedding compute failed', {
+      status,
+      code: parsed.code,
+    });
+    throw new EmbeddingApiError(parsed.message, {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
+}
+
+/**
+ * POST /embeddings/similarity — ranked similar scopes (affinity, not quality).
+ * @param {object} query composition.similarity_query.v1 (or partial with composition+scope)
+ * @param {string|null} [modelId]
+ */
+export async function searchSimilarEmbeddings(query, modelId = null) {
+  if (!query || typeof query !== 'object' || Array.isArray(query)) {
+    throw new EmbeddingApiError('Similarity query is required', { code: 'similarity_query_invalid' });
+  }
+
+  let requestQuery = { ...query };
+  if (requestQuery.composition) {
+    requestQuery = {
+      ...requestQuery,
+      composition: normalizeApiComposition(requestQuery.composition, {
+        context: 'embedding-similarity-request',
+      }),
+    };
+    validateCanonicalForApi(requestQuery.composition, { action: 'embedding similarity' });
+  }
+  if (requestQuery.scope) {
+    const scopeResult = normalizeEmbedScope(requestQuery.scope);
+    if (!scopeResult.ok) {
+      throw new EmbeddingApiError(scopeResult.message, { code: scopeResult.code });
+    }
+    requestQuery.scope = scopeResult.scope;
+  }
+
+  embeddingLogger.debug('Similarity search started', {
+    scopeKind: requestQuery.scope?.kind || null,
+    topK: requestQuery.top_k ?? null,
+    corpusKind: requestQuery.corpus?.kind || 'projects',
+    excludeProjectId: requestQuery.exclude_project_id || null,
+  });
+
+  try {
+    const body = { query: requestQuery };
+    if (typeof modelId === 'string' && modelId.trim()) {
+      body.model_id = modelId.trim();
+    }
+    const axiosResponse = await axios.post('/embeddings/similarity', body);
+    const response = axiosResponse.data || {};
+    const hits = normalizeSimilarityHits(response.hits, {
+      topK: requestQuery.top_k || 10,
+    });
+    embeddingLogger.debug('Similarity search ready', {
+      hitCount: hits.length,
+      queryFingerprintPrefix: response.query_fingerprint_prefix || null,
+      modelId: response.model_id || null,
+    });
+    return {
+      hits,
+      rawHits: Array.isArray(response.hits) ? response.hits : [],
+      query_fingerprint_prefix: response.query_fingerprint_prefix || null,
+      model_id: response.model_id || null,
+      profile_id: response.profile_id || null,
+      warning_codes: Array.isArray(response.warning_codes) ? response.warning_codes.slice(0, 32) : [],
+      musical_quality_claim: false,
+    };
+  } catch (error) {
+    if (error instanceof EmbeddingApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseMotifErrorDetail(error.response?.data?.detail ?? error.message);
+    embeddingLogger.error('Similarity search failed', {
+      status,
+      code: parsed.code,
+    });
+    throw new EmbeddingApiError(parsed.message, {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
+}
+
+/**
+ * POST /embeddings/related-motifs — related motif affinity within/across projects.
+ */
+export async function searchRelatedMotifs({
+  composition,
+  motifId,
+  occurrenceId = null,
+  topK = 8,
+  searchCrossProject = false,
+  modelId = null,
+} = {}) {
+  if (typeof motifId !== 'string' || !motifId.trim()) {
+    throw new EmbeddingApiError('motif_id is required', { code: 'embed_scope_invalid' });
+  }
+  const inboundComposition = normalizeApiComposition(composition, {
+    context: 'embedding-related-motifs-request',
+  });
+  validateCanonicalForApi(inboundComposition, { action: 'related motifs' });
+  if (!isCanonicalComposition(inboundComposition)) {
+    throw new EmbeddingApiError('Related motifs accept only composition.v2 documents', {
+      code: 'embed_invalid_composition',
+    });
+  }
+
+  embeddingLogger.debug('Related motifs search started', {
+    motifId: motifId.trim(),
+    occurrenceId: occurrenceId || null,
+    topK,
+    searchCrossProject: Boolean(searchCrossProject),
+  });
+
+  try {
+    const body = {
+      composition: inboundComposition,
+      motif_id: motifId.trim().slice(0, 120),
+      top_k: Math.min(50, Math.max(1, Number.isInteger(topK) ? topK : 8)),
+      search_cross_project: Boolean(searchCrossProject),
+    };
+    if (typeof occurrenceId === 'string' && occurrenceId.trim()) {
+      body.occurrence_id = occurrenceId.trim().slice(0, 120);
+    }
+    if (typeof modelId === 'string' && modelId.trim()) {
+      body.model_id = modelId.trim();
+    }
+    const axiosResponse = await axios.post('/embeddings/related-motifs', body);
+    const response = axiosResponse.data || {};
+    const hits = normalizeSimilarityHits(response.hits, { topK: body.top_k });
+    embeddingLogger.debug('Related motifs search ready', {
+      hitCount: hits.length,
+      modelId: response.model_id || null,
+    });
+    return {
+      hits,
+      rawHits: Array.isArray(response.hits) ? response.hits : [],
+      model_id: response.model_id || null,
+      warning_codes: Array.isArray(response.warning_codes) ? response.warning_codes.slice(0, 32) : [],
+      musical_quality_claim: false,
+    };
+  } catch (error) {
+    if (error instanceof EmbeddingApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseMotifErrorDetail(error.response?.data?.detail ?? error.message);
+    embeddingLogger.error('Related motifs search failed', {
+      status,
+      code: parsed.code,
+    });
+    throw new EmbeddingApiError(parsed.message, {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
+}
+
+/**
+ * POST /embeddings/reference/resolve — resolve style_reference to embedding + provenance.
+ * Optional helper for advisory score / fingerprint gates.
+ */
+export async function resolveMusicalReference(styleReference, modelId = null) {
+  const normalized = normalizeStyleReference(styleReference);
+  if (!normalized.ok) {
+    throw new EmbeddingApiError(normalized.message, { code: normalized.code });
+  }
+  if (!normalized.styleReference) {
+    throw new EmbeddingApiError('style_reference is required', { code: 'style_reference_invalid' });
+  }
+
+  const requestRef = { ...normalized.styleReference };
+  if (requestRef.composition) {
+    requestRef.composition = normalizeApiComposition(requestRef.composition, {
+      context: 'embedding-reference-resolve',
+    });
+    validateCanonicalForApi(requestRef.composition, { action: 'musical reference resolve' });
+  }
+
+  embeddingLogger.debug('Musical reference resolve started', {
+    projectId: requestRef.project_id || null,
+    scopeKind: requestRef.scope?.kind || null,
+    mode: requestRef.mode || null,
+  });
+
+  try {
+    const body = { style_reference: requestRef };
+    if (typeof modelId === 'string' && modelId.trim()) {
+      body.model_id = modelId.trim();
+    }
+    const axiosResponse = await axios.post('/embeddings/reference/resolve', body);
+    const response = axiosResponse.data || {};
+    if (!response.embedding || !response.provenance) {
+      throw new EmbeddingApiError('Invalid reference resolve response', {
+        code: 'reference_resolve_invalid',
+      });
+    }
+    embeddingLogger.debug('Musical reference resolve ready', {
+      projectId: response.provenance?.project_id || null,
+      fingerprintPrefix: fingerprintPrefix(response.provenance?.source_fingerprint),
+      dims: response.embedding?.dims ?? null,
+    });
+    return {
+      embedding: response.embedding,
+      provenance: response.provenance,
+      conditioning: response.conditioning || null,
+      warning_codes: Array.isArray(response.warning_codes) ? response.warning_codes.slice(0, 32) : [],
+    };
+  } catch (error) {
+    if (error instanceof EmbeddingApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseMotifErrorDetail(error.response?.data?.detail ?? error.message);
+    embeddingLogger.error('Musical reference resolve failed', {
+      status,
+      code: parsed.code,
+    });
+    throw new EmbeddingApiError(parsed.message, {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
 }

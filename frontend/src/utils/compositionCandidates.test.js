@@ -160,6 +160,22 @@ test('normalizeDevelopmentRequest enforces operation matrix', () => {
   assert.equal(ok.ok, true);
   assert.equal(ok.request.output_bars, 8);
 
+  const withRef = normalizeDevelopmentRequest({
+    composition,
+    operation: 'vary_section',
+    variation_strength: 'balanced',
+    candidate_count: 1,
+    source: { start_bar: 1, end_bar: 8 },
+    style_reference: {
+      project_id: 'ref-proj',
+      scope: { kind: 'section', section_index: 0 },
+      mode: 'prompt_features',
+    },
+  });
+  assert.equal(withRef.ok, true);
+  assert.equal(withRef.request.style_reference.project_id, 'ref-proj');
+  assert.equal(withRef.request.style_reference.scope.kind, 'section');
+
   const varyMissing = normalizeDevelopmentRequest({
     composition,
     operation: 'vary_section',

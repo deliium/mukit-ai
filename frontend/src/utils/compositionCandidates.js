@@ -215,6 +215,52 @@ export function normalizeDevelopmentRequest(payload) {
     instruction = null;
   }
 
+  let styleReference = null;
+  if (payload?.style_reference != null) {
+    // Lazy import avoided: callers normalize via compositionEmbeddingReference when needed.
+    // Accept a pre-validated object (project_id|composition + scope); strip unknown keys lightly.
+    const raw = payload.style_reference;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return {
+        ok: false,
+        code: 'development_invalid_operation',
+        message: 'style_reference must be an object',
+      };
+    }
+    const hasProject = typeof raw.project_id === 'string' && raw.project_id.trim();
+    const hasComposition = raw.composition != null && typeof raw.composition === 'object';
+    if (!hasProject && !hasComposition) {
+      return {
+        ok: false,
+        code: 'development_invalid_operation',
+        message: 'style_reference requires project_id or composition',
+      };
+    }
+    if (!raw.scope || typeof raw.scope !== 'object') {
+      return {
+        ok: false,
+        code: 'development_invalid_operation',
+        message: 'style_reference.scope is required',
+      };
+    }
+    styleReference = {
+      scope: raw.scope,
+      mode: typeof raw.mode === 'string' ? raw.mode : 'prompt_features',
+    };
+    if (hasProject) {
+      styleReference.project_id = raw.project_id.trim().slice(0, 80);
+    }
+    if (hasComposition) {
+      styleReference.composition = raw.composition;
+    }
+    if (typeof raw.revision_id === 'string' && raw.revision_id.trim()) {
+      styleReference.revision_id = raw.revision_id.trim().slice(0, 80);
+    }
+    if (typeof raw.expected_fingerprint === 'string' && raw.expected_fingerprint.length >= 16) {
+      styleReference.expected_fingerprint = raw.expected_fingerprint.slice(0, 128);
+    }
+  }
+
   return {
     ok: true,
     request: {
@@ -237,6 +283,7 @@ export function normalizeDevelopmentRequest(payload) {
       options: payload?.options && typeof payload.options === 'object'
         ? payload.options
         : {},
+      ...(styleReference ? { style_reference: styleReference } : {}),
     },
   };
 }
