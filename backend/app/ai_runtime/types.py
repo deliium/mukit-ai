@@ -28,6 +28,9 @@ ModelRuntimeId = Literal[
     "music_transformer",
     "fake_symbolic",
     "local_audio_mono",
+    "fake_neural_audio",
+    "sidecar_musicgen",
+    "local_midi_ddsp",
 ]
 
 

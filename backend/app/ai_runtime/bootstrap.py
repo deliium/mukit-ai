@@ -236,6 +236,26 @@ def build_registry_from_env(
             },
         )
 
+    from .runtimes.fake_neural_audio import neural_audio_descriptors
+
+    for neural_desc in neural_audio_descriptors(source):
+        if neural_desc.id in models:
+            logger.warning(
+                "Neural audio model id collides",
+                extra={"model_id": neural_desc.id},
+            )
+            continue
+        models[neural_desc.id] = neural_desc
+        logger.info(
+            "Registered neural audio generation model",
+            extra={
+                "model_id": neural_desc.id,
+                "runtime": neural_desc.runtime,
+                "status": neural_desc.status,
+                "primary_capability": neural_desc.primary_capability,
+            },
+        )
+
     ready_embedders = [
         m
         for m in models.values()
