@@ -39,6 +39,10 @@ mukit-ai/
 │   │   ├── ai_runtime/             # Capability registry, routing, typed model adapters (provider boundary)
 │   │   │   ├── local_health.py     # Bounded local sidecar probe (no weight download)
 │   │   │   └── runtimes/           # openai_compatible_chat, fake, stub, local_openai_compatible
+│   │   ├── ai_agents/              # V4 multi-agent layer above ai_runtime (typed artifacts; no DB writes)
+│   │   │   ├── registry.py         # AgentRegistry + bootstrap
+│   │   │   ├── workflow.py         # Acceptance spine orchestrator
+│   │   │   └── progressive_realize.py  # working_draft trust boundary
 │   │   ├── routers/
 │   │   │   ├── projects.py         # Projects module HTTP routes
 │   │   │   ├── imports.py          # MIDI / MusicXML multipart import
@@ -47,7 +51,8 @@ mukit-ai/
 │   │   │   ├── composition_development.py
 │   │   │   ├── harmony.py
 │   │   │   ├── motifs.py
-│   │   │   └── ai_models.py        # GET /ai/models discovery
+│   │   │   ├── ai_models.py        # GET /ai/models discovery
+│   │   │   └── ai_agents.py        # GET/POST /ai/agents* multi-agent API
 │   │   ├── services/               # Application services (orchestration + domain helpers)
 │   │   │   ├── llm_music_generator.py
 │   │   │   ├── llm_composition_editor.py

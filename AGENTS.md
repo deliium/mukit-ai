@@ -22,8 +22,9 @@ mukit-ai/
 │   │   ├── main.py          # Composition / LLM / export routes
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
 │   │   ├── ai_runtime/      # Capability registry, operation routing, typed model adapters
+│   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize)
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
-│   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + motifs + harmony + arrangement + development + embeddings + ai_models HTTP API
+│   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + motifs + harmony + arrangement + development + embeddings + ai_models + ai_agents HTTP API
 │   │   ├── services/        # Domain + orchestration (incl. import, audio_transcription, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
@@ -54,7 +55,7 @@ mukit-ai/
 │       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture helpers
 ├── scripts/                 # run_tests.sh, v1/v2/v3_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
-├── docs/                    # composition.v2/v1, ai-runtime, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, neural-audio-rendering, analysis, arrangement, import, datasets, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, multi-agent, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, neural-audio-rendering, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -117,10 +118,12 @@ mukit-ai/
 | `backend/app/services/fake_llm.py` | Deterministic `LLM_FAKE_MODE` generate/edit/arrangement (incl. V2 expressive fixture) |
 | `backend/app/ready.py` | Logging/CORS helpers and readiness report |
 | `backend/app/ai_runtime/` | Capability registry, operation routing, typed adapters |
+| `backend/app/ai_agents/` | V4 multi-agent registry, spine workflow, progressive realize |
 | `backend/app/local_llm_settings.py` | Optional `LOCAL_*` sidecar settings (memory-safe defaults) |
 | `backend/app/ai_runtime/local_health.py` | Bounded local sidecar health probe |
 | `backend/app/ai_runtime/runtimes/local_language.py` | `LocalLanguageModel` (OpenAI-compatible HTTP only) |
 | `backend/app/routers/ai_models.py` | `GET /ai/models` (+ `/{id}`) discovery |
+| `backend/app/routers/ai_agents.py` | `GET /ai/agents`, `POST /ai/agents/{id}/run`, workflow preview |
 | `backend/app/routers/projects.py` | Project CRUD + autosave + revision/branch history APIs |
 | `backend/app/services/project_history.py` | Revision list/detail, durable commit/restore, branch checkout/apply-as-branch |
 | `backend/app/services/project_history_store.py` | SQLite CAS history graph + compressed composition snapshots |
@@ -170,6 +173,7 @@ mukit-ai/
 |----------|------|-------------|
 | README | `README.md` | Install, features, env vars, run instructions |
 | AI Runtime | `docs/ai-runtime.md` | Capability registry, operation routing, `/ai/models`, fallback, provenance |
+| Multi-agent (V4) | `docs/multi-agent.md` | Specialized agents above runtime; workflow preview; Apply CAS |
 | Optional local AI | `docs/local-ai.md` | AMD/ROCm Compose profiles, llama.cpp/vLLM, memory-safe defaults, troubleshooting |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
 | Composition Editor | `docs/composition-editor.md` | Piano-roll selection, clipboard, transforms, cursor/loop |

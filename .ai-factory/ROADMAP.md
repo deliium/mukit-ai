@@ -36,6 +36,7 @@
 - [x] **Audio-to-symbolic musical input (monophonic)** — Mic/file monophonic transcription → session `transcription.preview.v1` review (confidence, expressive vs quantize) → Apply into `composition.v2`; local engines + fake CI path; never persists audio or confidence on notes
 - [x] **Optional neural audio rendering** — Job-based generative/neural instrument egress (`/neural-audio/renders`) with adapters + fidelity labels; optional MusicGen sidecar profile; never mutates V2 / FluidSynth / Tone.js
 - [x] **DAW interoperability and V3 end-to-end platform hardening** — SMF Type 1 + MusicXML DAW handoff (section markers, drag/download UX); durable `generation.provenance.v1` on revisions; checkpoint path confinement; `scripts/v3_docker_acceptance.sh` restart + seeded reproduce gate (fake modes)
+- [x] **V4 multi-agent music architecture** — Extensible specialized agents (`ai_agents/`) above V3 runtime; typed artifacts + progressive realize; spine workflow preview; `GET/POST /ai/agents*`; durable `agent_id` provenance; Apply via `multi-agent-apply` CAS only
 
 ## Completed
 
@@ -73,3 +74,4 @@
 | Audio-to-symbolic musical input (monophonic) | 2026-09-21 |
 | Optional neural audio rendering | 2026-09-21 |
 | DAW interoperability and V3 end-to-end platform hardening | 2026-09-21 |
+| V4 multi-agent music architecture | 2026-09-22 |

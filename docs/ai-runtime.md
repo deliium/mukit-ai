@@ -5,6 +5,11 @@ models by **capability**. Composition/editor business logic must not couple to a
 single provider or chat framework. FluidSynth WAV export stays outside this
 runtime.
 
+**V4 multi-agent layer:** Specialized music agents live in `backend/app/ai_agents/`
+**above** this runtime. Agents bind to models via `resolve_model_for_operation` /
+`AI_AGENT_<ID>_MODEL`, exchange typed artifacts, and never replace the model
+registry. See [Multi-agent architecture](./multi-agent.md).
+
 ## Capabilities
 
 Each registered model has:

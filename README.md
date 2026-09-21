@@ -20,6 +20,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Composition Development**: Continue, add a named section, or vary a range via the Develop tab (`POST /composition/development/preview`); optional **musical reference** conditioning (project/section embedding — affinity, not artist style); 1–4 ephemeral candidates with Compare/Reject/Audition; Apply or Apply-as-branch commits (details: [docs/composition-development.md](docs/composition-development.md))
 - **Musical similarity / embeddings**: Handcrafted symbolic feature embeddings (`local:symbolic-features-v1`) for scoped similarity search and reference provenance; never auto-export projects into training corpora (details: [docs/embeddings.md](docs/embeddings.md))
 - **Hybrid generation**: Optional pipeline where the LLM plans (`composition.plan.v1`) and a symbolic composer writes notes; select Hybrid in the Music Generator when a ready `symbolic_composer` is available (details: [docs/hybrid-generation.md](docs/hybrid-generation.md))
+- **Multi-agent (V4)**: Specialized cooperating agents (Creative Director → … → Critic) return typed session artifacts; Apply uses `multi-agent-apply` CAS only (details: [docs/multi-agent.md](docs/multi-agent.md))
 - **Composition Arrangement**: Orchestrate selected tracks / piano-to-ensemble and related texture ops via the Arrange tab (`GET /composition/arrangement/instruments`, `POST /composition/arrangement/preview`); session-only candidates until Apply / Apply-as-branch (details: [docs/composition-arrangement.md](docs/composition-arrangement.md))
 - **Safe AI Preview**: Full generation, AI region edit, and other substantial AI workflows keep candidates outside the canonical working composition until explicit Apply; Versions tab supports compare, audition, branch checkout, and restore
 - **Deterministic Export**: Download MusicXML, MIDI, and server-rendered WAV from the same canonical `tracks[].events[]`; export responses include projection status headers when approximations apply (motif metadata is intentionally omitted)
@@ -317,6 +318,7 @@ mukit-ai/
 | Guide | Description |
 |-------|-------------|
 | [AI Runtime](docs/ai-runtime.md) | Capability registry, routing, `/ai/models`, provenance |
+| [Multi-agent (V4)](docs/multi-agent.md) | Specialized agents above runtime; workflow preview; Apply CAS |
 | [Optional local AI](docs/local-ai.md) | AMD/ROCm Compose profiles, llama.cpp/vLLM sidecars, troubleshooting |
 | [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
 | [Composition Editor](docs/composition-editor.md) | Piano-roll multi-note editing, clipboard, cursor/loop |

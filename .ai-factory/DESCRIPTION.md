@@ -24,6 +24,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - Notation preview (MusicXML regenerated from V2) and browser playback (Tone.js) from `tracks[].events[]`
 - Deterministic export: MusicXML, MIDI (SMF Type 1 DAW handoff with section markers + drag/download UX), and server-side FluidSynth WAV
 - Durable hybrid generation provenance (`generation.provenance.v1`) on AI revisions; V3 Docker acceptance (`scripts/v3_docker_acceptance.sh`) with seeded reproduce under fake modes
+- V4 multi-agent music architecture: specialized in-process agents above `ai_runtime` (`GET /ai/agents`, workflow preview spine, typed artifacts, progressive realize); Apply only via `multi-agent-apply` CAS — never invents `composition.v4`
 
 ## Tech Stack
 
@@ -31,7 +32,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - **Framework:** FastAPI + Uvicorn; React 18 + Vite
 - **Database:** SQLite (`PROJECT_DB_PATH`) with Alembic schema migrations
 - **ORM:** None — raw SQL via `sqlite3` helpers in `backend/app/db/` and `project_store`
-- **LLM:** LangChain / LangGraph with OpenAI-compatible providers (OpenAI, DeepSeek) plus optional `LLM_FAKE_MODE` deterministic fixture provider for demos/E2E; optional local OpenAI-compatible sidecar (`LOCAL_LLM_*`, Compose `--profile local-ai` / `local-ai-vllm`) via `LocalLanguageModel` — app never loads weights; capability-aware `ai_runtime/` registry routes generate/edit/arrange/develop/reharmonize/motif by `AiOperation` (`GET /ai/models`, compat `/llm/models`); hybrid generation uncollapses `generate_planner` / `generate_composer` onto language vs `symbolic_composer` without silent LLM note fallback
+- **LLM:** LangChain / LangGraph with OpenAI-compatible providers (OpenAI, DeepSeek) plus optional `LLM_FAKE_MODE` deterministic fixture provider for demos/E2E; optional local OpenAI-compatible sidecar (`LOCAL_LLM_*`, Compose `--profile local-ai` / `local-ai-vllm`) via `LocalLanguageModel` — app never loads weights; capability-aware `ai_runtime/` registry routes generate/edit/arrange/develop/reharmonize/motif by `AiOperation` (`GET /ai/models`, compat `/llm/models`); hybrid generation uncollapses `generate_planner` / `generate_composer` onto language vs `symbolic_composer` without silent LLM note fallback; V4 `ai_agents/` binds specialized roles to the same resolve path (`AI_AGENT_<ID>_MODEL`)
 - **Music processing:** music21 (MusicXML render + import), mido (MIDI import/export), defusedxml (import preflight), FluidSynth + SoundFont (WAV)
 - **Frontend libraries:** Zustand, styled-components, Tone.js, OpenSheetMusicDisplay, axios
 - **Integrations:** Docker Compose production-local stack (`backend` + nginx `frontend`); optional `compose.local-ai.yml` profiles for local inference sidecars; optional `compose.neural-audio.yml` `--profile neural-audio` for MusicGen-shaped render sidecar; optional LLM API keys via `.env` / Compose (backend-only); `IMPORT_*` / `AUDIO_*` / `NEURAL_AUDIO_*` limits
