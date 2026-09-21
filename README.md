@@ -317,6 +317,7 @@ mukit-ai/
 | [Composition Analysis](docs/composition-analysis.md) | Deterministic sidecar, scopes, warnings, Analysis tab |
 | [MIDI / MusicXML import](docs/import.md) | Ingestion mappings, limits, issue codes, security |
 | [Symbolic datasets](docs/datasets.md) | Offline licensed corpus pipeline (`DATASET_ROOT`, CLI build/verify) |
+| [Symbolic tokenizer](docs/tokenizer.md) | Composition V2 ↔ token ids (`tokenizer.v1`, CLI encode/decode) |
 | [Composition V1](docs/composition-v1.md) | V1 compatibility, staged generation, region editing |
 | [Project persistence](docs/project-persistence.md) | SQLite projects, migrate-on-open, autosave |
 | [Testing](docs/testing.md) | Backend/frontend tests, fixtures, acceptance scripts |

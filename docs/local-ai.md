@@ -27,7 +27,7 @@ Frontend → FastAPI (ai_runtime) → LocalLanguageModel → HTTP OpenAI chat AP
 | *(default — no profile)* | — | Normal app; fake mode or cloud keys |
 | `local-ai` | **llama.cpp** OpenAI server | Default local chat (single-user, UMA-friendly GGUF) |
 | `local-ai-vllm` | **vLLM + ROCm** | Throughput / multi-request experiments |
-| `training` | Stub only | Future PyTorch+ROCm scaffolding — **no training loop**. Dataset preprocess is offline CLI against a mounted `DATASET_ROOT` (`python -m app.dataset.cli build`); see [datasets.md](datasets.md). |
+| `training` | Stub only | Future PyTorch+ROCm scaffolding — **no training loop yet**. Dataset preprocess: [datasets.md](datasets.md). Token contract for a future loop: [tokenizer.md](tokenizer.md) (`tokenizer.v1` encode/decode + manifest). |
 
 Application code does **not** branch on llama.cpp vs vLLM. Profiles differ only in sidecar image, command, port, and `LOCAL_LLM_BASE_URL`.
 

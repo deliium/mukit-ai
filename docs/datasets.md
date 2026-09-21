@@ -1,13 +1,14 @@
 # Symbolic music datasets
 
-Offline pipeline that turns licensed MIDI, MusicXML/MXL, and Composition V2 JSON into a **versioned, provenance-gated training corpus** under `DATASET_ROOT`. This is separate from user projects (`PROJECT_DB_PATH`) and does **not** run a tokenizer or model training loop.
+Offline pipeline that turns licensed MIDI, MusicXML/MXL, and Composition V2 JSON into a **versioned, provenance-gated training corpus** under `DATASET_ROOT`. This is separate from user projects (`PROJECT_DB_PATH`) and does **not** run a model training loop. Tokenization of examples is a separate package ([tokenizer.md](tokenizer.md)).
 
 ## Relationship to other features
 
 | Feature | Role |
 |---------|------|
 | [Import](import.md) | HTTP multipart → workspace `composition.v2`; reused as parsers here |
-| [Local AI](local-ai.md) | Optional inference sidecars; Compose `--profile training` stays a stub — preprocess is this CLI |
+| [Tokenizer](tokenizer.md) | REMI-style Composition V2 ↔ token ids (`python -m app.tokenizer.cli`); consumes examples/splits read-only |
+| [Local AI](local-ai.md) | Optional inference sidecars; Compose `--profile training` stays a stub — preprocess is this CLI + tokenizer |
 | Projects / revisions | Never used; corpora are filesystem-only |
 
 ## Layout
@@ -69,7 +70,7 @@ sources:
 segmentation:
   modes: [bars, token_limit]
   token_limit: 256
-  token_proxy: note_events   # proxy only — not a real BPE tokenizer
+  token_proxy: note_events   # proxy only — real vocab length is app.tokenizer (optional later)
 split_seed: 20260921
 train_ratio: 0.8
 val_ratio: 0.1

@@ -8,7 +8,8 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 
 - Multi-stage LLM generation of operational `composition.v2` (form → harmony → melody → bass → accompaniment → assemble → validate/repair)
 - Secure MIDI / MusicXML / MXL import into the same V2 workspace with session import reports (no LLM required; no retained source files)
-- Offline symbolic training dataset pipeline under `DATASET_ROOT` (CLI ingest/normalize/segment/split/stats; provenance-gated; never `PROJECT_DB_PATH`; no in-app tokenizer/training loop)
+- Offline symbolic training dataset pipeline under `DATASET_ROOT` (CLI ingest/normalize/segment/split/stats; provenance-gated; never `PROJECT_DB_PATH`)
+- Versioned Composition V2 tokenizer (`tokenizer.v1`) under `backend/app/tokenizer/` (CLI encode/decode/stats/viz; train+inference contract; never `PROJECT_DB_PATH` / weight load)
 - Deterministic composition analysis (`composition.analysis.v1`) over current V2 scopes; frontend-derived cache only; optional bounded advisory context for LLM edit/repair
 - Explicit harmony tick-span timeline with local add/replace/remove/move/resize; `POST /harmony/reharmonize/preview` for deterministic/AI candidates (apply is client-side, fingerprint-gated)
 - AI-assisted arrangement / orchestration via `GET /composition/arrangement/instruments` and `POST /composition/arrangement/preview` (ephemeral candidates; Apply commits V2 only; curated catalog not persisted as catalog IDs/ranges)
