@@ -2,6 +2,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import styled from 'styled-components';
 import NotationViewer from './NotationViewer.jsx';
 import PlaybackControls from './PlaybackControls.jsx';
+import MidiInputPanel from './MidiInputPanel.jsx';
 import PromptJsonEditor from './PromptJsonEditor.jsx';
 import ExportControls from './ExportControls.jsx';
 import PianoRollEditor from './PianoRollEditor.jsx';
@@ -180,6 +181,7 @@ const ComposerWorkspace = () => {
       <StickyTransport>
         <SectionTitle>Transport & tracks</SectionTitle>
         <PlaybackControls />
+        <MidiInputPanel />
       </StickyTransport>
 
       <TabRow

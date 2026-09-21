@@ -180,9 +180,16 @@ const PitchLabel = styled.div`
   align-items: center;
   justify-content: center;
   font-size: 0.65rem;
-  color: ${(props) => (props.$blackKey ? '#64748b' : '#312e81')};
-  background: ${(props) => (props.$blackKey ? '#e2e8f0' : 'transparent')};
+  color: ${(props) => {
+    if (props.$midiActive) return '#312e81';
+    return props.$blackKey ? '#64748b' : '#312e81';
+  }};
+  background: ${(props) => {
+    if (props.$midiActive) return '#a5b4fc';
+    return props.$blackKey ? '#e2e8f0' : 'transparent';
+  }};
   border-bottom: 1px solid #e2e8f0;
+  font-weight: ${(props) => (props.$midiActive ? 700 : 400)};
 `;
 
 const ScrollArea = styled.div`
@@ -342,6 +349,7 @@ const PianoRollEditor = () => {
   const motifDestinationTrackId = useMusicStore((state) => state.motifDestinationTrackId);
   const motifDestinationStartBar = useMusicStore((state) => state.motifDestinationStartBar);
   const markMotifFromSelection = useMusicStore((state) => state.markMotifFromSelection);
+  const midiActiveNotes = useMusicStore((state) => state.midiActiveNotes);
 
   const editorRef = useRef(null);
   const scrollRef = useRef(null);
@@ -1888,8 +1896,14 @@ const PianoRollEditor = () => {
           {pitchRows.map((midi) => {
             const pitch = midiToPitch(midi).pitch;
             const isBlack = pitch?.includes('#');
+            const midiActive = Boolean(pitch && (midiActiveNotes || []).includes(pitch));
             return (
-              <PitchLabel key={midi} $height={metrics.rowHeight} $blackKey={isBlack}>
+              <PitchLabel
+                key={midi}
+                $height={metrics.rowHeight}
+                $blackKey={isBlack}
+                $midiActive={midiActive}
+              >
                 {pitch}
               </PitchLabel>
             );

@@ -24,6 +24,12 @@ import {
   searchSimilarEmbeddings,
 } from '../api/musicApi.js';
 import { createAppLogger } from '../utils/appLogger.js';
+import { createMidiAccessSession } from '../utils/midiInputAccess.js';
+import { MIDI_MESSAGE_KINDS, parseMidiMessage } from '../utils/midiInputMessages.js';
+import { probeWebMidiSupport } from '../utils/midiInputSupport.js';
+import { createMidiPerformanceCapture } from '../utils/midiPerformanceCapture.js';
+import { createMidiMetronome } from '../utils/midiMetronome.js';
+import { applyMidiTakeToComposition } from '../utils/midiTakeApply.js';
 import {
   buildCurrentEmbedScope,
   buildSectionEmbedScope,
@@ -195,6 +201,7 @@ import {
   defaultDurationForSnap,
   deleteTrackNote,
   ensureCompositionNoteIds,
+  midiToPitch,
   pickDefaultTrackId,
   removeTieChain as removeTrackTieChain,
   sanitizeNoteSummary,
@@ -207,7 +214,7 @@ import {
   normalizeBarRange,
   selectedTickBoundaries,
 } from '../utils/pianoRollSelection.js';
-import { barStartTick, compileTimeline } from '../utils/compositionTimeline.js';
+import { barDurationTicks, barStartTick, compileTimeline } from '../utils/compositionTimeline.js';
 import {
   DEFAULT_NAV_MAX_ZOOM,
   DEFAULT_NAV_MIN_ZOOM,
@@ -337,6 +344,68 @@ const initialVersionHistoryState = {
 const logger = createAppLogger('musicStore');
 const arrangementLogger = createAppLogger('musicStore.arrangement');
 const embeddingLogger = createAppLogger('musicStore.embeddings');
+const midiLogger = createAppLogger('midiInput');
+
+/** @typedef {'idle'|'enabling'|'ready'|'armed'|'counting_in'|'recording'|'stopping'|'unavailable'|'denied'|'error'} MidiPhase */
+
+export const MIDI_PHASES = Object.freeze({
+  IDLE: 'idle',
+  ENABLING: 'enabling',
+  READY: 'ready',
+  ARMED: 'armed',
+  COUNTING_IN: 'counting_in',
+  RECORDING: 'recording',
+  STOPPING: 'stopping',
+  UNAVAILABLE: 'unavailable',
+  DENIED: 'denied',
+  ERROR: 'error',
+});
+
+const MIDI_PHASE_TRANSITIONS = Object.freeze({
+  idle: new Set(['enabling', 'unavailable', 'ready']),
+  enabling: new Set(['ready', 'denied', 'unavailable', 'error', 'idle']),
+  ready: new Set(['armed', 'idle', 'unavailable', 'error', 'enabling']),
+  armed: new Set(['counting_in', 'recording', 'ready', 'idle']),
+  counting_in: new Set(['recording', 'stopping', 'ready', 'idle']),
+  recording: new Set(['stopping', 'ready', 'idle', 'error']),
+  stopping: new Set(['idle', 'ready']),
+  unavailable: new Set(['idle', 'enabling', 'ready']),
+  denied: new Set(['idle', 'enabling']),
+  error: new Set(['idle', 'enabling', 'ready']),
+});
+
+const initialMidiInputState = {
+  midiSupport: null,
+  midiAccessStatus: 'idle',
+  midiInputs: [],
+  midiSelectedInputId: null,
+  midiArmed: false,
+  midiPhase: MIDI_PHASES.IDLE,
+  midiDestinationTrackId: null,
+  midiMetronomeEnabled: true,
+  midiCountInBars: 1,
+  midiQuantizeAfterRecord: false,
+  midiTestKeyboardEnabled: false,
+  midiActiveNotes: [],
+  midiTakeSummary: null,
+  midiErrorCode: null,
+  midiErrorMessage: '',
+};
+
+/** @type {ReturnType<typeof createMidiAccessSession> | null} */
+let midiAccessSession = null;
+/** @type {(() => void) | null} */
+let midiAccessUnsubscribe = null;
+/** @type {(() => void) | null} */
+let midiInputUnsubscribe = null;
+/** @type {ReturnType<typeof createMidiPerformanceCapture> | null} */
+let midiCaptureSession = null;
+/** @type {ReturnType<ReturnType<typeof createMidiPerformanceCapture>['stop']> | null} */
+let midiPendingTake = null;
+/** @type {ReturnType<typeof setTimeout> | null} */
+let midiCountInTimer = null;
+/** @type {ReturnType<typeof createMidiMetronome> | null} */
+let midiMetronomeSession = null;
 
 let playbackTransportSeq = 0;
 function nextPlaybackTransportSeq() {
@@ -566,6 +635,297 @@ function buildViewportScrollRequest({ scrollLeft = null, centerTick = null, reas
   };
 }
 
+function clearMidiCountInTimer() {
+  if (midiCountInTimer != null) {
+    clearTimeout(midiCountInTimer);
+    midiCountInTimer = null;
+  }
+  if (midiMetronomeSession) {
+    midiMetronomeSession.clear();
+  }
+}
+
+function disposeMidiMetronome() {
+  if (midiMetronomeSession) {
+    midiMetronomeSession.dispose();
+    midiMetronomeSession = null;
+  }
+}
+
+function disposeMidiInputSubscription() {
+  if (midiInputUnsubscribe) {
+    try {
+      midiInputUnsubscribe();
+    } catch (error) {
+      midiLogger.warn('MIDI input unsubscribe failed', {
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+    midiInputUnsubscribe = null;
+  }
+}
+
+function beginMidiCapture(set, get, { originTick, atMs } = {}) {
+  const state = get();
+  const composition = state.editedMusicJson;
+  if (!midiCaptureSession) {
+    midiCaptureSession = createMidiPerformanceCapture({
+      composition,
+      originTick: originTick ?? state.editCursorTick ?? 0,
+    });
+  }
+  midiPendingTake = null;
+  midiCaptureSession.start({
+    originTick: originTick ?? state.editCursorTick ?? 0,
+    composition,
+    atMs,
+  });
+  if (!transitionMidiPhase(set, get, MIDI_PHASES.RECORDING, 'capture-start')) {
+    return false;
+  }
+  set({
+    midiArmed: true,
+    midiErrorCode: null,
+    midiErrorMessage: '',
+    midiTakeSummary: null,
+  });
+  midiLogger.info('MIDI recording started', {
+    originTick: originTick ?? state.editCursorTick ?? 0,
+    destinationTrackId: state.midiDestinationTrackId || state.pianoRollTrackId,
+    countInBars: state.midiCountInBars,
+  });
+  return true;
+}
+
+function commitMidiTakeBuffer(set, get, take, { quantizeAfter = null } = {}) {
+  const state = get();
+  const trackId =
+    state.midiDestinationTrackId
+    || state.pianoRollTrackId
+    || pickDefaultTrackId(state.editedMusicJson);
+  if (!take || (!take.noteCount && !take.pedalCount)) {
+    midiLogger.warn('MIDI commit skipped — empty take', { code: 'midi_empty_take' });
+    set({
+      midiErrorCode: 'midi_empty_take',
+      midiErrorMessage: 'Nothing was recorded.',
+      midiTakeSummary: take,
+    });
+    return false;
+  }
+
+  const applied = applyMidiTakeToComposition(state.editedMusicJson, {
+    trackId,
+    notes: take.notes,
+    sustainPedals: take.sustainPedals,
+    lockedTrackIds: state.lockedTrackIds,
+  });
+  if (!applied.ok) {
+    midiLogger.error('MIDI take commit validation failed', {
+      code: applied.code,
+      message: applied.message || applied.code,
+    });
+    set({
+      midiErrorCode: applied.code,
+      midiErrorMessage: applied.message || applied.code,
+      midiTakeSummary: {
+        noteCount: take.noteCount,
+        pedalCount: take.pedalCount,
+        originTick: take.originTick,
+        endTick: take.endTick,
+      },
+    });
+    return false;
+  }
+
+  const primary = applied.noteRefs[0] || null;
+  const ok = commitCompositionTransaction(set, get, {
+    nextComposition: applied.composition,
+    selectedTrackId: trackId,
+    selectedNoteId: primary?.eventId || null,
+    selectedNoteIds: applied.noteRefs
+      .filter((ref) => ref.trackId === trackId)
+      .map((ref) => ref.eventId),
+    editorSelectionRefs: applied.noteRefs,
+    editorSelectionPrimary: primary,
+    action: 'midi-record',
+    noteSummary: {
+      noteCount: applied.noteRefs.length,
+      pedalCount: take.pedalCount,
+      barsAdded: applied.barsAdded,
+    },
+    affectedNoteCount: applied.noteRefs.length,
+    affectedTrackCount: 1,
+    statePatch: {
+      midiTakeSummary: {
+        noteCount: take.noteCount,
+        pedalCount: take.pedalCount,
+        originTick: take.originTick,
+        endTick: take.endTick,
+        barsAdded: applied.barsAdded,
+      },
+      midiArmed: false,
+      midiActiveNotes: [],
+      midiErrorCode: null,
+      midiErrorMessage: '',
+    },
+  });
+
+  if (!ok) {
+    midiLogger.error('MIDI take transaction rejected', { code: 'midi_commit_failed' });
+    set({
+      midiErrorCode: 'midi_commit_failed',
+      midiErrorMessage: 'Could not commit recorded notes.',
+    });
+    return false;
+  }
+
+  midiPendingTake = null;
+  midiLogger.info('MIDI take committed', {
+    noteCount: take.noteCount,
+    pedalCount: take.pedalCount,
+    barsAdded: applied.barsAdded,
+  });
+
+  const shouldQuantize = quantizeAfter != null
+    ? Boolean(quantizeAfter)
+    : Boolean(get().midiQuantizeAfterRecord);
+  if (shouldQuantize && applied.noteRefs.length) {
+    get().quantizeMidiTakeNotes(applied.noteRefs);
+  }
+
+  transitionMidiPhase(set, get, MIDI_PHASES.READY, 'commit');
+  return true;
+}
+
+function transitionMidiPhase(set, get, nextPhase, reason = '') {
+  const current = get().midiPhase;
+  const allowed = MIDI_PHASE_TRANSITIONS[current];
+  if (!allowed || !allowed.has(nextPhase)) {
+    midiLogger.warn('MIDI phase transition rejected', {
+      from: current,
+      to: nextPhase,
+      reason,
+    });
+    return false;
+  }
+  if (current === nextPhase) {
+    return true;
+  }
+  midiLogger.info('MIDI phase transition', { from: current, to: nextPhase, reason });
+  set({ midiPhase: nextPhase });
+  return true;
+}
+
+function handleMidiAccessEvent(set, get, event) {
+  if (!event || typeof event !== 'object') {
+    return;
+  }
+  if (event.type === 'inputs' && Array.isArray(event.inputs)) {
+    set({ midiInputs: event.inputs });
+    const selected = get().midiSelectedInputId;
+    if (selected && !event.inputs.some((input) => input.id === selected)) {
+      set({ midiSelectedInputId: null });
+      disposeMidiInputSubscription();
+    }
+    return;
+  }
+  if (event.type === 'disconnect') {
+    const selected = get().midiSelectedInputId;
+    const recording =
+      get().midiPhase === MIDI_PHASES.RECORDING
+      || get().midiPhase === MIDI_PHASES.COUNTING_IN;
+    set({
+      midiInputs: Array.isArray(event.inputs) ? event.inputs : get().midiInputs,
+      midiErrorCode: 'midi_device_disconnected',
+      midiErrorMessage: 'MIDI device disconnected',
+      midiActiveNotes: [],
+      ...(selected && event.deviceId === selected ? { midiSelectedInputId: null } : {}),
+    });
+    if (selected && event.deviceId === selected) {
+      disposeMidiInputSubscription();
+    }
+    if (recording) {
+      clearMidiCountInTimer();
+      midiLogger.warn('MIDI disconnect during record — buffering partial take', {
+        code: 'midi_device_disconnected',
+        deviceId: event.deviceId ? String(event.deviceId).slice(0, 12) : null,
+      });
+      if (midiCaptureSession && midiCaptureSession.isCapturing()) {
+        midiPendingTake = midiCaptureSession.stop();
+        set({
+          midiTakeSummary: {
+            noteCount: midiPendingTake.noteCount,
+            pedalCount: midiPendingTake.pedalCount,
+            originTick: midiPendingTake.originTick,
+            endTick: midiPendingTake.endTick,
+            partial: true,
+          },
+        });
+      }
+      transitionMidiPhase(set, get, MIDI_PHASES.READY, 'disconnect-during-record');
+      set({ midiArmed: false });
+    }
+    return;
+  }
+  if (event.type === 'reconnect') {
+    set({
+      midiInputs: Array.isArray(event.inputs) ? event.inputs : get().midiInputs,
+    });
+  }
+}
+
+function upsertActiveMidiNote(activeNotes, pitch) {
+  if (!pitch) {
+    return activeNotes;
+  }
+  if (activeNotes.includes(pitch)) {
+    return activeNotes;
+  }
+  return [...activeNotes, pitch];
+}
+
+function removeActiveMidiNote(activeNotes, pitch) {
+  if (!pitch) {
+    return activeNotes;
+  }
+  return activeNotes.filter((value) => value !== pitch);
+}
+
+/**
+ * Live MIDI → active-note highlights + capture buffer while recording.
+ */
+function handleLiveMidiMessage(set, get, event) {
+  const data = event && event.data != null ? event.data : null;
+  const parsed = parseMidiMessage(data);
+  const recording = get().midiPhase === MIDI_PHASES.RECORDING
+    && midiCaptureSession
+    && midiCaptureSession.isCapturing();
+
+  if (recording) {
+    midiCaptureSession.injectMessage(data, {
+      atMs: event && Number.isFinite(Number(event.timeStamp))
+        ? Number(event.timeStamp)
+        : undefined,
+    });
+  }
+
+  if (parsed.kind === MIDI_MESSAGE_KINDS.NOTE_ON) {
+    const { pitch } = midiToPitch(parsed.note);
+    if (!pitch) {
+      return;
+    }
+    set({ midiActiveNotes: upsertActiveMidiNote(get().midiActiveNotes, pitch) });
+    return;
+  }
+  if (parsed.kind === MIDI_MESSAGE_KINDS.NOTE_OFF) {
+    const { pitch } = midiToPitch(parsed.note);
+    if (!pitch) {
+      return;
+    }
+    set({ midiActiveNotes: removeActiveMidiNote(get().midiActiveNotes, pitch) });
+  }
+}
+
 export const useMusicStore = create((set, get) => ({
   apiStatus: 'checking',
   llmModelsLoaded: false,
@@ -695,6 +1055,7 @@ export const useMusicStore = create((set, get) => ({
   composerTabRequest: null,
   composerTabRequestSeq: 0,
   ...initialMotifUiState,
+  ...initialMidiInputState,
 
   setApiStatus: (apiStatus) => {
     console.debug('[musicStore] API status changed', { apiStatus });
@@ -8714,6 +9075,425 @@ export const useMusicStore = create((set, get) => ({
     });
     set({ reharmonizeCompareResult: result });
     return result;
+  },
+
+  probeMidiSupport: () => {
+    const support = probeWebMidiSupport();
+    midiLogger.debug('MIDI support probed from store', {
+      supported: support.supported,
+      reason: support.reason,
+    });
+    set({ midiSupport: support });
+    return support;
+  },
+
+  enableMidiAccess: async (deps = {}) => {
+    const state = get();
+    if (!transitionMidiPhase(set, get, MIDI_PHASES.ENABLING, 'enable')) {
+      return { ok: false, reason: state.midiPhase };
+    }
+    set({
+      midiAccessStatus: 'enabling',
+      midiErrorCode: null,
+      midiErrorMessage: '',
+    });
+
+    disposeMidiInputSubscription();
+    if (midiAccessUnsubscribe) {
+      midiAccessUnsubscribe();
+      midiAccessUnsubscribe = null;
+    }
+    if (midiAccessSession) {
+      midiAccessSession.dispose();
+      midiAccessSession = null;
+    }
+
+    midiAccessSession = createMidiAccessSession(deps);
+    midiAccessUnsubscribe = midiAccessSession.subscribe((event) => {
+      handleMidiAccessEvent(set, get, event);
+    });
+
+    const result = await midiAccessSession.enable();
+    if (!result.ok) {
+      const phase = result.reason === 'permission_denied'
+        ? MIDI_PHASES.DENIED
+        : MIDI_PHASES.UNAVAILABLE;
+      transitionMidiPhase(set, get, phase, 'enable-failed');
+      set({
+        midiAccessStatus: 'error',
+        midiInputs: [],
+        midiSelectedInputId: null,
+        midiErrorCode: result.reason,
+        midiErrorMessage: result.reason,
+      });
+      midiLogger.info('MIDI enable failed in store', { reason: result.reason });
+      return result;
+    }
+
+    const destination =
+      get().midiDestinationTrackId
+      || get().pianoRollTrackId
+      || pickDefaultTrackId(get().editedMusicJson);
+    const selectedInputId = result.preferredInputId || result.inputs[0]?.id || null;
+    transitionMidiPhase(set, get, MIDI_PHASES.READY, 'enable-ok');
+    set({
+      midiAccessStatus: 'ready',
+      midiSupport: { supported: true, reason: 'available' },
+      midiInputs: result.inputs,
+      midiSelectedInputId: selectedInputId,
+      midiDestinationTrackId: destination,
+      midiErrorCode: null,
+      midiErrorMessage: '',
+    });
+    if (selectedInputId) {
+      get().selectMidiInput(selectedInputId);
+    }
+    midiLogger.info('MIDI enable succeeded in store', {
+      inputCount: result.inputs.length,
+      hasSelection: Boolean(selectedInputId),
+      destinationTrackId: destination,
+    });
+    return result;
+  },
+
+  selectMidiInput: (inputId) => {
+    const state = get();
+    const id = inputId == null ? null : String(inputId);
+    if (id && !state.midiInputs.some((input) => input.id === id)) {
+      midiLogger.warn('MIDI select ignored — unknown input', {
+        deviceId: id.slice(0, 12),
+      });
+      return false;
+    }
+    disposeMidiInputSubscription();
+    set({ midiSelectedInputId: id });
+    if (midiAccessSession && id) {
+      midiAccessSession.selectAndRemember(id);
+      midiInputUnsubscribe = midiAccessSession.subscribeInput(id, (event) => {
+        handleLiveMidiMessage(set, get, event);
+      });
+    }
+    midiLogger.info('MIDI input selected', {
+      deviceId: id ? id.slice(0, 12) : null,
+    });
+    return true;
+  },
+
+  setMidiDestinationTrackId: (trackId) => {
+    const composition = get().editedMusicJson;
+    const next = trackId
+      ? pickDefaultTrackId(composition, trackId)
+      : pickDefaultTrackId(composition, get().pianoRollTrackId);
+    midiLogger.debug('MIDI destination track set', { trackId: next });
+    set({ midiDestinationTrackId: next });
+  },
+
+  setMidiMetronomeEnabled: (enabled) => {
+    set({ midiMetronomeEnabled: Boolean(enabled) });
+  },
+
+  setMidiCountInBars: (bars) => {
+    const n = Math.max(0, Math.min(2, Math.round(Number(bars) || 0)));
+    set({ midiCountInBars: n });
+  },
+
+  setMidiQuantizeAfterRecord: (enabled) => {
+    set({ midiQuantizeAfterRecord: Boolean(enabled) });
+  },
+
+  setMidiTestKeyboardEnabled: (enabled) => {
+    set({ midiTestKeyboardEnabled: Boolean(enabled) });
+  },
+
+  armMidiRecording: () => {
+    const state = get();
+    if (state.midiPhase !== MIDI_PHASES.READY && state.midiPhase !== MIDI_PHASES.ARMED) {
+      midiLogger.warn('MIDI arm rejected — invalid phase', { phase: state.midiPhase });
+      return false;
+    }
+    const destination =
+      state.midiDestinationTrackId
+      || state.pianoRollTrackId
+      || pickDefaultTrackId(state.editedMusicJson);
+    if (!destination) {
+      midiLogger.warn('MIDI arm rejected — no destination track', {
+        code: 'midi_no_destination',
+      });
+      set({
+        midiErrorCode: 'midi_no_destination',
+        midiErrorMessage: 'Select a destination track before arming.',
+      });
+      return false;
+    }
+    if (!transitionMidiPhase(set, get, MIDI_PHASES.ARMED, 'arm')) {
+      return false;
+    }
+    set({
+      midiArmed: true,
+      midiDestinationTrackId: destination,
+      midiErrorCode: null,
+      midiErrorMessage: '',
+      midiTakeSummary: null,
+    });
+    midiLogger.info('MIDI recording armed', { destinationTrackId: destination });
+    return true;
+  },
+
+  disarmMidiRecording: () => {
+    const state = get();
+    if (state.midiPhase === MIDI_PHASES.RECORDING || state.midiPhase === MIDI_PHASES.COUNTING_IN) {
+      midiLogger.warn('MIDI disarm rejected during capture', { phase: state.midiPhase });
+      return false;
+    }
+    transitionMidiPhase(set, get, MIDI_PHASES.READY, 'disarm');
+    set({
+      midiArmed: false,
+      midiActiveNotes: [],
+    });
+    midiLogger.info('MIDI recording disarmed');
+    return true;
+  },
+
+  panicMidiNotes: () => {
+    set({ midiActiveNotes: [] });
+    midiLogger.info('MIDI panic — cleared active notes', { code: 'midi_panic' });
+  },
+
+  /**
+   * Test/QWERTY injection path — same capture + active-note handling as Web MIDI.
+   * @param {Iterable<number> | ArrayLike<number>} data
+   * @param {{ atMs?: number }} [meta]
+   */
+  injectMidiMessage: (data, meta = {}) => {
+    handleLiveMidiMessage(set, get, {
+      data,
+      timeStamp: meta.atMs,
+    });
+  },
+
+  startMidiRecording: ({ originTick = null, skipCountIn = false, Tone = null } = {}) => {
+    const state = get();
+    if (
+      state.midiPhase !== MIDI_PHASES.ARMED
+      && state.midiPhase !== MIDI_PHASES.READY
+      && !(state.midiTestKeyboardEnabled && (
+        state.midiPhase === MIDI_PHASES.IDLE
+        || state.midiPhase === MIDI_PHASES.UNAVAILABLE
+      ))
+    ) {
+      midiLogger.warn('MIDI start rejected — invalid phase', { phase: state.midiPhase });
+      return false;
+    }
+    if (
+      (state.midiPhase === MIDI_PHASES.IDLE || state.midiPhase === MIDI_PHASES.UNAVAILABLE)
+      && state.midiTestKeyboardEnabled
+    ) {
+      transitionMidiPhase(set, get, MIDI_PHASES.READY, 'test-keyboard-ready');
+      set({ midiAccessStatus: 'ready' });
+    }
+    if (get().midiPhase === MIDI_PHASES.READY && !get().midiArmed) {
+      if (!get().armMidiRecording()) {
+        return false;
+      }
+    }
+
+    const composition = get().editedMusicJson;
+    const origin = originTick != null
+      ? Math.max(0, Math.round(Number(originTick)))
+      : Math.max(0, Math.round(Number(get().editCursorTick) || 0));
+    const countInBars = skipCountIn ? 0 : Math.max(0, Number(get().midiCountInBars) || 0);
+    const metronomeEnabled = Boolean(get().midiMetronomeEnabled);
+
+    clearMidiCountInTimer();
+    midiPendingTake = null;
+
+    if (metronomeEnabled || countInBars > 0) {
+      disposeMidiMetronome();
+      midiMetronomeSession = createMidiMetronome({
+        Tone,
+        composition,
+      });
+      midiMetronomeSession.schedule({
+        composition,
+        countInBars,
+        continueDuringRecord: metronomeEnabled,
+      });
+    }
+
+    if (countInBars > 0) {
+      if (!transitionMidiPhase(set, get, MIDI_PHASES.COUNTING_IN, 'count-in')) {
+        return false;
+      }
+      const tempo = Number(composition?.tempo) || 100;
+      const meter = composition?.time_signature || '4/4';
+      const tpq = Number(composition?.ticks_per_quarter) || 480;
+      const barTicks = barDurationTicks(meter, tpq) || (tpq * 4);
+      const secondsPerBar = (barTicks / tpq) * (60 / tempo);
+      const delayMs = Math.max(0, countInBars * secondsPerBar * 1000);
+      midiLogger.info('MIDI count-in scheduled', {
+        countInBars,
+        delayMs: Math.round(delayMs),
+        bpm: tempo,
+        metronomeEnabled,
+      });
+      midiCountInTimer = setTimeout(() => {
+        midiCountInTimer = null;
+        if (get().midiPhase !== MIDI_PHASES.COUNTING_IN) {
+          return;
+        }
+        beginMidiCapture(set, get, { originTick: origin });
+      }, delayMs);
+      return true;
+    }
+
+    return beginMidiCapture(set, get, { originTick: origin });
+  },
+
+  stopMidiRecording: ({ commit = true } = {}) => {
+    clearMidiCountInTimer();
+    disposeMidiMetronome();
+    const state = get();
+    if (
+      state.midiPhase !== MIDI_PHASES.RECORDING
+      && state.midiPhase !== MIDI_PHASES.COUNTING_IN
+      && !midiPendingTake
+    ) {
+      midiLogger.warn('MIDI stop ignored — not capturing', { phase: state.midiPhase });
+      return false;
+    }
+
+    if (!transitionMidiPhase(set, get, MIDI_PHASES.STOPPING, 'stop')) {
+      // Allow stop from counting_in even if transition table is strict
+      if (state.midiPhase === MIDI_PHASES.COUNTING_IN) {
+        set({ midiPhase: MIDI_PHASES.STOPPING });
+      } else {
+        return false;
+      }
+    }
+
+    let take = midiPendingTake;
+    if (midiCaptureSession && midiCaptureSession.isCapturing()) {
+      take = midiCaptureSession.stop();
+      midiPendingTake = take;
+    }
+
+    set({ midiActiveNotes: [], midiArmed: false });
+
+    if (!commit) {
+      midiPendingTake = null;
+      if (midiCaptureSession) {
+        midiCaptureSession.discard();
+      }
+      transitionMidiPhase(set, get, MIDI_PHASES.READY, 'stop-discard');
+      set({ midiTakeSummary: null });
+      midiLogger.info('MIDI recording stopped without commit');
+      return true;
+    }
+
+    const ok = commitMidiTakeBuffer(set, get, take);
+    if (!ok) {
+      transitionMidiPhase(set, get, MIDI_PHASES.READY, 'stop-commit-failed');
+    }
+    return ok;
+  },
+
+  commitPendingMidiTake: () => {
+    if (!midiPendingTake) {
+      midiLogger.warn('No pending MIDI take to commit');
+      return false;
+    }
+    return commitMidiTakeBuffer(set, get, midiPendingTake);
+  },
+
+  discardMidiTake: () => {
+    clearMidiCountInTimer();
+    midiPendingTake = null;
+    if (midiCaptureSession) {
+      midiCaptureSession.discard();
+    }
+    set({
+      midiTakeSummary: null,
+      midiActiveNotes: [],
+      midiArmed: false,
+      midiErrorCode: null,
+      midiErrorMessage: '',
+    });
+    if (
+      get().midiPhase === MIDI_PHASES.RECORDING
+      || get().midiPhase === MIDI_PHASES.COUNTING_IN
+      || get().midiPhase === MIDI_PHASES.STOPPING
+      || get().midiPhase === MIDI_PHASES.ARMED
+    ) {
+      transitionMidiPhase(set, get, MIDI_PHASES.READY, 'discard');
+    }
+    midiLogger.info('MIDI take discarded');
+    return true;
+  },
+
+  quantizeMidiTakeNotes: (noteRefs, options = {}) => {
+    const state = get();
+    const refs = Array.isArray(noteRefs) ? noteRefs : [];
+    if (!refs.length || !state.editedMusicJson) {
+      midiLogger.info('MIDI quantize skipped', { reason: 'no_refs' });
+      return false;
+    }
+    const snapValue = options.snapValue || state.pianoRollSnap || '1/8';
+    const strength = options.strength != null ? options.strength : 100;
+    const result = quantizeNotes(state.editedMusicJson, refs, {
+      mode: options.mode || 'start',
+      snapValue,
+      strength,
+      lockedTrackIds: state.lockedTrackIds,
+    });
+    if (!result.ok) {
+      midiLogger.warn('MIDI quantize rejected', {
+        code: result.code,
+        message: result.message,
+      });
+      return false;
+    }
+    if (result.noOp) {
+      midiLogger.info('MIDI quantize no-op', { refCount: refs.length, snap: snapValue });
+      return true;
+    }
+    const ok = commitCompositionTransaction(set, get, {
+      nextComposition: result.composition,
+      selectedTrackId: state.midiDestinationTrackId || state.pianoRollTrackId,
+      editorSelectionRefs: refs,
+      editorSelectionPrimary: refs[0] || null,
+      action: 'midi-quantize',
+      noteSummary: { quantizedCount: result.quantizedCount, snap: snapValue, strength },
+      affectedNoteCount: result.quantizedCount,
+      affectedTrackCount: 1,
+    });
+    midiLogger.info('MIDI quantize applied', {
+      refCount: refs.length,
+      snap: snapValue,
+      strength,
+      ok,
+    });
+    return ok;
+  },
+
+  resetMidiInputSession: () => {
+    clearMidiCountInTimer();
+    disposeMidiMetronome();
+    disposeMidiInputSubscription();
+    if (midiAccessUnsubscribe) {
+      midiAccessUnsubscribe();
+      midiAccessUnsubscribe = null;
+    }
+    if (midiAccessSession) {
+      midiAccessSession.dispose();
+      midiAccessSession = null;
+    }
+    midiPendingTake = null;
+    if (midiCaptureSession) {
+      midiCaptureSession.discard();
+      midiCaptureSession = null;
+    }
+    set({ ...initialMidiInputState });
+    midiLogger.info('MIDI session reset');
   },
 }));
 
