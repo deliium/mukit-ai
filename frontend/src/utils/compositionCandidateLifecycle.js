@@ -106,6 +106,15 @@ export function buildAiCandidateEnvelope({
   candidateFingerprint,
   provider = null,
   model = null,
+  modelId = null,
+  modelVersion = null,
+  runtime = null,
+  capability = null,
+  operation = null,
+  generationParameters = null,
+  requestedModelId = null,
+  resolvedModelId = null,
+  fallbackApplied = false,
   instruction = null,
   warnings = [],
   declaredRanges = [],
@@ -122,6 +131,17 @@ export function buildAiCandidateEnvelope({
     warnings: Array.isArray(warnings) ? warnings.slice(0, 32) : [],
     provider: provider || null,
     model: model || null,
+    model_id: modelId || resolvedModelId || null,
+    model_version: modelVersion || null,
+    runtime: runtime || null,
+    capability: capability || null,
+    operation: operation || operationType || null,
+    generation_parameters: generationParameters && typeof generationParameters === 'object'
+      ? generationParameters
+      : null,
+    requested_model_id: requestedModelId || null,
+    resolved_model_id: resolvedModelId || modelId || null,
+    fallback_applied: Boolean(fallbackApplied),
     instruction: typeof instruction === 'string' && instruction.trim()
       ? instruction.trim().slice(0, 500)
       : null,
@@ -186,10 +206,60 @@ export function aiCandidateLogFields(candidate) {
     operationType: candidate.operation_type || null,
     provider: candidate.provider || null,
     model: candidate.model || null,
+    modelId: candidate.model_id || candidate.resolved_model_id || null,
+    runtime: candidate.runtime || null,
+    fallbackApplied: Boolean(candidate.fallback_applied),
     warningCount: Array.isArray(candidate.warnings) ? candidate.warnings.length : 0,
     sourcePrefix: editFingerprintLogPrefix(candidate.source_fingerprint),
     candidatePrefix: editFingerprintLogPrefix(candidate.candidate_fingerprint),
     rangeCount: Array.isArray(candidate.declared_ranges) ? candidate.declared_ranges.length : 0,
     trackCount: Array.isArray(candidate.declared_track_ids) ? candidate.declared_track_ids.length : 0,
+  };
+}
+
+/**
+ * Map API/candidate fields into durable `AiProvenance` for history commit.
+ * @param {object|null|undefined} candidate
+ * @param {object} [overrides]
+ */
+export function buildHistoryAiProvenance(candidate, overrides = {}) {
+  const src = candidate && typeof candidate === 'object' ? candidate : {};
+  return {
+    provider: src.provider || null,
+    model: src.model || null,
+    model_id: src.model_id || src.resolved_model_id || null,
+    model_version: src.model_version || null,
+    runtime: src.runtime || null,
+    capability: src.capability || null,
+    operation: src.operation || src.operation_type || null,
+    generation_parameters: src.generation_parameters && typeof src.generation_parameters === 'object'
+      ? src.generation_parameters
+      : null,
+    user_instruction: src.instruction || src.user_instruction || undefined,
+    candidate_id: src.candidate_id || undefined,
+    candidate_fingerprint: src.candidate_fingerprint || undefined,
+    warning_codes: toHistoryAiWarningCodes(src.warnings),
+    ...overrides,
+  };
+}
+
+/**
+ * Pick additive AI runtime fields from an operation HTTP response.
+ * @param {object|null|undefined} response
+ */
+export function aiRuntimeFieldsFromResponse(response) {
+  if (!response || typeof response !== 'object') {
+    return {};
+  }
+  return {
+    modelId: response.model_id || response.resolved_model_id || null,
+    modelVersion: response.model_version || null,
+    runtime: response.runtime || null,
+    capability: response.capability || null,
+    operation: response.operation || response.ai_operation || null,
+    generationParameters: response.generation_parameters || null,
+    requestedModelId: response.requested_model_id || null,
+    resolvedModelId: response.resolved_model_id || response.model_id || null,
+    fallbackApplied: Boolean(response.fallback_applied),
   };
 }

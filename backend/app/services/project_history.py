@@ -111,6 +111,12 @@ def _revision_row_to_item(row: Any) -> RevisionListItem:
             "identical",
             "source_event_count",
             "target_event_count",
+            "model_id",
+            "model_version",
+            "runtime",
+            "capability",
+            "operation",
+            "generation_parameters",
         }
     }
     return RevisionListItem(
@@ -329,12 +335,31 @@ def _ai_fields(ai: AiProvenance | None) -> dict[str, Any]:
             "user_instruction": None,
             "summary_json": "{}",
         }
-    summary = {
+    summary: dict[str, Any] = {
         "warning_codes": list(ai.warning_codes),
         "candidate_id": ai.candidate_id,
         "candidate_fingerprint": ai.candidate_fingerprint,
+        "model_id": ai.model_id,
+        "model_version": ai.model_version,
+        "runtime": ai.runtime,
+        "capability": ai.capability,
+        "operation": ai.operation,
+        "generation_parameters": ai.generation_parameters,
     }
     summary = {key: value for key, value in summary.items() if value not in (None, [])}
+    logger.debug(
+        "AI provenance attached for revision",
+        extra={
+            "operation": ai.operation,
+            "model_id": ai.model_id,
+            "provider": ai.provider,
+            "has_generation_parameters": bool(ai.generation_parameters),
+        },
+    )
+    logger.info(
+        "AI provenance summary for commit",
+        extra={"operation": ai.operation, "model_id": ai.model_id or f"{ai.provider}:{ai.model}"},
+    )
     return {
         "ai_provider": ai.provider,
         "ai_model": ai.model,

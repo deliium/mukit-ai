@@ -54,6 +54,12 @@ function normalizeGenerationMeta(generationMeta) {
   return {
     provider: generationMeta.provider ?? null,
     model: generationMeta.model ?? null,
+    model_id: generationMeta.model_id ?? null,
+    model_version: generationMeta.model_version ?? null,
+    runtime: generationMeta.runtime ?? null,
+    capability: generationMeta.capability ?? null,
+    operation: generationMeta.operation ?? null,
+    generation_parameters: generationMeta.generation_parameters ?? null,
     prompt: generationMeta.prompt ?? null,
   };
 }

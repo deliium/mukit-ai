@@ -63,7 +63,9 @@ import {
 import {
   AI_CANDIDATE_STATUS,
   aiCandidateLogFields,
+  aiRuntimeFieldsFromResponse,
   buildAiCandidateEnvelope,
+  buildHistoryAiProvenance,
   captureAiRequestContext,
   detectAiRequestStale,
   fingerprintCompositionOrNull,
@@ -728,7 +730,22 @@ export const useMusicStore = create((set, get) => ({
     return true;
   },
 
-  completeGeneration: async ({ music, musicxml, warnings = [], provider = null, model = null }) => {
+  completeGeneration: async ({
+    music,
+    musicxml,
+    warnings = [],
+    provider = null,
+    model = null,
+    model_id = null,
+    model_version = null,
+    runtime = null,
+    capability = null,
+    operation = null,
+    generation_parameters = null,
+    requested_model_id = null,
+    resolved_model_id = null,
+    fallback_applied = false,
+  }) => {
     const capture = get().generationRequestCapture;
     if (!capture || get().generationStatus !== 'loading') {
       console.warn('[musicStore] Ignoring generation response without active request');
@@ -790,6 +807,17 @@ export const useMusicStore = create((set, get) => ({
       candidateFingerprint,
       provider: provider || get().selectedProvider || null,
       model: model || get().selectedModel || null,
+      ...aiRuntimeFieldsFromResponse({
+        model_id,
+        model_version,
+        runtime,
+        capability,
+        operation,
+        generation_parameters,
+        requested_model_id,
+        resolved_model_id,
+        fallback_applied,
+      }),
       instruction: capture.promptSnapshot?.instructions || get().prompt?.instructions || null,
       warnings,
       musicXml: musicxml || '',
@@ -1025,12 +1053,11 @@ export const useMusicStore = create((set, get) => ({
           composition: prepared,
           operation_type: 'generate-apply',
           ai: {
-            provider: normalizeAiProvider(generationMeta.provider),
-            model: generationMeta.model,
-            user_instruction: candidate.instruction || undefined,
-            candidate_id: candidate.candidate_id,
-            candidate_fingerprint: candidate.candidate_fingerprint,
-            warning_codes: toHistoryAiWarningCodes(candidate.warnings),
+            ...buildHistoryAiProvenance(candidate, {
+              provider: normalizeAiProvider(generationMeta.provider),
+              model: generationMeta.model,
+              user_instruction: candidate.instruction || undefined,
+            }),
           },
         });
       } else {
@@ -1044,12 +1071,11 @@ export const useMusicStore = create((set, get) => ({
           operation_type: 'generate-apply',
           checkpoint_dirty_draft: true,
           ai: {
-            provider: normalizeAiProvider(generationMeta.provider),
-            model: generationMeta.model,
-            user_instruction: candidate.instruction || undefined,
-            candidate_id: candidate.candidate_id,
-            candidate_fingerprint: candidate.candidate_fingerprint,
-            warning_codes: toHistoryAiWarningCodes(candidate.warnings),
+            ...buildHistoryAiProvenance(candidate, {
+              provider: normalizeAiProvider(generationMeta.provider),
+              model: generationMeta.model,
+              user_instruction: candidate.instruction || undefined,
+            }),
           },
         });
       }
@@ -3667,14 +3693,11 @@ export const useMusicStore = create((set, get) => ({
 
     set({ aiEditCandidate: { ...candidate, status: AI_CANDIDATE_STATUS.APPLYING } });
 
-    const aiPayload = {
+    const aiPayload = buildHistoryAiProvenance(candidate, {
       provider: normalizeAiProvider(candidate.provider),
       model: candidate.model,
       user_instruction: candidate.instruction || undefined,
-      candidate_id: candidate.candidate_id,
-      candidate_fingerprint: candidate.candidate_fingerprint,
-      warning_codes: toHistoryAiWarningCodes(candidate.warnings),
-    };
+    });
 
     if (!state.currentProjectId) {
       cancelAnalysisLifecycle();
@@ -6218,13 +6241,10 @@ export const useMusicStore = create((set, get) => ({
     );
     const newOccurrenceId = motifResult?.new_occurrence_id || null;
 
-    const aiPayload = {
+    const aiPayload = buildHistoryAiProvenance(candidate, {
       provider: normalizeAiProvider(candidate.provider),
       model: candidate.model,
-      candidate_id: candidate.candidate_id,
-      candidate_fingerprint: candidate.candidate_fingerprint,
-      warning_codes: toHistoryAiWarningCodes(candidate.warnings),
-    };
+    });
 
     const localStatePatch = {
       musicXml: candidate.music_xml || state.musicXml || '',
