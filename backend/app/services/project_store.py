@@ -439,7 +439,14 @@ def update_project(
                     expected_version = int(version_row["working_version"])
                 else:
                     expected_version = expected_working_version
-                save_branch_draft(
+                prev_fp_row = conn.execute(
+                    "SELECT working_fingerprint FROM project_branches WHERE id = ?",
+                    (target_branch,),
+                ).fetchone()
+                previous_fingerprint = (
+                    prev_fp_row["working_fingerprint"] if prev_fp_row is not None else None
+                )
+                draft_result = save_branch_draft(
                     conn,
                     project_id,
                     branch_id=target_branch,
@@ -448,6 +455,15 @@ def update_project(
                     composition=None if clear_composition else composition,
                     expected_source_fingerprint=expected_source_fingerprint,
                     clear_composition=clear_composition,
+                )
+                from .composition_embedding_invalidation import (
+                    maybe_invalidate_project_embeddings,
+                )
+
+                maybe_invalidate_project_embeddings(
+                    project_id,
+                    previous_fingerprint=previous_fingerprint,
+                    next_fingerprint=draft_result.working_fingerprint,
                 )
 
             if generation_touched:

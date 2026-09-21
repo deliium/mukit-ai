@@ -509,6 +509,15 @@ def commit_revision(
             affected_track_ids_json=tracks_json,
             summary_json=json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
         )
+        from app.services.composition_embedding_invalidation import (
+            maybe_invalidate_project_embeddings,
+        )
+
+        maybe_invalidate_project_embeddings(
+            project_id,
+            previous_fingerprint=request.expected_source_fingerprint,
+            next_fingerprint=result.working_fingerprint,
+        )
         branch_name = _load_active_branch_name(conn, project_id, result.branch_id)
         composition = (
             None
@@ -870,6 +879,15 @@ def apply_as_branch_command(
             affected_ranges_json=ranges_json,
             affected_track_ids_json=tracks_json,
             summary_json=json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
+        )
+        from app.services.composition_embedding_invalidation import (
+            maybe_invalidate_project_embeddings,
+        )
+
+        maybe_invalidate_project_embeddings(
+            project_id,
+            previous_fingerprint=request.expected_source_fingerprint,
+            next_fingerprint=result.working_fingerprint,
         )
         composition = (
             None

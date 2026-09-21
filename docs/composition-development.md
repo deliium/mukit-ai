@@ -56,14 +56,27 @@ Mixed meter: append duration uses compiled active ending meter — never root me
 | Instruction | 500 chars |
 | Context budget | up to 48_000 chars (default 12_000) |
 
+## Style / reference conditioning
+
+Optional request field `style_reference` resolves a musical reference (inline composition or `project_id` / `revision_id` + embed `scope`) into bounded conditioning:
+
+1. Embed the reference scope (`local:symbolic-features-v1`).
+2. Build a human-readable `feature_summary` (rounded histograms/stats — never a full vector dump).
+3. Attach `style_conditioning` + `reference_provenance` on the preview response.
+4. Advisory warning `reference_similarity_delta` compares each candidate embedding to the reference (affinity only, not quality).
+
+On Apply, clients should nest `reference_provenance.to_generation_parameters_fragment()` under `AiProvenance.generation_parameters` so revision `summary_json` retains bounded provenance (no full reference composition). Working fingerprint after apply must differ from the reference fingerprint; existing outside-range / topology preservation assertions still apply.
+
+Resolve-only helper: `POST /embeddings/reference/resolve`.
+
 ## Fake mode
 
-With `LLM_FAKE_MODE=1`, drafts are deterministic and still pass production realization/validation. `LLM_FAKE_INJECT_MALFORMED=development` exhausts candidates for failure tests.
+With `LLM_FAKE_MODE=1`, drafts are deterministic and still pass production realization/validation. When `style_reference` is present, fake drafts use a distinct contour/harmony so realized fingerprints differ from the reference. `LLM_FAKE_INJECT_MALFORMED=development` exhausts candidates for failure tests.
 
 ## Logging (allowed vs prohibited)
 
-**Allowed:** operation, intent, strength, stage, provider/model, candidate ordinal/counts, timings, stable codes, fingerprint prefixes.  
-**Prohibited:** API keys, prompts/instructions, full compositions/analysis, event/harmony arrays, provider raw output.
+**Allowed:** operation, intent, strength, stage, provider/model, candidate ordinal/counts, timings, stable codes, fingerprint prefixes, conditioning mode, reference `project_id`, candidate vs reference similarity delta.  
+**Prohibited:** API keys, prompts/instructions, full compositions/analysis, event/harmony arrays, full embedding vectors, provider raw output.
 
 ## Error codes (stable)
 
@@ -74,6 +87,8 @@ Includes `development_source_required`, `development_output_bars_required`, `dev
 Finished 16-bar A → request 8-bar continuation with 3 candidates → working piece unchanged → apply one candidate → canonical 24-bar result with exact original 16-bar prefix.
 
 Alternate: `vary_section` on chorus bars with three candidates → Reject one → Apply as branch `Darker harmony` → checkout `Original` after reload → restore as new child. See [Project persistence](project-persistence.md) and `e2e/project-version-history.spec.js`.
+
+Closer-to-reference: `vary_section` with `style_reference` (e.g. another project section) → preview candidates include provenance → Apply with `generation_parameters.reference_provenance` → working fingerprint ≠ reference; revision summary retains bounded provenance. Covered by `tests/test_embeddings_conditioning.py`.
 
 ## See Also
 

@@ -24,6 +24,8 @@ from app.composition_development_schemas import (
     validate_development_request_limits,
     normalized_development_request_fingerprint_payload,
 )
+from app.embeddings.errors import EmbeddingError
+from app.embeddings.settings import EMBEDDING_FINGERPRINT_LOG_PREFIX_LEN
 from app.llm_settings import LLMProviderSettings, LLMSettings, load_llm_settings
 from app.services.composition_development_context import (
     build_development_source_context,
@@ -34,6 +36,11 @@ from app.services.composition_development_fingerprint import derive_development_
 from app.services.composition_edit_fingerprint import (
     composition_edit_fingerprint,
     edit_fingerprint_log_prefix,
+)
+from app.services.composition_style_conditioning import (
+    candidate_reference_similarity,
+    conditioning_context_fragment,
+    resolve_style_reference,
 )
 from app.services.llm_music_generator import (
     InvalidLLMOutputError,
@@ -91,6 +98,7 @@ def _build_development_prompt(
     candidate_ordinal: int,
     creative_direction: str,
     repair_codes: list[str] | None = None,
+    style_conditioning_fragment: dict[str, Any] | None = None,
 ) -> str:
     hard = {
         "operation": request.operation,
@@ -105,6 +113,7 @@ def _build_development_prompt(
         "relative_draft_only": True,
         "continue_every_track": True,
         "tracks_events_only_playable": True,
+        "has_style_reference": style_conditioning_fragment is not None,
     }
     repair_block = ""
     if repair_codes:
@@ -112,6 +121,9 @@ def _build_development_prompt(
             "\nRepair the previous draft using only these diagnostic codes "
             f"(do not dump notes): {', '.join(repair_codes[:16])}\n"
         )
+    style_block = ""
+    if style_conditioning_fragment is not None:
+        style_block = f"\nStyle/reference conditioning (bounded): {style_conditioning_fragment}\n"
     return (
         "You are extending or varying a canonical composition.v2 document.\n"
         "Return ONLY a relative CompositionDevelopmentDraft JSON object.\n"
@@ -119,6 +131,7 @@ def _build_development_prompt(
         "Preserve the immutable source; bridge the seam musically.\n"
         f"Hard constraints: {hard}\n"
         f"Bounded musical context: {context_payload}\n"
+        f"{style_block}"
         f"Optional user instruction (bounded): {(request.instruction or '').strip()[:500]!r}\n"
         f"Optional instruction length={_instruction_meta(request.instruction)['instruction_len']}\n"
         f"{repair_block}"
@@ -187,6 +200,7 @@ async def _generate_one_candidate_draft(
     context_payload: dict[str, Any],
     candidate_ordinal: int,
     repair_codes: list[str] | None = None,
+    style_conditioning_fragment: dict[str, Any] | None = None,
 ) -> CompositionDevelopmentDraft:
     from app.services.fake_llm import FakeLLMError, draft_fake_composition_development, is_fake_provider
 
@@ -209,6 +223,7 @@ async def _generate_one_candidate_draft(
         candidate_ordinal=candidate_ordinal,
         creative_direction=creative_direction,
         repair_codes=repair_codes,
+        style_conditioning_fragment=style_conditioning_fragment,
     )
     timeout = request.options.timeout_seconds or load_llm_settings().request_timeout_seconds
     return await _invoke_structured_draft(
@@ -235,6 +250,41 @@ async def run_composition_development_preview(
     context = build_development_source_context(request)
     context_payload = development_context_prompt_payload(context)
 
+    style_conditioning = None
+    reference_provenance = None
+    reference_embedding = None
+    style_conditioning_fragment: dict[str, Any] | None = None
+    if request.style_reference is not None:
+        try:
+            resolved = resolve_style_reference(request.style_reference, include_conditioning=True)
+        except EmbeddingError as exc:
+            raise CompositionDevelopmentError(
+                "development_invalid_operation",
+                message=exc.message,
+                http_status=404 if exc.code == "reference_not_found" else 422,
+                details={"embedding_error_code": exc.code, **(exc.details or {})},
+            ) from exc
+        style_conditioning = resolved.conditioning
+        reference_provenance = resolved.provenance
+        reference_embedding = resolved.embedding
+        if style_conditioning is not None:
+            style_conditioning_fragment = conditioning_context_fragment(style_conditioning)
+            context_payload = {
+                **context_payload,
+                "style_conditioning": style_conditioning_fragment,
+            }
+        logger.info(
+            "Composition development style conditioning attached",
+            extra={
+                "conditioning_mode": request.style_reference.mode,
+                "project_id": request.style_reference.project_id,
+                "fingerprint_prefix": reference_provenance.fingerprint_prefix()
+                if reference_provenance
+                else None,
+                "scope_kind": request.style_reference.scope.kind,
+            },
+        )
+
     logger.info(
         "Composition development preview started",
         extra={
@@ -246,6 +296,7 @@ async def run_composition_development_preview(
             "candidate_count": request.candidate_count,
             "output_bars": request.output_bars,
             "edit_source_prefix": edit_fingerprint_log_prefix(edit_source_fingerprint),
+            "has_style_reference": request.style_reference is not None,
             **_instruction_meta(request.instruction),
         },
     )
@@ -283,6 +334,7 @@ async def run_composition_development_preview(
                     context_payload=context_payload,
                     candidate_ordinal=ordinal,
                     repair_codes=repair_codes or None,
+                    style_conditioning_fragment=style_conditioning_fragment,
                 )
                 realized = realize_development_draft(
                     request,
@@ -350,6 +402,59 @@ async def run_composition_development_preview(
             candidate_fingerprint=candidate_fp,
             candidate_ordinal=ordinal,
         )
+        candidate_warnings = [
+            code
+            for code in realized.warning_codes
+            if code
+            in {
+                "candidate_failed_validation",
+                "candidate_failed_identity",
+                "candidate_repaired",
+                "candidate_partial_success",
+                "context_truncated",
+                "empty_harmony_context",
+                "empty_motif_context",
+                "modulation_at_boundary",
+                "restart_like_opening",
+                "sparse_track_draft",
+                "identity_anchor_weak",
+                "seam_gap_advisory",
+                "seam_leap_advisory",
+                "density_divergence_advisory",
+                "register_divergence_advisory",
+                "rhythm_divergence_advisory",
+                "harmonic_continuity_advisory",
+                "reference_similarity_delta",
+            }
+        ][:32]
+        if reference_embedding is not None:
+            try:
+                sim, dist = candidate_reference_similarity(
+                    reference_embedding,
+                    realized.composition,
+                    model_id=reference_embedding.model_id,
+                )
+                candidate_warnings.append("reference_similarity_delta")
+                logger.info(
+                    "Development candidate vs reference similarity",
+                    extra={
+                        "candidate_ordinal": ordinal,
+                        "candidate_similarity": sim,
+                        "candidate_distance": dist,
+                        "reference_fingerprint_prefix": reference_embedding.source_fingerprint[
+                            :EMBEDDING_FINGERPRINT_LOG_PREFIX_LEN
+                        ],
+                        "candidate_prefix": edit_fingerprint_log_prefix(candidate_fp),
+                    },
+                )
+            except EmbeddingError as exc:
+                logger.debug(
+                    "Skipped reference similarity delta",
+                    extra={
+                        "candidate_ordinal": ordinal,
+                        "error_code": exc.code,
+                    },
+                )
         candidates.append(
             DevelopmentCandidate(
                 candidate_id=candidate_id,
@@ -370,29 +475,7 @@ async def run_composition_development_preview(
                 identity_diagnostics=list(realized.identity_diagnostics),
                 provider=provider.provider,  # type: ignore[arg-type]
                 model=model,
-                warning_codes=[
-                    code
-                    for code in realized.warning_codes
-                    if code in {
-                        "candidate_failed_validation",
-                        "candidate_failed_identity",
-                        "candidate_repaired",
-                        "candidate_partial_success",
-                        "context_truncated",
-                        "empty_harmony_context",
-                        "empty_motif_context",
-                        "modulation_at_boundary",
-                        "restart_like_opening",
-                        "sparse_track_draft",
-                        "identity_anchor_weak",
-                        "seam_gap_advisory",
-                        "seam_leap_advisory",
-                        "density_divergence_advisory",
-                        "register_divergence_advisory",
-                        "rhythm_divergence_advisory",
-                        "harmonic_continuity_advisory",
-                    }
-                ][:32],
+                warning_codes=list(dict.fromkeys(candidate_warnings))[:32],
                 **_ai_resolution_kwargs(),
             )
         )
@@ -426,6 +509,8 @@ async def run_composition_development_preview(
 
     if len(candidates) < request.candidate_count:
         warning_codes.append("candidate_partial_success")
+    if reference_provenance is not None:
+        warning_codes.append("reference_similarity_delta")
 
     response = CompositionDevelopmentPreviewResponse(
         edit_source_fingerprint=edit_source_fingerprint,
@@ -438,6 +523,8 @@ async def run_composition_development_preview(
         warning_codes=list(dict.fromkeys(warning_codes))[:32],
         provider=provider.provider,
         model=model,
+        style_conditioning=style_conditioning,
+        reference_provenance=reference_provenance,
         **_ai_resolution_kwargs(),
     )
     logger.info(
@@ -453,6 +540,7 @@ async def run_composition_development_preview(
             "warning_code_count": len(response.warning_codes),
             "edit_source_prefix": edit_fingerprint_log_prefix(edit_source_fingerprint),
             "elapsed_ms": int((time.perf_counter() - started) * 1000),
+            "has_style_reference": request.style_reference is not None,
             "request_fingerprint_keys": sorted(
                 normalized_development_request_fingerprint_payload(request).keys()
             ),

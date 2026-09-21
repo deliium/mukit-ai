@@ -17,6 +17,11 @@ from app.composition_schemas import (
     NOTE_PITCH_PATTERN,
     midi_pitch_number,
 )
+from app.embeddings.schemas import (
+    CompositionReferenceProvenanceV1,
+    CompositionStyleConditioningV1,
+    StyleReferenceRequest,
+)
 from app.schemas import LLMModelSelection
 
 
@@ -124,6 +129,7 @@ DEVELOPMENT_WARNING_CODES: frozenset[str] = frozenset(
         "register_divergence_advisory",
         "rhythm_divergence_advisory",
         "harmonic_continuity_advisory",
+        "reference_similarity_delta",
     }
 )
 
@@ -588,6 +594,7 @@ class CompositionDevelopmentPreviewRequest(BaseModel):
     instruction: str | None = Field(default=None, max_length=DEVELOPMENT_MAX_INSTRUCTION_CHARS)
     selection: LLMModelSelection = Field(default_factory=LLMModelSelection)
     options: CompositionDevelopmentOptions = Field(default_factory=CompositionDevelopmentOptions)
+    style_reference: StyleReferenceRequest | None = None
 
     @field_validator("target_section_type")
     @classmethod
@@ -717,6 +724,8 @@ class CompositionDevelopmentPreviewResponse(BaseModel):
     capability: str | None = Field(default=None, max_length=64)
     ai_operation: str | None = Field(default=None, max_length=64)
     model_version: str | None = Field(default=None, max_length=120)
+    style_conditioning: CompositionStyleConditioningV1 | None = None
+    reference_provenance: CompositionReferenceProvenanceV1 | None = None
 
     @field_validator("warning_codes")
     @classmethod
@@ -804,6 +813,21 @@ def normalized_development_request_fingerprint_payload(
     source_payload: dict[str, Any] | None = None
     if request.source is not None:
         source_payload = request.source.model_dump(mode="json", exclude_none=True)
+    style_reference_payload: dict[str, Any] | None = None
+    if request.style_reference is not None:
+        # Bound identity only — never inline full reference composition bytes.
+        style_reference_payload = {
+            "project_id": request.style_reference.project_id,
+            "revision_id": request.style_reference.revision_id,
+            "scope": request.style_reference.scope.model_dump(mode="json"),
+            "mode": request.style_reference.mode,
+            "has_inline_composition": request.style_reference.composition is not None,
+            "expected_fingerprint_prefix": (
+                request.style_reference.expected_fingerprint[:EDIT_FINGERPRINT_LOG_PREFIX_LEN]
+                if request.style_reference.expected_fingerprint
+                else None
+            ),
+        }
     return {
         "algorithm_version": DEVELOPMENT_ALGORITHM_VERSION,
         "operation": request.operation,
@@ -818,5 +842,6 @@ def normalized_development_request_fingerprint_payload(
         "instruction": request.instruction,
         "selection": request.selection.model_dump(mode="json", exclude_none=True),
         "options": request.options.model_dump(mode="json"),
+        "style_reference": style_reference_payload,
     }
 

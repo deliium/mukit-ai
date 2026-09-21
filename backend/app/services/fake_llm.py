@@ -112,6 +112,14 @@ async def draft_fake_composition_development(
         density_step = 1
     onset_nudge = (candidate_ordinal - 1) * (request.composition.ticks_per_quarter // 8)
 
+    # Style/reference conditioning: shift contour/harmony so realized V2 fingerprints
+    # differ from the reference material while still validating through realization.
+    style_conditioned = getattr(request, "style_reference", None) is not None
+    if style_conditioned:
+        pitch_cycle = _pitch_cycle((candidate_ordinal - 1 + 2) % 4)
+        density_step = 1
+        onset_nudge = onset_nudge + (request.composition.ticks_per_quarter // 4)
+
     tracks = []
     for track in request.composition.tracks:
         events = []
@@ -129,12 +137,18 @@ async def draft_fake_composition_development(
                 )
         else:
             for bar in range(output_bars):
-                if bar % density_step != 0 and request.variation_strength == "conservative":
+                if bar % density_step != 0 and request.variation_strength == "conservative" and not style_conditioned:
                     continue
                 start = bar * bar_ticks + (onset_nudge if bar == 0 else 0)
                 if start >= output_duration:
                     break
                 pitch = pitch_cycle[bar % len(pitch_cycle)]
+                if style_conditioned:
+                    # Transpose up a third vs default fake contour for distinct fingerprint.
+                    letter = pitch[0]
+                    accidental = "#" if "#" in pitch else "b" if "b" in pitch else ""
+                    octave = int(pitch[-1]) if pitch[-1].isdigit() else 4
+                    pitch = f"{letter}{accidental}{min(6, octave + 1)}"
                 if track.role == "bass":
                     letter = pitch[0]
                     accidental = "#" if "#" in pitch else "b" if "b" in pitch else ""
@@ -147,7 +161,7 @@ async def draft_fake_composition_development(
                         "pitch": pitch,
                         "relative_start_tick": start,
                         "duration_ticks": duration,
-                        "velocity": 72 + (candidate_ordinal % 5),
+                        "velocity": 72 + (candidate_ordinal % 5) + (8 if style_conditioned else 0),
                         "draft_event_id": f"d{candidate_ordinal}-{track.id}-{bar}",
                     }
                 )
@@ -167,6 +181,8 @@ async def draft_fake_composition_development(
     chord_cycle = ["C", "G", "Am", "F"]
     if request.development_intent == "contrast":
         chord_cycle = ["Am", "Em", "F", "G"]
+    if style_conditioned:
+        chord_cycle = ["Dm", "Bb", "F", "C"]
     for bar in range(output_bars):
         harmony.append(
             {
@@ -195,6 +211,7 @@ async def draft_fake_composition_development(
             "event_count": sum(len(track["events"]) for track in tracks),
             "creative_direction_len": len(creative_direction),
             "repair_code_count": len(repair_codes or []),
+            "style_conditioned": style_conditioned,
             "has_context_timeline": compile_timeline(request.composition).bar_count == request.composition.bar_count,
         },
     )
