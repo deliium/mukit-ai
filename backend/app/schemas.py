@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .embeddings.schemas import StyleReferenceRequest
 from .composition_schemas import (
     COMPOSITION_SCHEMA_VERSION,
     COMPOSITION_SCHEMA_VERSION_V1,
@@ -298,6 +299,8 @@ class LLMMusicGenerationRequest(BaseModel):
     prompt: LLMPromptParameters
     selection: LLMModelSelection = Field(default_factory=LLMModelSelection)
     options: LLMGenerationOptions = Field(default_factory=LLMGenerationOptions)
+    # Optional musical reference for style conditioning (resolved by generate path when wired).
+    style_reference: StyleReferenceRequest | None = None
 
 
 class LLMProviderModel(BaseModel):
