@@ -32,6 +32,7 @@
 - [x] **Reproducible symbolic music training and evaluation** — Experiment dirs, resume, AMP/accum/clip, metrics, symbolic eval (not quality), listening set, compare CLI; offline only (never blocks web API)
 - [x] **Style/semantic embeddings and conditioning for symbolic composition** — Handcrafted `symbolic.features.v1` registry embedder, scoped similarity, reference provenance, Develop-tab musical reference conditioning; no large net; no silent dataset ingest
 - [x] **Hybrid LLM planner + symbolic note generation pipeline** — Pipeline-parameterized LangGraph (`llm_only` / `hybrid_plan_symbolic` / continuation / variation); versioned non-playable `composition.plan.v1`; Music Transformer / `fake:symbolic-tiny` note engine; multi-stage provenance; no silent LLM note fallback
+- [x] **MIDI keyboard / live MIDI performance input** — Browser Web MIDI (or QWERTY test mode) performance capture into `composition.v2` with count-in, metronome, optional quantize, timeline extend, and safe disconnect; never required at startup
 
 ## Completed
 
@@ -65,3 +66,4 @@
 | Reproducible symbolic music training and evaluation | 2026-09-21 |
 | Style/semantic embeddings and conditioning for symbolic composition | 2026-09-21 |
 | Hybrid LLM planner + symbolic note generation pipeline | 2026-09-21 |
+| MIDI keyboard / live MIDI performance input | 2026-09-21 |

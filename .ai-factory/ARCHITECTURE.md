@@ -97,18 +97,18 @@ mukit-ai/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
-│   ├── e2e/                        # Playwright V1/V2/import/analysis/arrangement acceptance
+│   ├── e2e/                        # Playwright V1/V2/import/analysis/arrangement/editor/midi-live-input acceptance
 │   └── src/
 │       ├── api/                    # HTTP clients (outbound adapters)
 │       │   ├── musicApi.js
 │       │   └── projectApi.js
 │       ├── store/
-│       │   └── musicStore.js       # Zustand — shared UI/application state (incl. analysis/arrangement)
-│       ├── components/             # Feature UI (projects, import, analysis, arrangement, generate, piano roll, playback, export)
-│       ├── utils/                  # Client-side composition/playback/analysis/arrangement helpers
+│       │   └── musicStore.js       # Zustand — shared UI/application state (incl. analysis/arrangement/MIDI session)
+│       ├── components/             # Feature UI (projects, import, analysis, arrangement, generate, piano roll, playback, MidiInputPanel, export)
+│       ├── utils/                  # Client-side composition/playback/analysis/arrangement/midiInput* helpers
 │       ├── App.jsx
 │       └── main.jsx
-├── docs/                           # composition.v2/v1, ai-runtime, local-ai, analysis, arrangement, embeddings, import, datasets, tokenizer, music-transformer, persistence, testing
+├── docs/                           # composition.v2/v1, ai-runtime, local-ai, analysis, arrangement, embeddings, midi-live-input, import, datasets, tokenizer, music-transformer, persistence, testing
 ├── models/llm/                     # Optional host GGUF/weights for Compose local-ai profiles (gitignored)
 ├── docker-compose.yml              # Default stack: backend + frontend only (no GPU / no local AI pull)
 ├── compose.dev.yml                 # Hot-reload override; optional notes for local-ai compose
@@ -132,6 +132,7 @@ mukit-ai/
 | **Composition / LLM** | `main.py` LLM routes, `schemas.py`, `llm_*`, `composition_*` (plan/validate/normalize/patch); bounded analysis advisory via `build_llm_analysis_context` | `MusicGenerator`, `PromptJsonEditor`, `AiRegionEditPanel`, `musicApi.js` |
 | **AI runtime** | `ai_runtime/` (capability registry, operation routing, typed protocols/adapters including `local_openai_compatible`); `local_llm_settings.py` + `local_health.py` for optional OpenAI-compatible sidecars; discovery via `/ai/models` (compat `/llm/models`); FluidSynth stays outside; app never loads GGUF/safetensors | `musicApi.js` model catalog clients; global selector remains `/llm/models` (includes ready `local:*` when enabled) |
 | **Rendering / Export** | `music_json_renderer`, `composition_midi`, `composition_wav` | `NotationViewer`, `ExportControls`, playback components + `utils/playback*` / `tonePlaybackEngine` |
+| **MIDI live input (browser)** | None (no backend MIDI stream / WebSocket bridge) | `MidiInputPanel`, session slice in `musicStore`, `utils/midiInput*` / `midiPerformanceCapture` / `midiTakeApply` / `midiMetronome` / `computerKeyboardMidi` — Web MIDI or QWERTY → one V2 take commit; never required at startup; not file import |
 | **Shared infrastructure** | `db/`, `llm_settings.py`, CORS/lifespan in `main.py` | `api/*`, shared store fields, `utils/downloadFile.js` |
 
 Prefer growing these boundaries (new routers under `routers/`, cohesive service clusters, schema files per module) over dumping unrelated logic into `main.py` or a single god service.
@@ -176,8 +177,8 @@ FastAPI backend
 - **Canonical contract:** `composition.v2` (see `docs/composition-v2.md` and `composition_schemas.py`) is the operational shared language between generate, edit, persist, render, export, and the frontend editors/playback. `composition.v1` remains migration/parser input (`docs/composition-v1.md`). Derived `composition.analysis.v1` is advisory only (`docs/composition-analysis.md`) and must not become a second source of truth.
 - **Projects module:** `project_store` owns SQLite; `project_composition` normalizes stored JSON to the canonical model before API responses.
 - **Composition pipeline:** LLM generate/edit services produce or patch JSON; validator/normalizer/timing services enforce and shape the model; render/export services consume validated compositions only. Analysis may feed a bounded advisory projection into edit/repair prompts without mutating events.
-- **Frontend state:** Zustand `musicStore` holds API status, models, project browser/save status, edited composition, piano-roll and playback transport state, and a single derived analysis report. Feature components subscribe to slices; they do not own parallel sources of truth for the same composition.
-- **Client ↔ server:** `musicApi.js` / `projectApi.js` are the only HTTP clients; components and store actions go through them.
+- **Frontend state:** Zustand `musicStore` holds API status, models, project browser/save status, edited composition, piano-roll and playback transport state, a single derived analysis report, and ephemeral session slices (analysis/arrangement/development/MIDI live input). Feature components subscribe to slices; they do not own parallel sources of truth for the same composition. MIDI session fields (device ids, active notes, raw takes) must never enter project autosave / revision payloads.
+- **Client ↔ server:** `musicApi.js` / `projectApi.js` are the only HTTP clients; components and store actions go through them. Browser Web MIDI / QWERTY performance capture stays frontend-only and commits into validated `composition.v2` via store transactions — it is not the file MIDI import path.
 
 ## Key Principles
 

@@ -288,11 +288,19 @@ npm run lint
 npm run build
 LLM_FAKE_MODE=1 npm run test:e2e -- e2e/v2-editor-workflow.spec.js
 LLM_FAKE_MODE=1 npm run test:e2e -- e2e/playback-mixer.spec.js
+# Live MIDI panel smoke (no hardware; asserts no requestMIDIAccess on first paint):
+npm test -- src/utils/midiInputSupport.test.js src/utils/midiInputMessages.test.js \
+  src/utils/midiInputAccess.test.js src/utils/midiPerformanceCapture.test.js \
+  src/utils/computerKeyboardMidi.test.js src/utils/midiTakeApply.test.js \
+  src/utils/midiMetronome.test.js src/store/musicStore.midiInput.test.js
+LLM_FAKE_MODE=1 npm run test:e2e -- e2e/midi-live-input.spec.js
 # Likely regressions after editor changes:
 LLM_FAKE_MODE=1 npm run test:e2e -- e2e/v2-user-journey.spec.js e2e/import-user-journey.spec.js
 ```
 
 The journey seeds a deterministic **100-bar** multi-track fixture (`frontend/e2e/fixtures/largeScoreEditor.js`, ~600+ notes) via `seedLargeScoreEditorProject`, then uses **real pointer/keyboard** interaction (not store mutation) for multi-select, copy/duplicate, transpose, velocity, quantize, loop-from-selection, play-from-cursor, undo/redo, articulation/dynamics, bar/section navigation, lock/hide tracks, and 390px layout.
+
+Live MIDI capture details: [midi-live-input.md](midi-live-input.md). Log namespaces: `midiInput`, `midiCapture` (`VITE_LOG_LEVEL`).
 
 Performance instrumentation (`frontend/src/utils/editorPerfInstrumentation.js`) is inert unless `window.__MUKIT_EDITOR_PERF_ENABLE__` is set (E2E enables it). Budgets (hardware-tolerant CI gates):
 

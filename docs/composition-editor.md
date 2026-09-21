@@ -38,6 +38,7 @@ Clipboard: Ctrl/Cmd+C / X / V / D. Paste anchors at the **edit cursor**. Motif m
 - Edit cursor (ruler / Ctrl+click); bar and section prev/next
 - Zoom in/out, fit, zoom-to-selection; Ctrl+wheel zoom
 - **Play From Cursor**, loop from selection / toggle / clear
+- **MIDI live input** — record from a keyboard (or QWERTY test mode) into the destination track; see [midi-live-input.md](midi-live-input.md)
 - Auto-follow scrolls the viewport during playback without rerendering every note on each tick
 - Browser instruments/mixer (trim/pan/mute/solo/send) are ephemeral — see [browser-playback.md](browser-playback.md)
 

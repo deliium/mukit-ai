@@ -45,12 +45,12 @@ mukit-ai/
 │   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement/editor acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, …
-│       ├── store/           # Zustand musicStore (composition transactions + session previews)
-│       └── utils/           # validation, editor selection/ops/nav, viewport, playback, analysis, motif, harmony, arrangement helpers
+│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, …
+│       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI session)
+│       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture helpers
 ├── scripts/                 # run_tests.sh, v1/v2_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
-├── docs/                    # composition.v2/v1, ai-runtime, hybrid-generation, editor, analysis, arrangement, import, datasets, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, hybrid-generation, editor, midi-live-input, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -65,6 +65,11 @@ mukit-ai/
 | File | Purpose |
 |------|---------|
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
+| `frontend/src/components/MidiInputPanel.jsx` | Live MIDI / QWERTY record panel (sticky transport) |
+| `frontend/src/utils/midiInputAccess.js` | Lazy Web MIDI access + device registry |
+| `frontend/src/utils/midiPerformanceCapture.js` | Session take buffer (raw ticks) |
+| `frontend/src/utils/midiTakeApply.js` | Timeline extend + batch commit into V2 |
+| `frontend/src/utils/midiMetronome.js` | Ephemeral count-in / metronome clicks |
 | `backend/app/dataset/cli.py` | Offline dataset CLI (`python -m app.dataset.cli`) |
 | `backend/app/tokenizer/cli.py` | Offline tokenizer CLI (`python -m app.tokenizer.cli`) |
 | `backend/app/embeddings/cli.py` | Offline embedding eval CLI (`python -m app.embeddings.cli`) |
@@ -158,6 +163,7 @@ mukit-ai/
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
 | Composition Editor | `docs/composition-editor.md` | Piano-roll selection, clipboard, transforms, cursor/loop |
 | Browser playback | `docs/browser-playback.md` | Tone.js instruments/mixer/transport; ephemeral session state |
+| MIDI live input | `docs/midi-live-input.md` | Web MIDI / QWERTY performance capture into V2 |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |

@@ -79,5 +79,6 @@ The repository root `LICENSE` file is currently CC0 1.0 text while `README.md` h
 - `frontend/src/utils/playbackTracks.js` / `playbackEvents.js` / `playbackSource.js`
 - `frontend/src/utils/playbackInstrumentAdapters.js` / `browserPlaybackAssets.js`
 - `frontend/src/utils/playbackMixerControls.js`
-- `frontend/src/components/PlaybackControls.jsx` / `TrackPlaybackControls.jsx`
-- `frontend/e2e/playback-mixer.spec.js`
+- `frontend/src/utils/midiMetronome.js` — ephemeral count-in / click track for live MIDI record ([midi-live-input.md](midi-live-input.md))
+- `frontend/src/components/PlaybackControls.jsx` / `TrackPlaybackControls.jsx` / `MidiInputPanel.jsx`
+- `frontend/e2e/playback-mixer.spec.js` / `midi-live-input.spec.js`
