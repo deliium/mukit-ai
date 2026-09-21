@@ -363,6 +363,16 @@ export class EmbeddingApiError extends Error {
   }
 }
 
+export class TranscriptionApiError extends Error {
+  constructor(message, { status = null, code = null, details = null } = {}) {
+    super(message);
+    this.name = 'TranscriptionApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
 export const REHARMONIZE_OPERATIONS = Object.freeze([
   'suggest_progression',
   'reharmonize',
@@ -1100,6 +1110,86 @@ export async function importMidi(file) {
 
 export async function importMusicXml(file) {
   return importCompositionUpload('/imports/musicxml', file, { format: 'musicxml' });
+}
+
+/**
+ * Upload audio for monophonic transcription. Returns preview only (no composition).
+ * @param {Blob|File} file
+ * @param {{ tempoBpm?: number|null, ticksPerQuarter?: number|null, originTick?: number }} options
+ */
+export async function transcribeAudio(file, options = {}) {
+  const byteCount = typeof file?.size === 'number' ? file.size : null;
+  console.debug('[musicApi] Audio transcription request started', {
+    endpoint: '/transcription/audio',
+    byteCount,
+    hasTempo: options.tempoBpm != null,
+  });
+  const formData = new FormData();
+  formData.append('file', file, file?.name || 'capture.wav');
+  if (options.tempoBpm != null && Number.isFinite(Number(options.tempoBpm))) {
+    formData.append('tempo_bpm', String(Math.round(Number(options.tempoBpm))));
+  }
+  if (options.ticksPerQuarter != null && Number.isFinite(Number(options.ticksPerQuarter))) {
+    formData.append('ticks_per_quarter', String(Math.round(Number(options.ticksPerQuarter))));
+  }
+  if (options.originTick != null && Number.isFinite(Number(options.originTick))) {
+    formData.append('origin_tick', String(Math.max(0, Math.round(Number(options.originTick)))));
+  }
+
+  try {
+    const response = await axios.post('/transcription/audio', formData, {
+      headers: { 'Content-Type': undefined },
+      transformRequest: [
+        (data, headers) => {
+          if (typeof FormData !== 'undefined' && data instanceof FormData) {
+            if (headers && typeof headers.set === 'function') {
+              headers.set('Content-Type', false);
+            } else if (headers) {
+              delete headers['Content-Type'];
+              delete headers['content-type'];
+            }
+          }
+          return data;
+        },
+      ],
+    });
+    const payload = response.data || {};
+    const preview = payload.preview || null;
+    if (!preview || preview.schema_version !== 'transcription.preview.v1') {
+      throw new TranscriptionApiError('Invalid transcription preview response', {
+        status: response.status,
+        code: 'audio_internal_error',
+      });
+    }
+    console.debug('[musicApi] Audio transcription response received', {
+      status: response.status,
+      engineId: payload.engine?.id || preview.engine?.id || null,
+      noteCount: preview.summary?.note_count ?? preview.notes?.length ?? 0,
+      lowConfidenceCount: preview.summary?.low_confidence_count ?? null,
+      retentionDeleted: payload.retention?.deleted === true,
+    });
+    return {
+      preview,
+      engine: payload.engine || preview.engine || null,
+      retention: payload.retention || { deleted: true },
+    };
+  } catch (error) {
+    if (error instanceof TranscriptionApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseImportErrorDetail(error.response?.data?.detail);
+    console.error('[musicApi] Audio transcription request failed', {
+      status,
+      code: parsed.code,
+      message: parsed.message,
+    });
+    throw new TranscriptionApiError(parsed.message || 'Audio transcription failed', {
+      status,
+      code: parsed.code,
+      details: parsed.details,
+    });
+  }
 }
 
 async function importCompositionUpload(endpoint, file, { format }) {

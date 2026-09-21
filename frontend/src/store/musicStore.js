@@ -22,8 +22,17 @@ import {
   renderMusicXmlPreview,
   searchRelatedMotifs,
   searchSimilarEmbeddings,
+  TranscriptionApiError,
+  transcribeAudio,
 } from '../api/musicApi.js';
 import { createAppLogger } from '../utils/appLogger.js';
+import {
+  applyAudioTranscriptionToComposition,
+  defaultSelectedProvisionalIds,
+  DEFAULT_AUDIO_CONFIDENCE_THRESHOLD,
+} from '../utils/audioTranscriptionApply.js';
+import { probeAudioInputSupport } from '../utils/audioInputSupport.js';
+import { createAudioRecorder } from '../utils/audioRecorder.js';
 import { createMidiAccessSession } from '../utils/midiInputAccess.js';
 import { MIDI_MESSAGE_KINDS, parseMidiMessage } from '../utils/midiInputMessages.js';
 import { probeWebMidiSupport } from '../utils/midiInputSupport.js';
@@ -345,6 +354,52 @@ const logger = createAppLogger('musicStore');
 const arrangementLogger = createAppLogger('musicStore.arrangement');
 const embeddingLogger = createAppLogger('musicStore.embeddings');
 const midiLogger = createAppLogger('midiInput');
+const audioLogger = createAppLogger('audioTranscription');
+
+export const AUDIO_PHASES = Object.freeze({
+  IDLE: 'idle',
+  REQUESTING_MIC: 'requesting_mic',
+  RECORDING: 'recording',
+  UPLOADING: 'uploading',
+  TRANSCRIBING: 'transcribing',
+  REVIEW: 'review',
+  APPLYING: 'applying',
+  ERROR: 'error',
+});
+
+const initialAudioTranscriptionState = {
+  audioSupport: null,
+  audioPhase: AUDIO_PHASES.IDLE,
+  audioPreview: null,
+  audioSelectedProvisionalIds: [],
+  audioIncludeLowConfidence: false,
+  audioQuantizeOnApply: false,
+  audioDestinationTrackId: null,
+  audioErrorCode: null,
+  audioErrorMessage: '',
+  audioConfidenceThreshold: DEFAULT_AUDIO_CONFIDENCE_THRESHOLD,
+};
+
+/** @type {ReturnType<typeof createAudioRecorder> | null} */
+let audioRecorderSession = null;
+
+function clearedAudioTranscriptionState() {
+  return { ...initialAudioTranscriptionState };
+}
+
+function transitionAudioPhase(set, get, nextPhase, reason) {
+  const current = get().audioPhase;
+  if (current === nextPhase) {
+    return true;
+  }
+  audioLogger.info('Audio transcription phase transition', {
+    from: current,
+    to: nextPhase,
+    reason,
+  });
+  set({ audioPhase: nextPhase });
+  return true;
+}
 
 /** @typedef {'idle'|'enabling'|'ready'|'armed'|'counting_in'|'recording'|'stopping'|'unavailable'|'denied'|'error'} MidiPhase */
 
@@ -1056,6 +1111,7 @@ export const useMusicStore = create((set, get) => ({
   composerTabRequestSeq: 0,
   ...initialMotifUiState,
   ...initialMidiInputState,
+  ...initialAudioTranscriptionState,
 
   setApiStatus: (apiStatus) => {
     console.debug('[musicStore] API status changed', { apiStatus });
@@ -1654,6 +1710,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedDevelopmentPreviewState(),
       ...clearedArrangementPreviewState(),
       ...initialHarmonyUiState,
+      ...clearedAudioTranscriptionState(),
     };
 
     // No open project: local-only replace (no durable history claim).
@@ -1724,6 +1781,7 @@ export const useMusicStore = create((set, get) => ({
         aiEditCompareResult: null,
         aiEditRequestCapture: null,
         ...clearedVersionHistoryState(),
+        ...clearedAudioTranscriptionState(),
       });
       return true;
     } catch (error) {
@@ -4932,8 +4990,9 @@ export const useMusicStore = create((set, get) => ({
           ...clearedMotifUiState(),
           ...clearedReharmonizePreviewState(),
       ...clearedDevelopmentPreviewState(),
-      ...clearedArrangementPreviewState(),
+          ...clearedArrangementPreviewState(),
           ...initialHarmonyUiState,
+          ...clearedAudioTranscriptionState(),
         });
       }
       await get().loadProjectList();
@@ -9494,6 +9553,263 @@ export const useMusicStore = create((set, get) => ({
     }
     set({ ...initialMidiInputState });
     midiLogger.info('MIDI session reset');
+  },
+
+  probeAudioSupport: () => {
+    const support = probeAudioInputSupport();
+    set({ audioSupport: support });
+    return support;
+  },
+
+  setAudioDestinationTrackId: (trackId) => {
+    const next = trackId == null ? null : String(trackId);
+    audioLogger.debug('Audio destination track set', { trackId: next });
+    set({ audioDestinationTrackId: next });
+  },
+
+  setAudioIncludeLowConfidence: (enabled) => {
+    const include = Boolean(enabled);
+    const state = get();
+    const preview = state.audioPreview;
+    let selected = state.audioSelectedProvisionalIds;
+    if (preview) {
+      if (include) {
+        selected = (preview.notes || []).map((n) => String(n.provisional_id));
+      } else {
+        selected = defaultSelectedProvisionalIds(
+          preview,
+          state.audioConfidenceThreshold,
+        );
+      }
+    }
+    audioLogger.info('Audio include-low-confidence toggled', {
+      include,
+      selectedCount: selected.length,
+    });
+    set({
+      audioIncludeLowConfidence: include,
+      audioSelectedProvisionalIds: selected,
+    });
+  },
+
+  setAudioQuantizeOnApply: (enabled) => {
+    set({ audioQuantizeOnApply: Boolean(enabled) });
+  },
+
+  setAudioSelectedProvisionalIds: (ids) => {
+    const next = Array.isArray(ids) ? ids.map(String) : [];
+    set({ audioSelectedProvisionalIds: next });
+  },
+
+  toggleAudioProvisionalId: (provisionalId) => {
+    const id = String(provisionalId);
+    const current = new Set(get().audioSelectedProvisionalIds.map(String));
+    if (current.has(id)) {
+      current.delete(id);
+    } else {
+      current.add(id);
+    }
+    set({ audioSelectedProvisionalIds: Array.from(current) });
+  },
+
+  startAudioRecording: async () => {
+    const state = get();
+    if (state.audioPhase === AUDIO_PHASES.RECORDING) {
+      return { ok: false, code: 'already_recording' };
+    }
+    transitionAudioPhase(set, get, AUDIO_PHASES.REQUESTING_MIC, 'record-start');
+    set({ audioErrorCode: null, audioErrorMessage: '' });
+    if (!audioRecorderSession) {
+      audioRecorderSession = createAudioRecorder();
+    }
+    const result = await audioRecorderSession.start();
+    if (!result.ok) {
+      audioLogger.warn('Audio record start failed', { code: result.code });
+      set({
+        audioPhase: AUDIO_PHASES.ERROR,
+        audioErrorCode: result.code,
+        audioErrorMessage: result.code === 'permission_denied'
+          ? 'Microphone permission denied.'
+          : 'Microphone recording is unavailable.',
+      });
+      return result;
+    }
+    transitionAudioPhase(set, get, AUDIO_PHASES.RECORDING, 'recording');
+    return { ok: true };
+  },
+
+  stopAudioRecordingAndTranscribe: async () => {
+    if (!audioRecorderSession || !audioRecorderSession.isRecording()) {
+      return { ok: false, code: 'not_recording' };
+    }
+    const stopped = await audioRecorderSession.stop();
+    if (!stopped.ok) {
+      set({
+        audioPhase: AUDIO_PHASES.ERROR,
+        audioErrorCode: stopped.code,
+        audioErrorMessage: 'Failed to encode recording.',
+      });
+      return stopped;
+    }
+    return get().transcribeAudioBlob(stopped.blob);
+  },
+
+  cancelAudioRecording: () => {
+    if (audioRecorderSession) {
+      audioRecorderSession.cancel();
+    }
+    transitionAudioPhase(set, get, AUDIO_PHASES.IDLE, 'cancel-record');
+    return { ok: true };
+  },
+
+  transcribeAudioFile: async (file) => {
+    if (!file) {
+      return { ok: false, code: 'audio_empty_upload' };
+    }
+    return get().transcribeAudioBlob(file);
+  },
+
+  transcribeAudioBlob: async (blob) => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    transitionAudioPhase(set, get, AUDIO_PHASES.UPLOADING, 'upload');
+    set({ audioErrorCode: null, audioErrorMessage: '' });
+    audioLogger.info('Audio transcription upload starting', {
+      uploadBytes: blob?.size ?? null,
+    });
+    transitionAudioPhase(set, get, AUDIO_PHASES.TRANSCRIBING, 'transcribe');
+    try {
+      const tempoBpm = composition?.tempo_bpm != null
+        ? Number(composition.tempo_bpm)
+        : null;
+      const ticksPerQuarter = composition?.ticks_per_quarter != null
+        ? Number(composition.ticks_per_quarter)
+        : null;
+      const result = await transcribeAudio(blob, {
+        tempoBpm,
+        ticksPerQuarter,
+        originTick: state.editCursorTick || 0,
+      });
+      const preview = result.preview;
+      const threshold = Number(preview.summary?.include_threshold)
+        || state.audioConfidenceThreshold
+        || DEFAULT_AUDIO_CONFIDENCE_THRESHOLD;
+      const selected = defaultSelectedProvisionalIds(preview, threshold);
+      const destination = state.audioDestinationTrackId
+        || state.pianoRollTrackId
+        || pickDefaultTrackId(composition);
+      audioLogger.info('Audio transcription preview ready', {
+        noteCount: preview.summary?.note_count ?? preview.notes?.length ?? 0,
+        lowConfidenceCount: preview.summary?.low_confidence_count ?? 0,
+        selectedCount: selected.length,
+        engineId: result.engine?.id || preview.engine?.id || null,
+      });
+      set({
+        audioPhase: AUDIO_PHASES.REVIEW,
+        audioPreview: preview,
+        audioSelectedProvisionalIds: selected,
+        audioConfidenceThreshold: threshold,
+        audioIncludeLowConfidence: false,
+        audioDestinationTrackId: destination,
+        audioErrorCode: null,
+        audioErrorMessage: '',
+      });
+      return { ok: true, preview };
+    } catch (error) {
+      const code = error instanceof TranscriptionApiError
+        ? (error.code || 'audio_internal_error')
+        : 'audio_internal_error';
+      audioLogger.warn('Audio transcription failed', {
+        code,
+        status: error.status || null,
+      });
+      set({
+        audioPhase: AUDIO_PHASES.ERROR,
+        audioErrorCode: code,
+        audioErrorMessage: error.message || 'Transcription failed',
+      });
+      return { ok: false, code, message: error.message };
+    }
+  },
+
+  applyAudioTranscription: () => {
+    const state = get();
+    if (!state.audioPreview || state.audioPhase !== AUDIO_PHASES.REVIEW) {
+      audioLogger.warn('Audio apply rejected — not in review', {
+        phase: state.audioPhase,
+      });
+      return { ok: false, code: 'invalid_phase' };
+    }
+    const trackId = state.audioDestinationTrackId
+      || state.pianoRollTrackId
+      || pickDefaultTrackId(state.editedMusicJson);
+    if (!trackId) {
+      set({
+        audioErrorCode: 'audio_track_missing',
+        audioErrorMessage: 'Select a destination track before applying.',
+      });
+      return { ok: false, code: 'audio_track_missing' };
+    }
+    transitionAudioPhase(set, get, AUDIO_PHASES.APPLYING, 'apply');
+    const applied = applyAudioTranscriptionToComposition(state.editedMusicJson, {
+      trackId,
+      preview: state.audioPreview,
+      selectedIds: state.audioSelectedProvisionalIds,
+      includeLowConfidence: state.audioIncludeLowConfidence,
+      quantize: state.audioQuantizeOnApply,
+      snapValue: state.pianoRollSnap || '1/8',
+      lockedTrackIds: state.lockedTrackIds,
+      threshold: state.audioConfidenceThreshold,
+    });
+    if (!applied.ok) {
+      audioLogger.warn('Audio apply failed', { code: applied.code });
+      set({
+        audioPhase: AUDIO_PHASES.REVIEW,
+        audioErrorCode: applied.code,
+        audioErrorMessage: applied.message || applied.code,
+      });
+      return applied;
+    }
+    const primary = applied.noteRefs[0] || null;
+    const ok = commitCompositionTransaction(set, get, {
+      nextComposition: applied.composition,
+      selectedTrackId: trackId,
+      selectedNoteId: primary?.eventId || null,
+      selectedNoteIds: applied.noteRefs
+        .filter((ref) => ref.trackId === trackId)
+        .map((ref) => ref.eventId),
+      editorSelectionRefs: applied.noteRefs,
+      editorSelectionPrimary: primary,
+      action: 'audio-transcribe',
+      noteSummary: {
+        noteCount: applied.noteRefs.length,
+        excludedLow: applied.excludedLow,
+        quantize: state.audioQuantizeOnApply,
+        barsAdded: applied.barsAdded,
+      },
+      affectedNoteCount: applied.noteRefs.length,
+      affectedTrackCount: 1,
+      statePatch: {
+        ...clearedAudioTranscriptionState(),
+        audioDestinationTrackId: trackId,
+      },
+    });
+    audioLogger.info('Audio transcription applied to composition', {
+      noteCount: applied.noteRefs.length,
+      excludedLow: applied.excludedLow,
+      quantize: state.audioQuantizeOnApply,
+      ok,
+    });
+    return { ok, noteRefs: applied.noteRefs, barsAdded: applied.barsAdded };
+  },
+
+  discardAudioTranscription: () => {
+    if (audioRecorderSession) {
+      audioRecorderSession.cancel();
+    }
+    audioLogger.info('Audio transcription discarded');
+    set({ ...clearedAudioTranscriptionState() });
+    return { ok: true };
   },
 }));
 

@@ -1966,6 +1966,9 @@ const PianoRollEditor = () => {
               dragPreview={dragPreview}
               noteBoxSelectRect={noteBoxSelectRect}
               editCursorTick={editCursorTick}
+              pitchMidiMax={metrics.maxMidi}
+              pitchMidiMin={metrics.minMidi}
+              rowHeight={metrics.rowHeight}
             />
           </GridCanvas>
         </ScrollArea>

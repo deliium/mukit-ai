@@ -98,6 +98,25 @@ const NoteBoxSelectOverlay = styled.div`
   z-index: 7;
 `;
 
+const ProvisionalNote = styled.div`
+  position: absolute;
+  left: ${(props) => props.$left}px;
+  top: ${(props) => props.$top}px;
+  width: ${(props) => Math.max(3, props.$width)}px;
+  height: ${(props) => Math.max(4, props.$height)}px;
+  border-radius: 2px;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 3;
+  opacity: 0.85;
+  background: ${(props) => (
+    props.$low
+      ? 'repeating-linear-gradient(45deg, #fbbf24, #fbbf24 4px, #f59e0b 4px, #f59e0b 8px)'
+      : 'rgba(245, 158, 11, 0.55)'
+  )};
+  border: 1px solid ${(props) => (props.$low ? '#b45309' : '#d97706')};
+`;
+
 /**
  * Transient overlays: AI/motif selection, note box-select marquee, edit/playback cursors, drag ghost.
  * Subscribes to playbackSeconds so the note layer stays stable.
@@ -116,10 +135,17 @@ function PianoRollOverlayLayer({
   dragPreview,
   noteBoxSelectRect = null,
   editCursorTick = null,
+  pitchMidiMax = null,
+  pitchMidiMin = null,
+  rowHeight = 16,
 }) {
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
   const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
   const playbackLoop = useMusicStore((state) => state.playbackLoop);
+  const audioPhase = useMusicStore((state) => state.audioPhase);
+  const audioPreview = useMusicStore((state) => state.audioPreview);
+  const audioConfidenceThreshold = useMusicStore((state) => state.audioConfidenceThreshold);
+  const audioSelectedProvisionalIds = useMusicStore((state) => state.audioSelectedProvisionalIds);
   const lastCursorLogRef = useRef(0);
 
   const cursorTick = useMemo(() => {
@@ -157,6 +183,51 @@ function PianoRollOverlayLayer({
     }
     return Math.max(0, tick) * pixelsPerTick;
   }, [editCursorTick, pixelsPerTick]);
+
+  const provisionalNotes = useMemo(() => {
+    if (audioPhase !== 'review' || !audioPreview || !Array.isArray(audioPreview.notes)) {
+      return [];
+    }
+    if (
+      !Number.isFinite(pixelsPerTick)
+      || pixelsPerTick <= 0
+      || pitchMidiMax == null
+      || pitchMidiMin == null
+    ) {
+      return [];
+    }
+    const selected = new Set((audioSelectedProvisionalIds || []).map(String));
+    const threshold = Number(audioConfidenceThreshold) || 0.5;
+    const height = Math.max(4, Number(rowHeight) || 16);
+    return audioPreview.notes
+      .filter((note) => selected.has(String(note.provisional_id)))
+      .map((note) => {
+        const midi = Math.round(Number(note.pitch));
+        if (midi < pitchMidiMin || midi > pitchMidiMax) {
+          return null;
+        }
+        const start = Math.max(0, Number(note.start_tick) || 0);
+        const duration = Math.max(1, Number(note.duration_ticks) || 1);
+        return {
+          id: note.provisional_id,
+          left: start * pixelsPerTick,
+          width: duration * pixelsPerTick,
+          top: (pitchMidiMax - midi) * height,
+          height: height - 2,
+          low: Number(note.confidence) < threshold,
+        };
+      })
+      .filter(Boolean);
+  }, [
+    audioPhase,
+    audioPreview,
+    audioSelectedProvisionalIds,
+    audioConfidenceThreshold,
+    pixelsPerTick,
+    pitchMidiMax,
+    pitchMidiMin,
+    rowHeight,
+  ]);
 
   useEffect(() => {
     if (cursorTick === null || !Number.isFinite(pixelsPerTick)) {
@@ -212,6 +283,18 @@ function PianoRollOverlayLayer({
           $width={motifDestinationRect.width}
         />
       ) : null}
+      {provisionalNotes.map((note) => (
+        <ProvisionalNote
+          key={note.id}
+          data-testid="piano-roll-audio-provisional-note"
+          data-low-confidence={note.low ? 'true' : 'false'}
+          $left={note.left}
+          $top={note.top}
+          $width={note.width}
+          $height={note.height}
+          $low={note.low}
+        />
+      ))}
       {dragPreview && (
         <DragGhost
           data-testid="piano-roll-drag-ghost"
