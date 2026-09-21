@@ -9,8 +9,17 @@ from .capabilities import ModelCapability
 from .operations import AiOperation
 
 ModelLocality = Literal["local", "remote"]
-ModelStatus = Literal["ready", "unconfigured", "unavailable", "degraded"]
-ModelRuntimeId = Literal["openai_compatible_chat", "fake", "stub"]
+# Additive local lifecycle statuses appear in discovery; selectable filters use ready.
+ModelStatus = Literal[
+    "ready",
+    "unconfigured",
+    "unavailable",
+    "degraded",
+    "loading",
+    "out_of_memory",
+    "unsupported_device",
+]
+ModelRuntimeId = Literal["openai_compatible_chat", "fake", "stub", "local_openai_compatible"]
 
 
 @dataclass(frozen=True)

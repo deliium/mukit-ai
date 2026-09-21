@@ -205,7 +205,7 @@ def provider_settings_for_resolved(
     *,
     env: Mapping[str, str] | None = None,
 ) -> LLMProviderSettings:
-    """Map a resolved chat/fake model back to ``LLMProviderSettings`` for existing orchestrators."""
+    """Map a resolved chat/fake/local model back to ``LLMProviderSettings`` for existing orchestrators."""
     active = settings or load_llm_settings(env)
     descriptor = resolved.descriptor
     configured: LLMProviderSettings | None = None
@@ -224,12 +224,30 @@ def provider_settings_for_resolved(
                 api_key="fake",
                 is_default=True,
             )
+        if descriptor.runtime == "local_openai_compatible":
+            from app.local_llm_settings import load_local_llm_settings
+
+            local = load_local_llm_settings(env)
+            if not local.enabled or not local.model:
+                raise ModelUnavailableError(
+                    f"No local LLM credentials for provider {descriptor.provider}",
+                    code="model_unavailable",
+                )
+            return LLMProviderSettings(
+                provider="local",
+                model=descriptor.provider_model or local.model,
+                api_key=local.api_key,
+                base_url=local.base_url,
+                is_default=False,
+            )
         raise ModelUnavailableError(
             f"No LLM credentials for provider {descriptor.provider}",
             code="model_unavailable",
         )
     model_name = descriptor.provider_model or configured.model
-    if model_name != configured.model:
+    if model_name != configured.model or (
+        descriptor.runtime == "local_openai_compatible" and configured.base_url
+    ):
         return LLMProviderSettings(
             provider=configured.provider,
             model=model_name,
@@ -296,12 +314,23 @@ def _ensure_settings_models_registered(
         registry = get_registry(env)
         if model_id in registry:
             continue
-        runtime = "fake" if provider.provider == FAKE_PROVIDER else "openai_compatible_chat"
-        locality = "local" if runtime == "fake" else "remote"
+        if provider.provider == FAKE_PROVIDER:
+            runtime = "fake"
+            locality = "local"
+        elif provider.provider == "local":
+            runtime = "local_openai_compatible"
+            locality = "local"
+        else:
+            runtime = "openai_compatible_chat"
+            locality = "remote"
         register_model(
             ModelDescriptor(
                 id=model_id,
-                display_name=f"{provider.provider}:{provider.model}",
+                display_name=(
+                    f"Local ({provider.model})"
+                    if provider.provider == "local"
+                    else f"{provider.provider}:{provider.model}"
+                ),
                 provider=provider.provider,
                 runtime=runtime,  # type: ignore[arg-type]
                 primary_capability=ModelCapability.LANGUAGE_PLANNER,
@@ -311,6 +340,7 @@ def _ensure_settings_models_registered(
                 status="ready",
                 health=ModelHealth(status="ready", credentials_present=True),
                 provider_model=provider.model,
+                limits={},
             ),
             overwrite=False,
         )
@@ -482,7 +512,18 @@ def _assert_supports_operation(descriptor: ModelDescriptor, operation: AiOperati
 
 
 def _assert_available(descriptor: ModelDescriptor) -> None:
-    if descriptor.status in {"unconfigured", "unavailable"} or descriptor.runtime == "stub":
+    if descriptor.runtime == "stub":
+        raise ModelUnavailableError(
+            f"Model unavailable: {descriptor.id}",
+            code="model_unavailable",
+        )
+    if descriptor.status in {
+        "unconfigured",
+        "unavailable",
+        "loading",
+        "out_of_memory",
+        "unsupported_device",
+    }:
         raise ModelUnavailableError(
             f"Model unavailable: {descriptor.id}",
             code="model_unavailable",

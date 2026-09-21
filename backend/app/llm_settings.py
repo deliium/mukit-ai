@@ -3,13 +3,15 @@ import os
 from dataclasses import dataclass
 from typing import Mapping
 
+from app.local_llm_settings import LOCAL_PROVIDER, load_local_llm_settings, local_llm_enabled
+
 
 logger = logging.getLogger(__name__)
 
 OPENAI_PROVIDER = "openai"
 DEEPSEEK_PROVIDER = "deepseek"
 FAKE_PROVIDER = "fake"
-SUPPORTED_PROVIDERS = {OPENAI_PROVIDER, DEEPSEEK_PROVIDER, FAKE_PROVIDER}
+SUPPORTED_PROVIDERS = {OPENAI_PROVIDER, DEEPSEEK_PROVIDER, FAKE_PROVIDER, LOCAL_PROVIDER}
 FAKE_MODE_ENV = "LLM_FAKE_MODE"
 FAKE_MODEL_DEFAULT = "fake-deterministic"
 
@@ -108,6 +110,31 @@ def load_llm_settings(env: Mapping[str, str] | None = None) -> LLMSettings:
                     "has_deepseek_key": bool(deepseek_key),
                 },
             )
+
+    local_settings = load_local_llm_settings(source)
+    if local_settings.enabled and local_settings.model:
+        providers.append(
+            LLMProviderSettings(
+                provider=LOCAL_PROVIDER,
+                model=local_settings.model,
+                api_key=local_settings.api_key,
+                base_url=local_settings.base_url,
+            )
+        )
+        logger.info(
+            "Local LLM provider loaded into LLM settings",
+            extra={
+                "provider": LOCAL_PROVIDER,
+                "model": local_settings.model,
+                "device": local_settings.device,
+                "has_base_url": bool(local_settings.base_url),
+            },
+        )
+    elif local_llm_enabled(source):
+        logger.debug(
+            "Local LLM enabled flag set but model missing; not adding provider",
+            extra={"provider": LOCAL_PROVIDER},
+        )
 
     # When fake mode is on and the user did not request a specific default, prefer fake.
     effective_requested = requested_default
