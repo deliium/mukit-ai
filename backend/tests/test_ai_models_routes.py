@@ -41,6 +41,35 @@ def test_list_ai_models_filter_by_capability(monkeypatch):
     response = asyncio.run(list_ai_models(capability="embedding"))
     assert len(response.models) >= 1
     assert all(m.primary_capability == "embedding" for m in response.models)
+    ready = [m for m in response.models if m.status == "ready"]
+    assert any(m.id == "local:symbolic-features-v1" for m in ready)
+    assert any(m.runtime == "symbolic_features" for m in ready)
+    assert response.operation_defaults.get("embed") == "local:symbolic-features-v1"
+
+
+def test_resolve_embed_defaults_to_symbolic_features(monkeypatch):
+    from app.ai_runtime.operations import AiOperation
+    from app.ai_runtime.routing import resolve_model_for_operation
+    from app.ai_runtime.runtimes.symbolic_features import build_symbolic_features_embedding_model
+    from tests.test_composition_v2_schema import minimal_v2
+    from app.composition_schemas import CompositionV2
+
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    env = dict(**{k: v for k, v in __import__("os").environ.items()})
+    registry_mod.reload_registry(env)
+    resolved = resolve_model_for_operation(AiOperation.EMBED, None, env=env)
+    assert resolved.resolved_model_id == "local:symbolic-features-v1"
+    assert resolved.descriptor.runtime == "symbolic_features"
+    model = build_symbolic_features_embedding_model(resolved.descriptor)
+    card = model.embed_composition_scope(CompositionV2.model_validate(minimal_v2(
+        tracks=[{
+            "id": "piano-1", "name": "Piano", "instrument": "piano", "role": "melody",
+            "midi_program": 0, "channel": 1,
+            "events": [{"pitch": "C4", "start_tick": 0, "duration_ticks": 480, "velocity": 80}],
+        }]
+    )))
+    assert card.dims == 81
+    assert card.model_id == "local:symbolic-features-v1"
 
 
 def test_get_ai_model_detail(monkeypatch):

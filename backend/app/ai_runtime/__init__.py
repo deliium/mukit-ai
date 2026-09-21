@@ -23,6 +23,7 @@ from .protocols import (
     AudioTranscriptionModel,
     EmbeddingModel,
     LanguageModel,
+    SymbolicEmbeddingModel,
     SymbolicMusicModel,
 )
 from .types import (
@@ -52,6 +53,7 @@ __all__ = [
     "ModelNotFoundError",
     "ModelUnavailableError",
     "ResolvedModel",
+    "SymbolicEmbeddingModel",
     "SymbolicMusicModel",
     "creative_chat_operations",
     "default_capability_for_operation",

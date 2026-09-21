@@ -23,7 +23,7 @@ creative motif — not multiple primary capabilities.
 | `language_planner` | Form/harmony/theme planning, instruction following, JSON repair |
 | `symbolic_composer` | Full/partial symbolic composition generation |
 | `symbolic_editor` | Region edit, arrangement/development drafts, reharmonize AI, creative motifs |
-| `embedding` | Similarity / retrieval (stub) |
+| `embedding` | Symbolic musical similarity / retrieval (`local:symbolic-features-v1` ready; text stub remains unconfigured) |
 | `audio_transcription` | Audio → text/MIDI-ish (stub) |
 | `audio_generation` | Neural audio render (stub; distinct from FluidSynth) |
 
@@ -40,7 +40,7 @@ creative motif — not multiple primary capabilities.
 | `reharmonize_ai` | `AI_OP_REHARMONIZE_AI` | `symbolic_editor` |
 | `creative_motif` | `AI_OP_CREATIVE_MOTIF` | `symbolic_editor` |
 | `transcribe` | `AI_OP_TRANSCRIBE` | `audio_transcription` (stub) |
-| `embed` | `AI_OP_EMBED` | `embedding` (stub) |
+| `embed` | `AI_OP_EMBED` | `embedding` (default: `local:symbolic-features-v1`) |
 | `audio_render` | `AI_OP_AUDIO_RENDER` | `audio_generation` (stub) |
 
 Fallback: `AI_FALLBACK_<OPERATION>=id1,id2` (comma-separated model ids). Never silent.
@@ -54,7 +54,7 @@ Canonical **`model_id`**: `provider:model` (e.g. `openai:gpt-4o-mini`, `fake:fak
 | `id` | Canonical `provider:model` |
 | `display_name` | UI label |
 | `provider` | Vendor/org id |
-| `runtime` | `openai_compatible_chat` \| `fake` \| `stub` \| `local_openai_compatible` |
+| `runtime` | `openai_compatible_chat` \| `fake` \| `stub` \| `local_openai_compatible` \| `symbolic_features` |
 | `primary_capability` | Discovery group |
 | `locality` | `local` \| `remote` |
 | `model_version` | Optional version string |
@@ -126,7 +126,7 @@ backend/app/ai_runtime/
   registry.py       # in-memory registry + reload
   bootstrap.py      # env → registry
   routing.py        # operation resolution + fallback
-  runtimes/         # openai_compatible_chat, fake, stub, local_openai_compatible
+  runtimes/         # openai_compatible_chat, fake, stub, local_openai_compatible, symbolic_features
   local_health.py   # Bounded sidecar probe (no weight download)
 ```
 

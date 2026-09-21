@@ -35,12 +35,28 @@ class SymbolicMusicModel(Protocol):
 
 @runtime_checkable
 class EmbeddingModel(Protocol):
-    """Text embedding model (stub capability in this plan)."""
+    """Text embedding model (stub capability — not musical similarity)."""
 
     @property
     def model_id(self) -> str: ...
 
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
+@runtime_checkable
+class SymbolicEmbeddingModel(Protocol):
+    """Symbolic composition-scope embedding (handcrafted or learned adapter).
+
+    Distinct from text ``EmbeddingModel.embed(texts)`` — musical similarity must
+    not silently fall back to text stubs.
+    """
+
+    @property
+    def model_id(self) -> str: ...
+
+    def embed_composition_scope(self, composition: Any, scope: Any) -> Any:
+        """Return ``CompositionEmbeddingV1`` for the given Composition V2 + scope."""
+        ...
 
 
 @runtime_checkable

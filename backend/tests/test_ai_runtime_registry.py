@@ -76,8 +76,11 @@ def test_filter_by_capability_and_operation():
     assert any(m.id == "openai:gpt-4o-mini" for m in arrange)
 
     embed = registry_mod.list_models(capability=ModelCapability.EMBEDDING)
-    assert len(embed) == 1
-    assert embed[0].status == "unconfigured"
+    assert len(embed) >= 2
+    by_id = {m.id: m for m in embed}
+    assert by_id["local:embedding-stub"].status == "unconfigured"
+    assert by_id["local:symbolic-features-v1"].status == "ready"
+    assert by_id["local:symbolic-features-v1"].runtime == "symbolic_features"
 
 
 def test_get_model_missing_raises():

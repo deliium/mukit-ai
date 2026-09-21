@@ -19,7 +19,13 @@ ModelStatus = Literal[
     "out_of_memory",
     "unsupported_device",
 ]
-ModelRuntimeId = Literal["openai_compatible_chat", "fake", "stub", "local_openai_compatible"]
+ModelRuntimeId = Literal[
+    "openai_compatible_chat",
+    "fake",
+    "stub",
+    "local_openai_compatible",
+    "symbolic_features",
+]
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,85 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 100,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "bar_count": 4,
+  "duration_ticks": 7680,
+  "sections": [
+    {
+      "type": "intro",
+      "start_bar": 1,
+      "bar_count": 2,
+      "start_tick": 0,
+      "duration_ticks": 3840,
+      "id": "s1"
+    },
+    {
+      "type": "outro",
+      "start_bar": 3,
+      "bar_count": 2,
+      "start_tick": 3840,
+      "duration_ticks": 3840,
+      "id": "s2"
+    }
+  ],
+  "tracks": [
+    {
+      "id": "melody-1",
+      "name": "Melody",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "is_drum": false,
+      "events": [
+        {
+          "type": "note",
+          "pitch": "D4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "e1",
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "F#4",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "e2",
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "A4",
+          "start_tick": 960,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "e3",
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "D5",
+          "start_tick": 1440,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "e4",
+          "articulations": [],
+          "tie": null
+        }
+      ]
+    }
+  ],
+  "harmony": [],
+  "tempo_changes": [],
+  "time_signature_changes": [],
+  "key_changes": [],
+  "markers": []
+}

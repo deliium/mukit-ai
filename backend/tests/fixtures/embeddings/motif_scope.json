@@ -1,0 +1,85 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 100,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "bar_count": 2,
+  "duration_ticks": 3840,
+  "sections": [
+    {
+      "type": "intro",
+      "start_bar": 1,
+      "bar_count": 2,
+      "start_tick": 0,
+      "duration_ticks": 3840
+    }
+  ],
+  "tracks": [
+    {
+      "id": "melody-1",
+      "name": "Melody",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "events": [
+        {
+          "type": "note",
+          "pitch": "C4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "n1"
+        },
+        {
+          "type": "note",
+          "pitch": "D4",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "n2"
+        },
+        {
+          "type": "note",
+          "pitch": "E4",
+          "start_tick": 960,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "n3"
+        },
+        {
+          "type": "note",
+          "pitch": "F4",
+          "start_tick": 1440,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "n4"
+        }
+      ]
+    }
+  ],
+  "harmony": [],
+  "tempo_changes": [],
+  "time_signature_changes": [],
+  "key_changes": [],
+  "markers": [],
+  "motifs": [
+    {
+      "id": "motif-a",
+      "label": "Motif A",
+      "occurrences": [
+        {
+          "id": "occ-orig",
+          "track_id": "melody-1",
+          "event_ids": [
+            "n1",
+            "n2",
+            "n3"
+          ],
+          "relationship": "original"
+        }
+      ]
+    }
+  ]
+}

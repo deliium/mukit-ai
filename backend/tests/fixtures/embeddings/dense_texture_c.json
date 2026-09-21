@@ -1,0 +1,105 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 100,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "bar_count": 4,
+  "duration_ticks": 7680,
+  "sections": [
+    {
+      "type": "intro",
+      "start_bar": 1,
+      "bar_count": 2,
+      "start_tick": 0,
+      "duration_ticks": 3840,
+      "id": "s1"
+    },
+    {
+      "type": "outro",
+      "start_bar": 3,
+      "bar_count": 2,
+      "start_tick": 3840,
+      "duration_ticks": 3840,
+      "id": "s2"
+    }
+  ],
+  "tracks": [
+    {
+      "id": "pad-1",
+      "name": "Melody",
+      "instrument": "piano",
+      "role": "harmony",
+      "midi_program": 0,
+      "channel": 1,
+      "is_drum": false,
+      "events": [
+        {
+          "type": "note",
+          "pitch": "C3",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 70,
+          "id": "c1",
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "E3",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 70,
+          "id": "c2",
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "G3",
+          "start_tick": 0,
+          "duration_ticks": 1920,
+          "velocity": 70,
+          "id": "c3",
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "C3",
+          "start_tick": 1920,
+          "duration_ticks": 1920,
+          "velocity": 70,
+          "id": "c4",
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "F3",
+          "start_tick": 1920,
+          "duration_ticks": 1920,
+          "velocity": 70,
+          "id": "c5",
+          "articulations": [],
+          "tie": null
+        },
+        {
+          "type": "note",
+          "pitch": "A3",
+          "start_tick": 1920,
+          "duration_ticks": 1920,
+          "velocity": 70,
+          "id": "c6",
+          "articulations": [],
+          "tie": null
+        }
+      ]
+    }
+  ],
+  "harmony": [],
+  "tempo_changes": [],
+  "time_signature_changes": [],
+  "key_changes": [],
+  "markers": []
+}

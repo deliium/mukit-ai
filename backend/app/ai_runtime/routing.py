@@ -389,6 +389,24 @@ def default_operation_routes(env: Mapping[str, str] | None = None) -> dict[str, 
         if raw is None and operation in (AiOperation.GENERATE_PLANNER, AiOperation.GENERATE_COMPOSER):
             raw = (source.get(operation_env_key(AiOperation.GENERATE)) or "").strip() or None
         routes[str(operation)] = raw
+
+    # Implicit default for embed when AI_OP_EMBED unset: ready symbolic features model.
+    if not routes.get("embed"):
+        from app.embeddings.settings import EMBEDDING_DEFAULT_MODEL_ID
+
+        try:
+            descriptor = get_model(EMBEDDING_DEFAULT_MODEL_ID, env=source)
+            if descriptor.status == "ready" and AiOperation.EMBED in descriptor.supported_operations:
+                routes["embed"] = EMBEDDING_DEFAULT_MODEL_ID
+                logger.debug(
+                    "Default embed route set to symbolic features model",
+                    extra={"model_id": EMBEDDING_DEFAULT_MODEL_ID},
+                )
+        except ModelNotFoundError:
+            logger.warning(
+                "No implicit embed default; symbolic features model not registered",
+                extra={"expected_model_id": EMBEDDING_DEFAULT_MODEL_ID},
+            )
     return routes
 
 
@@ -478,10 +496,26 @@ def _resolve_primary(
 
     default_id = get_default_model_id(env)
     if default_id:
-        logger.info("Resolution path: global default", extra={"model_id": default_id})
-        return get_model(default_id, env=env), "global", default_id
+        try:
+            descriptor = get_model(default_id, env=env)
+            if operation in descriptor.supported_operations:
+                logger.info("Resolution path: global default", extra={"model_id": default_id})
+                return descriptor, "global", default_id
+            logger.debug(
+                "Global default does not support operation; continuing search",
+                extra={
+                    "model_id": default_id,
+                    "operation": str(operation),
+                    "supported_operations": [str(op) for op in descriptor.supported_operations],
+                },
+            )
+        except ModelNotFoundError:
+            logger.debug(
+                "Global default model id not registered",
+                extra={"model_id": default_id, "operation": str(operation)},
+            )
 
-    # Prefer any ready language/chat model for creative ops.
+    # Prefer any ready model that supports this operation (e.g. symbolic embedder).
     ready = list_models(operation=operation, status="ready", env=env)
     if ready:
         logger.info("Resolution path: global first ready", extra={"model_id": ready[0].id})

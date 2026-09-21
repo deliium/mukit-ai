@@ -158,6 +158,38 @@ def build_registry_from_env(
             extra={"model_id": stub_id, "primary_capability": capability},
         )
 
+    # Ready handcrafted symbolic embedder (default for AI_OP_EMBED).
+    from .runtimes.symbolic_features import default_symbolic_features_descriptor
+
+    symbolic = default_symbolic_features_descriptor()
+    if symbolic.id in models:
+        logger.warning(
+            "Symbolic features model id collides with existing entry",
+            extra={"model_id": symbolic.id},
+        )
+    else:
+        models[symbolic.id] = symbolic
+        logger.info(
+            "Registered ready symbolic features embedding model",
+            extra={
+                "model_id": symbolic.id,
+                "runtime": symbolic.runtime,
+                "status": symbolic.status,
+                "primary_capability": symbolic.primary_capability,
+            },
+        )
+
+    ready_embedders = [
+        m
+        for m in models.values()
+        if m.primary_capability == ModelCapability.EMBEDDING and m.status == "ready"
+    ]
+    if not ready_embedders:
+        logger.warning(
+            "No ready embedding models registered; only text stubs may be present",
+            extra={"embedding_model_count": sum(1 for m in models.values() if m.primary_capability == ModelCapability.EMBEDDING)},
+        )
+
     extra_path = (source.get(REGISTRY_PATH_ENV) or "").strip()
     if extra_path:
         _merge_registry_file(models, Path(extra_path))
