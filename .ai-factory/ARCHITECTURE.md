@@ -30,7 +30,10 @@ mukit-ai/
 │   │   ├── import_schemas.py       # Import response/report/issue DTOs
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── llm_settings.py         # Provider config from environment
+│   │   ├── local_llm_settings.py   # Optional LOCAL_* OpenAI-compatible sidecar settings
 │   │   ├── ai_runtime/             # Capability registry, routing, typed model adapters (provider boundary)
+│   │   │   ├── local_health.py     # Bounded local sidecar probe (no weight download)
+│   │   │   └── runtimes/           # openai_compatible_chat, fake, stub, local_openai_compatible
 │   │   ├── routers/
 │   │   │   ├── projects.py         # Projects module HTTP routes
 │   │   │   ├── imports.py          # MIDI / MusicXML multipart import
@@ -38,7 +41,8 @@ mukit-ai/
 │   │   │   ├── arrangement.py      # GET/POST /composition/arrangement/*
 │   │   │   ├── composition_development.py
 │   │   │   ├── harmony.py
-│   │   │   └── motifs.py
+│   │   │   ├── motifs.py
+│   │   │   └── ai_models.py        # GET /ai/models discovery
 │   │   ├── services/               # Application services (orchestration + domain helpers)
 │   │   │   ├── llm_music_generator.py
 │   │   │   ├── llm_composition_editor.py
@@ -99,13 +103,14 @@ mukit-ai/
 │       ├── utils/                  # Client-side composition/playback/analysis/arrangement helpers
 │       ├── App.jsx
 │       └── main.jsx
-├── docs/                           # composition.v2/v1, analysis, arrangement, import, persistence, testing
-├── docker-compose.yml
-├── compose.dev.yml
+├── docs/                           # composition.v2/v1, ai-runtime, local-ai, analysis, arrangement, import, persistence, testing
+├── models/llm/                     # Optional host GGUF/weights for Compose local-ai profiles (gitignored)
+├── docker-compose.yml              # Default stack: backend + frontend only (no GPU / no local AI pull)
+├── compose.dev.yml                 # Hot-reload override; optional notes for local-ai compose
+├── compose.local-ai.yml            # Optional profiles: local-ai (llama.cpp), local-ai-vllm, training stub
 ├── .env.example
 └── README.md
 ```
-
 ### Logical modules (within the flat trees)
 
 | Module | Backend home | Frontend home |
@@ -116,7 +121,7 @@ mukit-ai/
 | **Arrangement** | `routers/arrangement.py`, `arrangement_schemas.py`, `instrument_catalog.py`, `composition_arrangement_*`, `llm_composition_arrangement.py` | `ArrangementPanel`, arrangement APIs in `musicApi.js`, `compositionArrangementCandidates.js`, arrangement slice of `musicStore` |
 | **Harmony / reharmonize** | `routers/harmony.py`, `harmony_schemas.py`, `composition_harmony_*`, `composition_reharmonization.py`, `llm_reharmonizer.py` | `HarmonyTimelinePanel`, `previewReharmonization` in `musicApi.js`, `compositionHarmony*.js`, reharmonize slice of `musicStore` |
 | **Composition / LLM** | `main.py` LLM routes, `schemas.py`, `llm_*`, `composition_*` (plan/validate/normalize/patch); bounded analysis advisory via `build_llm_analysis_context` | `MusicGenerator`, `PromptJsonEditor`, `AiRegionEditPanel`, `musicApi.js` |
-| **AI runtime** | `ai_runtime/` (capability registry, operation routing, typed protocols/adapters); discovery via `/ai/models` (compat `/llm/models`); FluidSynth stays outside | `musicApi.js` model catalog clients; global selector remains `/llm/models` until per-op UX |
+| **AI runtime** | `ai_runtime/` (capability registry, operation routing, typed protocols/adapters including `local_openai_compatible`); `local_llm_settings.py` + `local_health.py` for optional OpenAI-compatible sidecars; discovery via `/ai/models` (compat `/llm/models`); FluidSynth stays outside; app never loads GGUF/safetensors | `musicApi.js` model catalog clients; global selector remains `/llm/models` (includes ready `local:*` when enabled) |
 | **Rendering / Export** | `music_json_renderer`, `composition_midi`, `composition_wav` | `NotationViewer`, `ExportControls`, playback components + `utils/playback*` / `tonePlaybackEngine` |
 | **Shared infrastructure** | `db/`, `llm_settings.py`, CORS/lifespan in `main.py` | `api/*`, shared store fields, `utils/downloadFile.js` |
 
@@ -173,7 +178,7 @@ FastAPI backend
 4. **Application services orchestrate:** Services coordinate LLM calls, validation, and I/O. Push invariants into schema validation and dedicated composition helpers rather than scattering rules across handlers and React components.
 5. **Frontend purity where it matters:** Keep event math, validation mirrors, and Tone.js engine code in `utils/` with unit tests; keep UI in `components/`.
 6. **Infrastructure stays small and shared:** `db/`, env-based `llm_settings`, Docker, and CORS belong to shared infrastructure — not copied per feature.
-7. **AI provider boundary:** Orchestrators resolve models via `ai_runtime` (capability + operation), not by constructing LangChain clients inline. Remote chat must use `llm_chat_client`; FluidSynth WAV export is not an AI runtime.
+7. **AI provider boundary:** Orchestrators resolve models via `ai_runtime` (capability + operation), not by constructing LangChain clients inline. Remote and optional local chat must use `llm_chat_client` / OpenAI-compatible HTTP only (`LocalLanguageModel` for `runtime=local_openai_compatible`); never import llama.cpp/vLLM or load weights in FastAPI. FluidSynth WAV export is not an AI runtime. Optional local sidecars live under Compose profiles in `compose.local-ai.yml` — default `docker compose up` must not require GPU or multi-GB inference images.
 
 ## Code Organization Note
 

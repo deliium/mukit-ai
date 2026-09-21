@@ -54,13 +54,13 @@ Canonical **`model_id`**: `provider:model` (e.g. `openai:gpt-4o-mini`, `fake:fak
 | `id` | Canonical `provider:model` |
 | `display_name` | UI label |
 | `provider` | Vendor/org id |
-| `runtime` | `openai_compatible_chat` \| `fake` \| `stub` |
+| `runtime` | `openai_compatible_chat` \| `fake` \| `stub` \| `local_openai_compatible` |
 | `primary_capability` | Discovery group |
 | `locality` | `local` \| `remote` |
 | `model_version` | Optional version string |
 | `supported_operations` | Operation allow-list |
-| `status` / `health` | Non-secret readiness |
-| `limits` | Optional public limits |
+| `status` / `health` | Non-secret readiness (`ready` when usable; local probes may set `loading` / `out_of_memory` / `unsupported_device`; `health_detail` carries `loaded` etc.) |
+| `limits` | Optional public limits (e.g. local `context_size`, `max_concurrency` — never host weight paths) |
 
 Lifecycle: `reload_registry(env=...)` so tests and config reload are not stuck on a
 stale process-global registry. Optional `AI_MODEL_REGISTRY_PATH` adds entries;
@@ -85,6 +85,15 @@ Responses that return provider/model also surface `fallback_applied`,
 - Docker: nginx must proxy `location /ai/` to the backend (same origin as `/llm/`)
 
 Never return API keys, base URL secrets, absolute weight paths, or host usernames.
+
+### Optional local OpenAI-compatible models
+
+When `LOCAL_LLM_ENABLED=1` and a sidecar is reachable, the registry adds
+`local:<model>` with `runtime=local_openai_compatible` and `locality=local`.
+Transport reuses the shared ChatOpenAI factory against `LOCAL_LLM_BASE_URL`
+(`LocalLanguageModel`). Default Compose does **not** start a sidecar — see
+[Optional local AI (AMD/ROCm)](./local-ai.md). `/ready` exposes a soft `local_ai`
+subsection that never fails overall readiness when local AI is off or down.
 
 ## Provenance
 
@@ -117,7 +126,8 @@ backend/app/ai_runtime/
   registry.py       # in-memory registry + reload
   bootstrap.py      # env → registry
   routing.py        # operation resolution + fallback
-  runtimes/         # openai_compatible_chat, fake, stub adapters
+  runtimes/         # openai_compatible_chat, fake, stub, local_openai_compatible
+  local_health.py   # Bounded sidecar probe (no weight download)
 ```
 
 See also: `.ai-factory/ARCHITECTURE.md` (Composition/LLM module), `.env.example`.

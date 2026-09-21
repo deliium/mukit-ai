@@ -62,6 +62,9 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Named volume `mukit_project_data` persists SQLite at `/data/projects.db`. Prefer `docker compose restart` or `down` without `-v`.
 - Both services use `restart: unless-stopped` and healthchecks (`GET /health` on backend; HTTP on frontend).
 - Hot-reload override (optional): `docker compose -f docker-compose.yml -f compose.dev.yml up --build`
+- Optional local AI (llama.cpp / vLLM sidecars; not required for default up):
+  `docker compose -f docker-compose.yml -f compose.local-ai.yml --profile local-ai up --build`
+  with `LOCAL_LLM_ENABLED=1` — details: [docs/local-ai.md](docs/local-ai.md).
 - Optional arrangement catalog override: set `ARRANGEMENT_INSTRUMENT_CATALOG_PATH` to an **absolute path inside the backend container** (see `.env.example` and the read-only bind example in `compose.dev.yml`). Details: [docs/composition-arrangement.md](docs/composition-arrangement.md).
 - Logging: set `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` (default `INFO`). Never expect keys/prompts/raw MusicXML/MIDI/WAV or upload bytes in logs.
 - Import limits: `IMPORT_*` in `.env.example` (default upload 5 MiB). Details: [docs/import.md](docs/import.md).
@@ -304,6 +307,8 @@ mukit-ai/
 
 | Guide | Description |
 |-------|-------------|
+| [AI Runtime](docs/ai-runtime.md) | Capability registry, routing, `/ai/models`, provenance |
+| [Optional local AI](docs/local-ai.md) | AMD/ROCm Compose profiles, llama.cpp/vLLM sidecars, troubleshooting |
 | [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
 | [Composition Editor](docs/composition-editor.md) | Piano-roll multi-note editing, clipboard, cursor/loop |
 | [Browser playback](docs/browser-playback.md) | Tone.js projection, mixer, samples vs FluidSynth export |

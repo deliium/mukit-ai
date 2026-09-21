@@ -25,6 +25,7 @@
 - [x] **Safe AI experimentation and versioning** — Preview-first AI apply, immutable project revisions, named alternative branches, and restart-safe compare/restore
 - [x] **Expressive V2 playback and mixing** — Sampled/synth browser performance with velocity and V2 expression, ephemeral mixer (balance/pan/mute/solo/ambience), smooth transport, and local audited assets without changing export
 - [x] **Unified AI runtime and model-provider architecture (V3)** — Capability registry, operation routing, typed adapters, `/ai/models` discovery, explicit fallback, and enriched provenance without regressing V2 remote LLM workflows
+- [x] **Optional local AI inference (AMD/ROCm)** — Compose profiles for llama.cpp / vLLM sidecars, `LocalLanguageModel` via OpenAI-compatible HTTP, soft readiness, frontend select of `local:*` without changing default `docker compose up`
 
 ## Completed
 
@@ -51,3 +52,4 @@
 | Safe AI experimentation and versioning | 2026-09-10 |
 | Expressive V2 playback and mixing | 2026-09-10 |
 | Unified AI runtime and model-provider architecture (V3) | 2026-09-21 |
+| Optional local AI inference (AMD/ROCm) | 2026-09-21 |
