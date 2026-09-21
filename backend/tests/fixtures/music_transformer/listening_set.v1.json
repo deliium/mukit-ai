@@ -1,0 +1,27 @@
+{
+  "schema_version": "music_transformer.listening_set.v1",
+  "prompts": [
+    {
+      "id": "seed_one_bar_greedy",
+      "seed": 7,
+      "conditioning": {},
+      "prefix_path": "seed_one_bar.json",
+      "sample_overrides": {
+        "greedy": true,
+        "max_new_tokens": 32,
+        "temperature": 0.0
+      }
+    },
+    {
+      "id": "seed_one_bar_alt_seed",
+      "seed": 11,
+      "conditioning": {},
+      "prefix_path": "seed_one_bar.json",
+      "sample_overrides": {
+        "greedy": true,
+        "max_new_tokens": 32,
+        "temperature": 0.0
+      }
+    }
+  ]
+}

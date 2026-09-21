@@ -7,6 +7,7 @@ Tiny CPU-only assets for unit/acceptance tests.
 | `tiny_arch.json` | Micro `music_transformer.config.v1` (2 layers, d_model=64) |
 | `tiny_train.json` | Short train loop knobs |
 | `seed_one_bar.json` | One-bar Composition V2 seed (prefix / train input) |
+| `listening_set.v1.json` | Fixed listening prompts (prefix = `seed_one_bar.json`) |
 
 ## CPU smoke train
 
