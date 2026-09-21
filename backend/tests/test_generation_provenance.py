@@ -66,6 +66,32 @@ def test_build_generation_provenance_v1_includes_schema_and_sanitized_stages():
     assert composer["tokenizer_version"] == "tokenizer.v1"
 
 
+def test_sanitize_stage_preserves_agent_id_and_capability():
+    fragment = build_generation_provenance_v1(
+        pipeline_id="agent_spine_v1",
+        stages=[
+            {
+                "operation": "agent_harmony_propose",
+                "model_id": "fake:fake-v1",
+                "runtime": "fake",
+                "capability": "symbolic_editor",
+                "agent_id": "harmony",
+                "agent_capability": "harmony",
+                "prompt": "should_be_dropped",
+            }
+        ],
+    )
+    stage = fragment["stages"][0]
+    assert stage["agent_id"] == "harmony"
+    assert stage["agent_capability"] == "harmony"
+    assert "prompt" not in stage
+    enriched = attach_provenance_fragment(
+        {"pipeline_id": "agent_spine_v1", "stages": fragment["stages"]},
+    )
+    assert enriched["stages"][0]["agent_id"] == "harmony"
+    assert enriched["generation_parameters"]["stages"][0]["agent_id"] == "harmony"
+
+
 def test_build_generation_provenance_rejects_secret_values():
     with pytest.raises(PersistenceSecretError):
         build_generation_provenance_v1(

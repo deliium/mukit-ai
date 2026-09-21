@@ -29,6 +29,8 @@ _MAX_RUNTIME = 64
 _MAX_CAPABILITY = 64
 _MAX_OPERATION = 64
 _MAX_DIGEST_PREFIX = 40
+_MAX_AGENT_ID = 64
+_MAX_AGENT_CAPABILITY = 64
 
 _GENERATION_CONFIG_KEYS = frozenset(
     {
@@ -106,6 +108,20 @@ def _sanitize_stage(stage: Mapping[str, Any]) -> dict[str, Any]:
     tokenizer = _truncate(stage.get("tokenizer_version"), _MAX_TOKENIZER_VERSION)
     if tokenizer:
         out["tokenizer_version"] = tokenizer
+    agent_id = _truncate(stage.get("agent_id"), _MAX_AGENT_ID)
+    if agent_id:
+        out["agent_id"] = agent_id
+    agent_capability = _truncate(stage.get("agent_capability"), _MAX_AGENT_CAPABILITY)
+    if agent_capability:
+        out["agent_capability"] = agent_capability
+    logger.debug(
+        "Provenance stage sanitized",
+        extra={
+            "operation": out.get("operation"),
+            "has_agent_id": "agent_id" in out,
+            "has_agent_capability": "agent_capability" in out,
+        },
+    )
     return out
 
 

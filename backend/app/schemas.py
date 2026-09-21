@@ -345,6 +345,9 @@ class GenerationPipelineStageProvenance(BaseModel):
     seed: int | None = None
     checkpoint_card_prefix: str | None = Field(default=None, max_length=64)
     tokenizer_version: str | None = Field(default=None, max_length=80)
+    # V4 multi-agent: durable agent identity on pipeline stages (optional for V3).
+    agent_id: str | None = Field(default=None, max_length=64)
+    agent_capability: str | None = Field(default=None, max_length=64)
 
 
 class LLMMusicGenerationResponse(BaseModel):
