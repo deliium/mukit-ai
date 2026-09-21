@@ -75,6 +75,13 @@ services:
       IMPORT_MAX_METADATA_CHANGES: ${IMPORT_MAX_METADATA_CHANGES:-512}
       IMPORT_MAX_ACTIVE_NOTES: ${IMPORT_MAX_ACTIVE_NOTES:-512}
       IMPORT_DEFAULT_TARGET_PPQ: ${IMPORT_DEFAULT_TARGET_PPQ:-480}
+      # Monophonic audio transcription (preview-only; not MIDI import). See docs/audio-transcription.md.
+      AUDIO_MAX_UPLOAD_BYTES: ${AUDIO_MAX_UPLOAD_BYTES:-10485760}
+      AUDIO_MAX_DURATION_SECONDS: ${AUDIO_MAX_DURATION_SECONDS:-60}
+      AUDIO_MAX_SAMPLE_RATE: ${AUDIO_MAX_SAMPLE_RATE:-48000}
+      AUDIO_CONFIDENCE_INCLUDE_THRESHOLD: ${AUDIO_CONFIDENCE_INCLUDE_THRESHOLD:-0.5}
+      AUDIO_TRANSCRIPTION_ENGINE: ${AUDIO_TRANSCRIPTION_ENGINE:-auto}
+      AUDIO_FAKE_MODE: ${AUDIO_FAKE_MODE:-0}
       # Optional: absolute path *inside this container* to arrangement.instruments.v1 JSON.
       # Bind-mount the file first (see compose.dev.yml). Empty = packaged fixture.
       ARRANGEMENT_INSTRUMENT_CATALOG_PATH: ${ARRANGEMENT_INSTRUMENT_CATALOG_PATH:-}
