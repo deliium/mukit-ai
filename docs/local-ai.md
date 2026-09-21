@@ -27,7 +27,7 @@ Frontend → FastAPI (ai_runtime) → LocalLanguageModel → HTTP OpenAI chat AP
 | *(default — no profile)* | — | Normal app; fake mode or cloud keys |
 | `local-ai` | **llama.cpp** OpenAI server | Default local chat (single-user, UMA-friendly GGUF) |
 | `local-ai-vllm` | **vLLM + ROCm** | Throughput / multi-request experiments |
-| `training` | Stub only | Future PyTorch+ROCm scaffolding — **no training loop yet**. Dataset preprocess: [datasets.md](datasets.md). Token contract for a future loop: [tokenizer.md](tokenizer.md) (`tokenizer.v1` encode/decode + manifest). |
+| `training` | Stub only | Compose stub for future ROCm image notes — **not** the Music Transformer train loop. Dataset preprocess: [datasets.md](datasets.md). Token contract: [tokenizer.md](tokenizer.md). Offline PyTorch train/generate: [music-transformer.md](music-transformer.md) (`python -m app.music_transformer.cli`). |
 
 Application code does **not** branch on llama.cpp vs vLLM. Profiles differ only in sidecar image, command, port, and `LOCAL_LLM_BASE_URL`.
 
@@ -146,6 +146,7 @@ docker compose -f docker-compose.yml -f compose.dev.yml -f compose.local-ai.yml 
 ## See also
 
 - [AI Runtime](./ai-runtime.md) — registry, routing, provenance
+- [Symbolic Music Transformer](./music-transformer.md) — offline PyTorch train/generate (separate from llama.cpp/vLLM)
 - [Testing](./testing.md) — backend unit tests (no GPU required in CI)
 - `.env.example` — `LOCAL_*` knobs
 - `compose.local-ai.yml` — profile service definitions

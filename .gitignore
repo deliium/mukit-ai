@@ -59,6 +59,12 @@ models/llm/*
 *.gguf
 *.safetensors
 
+# Music Transformer checkpoints (train outputs); keep fixtures tiny and tracked
+checkpoints/
+*.pt
+*.pt.card.json
+backend/checkpoints/
+
 # Local SQLite project database
 backend/data/
 

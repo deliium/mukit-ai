@@ -19,6 +19,7 @@ from .routers.harmony import router as harmony_router
 from .routers.composition_development import router as composition_development_router
 from .routers.arrangement import router as arrangement_router
 from .routers.ai_models import router as ai_models_router
+from .music_transformer.settings import load_music_transformer_settings
 from .schemas import (
     Composition,
     LLMCompositionEditRequest,
@@ -107,6 +108,18 @@ app.include_router(harmony_router)
 app.include_router(composition_development_router)
 app.include_router(arrangement_router)
 app.include_router(ai_models_router)
+
+_mt_settings = load_music_transformer_settings()
+if _mt_settings.api_enabled:
+    from .routers.music_transformer import router as music_transformer_router
+
+    app.include_router(music_transformer_router)
+    logger.info(
+        "Music Transformer API router enabled",
+        extra={"device": _mt_settings.device, "has_default_checkpoint": _mt_settings.default_checkpoint is not None},
+    )
+else:
+    logger.info("Music Transformer API router disabled (MUSIC_TRANSFORMER_API_ENABLED=0)")
 
 
 def _composition_export_summary(composition: CompositionV2) -> dict:

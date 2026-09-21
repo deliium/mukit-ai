@@ -103,11 +103,13 @@ restored, report = decode_tokens(sequence, config, vocab=vocab)
 - No FastAPI routes, no project DB persistence, no weight loading / GGUF export.
 - Core profile does not round-trip articulations, ties, automation, motifs, staff/voice, or free-text labels.
 - Dataset `token_limit` remains a note-count **proxy** until a future optional call to real tokenizer length.
-- Next handoff: Composer training loop consumes `tokenizer.v1` + `tokenizer.manifest.v1` (see [local-ai.md](local-ai.md) for optional inference sidecars; training is separate).
+- Model binding: PyTorch Music Transformer checkpoints embed `tokenizer.model_expectation.v1` (`expected_tokenizer_version` + `vocab_hash`). See [music-transformer.md](music-transformer.md).
+- Optional inference sidecars (llama.cpp / vLLM) remain separate — see [local-ai.md](local-ai.md).
 
 ## See also
 
 - [Composition V2](composition-v2.md)
+- [Symbolic Music Transformer](music-transformer.md)
 - [Symbolic datasets](datasets.md)
 - [Optional local AI](local-ai.md)
 - Package: `backend/app/tokenizer/`

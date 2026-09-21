@@ -197,6 +197,9 @@ def build_readiness_report() -> dict[str, Any]:
     # App can serve projects/exports without LLM; LLM routes stay 503.
     # Invalid configured arrangement catalog makes the process not ready.
     ai_summary = _ai_registry_summary()
+    from app.services.music_transformer_generate import music_transformer_readiness_block
+
+    mt_block = music_transformer_readiness_block()
     ready = bool(db_ok and catalog_ok)
     report = {
         "status": "ready" if ready else "not_ready",
@@ -219,6 +222,7 @@ def build_readiness_report() -> dict[str, Any]:
             "soundfont_exists": wav_config.soundfont_exists,
         },
         "arrangement_catalog": catalog_block,
+        "music_transformer": mt_block,
     }
     logger.info(
         "Readiness check completed",
@@ -230,6 +234,7 @@ def build_readiness_report() -> dict[str, Any]:
             "wav_ready": wav_ready,
             "local_ai_enabled": bool(local_ai_block.get("enabled")),
             "local_ai_status": local_ai_block.get("status"),
+            "music_transformer_api_enabled": bool(mt_block.get("enabled")),
         },
     )
     return report

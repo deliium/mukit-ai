@@ -28,6 +28,7 @@
 - [x] **Optional local AI inference (AMD/ROCm)** — Compose profiles for llama.cpp / vLLM sidecars, `LocalLanguageModel` via OpenAI-compatible HTTP, soft readiness, frontend select of `local:*` without changing default `docker compose up`
 - [x] **Symbolic music training dataset pipeline** — Offline `DATASET_ROOT` corpus (ingest → normalize → segment → provenance/dedup/split → stats) via `python -m app.dataset.cli`; no tokenizer/training loop; never writes to `PROJECT_DB_PATH`
 - [x] **Symbolic music Composition V2 tokenizer** — Versioned REMI-style encode/decode (`tokenizer.v1`), vocab/manifest, repair, stats/viz, CLI; train+inference contract; never `PROJECT_DB_PATH` / FastAPI / weight load
+- [x] **Symbolic music PyTorch Music Transformer** — Decoder-only LM over `tokenizer.v1`; offline train/generate CLI, checkpoint card, inference adapter, optional API; CPU tests + ROCm device knob; never `PROJECT_DB_PATH` / GGUF in FastAPI
 
 ## Completed
 
@@ -57,3 +58,4 @@
 | Optional local AI inference (AMD/ROCm) | 2026-09-21 |
 | Symbolic music training dataset pipeline | 2026-09-21 |
 | Symbolic music Composition V2 tokenizer | 2026-09-21 |
+| Symbolic music PyTorch Music Transformer | 2026-09-21 |
