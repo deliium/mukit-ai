@@ -69,16 +69,23 @@ def collect_input_paths(
     dataset_dir: Path | None = None,
     inputs: Sequence[Path] | None = None,
     inputs_glob: str | None = None,
+    split: str | None = None,
 ) -> list[Path]:
+    """Collect train inputs. When ``split`` is set and dataset has ``splits/<split>.jsonl``,
+    prefer those example paths; otherwise fall back to ``examples/**/*.json``.
+    """
     paths: list[Path] = []
     if inputs:
         paths.extend(Path(p) for p in inputs)
     if dataset_dir is not None:
         root = Path(dataset_dir)
-        # Prefer examples/ if present (dataset.version layout)
-        examples = root / "examples"
-        search_root = examples if examples.is_dir() else root
-        paths.extend(sorted(search_root.rglob("*.json")))
+        split_paths = _paths_from_split_manifest(root, split) if split else []
+        if split_paths:
+            paths.extend(split_paths)
+        else:
+            examples = root / "examples"
+            search_root = examples if examples.is_dir() else root
+            paths.extend(sorted(search_root.rglob("*.json")))
     if inputs_glob:
         paths.extend(sorted(Path().glob(inputs_glob)))
     # de-dupe preserving order
@@ -92,6 +99,79 @@ def collect_input_paths(
         if path.is_file():
             unique.append(path)
     return unique
+
+
+def _paths_from_split_manifest(dataset_dir: Path, split: str | None) -> list[Path]:
+    if not split:
+        return []
+    split_file = Path(dataset_dir) / "splits" / f"{split}.jsonl"
+    if not split_file.is_file():
+        return []
+    paths: list[Path] = []
+    examples_dir = Path(dataset_dir) / "examples"
+    try:
+        for line in split_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            example_id = row.get("example_id") or row.get("id")
+            rel = row.get("path") or row.get("example_path")
+            if rel:
+                candidate = Path(dataset_dir) / rel
+                if candidate.is_file():
+                    paths.append(candidate)
+                    continue
+            if example_id:
+                candidate = examples_dir / f"{example_id}.json"
+                if candidate.is_file():
+                    paths.append(candidate)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Failed reading split manifest; falling back to examples/",
+            extra={"split": split, "error_type": type(exc).__name__},
+        )
+        return []
+    logger.info(
+        "Loaded split input paths",
+        extra={"split": split, "path_count": len(paths), "basename": split_file.name},
+    )
+    return paths
+
+
+def split_train_val_examples(
+    examples: list[EncodedExample],
+    *,
+    val_fraction: float | None,
+    seed: int,
+) -> tuple[list[EncodedExample], list[EncodedExample]]:
+    """Deterministic in-memory val split for fixtures without split manifests."""
+    if not val_fraction or val_fraction <= 0 or len(examples) < 2:
+        return examples, []
+    import random as py_random
+
+    rng = py_random.Random(seed)
+    order = list(range(len(examples)))
+    rng.shuffle(order)
+    val_n = max(1, int(len(examples) * val_fraction))
+    val_n = min(val_n, len(examples) - 1)
+    val_idx = set(order[:val_n])
+    train = [examples[i] for i in range(len(examples)) if i not in val_idx]
+    val = [examples[i] for i in range(len(examples)) if i in val_idx]
+    logger.info(
+        "Split train/val by fraction",
+        extra={
+            "train_count": len(train),
+            "val_count": len(val),
+            "val_fraction": val_fraction,
+            "seed": seed,
+        },
+    )
+    return train, val
+
+
+def count_non_pad_tokens(labels: Sequence[Sequence[int]], *, pad_id: int = 0) -> int:
+    return sum(1 for row in labels for token in row if token != pad_id)
 
 
 def load_encoded_corpus(
