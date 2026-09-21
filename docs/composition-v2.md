@@ -171,7 +171,8 @@ Ignored V1 extra fields are collected in the migration report (sanitized paths) 
 | Tempo changes | Piecewise timing | Conductor tempo events (integer BPM) | Metronome marks |
 | Meter changes | Bar/cursor/grid map | Conductor time-signature events | Time-signature attributes per part |
 | Key changes | Display/navigation only | Key-signature events where supported | Key-signature attributes per part |
-| Section labels, markers | Display/navigation | Marker/text meta events | Section labels, rehearsal/text expressions |
+| Section labels, markers | Display/navigation | Marker/text meta events; non-empty **section** `label`/`type` also projected as MIDI markers (`section_exported_as_marker`) when not already covered by V2 `markers` | Section labels, rehearsal/text expressions |
+
 | Canonical `motifs` metadata | Display/navigation only | Omitted (`motif_metadata_omitted`) | Omitted (`motif_metadata_omitted`) |
 | Harmony | Ignored (no invented notes) | Ignored | Chord-symbol projection only |
 
@@ -202,6 +203,7 @@ Stable issue codes:
 | `tie_ids_lost` | Semantic tie group IDs not retained in MIDI |
 | `pitch_spelling_lost` | Pitch spelling identity lost in target |
 | `marker_normalized` | Marker text/kind normalized for target |
+| `section_exported_as_marker` | V2 section label/type emitted as a MIDI marker for DAW form navigation |
 | `midi_channel_control_conflict` | Conflicting CC streams on a shared MIDI channel — **export error** |
 | `expression_combined` | Dynamic marks merged into expression/CC11 |
 | `sustain_projected` | Sustain spans projected to CC64 or pedal directions |

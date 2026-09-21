@@ -297,24 +297,24 @@ Rules: truncate prefixes; basenames only for checkpoints; `persistence_secret_gu
 
 ### Phase 3: Security & path confinement
 
-- [ ] Task 8: Confine symbolic / MT checkpoint paths
+- [x] Task 8: Confine symbolic / MT checkpoint paths
   Deliverable: Shared `resolve_model_path(user_path, *, allowed_roots)` used by `symbolic_composition_generate` / MT API generate. Reject escapes with stable error code. Env/default roots: `MUSIC_TRANSFORMER_CHECKPOINT_DIR`, optional Compose `models/` mount. Tests: traversal, absolute-outside, symlink-escape if feasible without flaky FS tricks.
   LOGGING: WARN rejects with code + basename; INFO resolved basename when accepted; never absolute home paths at INFO.
   Files: new small helper under `backend/app/services/` or `music_transformer/`, wire `symbolic_composition_generate.py` / `music_transformer_generate.py`, tests, `.env.example` comments.
 
-- [ ] Task 9: Explicit model install + no auto-download policy (code+docs hooks)
+- [x] Task 9: Explicit model install + no auto-download policy (code+docs hooks)
   Deliverable: Confirm Compose profiles never curl weights on `up`; add readiness/discovery messages that say “checkpoint not installed” rather than downloading. Audit neural-audio + local-ai docs cross-links. Any download script must be opt-in documented CLI, not imported by FastAPI lifespan.
   LOGGING: `/ready` soft subsections already — keep credentials-present booleans only.
   Files: `docs/local-ai.md`, `docs/music-transformer.md`, `docs/neural-audio-rendering.md` (cross-links in Task 12), compose files only if a dangerous hook exists (remove it).
 
 ### Phase 4: V3 end-to-end acceptance
 
-- [ ] Task 10: `scripts/v3_docker_acceptance.sh`
+- [x] Task 10: `scripts/v3_docker_acceptance.sh`
   Deliverable: Opt-in script (`RUN_DOCKER_ACCEPTANCE=1`) mirroring v2 script style: fake modes, health waits, project create, MIDI import fixture, optional audio fixture transcription, analysis POST, hybrid generate+seed, note edit, development preview apply (fake), revision commit, neural fake render, MIDI/MusicXML export assertions (multi-track + marker smoke), compose restart, reopen, seeded reproduce fingerprint match. Tear down volumes unless `KEEP_VOLUME=1`. Must not call paid APIs.
   LOGGING: phase banners + timings to stdout; on failure dump `compose logs --tail`.
   Files: `scripts/v3_docker_acceptance.sh`, mention in `docs/testing.md` / README.
 
-- [ ] Task 11: Automated tests across layers (non-Docker default CI)
+- [x] Task 11: Automated tests across layers (non-Docker default CI)
   Deliverable: Fill gaps not covered above:
   - Backend: MIDI daw checklist; provenance persist; path reject; hybrid seed reproduce (fake); V1→V2 migrate still green; import/export; neural fake unchanged.
   - Frontend: export drag helper; generationMeta provenance; versions provenance display.
@@ -326,7 +326,7 @@ Rules: truncate prefixes; basenames only for checkpoints; `persistence_secret_gu
 
 ### Phase 5: Documentation & diagrams
 
-- [ ] Task 12: Docs, roadmap milestone, architecture diagrams
+- [x] Task 12: Docs, roadmap milestone, architecture diagrams
   Deliverable:
   - New `docs/daw-interoperability.md` (Ableton/Reaper/SMF/MusicXML workflows, limits, drag/download).
   - Update `docs/composition-v2.md` export section (section markers), `docs/hybrid-generation.md` + `docs/ai-runtime.md` (durable provenance), `docs/testing.md` (v3 script), `docs/music-transformer.md` (path roots / no auto-download), `AGENTS.md` + `DESCRIPTION.md` one-liners, `.env.example` comments.
@@ -404,10 +404,10 @@ sequenceDiagram
 
 ## Definition of done (checklist)
 
-- [ ] DAW SMF checklist green; section markers projected; drag/download UX shipped
-- [ ] Ableton/Reaper/MusicXML workflows documented; no proprietary writers
-- [ ] AI revisions store pipeline/models/versions/tokenizer/seed/config safely
-- [ ] Checkpoint paths confined; installs explicit; keys never logged/persisted
+- [x] DAW SMF checklist green; section markers projected; drag/download UX shipped
+- [x] Ableton/Reaper/MusicXML workflows documented; no proprietary writers
+- [x] AI revisions store pipeline/models/versions/tokenizer/seed/config safely
+- [x] Checkpoint paths confined; installs explicit; keys never logged/persisted
 - [ ] `v3_docker_acceptance.sh` passes with fakes including restart + seeded reproduce
-- [ ] Normal CI stays free of paid APIs and long training
-- [ ] Docs + diagrams landed; roadmap milestone added
+- [x] Normal CI stays free of paid APIs and long training
+- [x] Docs + diagrams landed; roadmap milestone added

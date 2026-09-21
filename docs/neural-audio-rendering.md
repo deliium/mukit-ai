@@ -90,7 +90,7 @@ Default `docker compose up` does not pull the neural image. Place operator-accep
 | MIDI-DDSP | Apache-2.0 (code) | Check Magenta weight redistribution | **Not baked**; optional extras |
 | `fake:neural-audio` | Mukit | N/A (synthetic short WAV) | Always available when fake mode on |
 
-Do **not** claim Stable Audio Open is freely redistributable in product images. Do not auto-download weights on `docker compose up`.
+Do **not** claim Stable Audio Open is freely redistributable in product images. Do not auto-download weights on `docker compose up`. Same install policy as [local-ai.md](local-ai.md) / [music-transformer.md](music-transformer.md). DAW handoff remains SMF/MusicXML — see [daw-interoperability.md](daw-interoperability.md).
 
 ## Logging
 

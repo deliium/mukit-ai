@@ -358,7 +358,19 @@ def _ai_fields(ai: AiProvenance | None) -> dict[str, Any]:
     )
     logger.info(
         "AI provenance summary for commit",
-        extra={"operation": ai.operation, "model_id": ai.model_id or f"{ai.provider}:{ai.model}"},
+        extra={
+            "operation": ai.operation,
+            "model_id": ai.model_id or f"{ai.provider}:{ai.model}",
+            "pipeline_id": (ai.generation_parameters or {}).get("pipeline_id")
+            if isinstance(ai.generation_parameters, dict)
+            else None,
+            "seed": (ai.generation_parameters or {}).get("seed")
+            if isinstance(ai.generation_parameters, dict)
+            else None,
+            "stage_count": len((ai.generation_parameters or {}).get("stages") or [])
+            if isinstance(ai.generation_parameters, dict)
+            else 0,
+        },
     )
     return {
         "ai_provider": ai.provider,

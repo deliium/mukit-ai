@@ -101,3 +101,26 @@ def test_resolve_music_transformer_checkpoint_env(tmp_path: Path, monkeypatch: p
             env=env,
             cwd=tmp_path,
         )
+
+
+def test_music_transformer_generate_rejects_path_outside_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Service path confinement raises model_path_rejected (no silent LLM fallback)."""
+    from app.music_transformer.errors import MusicTransformerCheckpointError
+    from app.music_transformer_schemas import MusicTransformerGenerateRequest
+    from app.services.music_transformer_generate import generate_via_music_transformer
+
+    monkeypatch.setenv("MUSIC_TRANSFORMER_CHECKPOINT_DIR", str(tmp_path / "allowed"))
+    (tmp_path / "allowed").mkdir(parents=True)
+
+    with pytest.raises(MusicTransformerCheckpointError) as exc_info:
+        generate_via_music_transformer(
+            MusicTransformerGenerateRequest(
+                checkpoint="/etc/passwd",
+                seed=1,
+                max_new_tokens=8,
+                greedy=True,
+            )
+        )
+    assert exc_info.value.code == MODEL_PATH_REJECTED

@@ -99,9 +99,11 @@ subsection that never fails overall readiness when local AI is off or down.
 
 Additive fields on `AiProvenance` / `ProjectGenerationMeta` and revision
 `summary_json` (prefer no Alembic): `model_id`, `model_version`, `provider`,
-`runtime`, `capability`, `operation`, `generation_parameters` (bounded:
-temperature, timeout, candidate_count — no prompts/keys). Keep legacy
-`provider` / `model` populated for UI compat.
+`runtime`, `capability`, `operation`, `generation_parameters` (bounded
+`generation.provenance.v1` fragment: pipeline_id, stages, seed, compact
+generation_config — no prompts/keys/absolute paths). Keep legacy
+`provider` / `model` populated for UI compat. See [hybrid-generation.md](hybrid-generation.md)
+and [daw-interoperability.md](daw-interoperability.md).
 
 ## Secret policy
 

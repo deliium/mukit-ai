@@ -52,9 +52,9 @@ mukit-ai/
 │       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, AudioInputPanel, NeuralAudioRenderPanel, …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI/audio sessions)
 │       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture helpers
-├── scripts/                 # run_tests.sh, v1/v2_docker_acceptance.sh, dataset_build.sh
+├── scripts/                 # run_tests.sh, v1/v2/v3_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
-├── docs/                    # composition.v2/v1, ai-runtime, hybrid-generation, editor, midi-live-input, audio-transcription, neural-audio-rendering, analysis, arrangement, import, datasets, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, neural-audio-rendering, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -174,6 +174,7 @@ mukit-ai/
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
 | Composition Editor | `docs/composition-editor.md` | Piano-roll selection, clipboard, transforms, cursor/loop |
 | Browser playback | `docs/browser-playback.md` | Tone.js instruments/mixer/transport; ephemeral session state |
+| DAW interoperability | `docs/daw-interoperability.md` | SMF Type 1 / MusicXML handoff, Ableton/Reaper recipes, drag/download, V3 acceptance |
 | MIDI live input | `docs/midi-live-input.md` | Web MIDI / QWERTY performance capture into V2 |
 | Audio transcription | `docs/audio-transcription.md` | Monophonic mic/file → preview → Apply into V2 |
 | Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument jobs; licenses; Compose profile |

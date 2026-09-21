@@ -46,9 +46,18 @@ Audio melody transcription (`POST /transcription/audio`) is a separate ingress i
   ],
   "plan_schema_version": "composition.plan.v1",
   "constraints_digest_prefix": "sha256:…",
-  "seed": 42
+  "seed": 42,
+  "generation_parameters": {
+    "provenance_schema": "generation.provenance.v1",
+    "pipeline_id": "hybrid_plan_symbolic",
+    "seed": 42,
+    "stages": [],
+    "generation_config": {"sample_greedy": true}
+  }
 }
 ```
+
+On Apply, the SPA copies `generation_parameters` into revision `AiProvenance` → `summary_json` (never into playable V2). Versions UI shows a compact pipeline/seed/models line. Seeded reproduce: re-POST generate with the same `options.pipeline` + `options.seed` (see `generation_options_overrides_from_provenance` / `tests/test_generation_reproduce.py` / `scripts/v3_docker_acceptance.sh`). Never store prompts or API keys.
 
 ## Repair lanes
 
@@ -63,7 +72,8 @@ Audio melody transcription (`POST /transcription/audio`) is a separate ingress i
 | Env | Purpose |
 |-----|---------|
 | `LLM_FAKE_MODE=1` | Fake planner + always-ready `fake:symbolic-tiny` |
-| `MUSIC_TRANSFORMER_CHECKPOINT` | Checkpoint basename/path for real MT |
+| `MUSIC_TRANSFORMER_CHECKPOINT` | Checkpoint basename/path **under** allowlisted roots (never absolute escapes) |
+| `MUSIC_TRANSFORMER_ALLOWED_ROOTS` | Optional comma-separated absolute roots |
 | `MUSIC_TRANSFORMER_API_ENABLED` / `MUSIC_TRANSFORMER_GRAPH_ENABLED` | Opt-in readiness for `local:music-transformer` |
 | `GENERATION_HYBRID_MAX_TOKEN_RETRIES` | Token re-sample budget (default `1`) |
 | `AI_OP_GENERATE_PLANNER` / `AI_OP_GENERATE_COMPOSER` | Optional per-op model overrides. Hybrid calls resolve with `collapse_reserved_generate=False` so these stay distinct from `AI_OP_GENERATE`. |

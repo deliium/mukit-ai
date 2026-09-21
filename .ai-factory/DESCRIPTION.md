@@ -22,7 +22,8 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - Monophonic audio transcription (mic/file → session `transcription.preview.v1` review → Apply into V2); confidence stays off V2 notes; audio never persisted
 - Optional neural audio rendering (job-based generative/neural-instrument egress via `/neural-audio/renders`); never mutates V2; optional MusicGen Compose profile; distinct from FluidSynth Export WAV
 - Notation preview (MusicXML regenerated from V2) and browser playback (Tone.js) from `tracks[].events[]`
-- Deterministic export: MusicXML, MIDI, and server-side FluidSynth WAV
+- Deterministic export: MusicXML, MIDI (SMF Type 1 DAW handoff with section markers + drag/download UX), and server-side FluidSynth WAV
+- Durable hybrid generation provenance (`generation.provenance.v1`) on AI revisions; V3 Docker acceptance (`scripts/v3_docker_acceptance.sh`) with seeded reproduce under fake modes
 
 ## Tech Stack
 
