@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from app.music_transformer.errors import (
@@ -34,6 +33,19 @@ def generate_via_music_transformer(
             "checkpoint_missing",
             "No checkpoint configured (set MUSIC_TRANSFORMER_CHECKPOINT or request.checkpoint)",
         )
+    from app.services.model_path_resolve import (
+        MODEL_PATH_REJECTED,
+        ModelPathRejectedError,
+        resolve_music_transformer_checkpoint,
+    )
+
+    try:
+        checkpoint_path = resolve_music_transformer_checkpoint(ckpt)
+    except ModelPathRejectedError as exc:
+        raise MusicTransformerCheckpointError(
+            MODEL_PATH_REJECTED,
+            str(exc),
+        ) from exc
     from app.music_transformer.inference import generate_composition
 
     sample = MusicTransformerSampleConfigV1(
@@ -44,7 +56,7 @@ def generate_via_music_transformer(
         max_new_tokens=request.max_new_tokens,
     )
     composition, report = generate_composition(
-        Path(ckpt),
+        checkpoint_path,
         conditioning=request.conditioning,
         prefix_composition=request.prefix_composition,
         sample_config=sample,
@@ -55,7 +67,7 @@ def generate_via_music_transformer(
         extra={
             "status": report.status,
             "notes_out": report.notes_out,
-            "checkpoint_basename": Path(ckpt).name,
+            "checkpoint_basename": checkpoint_path.name,
         },
     )
     return MusicTransformerGenerateResponse(
@@ -81,14 +93,39 @@ def music_transformer_readiness_block() -> dict[str, Any]:
     except ImportError:
         torch_ok = False
     ckpt = settings.default_checkpoint
-    ckpt_ok = bool(ckpt and Path(ckpt).is_file())
+    ckpt_ok = False
+    ckpt_rejected = False
+    checkpoint_status = "not_configured"
+    if ckpt:
+        from app.services.model_path_resolve import (
+            ModelPathRejectedError,
+            resolve_music_transformer_checkpoint,
+        )
+
+        try:
+            resolved = resolve_music_transformer_checkpoint(ckpt)
+            ckpt_ok = resolved.is_file()
+            checkpoint_status = "present" if ckpt_ok else "not_installed"
+        except ModelPathRejectedError:
+            ckpt_rejected = True
+            ckpt_ok = False
+            checkpoint_status = "path_rejected"
     block = {
         "enabled": settings.api_enabled,
         "torch_available": torch_ok,
         "checkpoint_configured": ckpt is not None,
         "checkpoint_present": ckpt_ok,
+        "checkpoint_path_rejected": ckpt_rejected,
+        # Soft operator hint — never auto-download weights from /ready or lifespan.
+        "checkpoint_status": checkpoint_status,
+        "install_hint": (
+            "checkpoint not installed — mount weights under MUSIC_TRANSFORMER_CHECKPOINT_DIR "
+            "or models/; no auto-download on compose up"
+            if checkpoint_status in {"not_installed", "not_configured", "path_rejected"}
+            else None
+        ),
         "device": settings.device,
-        "ready": bool(settings.api_enabled and torch_ok and ckpt_ok),
+        "ready": bool(settings.api_enabled and torch_ok and ckpt_ok and not ckpt_rejected),
     }
     logger.debug("Music Transformer readiness block", extra=block)
     return block

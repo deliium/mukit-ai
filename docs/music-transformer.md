@@ -169,8 +169,16 @@ This does **not** replace default LangGraph / remote LLM generate. **No train HT
 | `MUSIC_TRANSFORMER_SEED` | `42` | Default seed |
 | `MUSIC_TRANSFORMER_CHECKPOINT_DIR` | `checkpoints/music_transformer` | Default dir basename |
 | `MUSIC_TRANSFORMER_EXPERIMENT_ROOT` | `experiments/music_transformer` | Experiment run root |
-| `MUSIC_TRANSFORMER_CHECKPOINT` | unset | Default checkpoint for API |
+| `MUSIC_TRANSFORMER_CHECKPOINT` | unset | Default checkpoint for API (basename or path **under** allowed roots) |
+| `MUSIC_TRANSFORMER_ALLOWED_ROOTS` | unset | Optional comma-separated absolute roots (Compose mounts) |
 | `MUSIC_TRANSFORMER_API_ENABLED` | `0` | Opt-in generate router only |
+
+### Install policy (no auto-download)
+
+- Place checkpoints under `MUSIC_TRANSFORMER_CHECKPOINT_DIR` or a Compose `./models/` mount yourself.
+- FastAPI **never** downloads weights on startup / `compose up`. Soft `/ready` → `music_transformer.checkpoint_status` reports `not_installed` / `path_rejected` with an install hint.
+- Paths outside allowlisted roots → HTTP **422** with code `model_path_rejected` (see hybrid [hybrid-generation.md](hybrid-generation.md)).
+- Language GGUF / MusicGen sidecars: [local-ai.md](local-ai.md), [neural-audio-rendering.md](neural-audio-rendering.md).
 
 ## Logging / secrets
 

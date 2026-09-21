@@ -35,6 +35,13 @@ def post_generate(body: MusicTransformerGenerateRequest) -> MusicTransformerGene
     except MusicTransformerDependencyError as exc:
         raise HTTPException(status_code=503, detail=exc.message) from exc
     except MusicTransformerCheckpointError as exc:
+        from app.services.model_path_resolve import MODEL_PATH_REJECTED, model_path_error_detail
+
+        if exc.code == MODEL_PATH_REJECTED:
+            raise HTTPException(
+                status_code=422,
+                detail=model_path_error_detail(exc),
+            ) from exc
         raise HTTPException(status_code=503, detail=exc.message) from exc
     except MusicTransformerGenerateError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc

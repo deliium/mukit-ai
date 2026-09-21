@@ -44,6 +44,8 @@ Application code does **not** branch on llama.cpp vs vLLM. Profiles differ only 
 
 ## Model installation
 
+**No auto-download on `docker compose up`.** Place weights yourself; FastAPI never curls GGUF/safetensors. Symbolic MT checkpoints follow the same rule — see [music-transformer.md](music-transformer.md) (`model_path_rejected` when paths escape allowlisted roots). Neural MusicGen: [neural-audio-rendering.md](neural-audio-rendering.md).
+
 1. Create weights directory (tracked `.gitkeep` only):
 
    ```bash

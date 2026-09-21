@@ -134,7 +134,24 @@ def symbolic_composer_available(
     }
     if not api_enabled and not allow_graph:
         return False, SYMBOLIC_COMPOSER_MODEL_ID_MT, SYMBOLIC_UNAVAILABLE
-    path = Path(checkpoint)
+    from app.services.model_path_resolve import (
+        MODEL_PATH_REJECTED,
+        ModelPathRejectedError,
+        resolve_music_transformer_checkpoint,
+    )
+
+    try:
+        path = resolve_music_transformer_checkpoint(checkpoint, env=source)
+    except ModelPathRejectedError:
+        logger.warning(
+            "Music Transformer checkpoint path rejected",
+            extra={
+                "model_id": SYMBOLIC_COMPOSER_MODEL_ID_MT,
+                "checkpoint_basename": Path(checkpoint).name,
+                "code": MODEL_PATH_REJECTED,
+            },
+        )
+        return False, SYMBOLIC_COMPOSER_MODEL_ID_MT, MODEL_PATH_REJECTED
     if not path.is_file():
         logger.warning(
             "Music Transformer checkpoint missing",
@@ -222,7 +239,19 @@ def _generate_via_music_transformer(
             code=reason or SYMBOLIC_UNAVAILABLE,
         )
     checkpoint = (source.get("MUSIC_TRANSFORMER_CHECKPOINT") or "").strip()
-    checkpoint_path = Path(checkpoint)
+    from app.services.model_path_resolve import (
+        MODEL_PATH_REJECTED,
+        ModelPathRejectedError,
+        resolve_music_transformer_checkpoint,
+    )
+
+    try:
+        checkpoint_path = resolve_music_transformer_checkpoint(checkpoint, env=source)
+    except ModelPathRejectedError as exc:
+        raise SymbolicCompositionGenerateError(
+            str(exc),
+            code=MODEL_PATH_REJECTED,
+        ) from exc
     try:
         from app.music_transformer.inference import generate_composition
         from app.music_transformer.schemas import MusicTransformerSampleConfigV1
