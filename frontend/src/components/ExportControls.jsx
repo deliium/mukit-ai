@@ -108,14 +108,12 @@ const ExportControls = () => {
       && dragPrep == null,
   );
 
-  const handleMidiDragStart = useCallback(
-    createExportDragStartHandler(() => midiFileRef.current, { format: 'midi' }),
-    [],
-  );
-  const handleMusicXmlDragStart = useCallback(
-    createExportDragStartHandler(() => musicXmlFileRef.current, { format: 'musicxml' }),
-    [],
-  );
+  const handleMidiDragStart = useCallback((event) => {
+    createExportDragStartHandler(() => midiFileRef.current, { format: 'midi' })(event);
+  }, []);
+  const handleMusicXmlDragStart = useCallback((event) => {
+    createExportDragStartHandler(() => musicXmlFileRef.current, { format: 'musicxml' })(event);
+  }, []);
 
   const prepareDrag = async (format) => {
     if (!canExport) {
