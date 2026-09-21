@@ -1,0 +1,12 @@
+# Optional local monophonic audio transcription engines.
+# Core app runs without these; set AUDIO_FAKE_MODE=1 for CI with fake:audio-mono.
+#
+#   pip install -r requirements-audio-transcription.txt
+#
+# Engines: librosa_pyin (librosa + soundfile + numpy), basic_pitch (when wheels available).
+
+numpy>=1.26,<3
+soundfile>=0.12,<1
+librosa>=0.10,<0.12
+# basic-pitch pulls heavier ML deps — install explicitly when needed:
+# basic-pitch>=0.3.0

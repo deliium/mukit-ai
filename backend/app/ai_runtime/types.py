@@ -27,6 +27,7 @@ ModelRuntimeId = Literal[
     "symbolic_features",
     "music_transformer",
     "fake_symbolic",
+    "local_audio_mono",
 ]
 
 

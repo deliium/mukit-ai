@@ -216,6 +216,26 @@ def build_registry_from_env(
             },
         )
 
+    from .runtimes.local_audio_transcription import local_audio_mono_descriptors
+
+    for audio_desc in local_audio_mono_descriptors(source):
+        if audio_desc.id in models:
+            logger.warning(
+                "Local audio transcription model id collides",
+                extra={"model_id": audio_desc.id},
+            )
+            continue
+        models[audio_desc.id] = audio_desc
+        logger.info(
+            "Registered local monophonic audio transcription model",
+            extra={
+                "model_id": audio_desc.id,
+                "runtime": audio_desc.runtime,
+                "status": audio_desc.status,
+                "primary_capability": audio_desc.primary_capability,
+            },
+        )
+
     ready_embedders = [
         m
         for m in models.values()
