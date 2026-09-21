@@ -76,18 +76,24 @@ def resolve_model_for_operation(
     env: Mapping[str, str] | None = None,
     generation_parameters: GenerationParameters | None = None,
     reload: bool = False,
+    collapse_reserved_generate: bool = True,
 ) -> ResolvedModel:
     """Resolve ``(operation, selection)`` → ``ResolvedModel``.
 
     Order: explicit ``model_id`` → legacy provider+model → ``AI_OP_*`` → global default.
     Fallback only when ``AI_FALLBACK_<OP>`` is configured and primary is unavailable.
+
+    Set ``collapse_reserved_generate=False`` for hybrid pipelines so
+    ``generate_planner`` / ``generate_composer`` keep distinct capability routing.
     """
     source = env if env is not None else os.environ
     if reload or not get_registry(source):
         reload_registry(source)
 
-    # Reserved planner/composer ops inherit generate env when unset.
-    effective_op = _effective_operation(operation, source)
+    # Reserved planner/composer ops inherit generate env when unset (unless hybrid).
+    effective_op = _effective_operation(
+        operation, source, collapse_reserved_generate=collapse_reserved_generate
+    )
     sel = ModelSelectionInput.from_selection(selection)
     requested_id = _requested_model_id(sel)
 
@@ -98,6 +104,7 @@ def resolve_model_for_operation(
             "effective_operation": str(effective_op),
             "requested_model_id": requested_id,
             "has_legacy": bool(sel.provider or sel.model),
+            "collapse_reserved_generate": collapse_reserved_generate,
         },
     )
 
@@ -265,6 +272,7 @@ def resolve_provider_for_operation(
     *,
     env: Mapping[str, str] | None = None,
     generation_parameters: GenerationParameters | None = None,
+    collapse_reserved_generate: bool = True,
 ) -> tuple[LLMProviderSettings, ResolvedModel]:
     """Resolve operation selection to ``(LLMProviderSettings, ResolvedModel)`` and stash on ContextVar."""
     active = settings or load_llm_settings(env)
@@ -276,6 +284,7 @@ def resolve_provider_for_operation(
         selection,
         env=env,
         generation_parameters=generation_parameters,
+        collapse_reserved_generate=collapse_reserved_generate,
     )
     provider = provider_settings_for_resolved(resolved, active, env=env)
     set_current_resolved_model(resolved)
@@ -386,7 +395,8 @@ def default_operation_routes(env: Mapping[str, str] | None = None) -> dict[str, 
     for operation in AiOperation:
         key = operation_env_key(operation)
         raw = (source.get(key) or "").strip() or None
-        if raw is None and operation in (AiOperation.GENERATE_PLANNER, AiOperation.GENERATE_COMPOSER):
+        if raw is None and operation == AiOperation.GENERATE_PLANNER:
+            # Discovery still shows planner falling back to generate env when unset.
             raw = (source.get(operation_env_key(AiOperation.GENERATE)) or "").strip() or None
         routes[str(operation)] = raw
 
@@ -407,11 +417,38 @@ def default_operation_routes(env: Mapping[str, str] | None = None) -> dict[str, 
                 "No implicit embed default; symbolic features model not registered",
                 extra={"expected_model_id": EMBEDDING_DEFAULT_MODEL_ID},
             )
+
+    # Implicit default for generate_composer: first ready symbolic_composer model.
+    if not routes.get("generate_composer"):
+        ready_composers = list_models(
+            operation=AiOperation.GENERATE_COMPOSER,
+            status="ready",
+            env=source,
+        )
+        if ready_composers:
+            routes["generate_composer"] = ready_composers[0].id
+            logger.debug(
+                "Default generate_composer route set to ready symbolic composer",
+                extra={"model_id": ready_composers[0].id},
+            )
     return routes
 
 
-def _effective_operation(operation: AiOperation, env: Mapping[str, str]) -> AiOperation:
-    if operation in (AiOperation.GENERATE_PLANNER, AiOperation.GENERATE_COMPOSER):
+def _effective_operation(
+    operation: AiOperation,
+    env: Mapping[str, str],
+    *,
+    collapse_reserved_generate: bool = True,
+) -> AiOperation:
+    """Collapse reserved planner/composer ops to GENERATE unless explicitly disabled.
+
+    Hybrid pipelines pass ``collapse_reserved_generate=False`` so GENERATE_PLANNER /
+    GENERATE_COMPOSER keep distinct capability routing.
+    """
+    if (
+        collapse_reserved_generate
+        and operation in (AiOperation.GENERATE_PLANNER, AiOperation.GENERATE_COMPOSER)
+    ):
         if not (env.get(operation_env_key(operation)) or "").strip():
             return AiOperation.GENERATE
     return operation

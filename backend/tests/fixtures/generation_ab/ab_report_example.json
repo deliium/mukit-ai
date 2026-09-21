@@ -1,0 +1,35 @@
+{
+  "musical_quality_claim": false,
+  "eval_example": true,
+  "llm_only": {
+    "pipeline_id": "llm_only",
+    "valid": true,
+    "constraint_status": "passed",
+    "note_count": 144,
+    "track_count": 3,
+    "bar_count": 16,
+    "stage_model_ids": [
+      "fake:fake-v1"
+    ],
+    "seed": null,
+    "warning_count": 2,
+    "provider": "fake",
+    "fingerprint_prefix": "eeaac8f0fd442e79"
+  },
+  "hybrid_plan_symbolic": {
+    "pipeline_id": "hybrid_plan_symbolic",
+    "valid": true,
+    "constraint_status": "passed",
+    "note_count": 24,
+    "track_count": 3,
+    "bar_count": 8,
+    "stage_model_ids": [
+      "fake:fake-v1",
+      "fake:symbolic-tiny"
+    ],
+    "seed": 7,
+    "warning_count": 1,
+    "provider": "fake",
+    "fingerprint_prefix": "c562d11bfa2fb3cb"
+  }
+}

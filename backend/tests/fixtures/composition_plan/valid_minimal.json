@@ -1,0 +1,82 @@
+{
+  "schema_version": "composition.plan.v1",
+  "form": {
+    "tempo": 120,
+    "key": "C major",
+    "time_signature": "4/4",
+    "bar_count": 8,
+    "sections": [
+      {"type": "intro", "start_bar": 1, "bar_count": 2},
+      {"type": "verse", "start_bar": 3, "bar_count": 4},
+      {"type": "outro", "start_bar": 7, "bar_count": 2}
+    ],
+    "instrumentation": ["piano", "bass"]
+  },
+  "modulation": {
+    "targets": [
+      {"section_index": 1, "key": "G major", "start_bar": 3}
+    ]
+  },
+  "harmony": {
+    "events": [
+      {"bar": 1, "chord": "C", "function": "tonic"},
+      {"bar": 3, "chord": "G", "function": "dominant"},
+      {"bar": 5, "chord": "Am", "function": "subdominant"},
+      {"bar": 7, "chord": "C", "cadence": "authentic"}
+    ]
+  },
+  "instrumentation": {
+    "hints": [
+      {"family": "piano", "role": "melody"},
+      {"family": "bass", "role": "bass"}
+    ]
+  },
+  "motifs_themes": {
+    "enabled": true,
+    "motif_id": "motif-a",
+    "motif_label": "Motif A",
+    "seed": {
+      "section_index": 0,
+      "track_role": "melody",
+      "start_bar_offset": 0,
+      "bar_span": 1,
+      "relative_cell": [
+        {
+          "relative_start_tick": 0,
+          "duration_ticks": 480,
+          "pitch_semitone_offset": 0,
+          "velocity": 80
+        },
+        {
+          "relative_start_tick": 480,
+          "duration_ticks": 480,
+          "pitch_semitone_offset": 2,
+          "velocity": 78
+        }
+      ]
+    },
+    "deployments": [
+      {
+        "id": "dep-1",
+        "target_section_index": 1,
+        "target_track_role": "melody",
+        "start_bar_offset": 0,
+        "operation": "transpose",
+        "parameters": {"transpose_semitones": 7}
+      }
+    ]
+  },
+  "density": {
+    "global_band": "moderate",
+    "per_section": [
+      {"section_index": 0, "band": "sparse"},
+      {"section_index": 1, "band": "moderate"}
+    ]
+  },
+  "target_ranges": [
+    {"role": "melody", "midi_min": 60, "midi_max": 84},
+    {"role": "bass", "midi_min": 36, "midi_max": 55}
+  ],
+  "stylistic_instructions": "Warm lyrical piano ballad with light bass support.",
+  "constraints_digest": "sha256:fixture-valid-plan-v1"
+}

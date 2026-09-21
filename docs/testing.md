@@ -37,6 +37,7 @@ when duration matches; otherwise V1 fixtures migrate to V2.
 
 Focused canonical coverage includes:
 
+- Hybrid / symbolic pipelines: `tests/test_generation_pipeline_ab.py`, `tests/test_generation_pipeline_options.py`, `tests/test_composition_plan_*.py`, `tests/test_symbolic_composition_generate.py` (fake planner + `fake:symbolic-tiny`; `musical_quality_claim: false`). Details: [hybrid-generation.md](hybrid-generation.md).
 - Set `LOG_LEVEL=DEBUG` to inspect stage/provider/model/attempt, constraint summaries, and diagnostic codes. Full prompts, API keys, and raw composition/export payloads must never appear in logs.
 - `backend/tests/test_llm_fake_provider.py` for fake generate/edit, fixture constraint gating (aliases, missing requirements, instrumentation report), `/llm/models`, malformed `502` without clobbering projects, and unsupported-instrument fixture export.
 - `backend/tests/test_instrument_identity.py` for sound-source normalization, requirement satisfaction, and duplicate-content classification.

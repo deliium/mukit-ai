@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import styled from 'styled-components';
-import { generateLlmMusicJson } from '../api/musicApi.js';
+import { fetchAiModels, generateLlmMusicJson } from '../api/musicApi.js';
+import { buildLlmRequest } from '../utils/llmGenerateRequest.js';
 import ComposerWorkspace from './ComposerWorkspace.jsx';
 import ImportControls from './ImportControls.jsx';
 import ProjectComposerBar from './ProjectComposerBar.jsx';
@@ -195,7 +196,41 @@ const MusicGenerator = () => {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [branchNameDraft, setBranchNameDraft] = useState('');
   const [applyBusy, setApplyBusy] = useState(false);
+  const [pipeline, setPipeline] = useState('llm_only');
+  const [hybridSeed, setHybridSeed] = useState('');
+  const [symbolicReady, setSymbolicReady] = useState(false);
+  const [lastProvenance, setLastProvenance] = useState(null);
   const startedAtRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAiModels({ capability: 'symbolic_composer', status: 'ready' })
+      .then((response) => {
+        if (cancelled) return;
+        const ready = Array.isArray(response?.models) && response.models.length > 0;
+        setSymbolicReady(ready);
+        console.debug('[MusicGenerator] Symbolic composer discovery', {
+          ready,
+          modelIds: (response?.models || []).map((model) => model.id),
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.debug('[MusicGenerator] Symbolic composer discovery failed', {
+          message: error?.message || String(error),
+        });
+        setSymbolicReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (pipeline === 'hybrid_plan_symbolic' && !symbolicReady) {
+      setPipeline('llm_only');
+    }
+  }, [pipeline, symbolicReady]);
 
   useEffect(() => {
     if (generationStatus !== 'loading') {
@@ -222,16 +257,27 @@ const MusicGenerator = () => {
       return;
     }
 
-    const requestData = buildLlmRequest(prompt, selectedProvider, selectedModel);
+    const requestData = buildLlmRequest(prompt, selectedProvider, selectedModel, {
+      pipeline,
+      seed: hybridSeed,
+    });
     console.debug('[MusicGenerator] LLM generation requested', {
       provider: selectedProvider,
       model: selectedModel,
       genre: prompt.genre,
       mood: prompt.mood,
+      pipeline,
+      seed: requestData.options?.seed ?? null,
     });
 
     try {
       const response = await generateLlmMusicJson(requestData);
+      setLastProvenance({
+        pipelineId: response.pipeline_id || pipeline,
+        stages: response.stages || [],
+        seed: response.seed ?? null,
+        planSchemaVersion: response.plan_schema_version || null,
+      });
       await completeGeneration({
         music: response.music,
         musicxml: response.musicxml,
@@ -297,6 +343,61 @@ const MusicGenerator = () => {
               </Select>
             </FormGroup>
           )}
+
+          <FormGroup>
+            <Label htmlFor="generationPipeline">Pipeline</Label>
+            <Select
+              id="generationPipeline"
+              data-testid="generation-pipeline-select"
+              value={pipeline}
+              disabled={generating || !llmReady}
+              title={
+                symbolicReady
+                  ? 'LLM plans and writes notes, or Hybrid uses LLM plan + symbolic notes'
+                  : 'Hybrid requires a ready symbolic_composer model'
+              }
+              onChange={(event) => setPipeline(event.target.value)}
+            >
+              <option value="llm_only">LLM</option>
+              <option value="hybrid_plan_symbolic" disabled={!symbolicReady}>
+                Hybrid{symbolicReady ? '' : ' (unavailable)'}
+              </option>
+            </Select>
+          </FormGroup>
+
+          {pipeline === 'hybrid_plan_symbolic' ? (
+            <FormGroup>
+              <Label htmlFor="hybridSeed">Seed (optional)</Label>
+              <Input
+                id="hybridSeed"
+                data-testid="generation-hybrid-seed"
+                type="number"
+                min="0"
+                placeholder="Deterministic symbolic seed"
+                value={hybridSeed}
+                disabled={generating}
+                onChange={(event) => setHybridSeed(event.target.value)}
+              />
+            </FormGroup>
+          ) : null}
+
+          {lastProvenance?.stages?.length ? (
+            <StatusMessage className="info" data-testid="generation-provenance">
+              <strong>Provenance</strong>
+              <div style={{ marginTop: 6 }}>
+                Pipeline: {lastProvenance.pipelineId}
+                {lastProvenance.seed != null ? ` · seed ${lastProvenance.seed}` : ''}
+              </div>
+              <ul style={{ margin: '6px 0 0 18px' }}>
+                {lastProvenance.stages.map((stage) => (
+                  <li key={`${stage.operation}-${stage.model_id}`}>
+                    {stage.operation}: {stage.model_id || 'unknown'}
+                    {stage.capability ? ` (${stage.capability})` : ''}
+                  </li>
+                ))}
+              </ul>
+            </StatusMessage>
+          ) : null}
 
           <ParameterGrid>
             <FormGroup>
@@ -510,40 +611,5 @@ const MusicGenerator = () => {
     </Container>
   );
 };
-
-function buildLlmRequest(prompt, selectedProvider, selectedModel) {
-  return {
-    selection: {
-      provider: selectedProvider || null,
-      model: selectedModel || null,
-    },
-    options: {
-      max_retries: 1,
-    },
-    prompt: {
-      genre: prompt.genre,
-      mood: prompt.mood,
-      key: prompt.key || null,
-      time_signature: prompt.time_signature,
-      tempo_min: Number(prompt.tempo_min),
-      tempo_max: Number(prompt.tempo_max),
-      instruments: prompt.instruments.split(',').map((instrument) => instrument.trim()).filter(Boolean),
-      sections: parseSections(prompt.sections),
-      complexity: prompt.complexity,
-      duration_bars: Number(prompt.duration_bars),
-      instructions: prompt.instructions || null,
-    },
-  };
-}
-
-function parseSections(value) {
-  return value
-    .split(',')
-    .map((section) => {
-      const [type, bars] = section.split(':').map((part) => part.trim());
-      return type && bars ? { type, bars: Number(bars) } : null;
-    })
-    .filter(Boolean);
-}
 
 export default MusicGenerator;

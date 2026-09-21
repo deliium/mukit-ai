@@ -6,7 +6,8 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 
 ## Core Features
 
-- Multi-stage LLM generation of operational `composition.v2` (form → harmony → melody → bass → accompaniment → assemble → validate/repair)
+- Multi-stage LLM generation of operational `composition.v2` (form → harmony → melody → bass → accompaniment → assemble → validate/repair); optional hybrid pipeline (`options.pipeline=hybrid_plan_symbolic`) where an LLM emits non-playable `composition.plan.v1` and a symbolic composer (`fake:symbolic-tiny` / Music Transformer) emits note events
+- Versioned non-playable `composition.plan.v1` planning contract (form/harmony/themes/density only — never a second score)
 - Secure MIDI / MusicXML / MXL import into the same V2 workspace with session import reports (no LLM required; no retained source files)
 - Offline symbolic training dataset pipeline under `DATASET_ROOT` (CLI ingest/normalize/segment/split/stats; provenance-gated; never `PROJECT_DB_PATH`)
 - Versioned Composition V2 tokenizer (`tokenizer.v1`) under `backend/app/tokenizer/` (CLI encode/decode/stats/viz; train+inference contract; never `PROJECT_DB_PATH` / weight load)
@@ -26,7 +27,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - **Framework:** FastAPI + Uvicorn; React 18 + Vite
 - **Database:** SQLite (`PROJECT_DB_PATH`) with Alembic schema migrations
 - **ORM:** None — raw SQL via `sqlite3` helpers in `backend/app/db/` and `project_store`
-- **LLM:** LangChain / LangGraph with OpenAI-compatible providers (OpenAI, DeepSeek) plus optional `LLM_FAKE_MODE` deterministic fixture provider for demos/E2E; optional local OpenAI-compatible sidecar (`LOCAL_LLM_*`, Compose `--profile local-ai` / `local-ai-vllm`) via `LocalLanguageModel` — app never loads weights; capability-aware `ai_runtime/` registry routes generate/edit/arrange/develop/reharmonize/motif by `AiOperation` (`GET /ai/models`, compat `/llm/models`)
+- **LLM:** LangChain / LangGraph with OpenAI-compatible providers (OpenAI, DeepSeek) plus optional `LLM_FAKE_MODE` deterministic fixture provider for demos/E2E; optional local OpenAI-compatible sidecar (`LOCAL_LLM_*`, Compose `--profile local-ai` / `local-ai-vllm`) via `LocalLanguageModel` — app never loads weights; capability-aware `ai_runtime/` registry routes generate/edit/arrange/develop/reharmonize/motif by `AiOperation` (`GET /ai/models`, compat `/llm/models`); hybrid generation uncollapses `generate_planner` / `generate_composer` onto language vs `symbolic_composer` without silent LLM note fallback
 - **Music processing:** music21 (MusicXML render + import), mido (MIDI import/export), defusedxml (import preflight), FluidSynth + SoundFont (WAV)
 - **Frontend libraries:** Zustand, styled-components, Tone.js, OpenSheetMusicDisplay, axios
 - **Integrations:** Docker Compose production-local stack (`backend` + nginx `frontend`); optional `compose.local-ai.yml` profiles for local inference sidecars; optional LLM API keys via `.env` / Compose (backend-only); `IMPORT_*` byte/complexity limits

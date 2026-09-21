@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 from typing import Any, TypedDict
 
@@ -12,6 +13,7 @@ from ..schemas import (
     CompositionV2NoteEvent,
     CompositionV2Section,
     CompositionV2Track,
+    GenerationPipelineId,
     GenerationRepairAction,
     GenerationValidationReport,
     LLMMusicGenerationRequest,
@@ -97,7 +99,38 @@ COMPOSER_STAGES = (
     "repair_composition",
 )
 
+HYBRID_COMPOSER_STAGES = (
+    "plan_form",
+    "plan_harmony",
+    "plan_themes",
+    "validate_plan",
+    "repair_plan",
+    "symbolic_condition",
+    "symbolic_generate",
+    "symbolic_decode_repair",
+    "assemble_from_symbolic",
+    "normalize_composition",
+    "validate_composition",
+    "repair_composition",
+)
+
+SYMBOLIC_PREFIX_STAGES = (
+    "load_prefix",
+    "symbolic_condition",
+    "symbolic_generate",
+    "symbolic_decode_repair",
+    "assemble_from_symbolic",
+    "normalize_composition",
+    "validate_composition",
+    "repair_composition",
+)
+
 DEFAULT_TICKS_PER_QUARTER = 480
+
+PIPELINE_LLM_ONLY: GenerationPipelineId = "llm_only"
+PIPELINE_HYBRID: GenerationPipelineId = "hybrid_plan_symbolic"
+PIPELINE_CONTINUATION: GenerationPipelineId = "symbolic_continuation"
+PIPELINE_VARIATION: GenerationPipelineId = "symbolic_variation"
 
 
 class LLMGenerationError(RuntimeError):
@@ -131,14 +164,24 @@ class GenerationConstraintViolationError(InvalidLLMOutputError):
         self.report = report
 
 
+class HybridPipelineUnavailableError(LLMGenerationError):
+    """Raised when a hybrid/symbolic pipeline stage is not yet available."""
+
+    def __init__(self, message: str, *, code: str = "symbolic_pipeline_unavailable") -> None:
+        super().__init__(message)
+        self.code = code
+
+
 __all__ = [
     "GenerationConstraintViolationError",
+    "HybridPipelineUnavailableError",
     "InvalidLLMOutputError",
     "LLMGenerationError",
     "NoLLMProviderConfiguredError",
     "OversizedLLMGenerationRequestError",
     "UnsupportedLLMProviderError",
     "generate_music_json",
+    "resolve_generation_pipeline",
     "select_llm_provider",
 ]
 
@@ -147,6 +190,8 @@ class _GenerationState(TypedDict, total=False):
     request: LLMMusicGenerationRequest
     provider: LLMProviderSettings
     constraints: GenerationConstraints
+    pipeline_id: GenerationPipelineId
+    seed: int | None
     raw_output: str
     parsed_json: dict[str, Any]
     music: Composition
@@ -155,6 +200,7 @@ class _GenerationState(TypedDict, total=False):
     form_plan: ComposerFormPlan
     harmony_plan: ComposerHarmonyPlan
     theme_plan: ComposerThemePlan
+    composition_plan: Any  # CompositionPlan | None (avoid circular import at type time)
     melody_draft: ComposerTrackDraft
     bass_draft: ComposerTrackDraft
     accompaniment_drafts: list[ComposerTrackDraft]
@@ -171,32 +217,143 @@ class _GenerationState(TypedDict, total=False):
     pre_normalize_hard_summary: dict[str, Any]
     repair_actions: list[GenerationRepairAction]
     repair_analysis_context: str
+    plan_ok: bool
+    symbolic_ok: bool
+    prefix_composition: CompositionV2 | None
+    symbolic_result: Any
+    symbolic_resample_count: int
+    provenance_stages: list[dict[str, Any]]
+    composer_model_id: str | None
+
+
+def resolve_generation_pipeline(request: LLMMusicGenerationRequest) -> GenerationPipelineId:
+    """Return the request pipeline id, defaulting to llm_only."""
+    pipeline = getattr(request.options, "pipeline", None) or PIPELINE_LLM_ONLY
+    logger.debug("Resolved generation pipeline", extra={"pipeline_id": pipeline})
+    return pipeline  # type: ignore[return-value]
 
 
 async def generate_music_json(
     request: LLMMusicGenerationRequest,
     settings: LLMSettings | None = None,
-) -> tuple[CompositionV2, list[str], LLMProviderSettings, GenerationValidationReport | None]:
+) -> tuple[
+    CompositionV2,
+    list[str],
+    LLMProviderSettings,
+    GenerationValidationReport | None,
+    dict[str, Any],
+]:
     active_settings = settings or load_llm_settings()
     enforce_llm_generation_bounds(request)
     constraints = build_generation_constraints(request)
-    provider = _select_provider(request, active_settings)
+    pipeline_id = resolve_generation_pipeline(request)
+    seed = request.options.seed
+    composer_model_id: str | None = None
+    if pipeline_id == PIPELINE_LLM_ONLY:
+        provider = _select_provider(request, active_settings, operation=None)
+    else:
+        # Hybrid / symbolic: uncollapse planner vs composer ops.
+        try:
+            provider, composer_model_id = _resolve_hybrid_stage_models(request, active_settings)
+        except UnsupportedLLMProviderError:
+            # Continuation/variation may not need a language planner; fall back to generate
+            # for any residual LLM bits while still requiring a symbolic composer below.
+            if pipeline_id in {PIPELINE_CONTINUATION, PIPELINE_VARIATION}:
+                provider = _select_provider(request, active_settings, operation=None)
+            else:
+                raise
 
-    from .fake_llm import FakeLLMError, generate_fake_music_json, is_fake_provider
+    from .fake_llm import (
+        FakeLLMError,
+        generate_fake_hybrid_music_json,
+        generate_fake_music_json,
+        is_fake_provider,
+    )
+    from .symbolic_composition_generate import (
+        SYMBOLIC_UNAVAILABLE,
+        symbolic_composer_available,
+    )
 
-    if is_fake_provider(provider):
+    # Refuse hybrid/symbolic when no ready composer (no silent LLM note fallback).
+    if pipeline_id != PIPELINE_LLM_ONLY:
+        prefer_fake = True if is_fake_provider(provider) else None
+        ready, resolved_composer_id, reason = symbolic_composer_available(prefer_fake=prefer_fake)
+        if composer_model_id:
+            resolved_composer_id = composer_model_id
+        if not ready:
+            logger.error(
+                "Symbolic composer unavailable for pipeline",
+                extra={
+                    "pipeline_id": pipeline_id,
+                    "code": reason or SYMBOLIC_UNAVAILABLE,
+                    "fallback_applied": False,
+                    "composer_model_id": resolved_composer_id,
+                },
+            )
+            raise HybridPipelineUnavailableError(
+                "Symbolic composer is unavailable; configure Music Transformer or use LLM_FAKE_MODE",
+                code=reason or SYMBOLIC_UNAVAILABLE,
+            )
+        composer_model_id = resolved_composer_id
+        logger.info(
+            "Symbolic composer available for pipeline",
+            extra={
+                "pipeline_id": pipeline_id,
+                "composer_model_id": composer_model_id,
+                "seed": seed,
+                "fallback_applied": False,
+            },
+        )
+
+    if is_fake_provider(provider) and pipeline_id == PIPELINE_LLM_ONLY:
         logger.info(
             "Routing music generation to fake LLM provider",
             extra={
                 "provider": provider.provider,
                 "model": _selected_model(request, provider),
                 "duration_bars": request.prompt.duration_bars,
+                "pipeline_id": pipeline_id,
             },
         )
         try:
-            return await generate_fake_music_json(request, provider, constraints=constraints)
+            music, warnings, provider, validation = await generate_fake_music_json(
+                request, provider, constraints=constraints
+            )
+            return music, warnings, provider, validation, {
+                "pipeline_id": pipeline_id,
+                "stages": [
+                    {
+                        "operation": "generate",
+                        "model_id": f"{provider.provider}:{provider.model}",
+                        "capability": "language_planner",
+                        "runtime": "fake",
+                    }
+                ],
+                "plan_schema_version": None,
+                "constraints_digest_prefix": None,
+                "seed": seed,
+            }
         except FakeLLMError as exc:
             raise InvalidLLMOutputError(str(exc)) from exc
+
+    if is_fake_provider(provider) and pipeline_id == PIPELINE_HYBRID:
+        logger.info(
+            "Routing hybrid generation to fake planner + fake symbolic",
+            extra={
+                "provider": provider.provider,
+                "model": _selected_model(request, provider),
+                "pipeline_id": pipeline_id,
+                "seed": seed,
+            },
+        )
+        try:
+            return await generate_fake_hybrid_music_json(
+                request, provider, constraints=constraints
+            )
+        except FakeLLMError as exc:
+            raise InvalidLLMOutputError(str(exc)) from exc
+        except HybridPipelineUnavailableError:
+            raise
 
     logger.info(
         "LLM music generation started",
@@ -208,6 +365,8 @@ async def generate_music_json(
             "instrument_count": len(request.prompt.instruments),
             "constraint_key": constraints.key,
             "key_user_specified": constraints.key_user_specified,
+            "pipeline_id": pipeline_id,
+            "seed": seed,
         },
     )
     logger.debug("LLM prompt parameters", extra={"prompt": _sanitized_prompt(request)})
@@ -217,6 +376,8 @@ async def generate_music_json(
         "request": request,
         "provider": provider,
         "constraints": constraints,
+        "pipeline_id": pipeline_id,
+        "seed": seed,
         "retry_count": 0,
         "stage_retry_count": 0,
         "warnings": [],
@@ -225,6 +386,9 @@ async def generate_music_json(
         "stage_raw_outputs": {},
         "current_stage": "plan_form",
         "validation_ok": False,
+        "plan_ok": False,
+        "symbolic_ok": False,
+        "composer_model_id": composer_model_id,
     }
     logger.debug("Initialized staged composer state", extra=_stage_state_summary(state))
 
@@ -351,9 +515,70 @@ async def generate_music_json(
                 "event_count": sum(len(track.events) for track in music.tracks),
                 "validation_retry_count": result.get("retry_count", 0),
                 "validation_status": validation_report.status if validation_report else None,
+                "pipeline_id": result.get("pipeline_id") or pipeline_id,
+                "seed": result.get("seed", seed),
             },
         )
-        return music, warnings, provider, validation_report
+        provenance = _build_generation_provenance(
+            result,
+            pipeline_id=pipeline_id,
+            seed=seed,
+            provider=provider,
+            composer_model_id=composer_model_id,
+        )
+        return music, warnings, provider, validation_report, provenance
+
+
+def _build_generation_provenance(
+    result: _GenerationState,
+    *,
+    pipeline_id: GenerationPipelineId,
+    seed: int | None,
+    provider: LLMProviderSettings,
+    composer_model_id: str | None = None,
+) -> dict[str, Any]:
+    stages: list[dict[str, Any]] = []
+    planner_id = f"{provider.provider}:{provider.model}"
+    stages.append(
+        {
+            "operation": "generate_planner",
+            "model_id": planner_id,
+            "capability": "language_planner",
+            "runtime": "fake" if provider.provider == "fake" else "openai_compatible_chat",
+        }
+    )
+    symbolic = result.get("symbolic_result")
+    if symbolic is not None:
+        report = getattr(symbolic, "report", {}) or {}
+        stages.append(
+            {
+                "operation": "generate_composer",
+                "model_id": getattr(symbolic, "model_id", None) or composer_model_id or result.get("composer_model_id"),
+                "capability": "symbolic_composer",
+                "runtime": getattr(symbolic, "backend", None),
+                "seed": getattr(symbolic, "seed", seed),
+                "checkpoint_card_prefix": (report.get("checkpoint_basename") or "")[:32] or None,
+                "tokenizer_version": report.get("tokenizer_version"),
+            }
+        )
+    elif pipeline_id == PIPELINE_LLM_ONLY:
+        stages = [
+            {
+                "operation": "generate",
+                "model_id": planner_id,
+                "capability": "language_planner",
+                "runtime": "fake" if provider.provider == "fake" else "openai_compatible_chat",
+            }
+        ]
+    plan = result.get("composition_plan")
+    digest = getattr(plan, "constraints_digest", None) if plan is not None else None
+    return {
+        "pipeline_id": pipeline_id,
+        "stages": stages,
+        "plan_schema_version": getattr(plan, "schema_version", None) if plan is not None else None,
+        "constraints_digest_prefix": (digest or "")[:20] or None,
+        "seed": seed,
+    }
 
 
 def select_llm_provider(
@@ -363,6 +588,7 @@ def select_llm_provider(
     settings: LLMSettings,
     operation: "AiOperation | None" = None,
     model_id: str | None = None,
+    collapse_reserved_generate: bool = True,
 ) -> LLMProviderSettings:
     """Resolve a configured provider/model pair shared by generate/edit/arrangement.
 
@@ -384,6 +610,7 @@ def select_llm_provider(
             op,
             ModelSelectionInput(model_id=model_id, provider=provider, model=model),
             settings,
+            collapse_reserved_generate=collapse_reserved_generate,
         )
         logger.info(
             "select_llm_provider resolved via AI runtime",
@@ -393,6 +620,7 @@ def select_llm_provider(
                 "runtime": resolved.descriptor.runtime,
                 "primary_capability": resolved.descriptor.primary_capability,
                 "fallback_applied": resolved.fallback_applied,
+                "collapse_reserved_generate": collapse_reserved_generate,
             },
         )
         return provider_settings
@@ -414,6 +642,7 @@ def _select_provider(
     settings: LLMSettings,
     *,
     operation: "AiOperation | None" = None,
+    collapse_reserved_generate: bool = True,
 ) -> LLMProviderSettings:
     from app.ai_runtime.operations import AiOperation
 
@@ -423,7 +652,60 @@ def _select_provider(
         model_id=getattr(request.selection, "model_id", None),
         settings=settings,
         operation=operation or AiOperation.GENERATE,
+        collapse_reserved_generate=collapse_reserved_generate,
     )
+
+
+def _resolve_hybrid_stage_models(
+    request: LLMMusicGenerationRequest,
+    settings: LLMSettings,
+) -> tuple[LLMProviderSettings, str | None]:
+    """Resolve hybrid planner (language) and composer (symbolic) without collapsing ops."""
+    from app.ai_runtime.errors import (
+        CapabilityMismatchError,
+        ModelNotFoundError,
+        ModelUnavailableError,
+    )
+    from app.ai_runtime.operations import AiOperation
+    from app.ai_runtime.routing import ModelSelectionInput, resolve_model_for_operation
+
+    provider = _select_provider(
+        request,
+        settings,
+        operation=AiOperation.GENERATE_PLANNER,
+        collapse_reserved_generate=False,
+    )
+    # Composer selection must not inherit the language model from the request.
+    composer_model_id: str | None = None
+    try:
+        composer = resolve_model_for_operation(
+            AiOperation.GENERATE_COMPOSER,
+            ModelSelectionInput(),
+            collapse_reserved_generate=False,
+        )
+        composer_model_id = composer.resolved_model_id
+        logger.info(
+            "Hybrid stage models resolved",
+            extra={
+                "planner_provider": provider.provider,
+                "planner_model": provider.model,
+                "composer_model_id": composer_model_id,
+                "composer_capability": str(composer.descriptor.primary_capability),
+                "composer_runtime": composer.descriptor.runtime,
+                "collapse_reserved_generate": False,
+                "fallback_applied": composer.fallback_applied,
+            },
+        )
+    except (ModelUnavailableError, ModelNotFoundError, CapabilityMismatchError) as exc:
+        logger.warning(
+            "Hybrid composer resolve deferred to availability check",
+            extra={
+                "error_type": type(exc).__name__,
+                "error_code": getattr(exc, "code", None),
+                "collapse_reserved_generate": False,
+            },
+        )
+    return provider, composer_model_id
 
 
 def _build_generation_graph():
@@ -434,7 +716,10 @@ def _build_generation_graph():
 
     logger.info(
         "Building staged LLM composition generation graph",
-        extra={"stages": list(COMPOSER_STAGES)},
+        extra={
+            "stages": list(COMPOSER_STAGES),
+            "hybrid_stages": list(HYBRID_COMPOSER_STAGES),
+        },
     )
     workflow = StateGraph(_GenerationState)
     workflow.add_node("plan_form", _plan_form)
@@ -448,17 +733,64 @@ def _build_generation_graph():
     workflow.add_node("normalize_composition", _normalize_composition)
     workflow.add_node("validate_composition", _validate_composition)
     workflow.add_node("repair_composition", _repair_composition)
+    # Hybrid / symbolic nodes (Task 4–5).
+    workflow.add_node("validate_plan", _validate_plan)
+    workflow.add_node("repair_plan", _repair_plan)
+    workflow.add_node("symbolic_condition", _symbolic_condition)
+    workflow.add_node("symbolic_generate", _symbolic_generate)
+    workflow.add_node("symbolic_decode_repair", _symbolic_decode_repair)
+    workflow.add_node("assemble_from_symbolic", _assemble_from_symbolic)
+    workflow.add_node("load_prefix", _load_prefix)
+    workflow.add_node("select_pipeline_entry", _select_pipeline_entry)
 
-    workflow.set_entry_point("plan_form")
+    workflow.set_entry_point("select_pipeline_entry")
+    workflow.add_conditional_edges(
+        "select_pipeline_entry",
+        _route_pipeline_entry,
+        {
+            "plan": "plan_form",
+            "prefix": "load_prefix",
+        },
+    )
     workflow.add_edge("plan_form", "plan_harmony")
     workflow.add_edge("plan_harmony", "plan_themes")
-    workflow.add_edge("plan_themes", "compose_melody")
+    workflow.add_conditional_edges(
+        "plan_themes",
+        _route_after_plan_themes,
+        {
+            "llm_compose": "compose_melody",
+            "hybrid": "validate_plan",
+            "symbolic_prefix": "load_prefix",
+        },
+    )
     workflow.add_edge("compose_melody", "compose_bass")
     workflow.add_edge("compose_bass", "compose_accompaniment")
     workflow.add_edge("compose_accompaniment", "realize_themes")
     workflow.add_edge("realize_themes", "assemble_composition")
     workflow.add_edge("assemble_composition", "normalize_composition")
     workflow.add_edge("normalize_composition", "validate_composition")
+    workflow.add_conditional_edges(
+        "validate_plan",
+        _route_after_validate_plan,
+        {
+            "symbolic": "symbolic_condition",
+            "repair_plan": "repair_plan",
+            "fail": END,
+        },
+    )
+    workflow.add_conditional_edges(
+        "repair_plan",
+        _route_after_repair_plan,
+        {
+            "validate_plan": "validate_plan",
+            "fail": END,
+        },
+    )
+    workflow.add_edge("symbolic_condition", "symbolic_generate")
+    workflow.add_edge("symbolic_generate", "symbolic_decode_repair")
+    workflow.add_edge("symbolic_decode_repair", "assemble_from_symbolic")
+    workflow.add_edge("assemble_from_symbolic", "normalize_composition")
+    workflow.add_edge("load_prefix", "symbolic_condition")
     workflow.add_conditional_edges(
         "validate_composition",
         _route_after_validation,
@@ -482,10 +814,480 @@ def _build_generation_graph():
             "assemble_composition": "assemble_composition",
             "normalize_composition": "normalize_composition",
             "validate_composition": "validate_composition",
+            "validate_plan": "validate_plan",
+            "symbolic_generate": "symbolic_generate",
             "fail": END,
         },
     )
     return workflow.compile()
+
+
+def _select_pipeline_entry(state: _GenerationState) -> _GenerationState:
+    pipeline = state.get("pipeline_id") or PIPELINE_LLM_ONLY
+    logger.debug(
+        "Generation pipeline entry selected",
+        extra={"pipeline_id": pipeline},
+    )
+    return state
+
+
+def _route_pipeline_entry(state: _GenerationState) -> str:
+    pipeline = state.get("pipeline_id") or PIPELINE_LLM_ONLY
+    if pipeline in {PIPELINE_CONTINUATION, PIPELINE_VARIATION}:
+        decision = "prefix"
+    else:
+        decision = "plan"
+    logger.debug(
+        "Routing pipeline entry",
+        extra={"pipeline_id": pipeline, "decision": decision},
+    )
+    return decision
+
+
+def _route_after_plan_themes(state: _GenerationState) -> str:
+    pipeline = state.get("pipeline_id") or PIPELINE_LLM_ONLY
+    if pipeline == PIPELINE_HYBRID:
+        decision = "hybrid"
+    elif pipeline in {PIPELINE_CONTINUATION, PIPELINE_VARIATION}:
+        decision = "symbolic_prefix"
+    else:
+        decision = "llm_compose"
+    logger.debug(
+        "Routing after plan_themes",
+        extra={"pipeline_id": pipeline, "decision": decision},
+    )
+    return decision
+
+
+def _route_after_validate_plan(state: _GenerationState) -> str:
+    if state.get("plan_ok"):
+        return "symbolic"
+    retry_limit = state["request"].options.max_retries
+    if int(state.get("stage_retry_count", 0)) >= retry_limit:
+        logger.error(
+            "Plan repair budget exhausted",
+            extra={
+                "pipeline_id": state.get("pipeline_id"),
+                "stage_retry_count": state.get("stage_retry_count", 0),
+            },
+        )
+        return "fail"
+    return "repair_plan"
+
+
+def _route_after_repair_plan(state: _GenerationState) -> str:
+    if state.get("repair_target") == "fail":
+        return "fail"
+    return "validate_plan"
+
+
+def _validate_plan(state: _GenerationState) -> _GenerationState:
+    """Assemble CompositionPlan from staged plan nodes and check hard constraints."""
+    from ..composition_plan_schemas import (
+        CompositionPlan,
+        PlanDensity,
+        PlanInstrumentation,
+        PlanInstrumentationHint,
+        PlanModulation,
+    )
+    from .composition_plan_constraints import attach_constraints_digest, validate_plan_against_constraints
+    from .composition_theme import empty_theme_plan
+
+    stage = "validate_plan"
+    logger.info(
+        "Composer stage started",
+        extra={
+            **_stage_log_extra(state, stage, attempt=state.get("stage_retry_count", 0)),
+            "pipeline_id": state.get("pipeline_id"),
+        },
+    )
+    form = state.get("form_plan")
+    if form is None:
+        diagnostic = ValidationDiagnostic(
+            code="plan_invalid",
+            message="validate_plan requires a form plan",
+            severity="error",
+            context={"stage": stage},
+        )
+        return {
+            **state,
+            "plan_ok": False,
+            "current_stage": stage,
+            "failed_stage": stage,
+            "validation_diagnostics": [diagnostic],
+        }
+
+    hints: list[PlanInstrumentationHint] = []
+    for label in form.instrumentation:
+        hints.append(PlanInstrumentationHint(family=label))
+    plan = CompositionPlan(
+        form=form,
+        harmony=state.get("harmony_plan") or ComposerHarmonyPlan(),
+        motifs_themes=state.get("theme_plan") or empty_theme_plan(reason="missing_theme_plan"),
+        modulation=PlanModulation(),
+        instrumentation=PlanInstrumentation(hints=hints),
+        density=PlanDensity(),
+        stylistic_instructions=bounded_user_instructions_for_prompt(state["request"]),
+    )
+    constraints = state["constraints"]
+    locked = attach_constraints_digest(plan, constraints)
+    diagnostics = validate_plan_against_constraints(locked, constraints, stage=stage)
+    errors = [item for item in diagnostics if item.severity == "error"]
+    plan_ok = not errors
+    logger.info(
+        "Composer stage completed",
+        extra={
+            **_stage_log_extra(state, stage, attempt=state.get("stage_retry_count", 0)),
+            "pipeline_id": state.get("pipeline_id"),
+            "plan_ok": plan_ok,
+            "error_codes": [item.code for item in errors],
+            "warning_codes": [item.code for item in diagnostics if item.severity == "warning"],
+        },
+    )
+    return {
+        **state,
+        "composition_plan": locked,
+        "plan_ok": plan_ok,
+        "validation_diagnostics": diagnostics if errors else list(state.get("validation_diagnostics") or []),
+        "current_stage": stage,
+        "failed_stage": "" if plan_ok else stage,
+    }
+
+
+def _repair_plan(state: _GenerationState) -> _GenerationState:
+    """Bounded plan repair — coerce form hard fields to constraints, rebuild plan, requeue validate."""
+    stage = "repair_plan"
+    attempt = int(state.get("stage_retry_count", 0)) + 1
+    retry_limit = int(state["request"].options.max_retries)
+    logger.warning(
+        "Plan repair attempt",
+        extra={
+            "pipeline_id": state.get("pipeline_id"),
+            "attempt": attempt,
+            "repair_lane": "plan",
+            "failed_stage": state.get("failed_stage"),
+            "retry_limit": retry_limit,
+        },
+    )
+    form = state.get("form_plan")
+    constraints = state.get("constraints")
+    updates: dict[str, Any] = {}
+    if form is not None and constraints is not None:
+        frozen, diagnostics = freeze_form_resolved_fields(constraints, form)
+        state = {**state, "constraints": frozen}
+        if constraints.key_user_specified and form.key != constraints.key:
+            updates["key"] = constraints.key
+        if form.time_signature != constraints.time_signature:
+            updates["time_signature"] = constraints.time_signature
+        if form.bar_count != constraints.duration_bars:
+            updates["bar_count"] = constraints.duration_bars
+        if form.tempo < constraints.tempo_min:
+            updates["tempo"] = constraints.tempo_min
+        elif form.tempo > constraints.tempo_max:
+            updates["tempo"] = constraints.tempo_max
+        if constraints.sections_user_specified and constraints.sections is not None:
+            updates["sections"] = [
+                ComposerFormSection(
+                    type=section.type,
+                    start_bar=section.start_bar,
+                    bar_count=section.bar_count,
+                )
+                for section in constraints.sections
+            ]
+        corrected = form.model_copy(update=updates) if updates else form
+        corrected = ComposerFormPlan.model_validate(corrected.model_dump())
+        state = {**state, "form_plan": corrected, "composition_plan": None}
+        if diagnostics or updates:
+            logger.info(
+                "Plan repair coerced form hard fields",
+                extra={
+                    "codes": [item.code for item in diagnostics],
+                    "coerced_fields": list(updates.keys()),
+                    "attempt": attempt,
+                },
+            )
+    if attempt > retry_limit:
+        logger.error(
+            "Plan repair exhausted retries",
+            extra={
+                "pipeline_id": state.get("pipeline_id"),
+                "attempt": attempt,
+                "code": "plan_invalid",
+                "repair_lane": "plan",
+            },
+        )
+        return {
+            **state,
+            "stage_retry_count": attempt,
+            "current_stage": stage,
+            "repair_target": "fail",
+            "plan_ok": False,
+            "failed_stage": stage,
+        }
+    return {
+        **state,
+        "stage_retry_count": attempt,
+        "current_stage": stage,
+        "repair_target": "validate_plan",
+        "plan_ok": False,
+    }
+
+
+def _symbolic_condition(state: _GenerationState) -> _GenerationState:
+    stage = "symbolic_condition"
+    plan = state.get("composition_plan")
+    if plan is None and state.get("pipeline_id") == PIPELINE_HYBRID:
+        logger.error("symbolic_condition missing composition_plan", extra={"pipeline_id": state.get("pipeline_id")})
+        raise HybridPipelineUnavailableError(
+            "symbolic_condition requires a validated CompositionPlan",
+            code="plan_invalid",
+        )
+    logger.info(
+        "Composer stage completed",
+        extra={
+            **_stage_log_extra(state, stage, attempt=state.get("retry_count", 0)),
+            "pipeline_id": state.get("pipeline_id"),
+            "seed": state.get("seed"),
+            "has_plan": plan is not None,
+            "has_prefix": state.get("prefix_composition") is not None,
+        },
+    )
+    return {**state, "current_stage": stage}
+
+
+def _symbolic_generate(state: _GenerationState) -> _GenerationState:
+    from .symbolic_composition_generate import (
+        SymbolicCompositionGenerateError,
+        generate_symbolic_composition,
+    )
+
+    stage = "symbolic_generate"
+    plan = state.get("composition_plan")
+    if plan is None:
+        raise HybridPipelineUnavailableError(
+            "symbolic_generate requires composition_plan",
+            code="plan_invalid",
+        )
+    attempt = int(state.get("symbolic_resample_count", 0))
+    logger.info(
+        "Composer stage started",
+        extra={
+            **_stage_log_extra(state, stage, attempt=attempt),
+            "pipeline_id": state.get("pipeline_id"),
+            "seed": state.get("seed"),
+            "repair_lane": "tokens" if attempt else None,
+        },
+    )
+    try:
+        result = generate_symbolic_composition(
+            plan,
+            seed=state.get("seed"),
+            prefix_composition=state.get("prefix_composition"),
+            genre=state["constraints"].genre,
+            mood=state["constraints"].mood,
+            prefer_fake=None,
+            resample_attempt=attempt,
+        )
+    except SymbolicCompositionGenerateError as exc:
+        logger.error(
+            "Symbolic generate failed",
+            extra={
+                "pipeline_id": state.get("pipeline_id"),
+                "code": exc.code,
+                "seed": state.get("seed"),
+                "attempt": attempt,
+            },
+        )
+        return {
+            **state,
+            "symbolic_ok": False,
+            "current_stage": stage,
+            "failed_stage": stage,
+            "validation_diagnostics": [
+                ValidationDiagnostic(
+                    code=exc.code,
+                    message=str(exc)[:400],
+                    severity="error",
+                    context={"stage": stage, "attempt": attempt},
+                )
+            ],
+        }
+    logger.info(
+        "Composer stage completed",
+        extra={
+            **_stage_log_extra(state, stage, attempt=attempt),
+            "pipeline_id": state.get("pipeline_id"),
+            "model_id": result.model_id,
+            "backend": result.backend,
+            "seed": result.seed,
+            "note_count": sum(len(t.events) for t in result.composition.tracks),
+            "fallback_applied": False,
+        },
+    )
+    return {
+        **state,
+        "symbolic_result": result,
+        "symbolic_ok": True,
+        "music": result.composition,
+        "current_stage": stage,
+        "failed_stage": "",
+    }
+
+
+def _symbolic_decode_repair(state: _GenerationState) -> _GenerationState:
+    """Token/decode repair lane — re-sample once on symbolic failure."""
+    stage = "symbolic_decode_repair"
+    if state.get("symbolic_ok"):
+        logger.info(
+            "symbolic_decode_repair skipped; symbolic_ok",
+            extra={"pipeline_id": state.get("pipeline_id"), "seed": state.get("seed")},
+        )
+        return {**state, "current_stage": stage}
+
+    attempt = int(state.get("symbolic_resample_count", 0))
+    max_attempts = int(os.environ.get("GENERATION_HYBRID_MAX_TOKEN_RETRIES", "1") or "1")
+    if attempt >= max_attempts:
+        logger.error(
+            "Symbolic token repair budget exhausted",
+            extra={
+                "pipeline_id": state.get("pipeline_id"),
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "repair_lane": "tokens",
+            },
+        )
+        return {**state, "current_stage": stage, "failed_stage": "symbolic_generate"}
+
+    logger.warning(
+        "Re-sampling symbolic generate after decode/token failure",
+        extra={
+            "pipeline_id": state.get("pipeline_id"),
+            "attempt": attempt + 1,
+            "seed": state.get("seed"),
+            "repair_lane": "tokens",
+        },
+    )
+    resampled = _symbolic_generate({**state, "symbolic_resample_count": attempt + 1})
+    return {**resampled, "current_stage": stage}
+
+
+def _assemble_from_symbolic(state: _GenerationState) -> _GenerationState:
+    stage = "assemble_from_symbolic"
+    music = state.get("music")
+    if music is None or not state.get("symbolic_ok"):
+        logger.error(
+            "assemble_from_symbolic missing symbolic music",
+            extra={"pipeline_id": state.get("pipeline_id"), "symbolic_ok": state.get("symbolic_ok")},
+        )
+        return {
+            **state,
+            "validation_ok": False,
+            "failed_stage": "symbolic_generate",
+            "current_stage": stage,
+        }
+    logger.info(
+        "Composer stage completed",
+        extra={
+            **_stage_log_extra(state, stage, attempt=state.get("retry_count", 0)),
+            "pipeline_id": state.get("pipeline_id"),
+            "track_count": len(music.tracks),
+            "event_count": sum(len(track.events) for track in music.tracks),
+            "schema_version": getattr(music, "schema_version", None),
+        },
+    )
+    hard_summary = {
+        "key": music.key,
+        "time_signature": music.time_signature,
+        "bar_count": music.bar_count,
+        "tempo": music.tempo,
+        "duration_ticks": music.duration_ticks,
+        "section_types": [section.type for section in music.sections],
+        "section_bars": [section.bar_count for section in music.sections],
+    }
+    return {
+        **state,
+        "music": music,
+        "current_stage": stage,
+        "failed_stage": "",
+        "pre_normalize_hard_summary": hard_summary,
+    }
+
+
+def _load_prefix(state: _GenerationState) -> _GenerationState:
+    """Load prefix composition for continuation/variation (from request options when present)."""
+    stage = "load_prefix"
+    prefix = state.get("prefix_composition")
+    options = state["request"].options
+    raw_prefix = getattr(options, "prefix_composition", None)
+    if prefix is None and raw_prefix is not None:
+        prefix = CompositionV2.model_validate(raw_prefix) if not isinstance(raw_prefix, CompositionV2) else raw_prefix
+    logger.info(
+        "Composer stage completed",
+        extra={
+            **_stage_log_extra(state, stage, attempt=0),
+            "pipeline_id": state.get("pipeline_id"),
+            "has_prefix": prefix is not None,
+            "prefix_bar_count": getattr(prefix, "bar_count", None) if prefix else None,
+            "seed": state.get("seed"),
+        },
+    )
+    if prefix is None:
+        raise HybridPipelineUnavailableError(
+            "symbolic_continuation/variation requires options.prefix_composition",
+            code="symbolic_prefix_missing",
+        )
+    # Light plan fragment from prefix metadata when composition_plan absent.
+    from ..composition_plan_schemas import CompositionPlan, PlanDensity, PlanInstrumentation, PlanModulation
+    from .composition_planner import ComposerFormPlan, ComposerFormSection
+    from .composition_plan_constraints import attach_constraints_digest
+    from .composition_theme import empty_theme_plan
+
+    sections = [
+        ComposerFormSection(
+            type=section.type,
+            start_bar=section.start_bar,
+            bar_count=section.bar_count,
+        )
+        for section in prefix.sections
+    ]
+    form = ComposerFormPlan(
+        tempo=prefix.tempo,
+        key=prefix.key,
+        time_signature=prefix.time_signature,
+        bar_count=prefix.bar_count,
+        sections=sections,
+        instrumentation=[track.instrument for track in prefix.tracks],
+    )
+    plan = CompositionPlan(
+        form=form,
+        harmony=ComposerHarmonyPlan(),
+        motifs_themes=empty_theme_plan(reason="prefix_pipeline"),
+        modulation=PlanModulation(),
+        instrumentation=PlanInstrumentation(),
+        density=PlanDensity(),
+    )
+    locked = attach_constraints_digest(plan, state["constraints"])
+    # Align hard duration/meter/key locks with the prefix score for continuation/variation.
+    from dataclasses import replace as dc_replace
+
+    constraints = state["constraints"]
+    updates: dict[str, Any] = {
+        "duration_bars": prefix.bar_count,
+        "time_signature": prefix.time_signature,
+    }
+    if not constraints.key_user_specified:
+        updates["key"] = prefix.key
+    aligned = dc_replace(constraints, **updates)
+    locked = attach_constraints_digest(plan, aligned)
+    return {
+        **state,
+        "prefix_composition": prefix,
+        "composition_plan": locked,
+        "form_plan": form,
+        "constraints": aligned,
+        "plan_ok": True,
+        "current_stage": stage,
+    }
 
 
 def _route_after_validation(state: _GenerationState) -> str:
@@ -500,12 +1302,29 @@ def _route_after_validation(state: _GenerationState) -> str:
                 "model": _selected_model(state["request"], state["provider"]),
                 "stage": state.get("failed_stage") or "validate_composition",
                 "retry_count": state.get("retry_count", 0),
+                "pipeline_id": state.get("pipeline_id"),
                 "diagnostic_codes": [
                     item.code for item in (state.get("validation_diagnostics") or []) if item.severity == "error"
                 ],
             },
         )
         return "fail"
+    # Hybrid default: re-sample symbolic rather than LLM note rewrite.
+    pipeline = state.get("pipeline_id") or PIPELINE_LLM_ONLY
+    if pipeline in {PIPELINE_HYBRID, PIPELINE_CONTINUATION, PIPELINE_VARIATION}:
+        allow_llm_repair = bool(
+            getattr(state["request"].options, "allow_llm_composition_repair", False)
+        ) if hasattr(state["request"].options, "allow_llm_composition_repair") else False
+        if not allow_llm_repair:
+            logger.info(
+                "Hybrid validation failure routing to symbolic re-sample",
+                extra={
+                    "pipeline_id": pipeline,
+                    "retry_count": state.get("retry_count", 0),
+                    "repair_lane": "symbolic_resample",
+                },
+            )
+            return "repair"
     return "repair"
 
 
@@ -524,6 +1343,8 @@ def _route_after_repair(state: _GenerationState) -> str:
         "assemble_composition",
         "normalize_composition",
         "validate_composition",
+        "validate_plan",
+        "symbolic_generate",
     }:
         return target
     return "assemble_composition"
@@ -1195,6 +2016,21 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
     diagnostics = [item for item in (state.get("validation_diagnostics") or []) if item.severity == "error"]
     codes = [item.code for item in diagnostics]
     repair_target = state.get("failed_stage") or "assemble_composition"
+    pipeline = state.get("pipeline_id") or PIPELINE_LLM_ONLY
+    # Hybrid composition repair prefers symbolic re-sample (not LLM note rewrite).
+    if pipeline in {PIPELINE_HYBRID, PIPELINE_CONTINUATION, PIPELINE_VARIATION}:
+        allow_llm = bool(getattr(state["request"].options, "allow_llm_composition_repair", False))
+        if not allow_llm:
+            repair_target = "symbolic_generate"
+            logger.info(
+                "Hybrid composition repair selecting symbolic re-sample",
+                extra={
+                    "pipeline_id": pipeline,
+                    "repair_lane": "composition_via_symbolic",
+                    "retry_count": retry_count,
+                    "codes": codes,
+                },
+            )
     if repair_target not in {
         "plan_form",
         "plan_harmony",
@@ -1206,6 +2042,8 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
         "assemble_composition",
         "normalize_composition",
         "validate_composition",
+        "validate_plan",
+        "symbolic_generate",
     }:
         repair_target = "assemble_composition"
 
@@ -1260,6 +2098,10 @@ async def _repair_composition(state: _GenerationState) -> _GenerationState:
         cleared.pop("theme_motifs", None)
         cleared.pop("theme_outcomes", None)
         cleared.pop("music", None)
+    elif repair_target == "symbolic_generate":
+        cleared.pop("music", None)
+        cleared["symbolic_ok"] = False
+        cleared["symbolic_resample_count"] = int(state.get("symbolic_resample_count", 0)) + 1
     elif repair_target in {"assemble_composition", "normalize_composition"}:
         cleared.pop("music", None)
 
@@ -3001,6 +3843,8 @@ def _stage_log_extra(state: _GenerationState, stage: str, *, attempt: int) -> di
 def _stage_state_summary(state: _GenerationState) -> dict[str, Any]:
     accompaniment = state.get("accompaniment_drafts") or []
     return {
+        "pipeline_id": state.get("pipeline_id"),
+        "seed": state.get("seed"),
         "current_stage": state.get("current_stage"),
         "failed_stage": state.get("failed_stage"),
         "repair_target": state.get("repair_target"),
@@ -3015,6 +3859,8 @@ def _stage_state_summary(state: _GenerationState) -> dict[str, Any]:
         "accompaniment_roles": [draft.role for draft in accompaniment],
         "diagnostics": summarize_diagnostics(state.get("validation_diagnostics")),
         "validation_ok": state.get("validation_ok"),
+        "plan_ok": state.get("plan_ok"),
+        "symbolic_ok": state.get("symbolic_ok"),
         "has_music": state.get("music") is not None,
     }
 

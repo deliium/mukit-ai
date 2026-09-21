@@ -375,7 +375,7 @@ def test_staged_generation_acceptance_shape(monkeypatch, caplog):
     payloads = _stage_payloads()
     calls = _install_stage_mock(monkeypatch, payloads)
 
-    music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
+    music, warnings, provider, _validation, _provenance = asyncio.run(generate_music_json(_request(), _settings()))
 
     assert provider.provider == "openai"
     assert music.schema_version == "composition.v2"
@@ -427,7 +427,7 @@ def test_theme_plan_prompt_includes_bounded_instructions(monkeypatch, caplog):
     payloads = _stage_payloads()
     calls = _install_stage_mock(monkeypatch, payloads)
     secret_instruction = "invert the opening motif in the bridge quietly"
-    music, _warnings, _provider, validation = asyncio.run(
+    music, _warnings, _provider, validation, _ = asyncio.run(
         generate_music_json(_request(instructions=secret_instruction), _settings())
     )
     assert music.schema_version == "composition.v2"
@@ -479,7 +479,7 @@ def test_theme_plan_disabled_for_single_section(monkeypatch):
         sections=[{"type": "verse", "bars": 8}],
         instructions=None,
     )
-    music, _warnings, _provider, _validation = asyncio.run(generate_music_json(request, _settings()))
+    music, _warnings, _provider, _validation, _provenance = asyncio.run(generate_music_json(request, _settings()))
     assert music.bar_count == 8
     assert music.motifs == []
 
@@ -528,7 +528,7 @@ def test_staged_generation_preserves_model_override(monkeypatch):
         }
     )
     settings = _settings(model="base-model")
-    music, warnings, provider, _validation = asyncio.run(generate_music_json(request, settings))
+    music, warnings, provider, _validation, _provenance = asyncio.run(generate_music_json(request, settings))
     assert music.schema_version == "composition.v2"
     assert provider.model == "gpt-override"
 
@@ -542,7 +542,7 @@ def test_staged_generation_deepseek_provider(monkeypatch):
             "selection": {"provider": "deepseek", "model": "deepseek-chat"},
         }
     )
-    music, warnings, provider, _validation = asyncio.run(generate_music_json(request, _settings("deepseek", "deepseek-chat")))
+    music, warnings, provider, _validation, _provenance = asyncio.run(generate_music_json(request, _settings("deepseek", "deepseek-chat")))
     assert provider.provider == "deepseek"
     assert music.bar_count == 16
 
@@ -569,7 +569,7 @@ def test_staged_generation_repairs_sparse_melody(monkeypatch, caplog):
     # Disable themes so sparse-melody repair still targets the classic melody stage.
     payloads = _stage_payloads(theme_enabled=False)
     _install_stage_mock(monkeypatch, payloads, fail_melody_once=True)
-    music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
+    music, warnings, provider, _validation, _provenance = asyncio.run(generate_music_json(_request(), _settings()))
     assert music.schema_version == "composition.v2"
     assert any("retrying" in warning.lower() or "failed validation" in warning.lower() for warning in warnings)
     assert "Composer repair attempt started" in caplog.text
@@ -588,7 +588,7 @@ def test_stage_parse_retry_preserves_integrity_repair_budget(monkeypatch, caplog
     request = LLMMusicGenerationRequest.model_validate(
         {**_request().model_dump(), "options": {"max_retries": 1}}
     )
-    music, warnings, provider, _validation = asyncio.run(generate_music_json(request, _settings()))
+    music, warnings, provider, _validation, _provenance = asyncio.run(generate_music_json(request, _settings()))
     assert music.schema_version == "composition.v2"
     assert "[FIX] Preserved integrity repair budget after stage parse retry" in caplog.text
     assert "Composer repair attempt started" in caplog.text
@@ -730,7 +730,7 @@ def test_assemble_clamps_slightly_overflowing_events(monkeypatch, caplog):
     # Disable thematic realization so the intentional overflow reaches assemble unchanged.
     payloads = _stage_payloads(slight_overflow_melody=True, theme_enabled=False)
     _install_stage_mock(monkeypatch, payloads)
-    music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
+    music, warnings, provider, _validation, _provenance = asyncio.run(generate_music_json(_request(), _settings()))
     melody = next(track for track in music.tracks if track.role == "melody")
     assert melody.events
     assert all(event.start_tick + event.duration_ticks <= music.duration_ticks for event in melody.events)
@@ -762,7 +762,7 @@ def test_assemble_remaps_duplicate_track_ids(monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     payloads = _stage_payloads(duplicate_track_ids=True)
     _install_stage_mock(monkeypatch, payloads)
-    music, warnings, provider, _validation = asyncio.run(generate_music_json(_request(), _settings()))
+    music, warnings, provider, _validation, _provenance = asyncio.run(generate_music_json(_request(), _settings()))
     track_ids = [track.id for track in music.tracks]
     assert len(track_ids) == len(set(track_ids))
     assert "melody-1" in track_ids
@@ -965,7 +965,7 @@ def test_f_sharp_minor_recovers_after_targeted_repair(monkeypatch, caplog):
             "options": {"max_retries": 2},
         }
     )
-    music, warnings, provider, validation = asyncio.run(generate_music_json(request, _settings()))
+    music, warnings, provider, validation, _provenance = asyncio.run(generate_music_json(request, _settings()))
     assert music.key == "F# minor"
     assert music.bar_count == 20
     assert music.tempo >= 90 and music.tempo <= 110
@@ -990,7 +990,7 @@ def test_duplicate_bass_accompaniment_triggers_targeted_repair(monkeypatch, capl
     request = _request()
     request = request.model_copy(update={"options": request.options.model_copy(update={"max_retries": 2})})
 
-    music, warnings, provider, validation = asyncio.run(generate_music_json(request, _settings()))
+    music, warnings, provider, validation, _provenance = asyncio.run(generate_music_json(request, _settings()))
 
     assert provider.provider == "openai"
     assert validation is not None
@@ -1053,7 +1053,7 @@ def test_one_requested_instrument_pair_satisfies_without_track_count_match(monke
     payloads["compose_accompaniment"] = json.dumps(accompaniment)
     _install_stage_mock(monkeypatch, payloads)
     # piano+bass request can pass with melody+harmony piano tracks plus bass (3 tracks > 2 requests).
-    music, _, _, validation = asyncio.run(
+    music, _, _, validation, _ = asyncio.run(
         generate_music_json(_request(instruments=["piano", "bass"]), _settings())
     )
     assert validation is not None and validation.ok
@@ -1071,7 +1071,7 @@ def test_name_independent_matching_in_staged_report(monkeypatch):
     melody["track"]["instrument"] = "keyboard"
     payloads["compose_melody"] = json.dumps(melody)
     _install_stage_mock(monkeypatch, payloads)
-    _, _, _, validation = asyncio.run(generate_music_json(_request(), _settings()))
+    _, _, _, validation, _ = asyncio.run(generate_music_json(_request(), _settings()))
     assert validation is not None
     assert validation.ok
     piano = next(item for item in validation.instrumentation.satisfied if item.key == "piano")
@@ -1170,7 +1170,7 @@ def test_successful_realize_strips_stale_theme_diagnostics(monkeypatch):
         }
 
     monkeypatch.setattr(llm_music_generator, "_plan_themes", plan_themes_with_stale)
-    music, _, _, validation = asyncio.run(generate_music_json(_request(), _settings()))
+    music, _, _, validation, _ = asyncio.run(generate_music_json(_request(), _settings()))
     assert validation is not None and validation.ok
     assert music.tracks
     assert "compose_melody" in calls or "compose_melody_seed" in calls
@@ -1179,7 +1179,7 @@ def test_successful_realize_strips_stale_theme_diagnostics(monkeypatch):
 def test_legitimate_same_instrument_different_roles_pass(monkeypatch):
     payloads = _stage_payloads()
     _install_stage_mock(monkeypatch, payloads)
-    music, _, _, validation = asyncio.run(generate_music_json(_request(), _settings()))
+    music, _, _, validation, _ = asyncio.run(generate_music_json(_request(), _settings()))
     piano_roles = {track.role for track in music.tracks if track.instrument == "piano"}
     assert {"melody", "harmony"}.issubset(piano_roles)
     assert validation.ok
@@ -1189,7 +1189,7 @@ def test_legitimate_same_instrument_different_roles_pass(monkeypatch):
 def test_duplicate_track_ids_still_allocated_for_distinct_roles(monkeypatch):
     payloads = _stage_payloads(duplicate_track_ids=True)
     _install_stage_mock(monkeypatch, payloads)
-    music, _, _, validation = asyncio.run(generate_music_json(_request(), _settings()))
+    music, _, _, validation, _ = asyncio.run(generate_music_json(_request(), _settings()))
     ids = [track.id for track in music.tracks]
     assert len(ids) == len(set(ids))
     assert validation.ok

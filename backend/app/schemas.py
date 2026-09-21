@@ -289,10 +289,26 @@ class LLMModelSelection(BaseModel):
     model: str | None = Field(default=None, max_length=120)
 
 
+GenerationPipelineId = Literal[
+    "llm_only",
+    "hybrid_plan_symbolic",
+    "symbolic_continuation",
+    "symbolic_variation",
+]
+
+
 class LLMGenerationOptions(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
     timeout_seconds: int | None = Field(default=None, ge=1, le=300)
     max_retries: int = Field(default=1, ge=0, le=5)
+    # Generation pipeline selector. Default preserves existing LangGraph LLM-only compose path.
+    pipeline: GenerationPipelineId = "llm_only"
+    # Deterministic seed for hybrid / symbolic pipelines (ignored by llm_only).
+    seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    # Prefix composition for symbolic_continuation / symbolic_variation.
+    prefix_composition: dict[str, Any] | None = None
+    # Last-resort LLM note rewrite on hybrid composition failure (default off).
+    allow_llm_composition_repair: bool = False
 
 
 class LLMMusicGenerationRequest(BaseModel):
@@ -318,6 +334,19 @@ class LLMModelsResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class GenerationPipelineStageProvenance(BaseModel):
+    """One stage of multi-stage generation provenance (bounded; no prompts/plans)."""
+
+    operation: str = Field(..., max_length=64)
+    model_id: str | None = Field(default=None, max_length=160)
+    capability: str | None = Field(default=None, max_length=64)
+    runtime: str | None = Field(default=None, max_length=64)
+    model_version: str | None = Field(default=None, max_length=120)
+    seed: int | None = None
+    checkpoint_card_prefix: str | None = Field(default=None, max_length=64)
+    tokenizer_version: str | None = Field(default=None, max_length=80)
+
+
 class LLMMusicGenerationResponse(BaseModel):
     music: CompositionV2
     provider: str = Field(..., max_length=64)
@@ -334,6 +363,12 @@ class LLMMusicGenerationResponse(BaseModel):
     musicxml_filename: str | None = None
     warnings: list[str] = Field(default_factory=list)
     validation: "GenerationValidationReport | None" = None
+    # Additive hybrid / multi-stage provenance (llm_only leaves these null/empty).
+    pipeline_id: GenerationPipelineId | None = None
+    stages: list[GenerationPipelineStageProvenance] = Field(default_factory=list)
+    plan_schema_version: str | None = Field(default=None, max_length=64)
+    constraints_digest_prefix: str | None = Field(default=None, max_length=40)
+    seed: int | None = None
 
 
 class GenerationValidationIssue(BaseModel):

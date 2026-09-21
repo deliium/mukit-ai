@@ -31,6 +31,7 @@
 - [x] **Symbolic music PyTorch Music Transformer** — Decoder-only LM over `tokenizer.v1`; offline train/generate CLI, checkpoint card, inference adapter, optional API; CPU tests + ROCm device knob; never `PROJECT_DB_PATH` / GGUF in FastAPI
 - [x] **Reproducible symbolic music training and evaluation** — Experiment dirs, resume, AMP/accum/clip, metrics, symbolic eval (not quality), listening set, compare CLI; offline only (never blocks web API)
 - [x] **Style/semantic embeddings and conditioning for symbolic composition** — Handcrafted `symbolic.features.v1` registry embedder, scoped similarity, reference provenance, Develop-tab musical reference conditioning; no large net; no silent dataset ingest
+- [x] **Hybrid LLM planner + symbolic note generation pipeline** — Pipeline-parameterized LangGraph (`llm_only` / `hybrid_plan_symbolic` / continuation / variation); versioned non-playable `composition.plan.v1`; Music Transformer / `fake:symbolic-tiny` note engine; multi-stage provenance; no silent LLM note fallback
 
 ## Completed
 
@@ -63,3 +64,4 @@
 | Symbolic music PyTorch Music Transformer | 2026-09-21 |
 | Reproducible symbolic music training and evaluation | 2026-09-21 |
 | Style/semantic embeddings and conditioning for symbolic composition | 2026-09-21 |
+| Hybrid LLM planner + symbolic note generation pipeline | 2026-09-21 |

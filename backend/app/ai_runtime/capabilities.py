@@ -25,7 +25,7 @@ class ModelCapability(StrEnum):
 OPERATION_DEFAULT_CAPABILITY: dict[AiOperation, ModelCapability] = {
     AiOperation.GENERATE: ModelCapability.LANGUAGE_PLANNER,
     AiOperation.GENERATE_PLANNER: ModelCapability.LANGUAGE_PLANNER,
-    AiOperation.GENERATE_COMPOSER: ModelCapability.LANGUAGE_PLANNER,
+    AiOperation.GENERATE_COMPOSER: ModelCapability.SYMBOLIC_COMPOSER,
     AiOperation.REGION_EDIT: ModelCapability.SYMBOLIC_EDITOR,
     AiOperation.ARRANGE_PREVIEW: ModelCapability.SYMBOLIC_EDITOR,
     AiOperation.DEVELOPMENT_PREVIEW: ModelCapability.SYMBOLIC_EDITOR,

@@ -38,6 +38,7 @@ from .services.composition_planner import OversizedLLMGenerationRequestError
 from .services.llm_composition_editor import edit_composition_region
 from .services.llm_music_generator import (
     GenerationConstraintViolationError,
+    HybridPipelineUnavailableError,
     InvalidLLMOutputError,
     LLMGenerationError,
     NoLLMProviderConfiguredError,
@@ -281,7 +282,9 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
 
     try:
         settings = load_llm_settings()
-        music, warnings, provider, validation = await generate_music_json(request, settings)
+        music, warnings, provider, validation, provenance = await generate_music_json(
+            request, settings
+        )
         musicxml, render_report = render_musicxml(music)
         all_warnings = [*warnings, *projection_issues_as_warnings(render_report)]
         logger.info(
@@ -292,6 +295,11 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
                 "schema_version": music.schema_version,
                 "warning_count": len(all_warnings),
                 "validation_status": validation.status if validation else None,
+                "pipeline_id": provenance.get("pipeline_id"),
+                "seed": provenance.get("seed"),
+                "stage_model_ids": [
+                    stage.get("model_id") for stage in (provenance.get("stages") or [])
+                ],
             },
         )
         logger.debug(
@@ -315,6 +323,11 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
             musicxml=musicxml,
             warnings=all_warnings,
             validation=validation,
+            pipeline_id=provenance.get("pipeline_id"),
+            stages=provenance.get("stages") or [],
+            plan_schema_version=provenance.get("plan_schema_version"),
+            constraints_digest_prefix=provenance.get("constraints_digest_prefix"),
+            seed=provenance.get("seed"),
             **_ai_resolution_response_fields(),
         )
     except OversizedLLMGenerationRequestError as exc:
@@ -329,6 +342,15 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
     except UnsupportedLLMProviderError as exc:
         logger.warning("LLM provider unavailable", extra={"reason": "unsupported_provider"})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HybridPipelineUnavailableError as exc:
+        logger.error(
+            "Hybrid/symbolic pipeline unavailable",
+            extra={"code": exc.code, "detail": str(exc)[:200], "fallback_applied": False},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={"message": str(exc)[:500], "code": exc.code},
+        ) from exc
     except GenerationConstraintViolationError as exc:
         detail = {
             "message": str(exc)[:500],

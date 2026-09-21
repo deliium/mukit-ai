@@ -1,0 +1,17 @@
+{
+  "schema_version": "composition.plan.v1",
+  "form": {
+    "tempo": 90,
+    "key": "D major",
+    "time_signature": "4/4",
+    "bar_count": 4,
+    "sections": [
+      {"type": "verse", "start_bar": 1, "bar_count": 4}
+    ],
+    "instrumentation": ["piano"]
+  },
+  "events": [
+    {"pitch": 60, "start_tick": 0, "duration_ticks": 480}
+  ],
+  "motifs_themes": {"enabled": false}
+}

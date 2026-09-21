@@ -22,6 +22,7 @@ from ..schemas import (
     LLMCompositionEditRequest,
     LLMMusicGenerationRequest,
 )
+from .generation_constraints import GenerationConstraints
 from .composition_region_patch import (
     CompositionRegionPatchError,
     apply_region_replacement_patch,
@@ -687,6 +688,143 @@ async def generate_fake_music_json(
         },
     )
     return music, warnings, provider, report
+
+
+async def generate_fake_hybrid_music_json(
+    request: LLMMusicGenerationRequest,
+    provider: LLMProviderSettings,
+    *,
+    constraints: GenerationConstraints | None = None,
+) -> tuple[
+    CompositionV2,
+    list[str],
+    LLMProviderSettings,
+    GenerationValidationReport | None,
+    dict,
+]:
+    """Fake planner + fake:symbolic-tiny composer for hybrid_plan_symbolic CI path."""
+    from ..composition_plan_schemas import (
+        COMPOSITION_PLAN_SCHEMA_VERSION,
+        CompositionPlan,
+        PlanDensity,
+        PlanInstrumentation,
+        PlanInstrumentationHint,
+        PlanModulation,
+    )
+    from .composition_plan_constraints import attach_constraints_digest, ensure_plan_conforms
+    from .composition_planner import ComposerFormPlan, ComposerFormSection, ComposerHarmonyPlan
+    from .composition_theme import empty_theme_plan
+    from .fake_symbolic_composer import FAKE_SYMBOLIC_MODEL_ID
+    from .generation_constraints import build_generation_constraints, validate_generation_constraints
+    from .symbolic_composition_generate import generate_symbolic_composition
+
+    active_constraints = constraints or build_generation_constraints(request)
+    seed = request.options.seed if request.options.seed is not None else 0
+    logger.info(
+        "Fake hybrid generation started",
+        extra={
+            "provider": provider.provider,
+            "model": provider.model,
+            "pipeline_id": "hybrid_plan_symbolic",
+            "seed": seed,
+            "duration_bars": active_constraints.duration_bars,
+        },
+    )
+
+    sections: list[ComposerFormSection]
+    if active_constraints.sections:
+        sections = [
+            ComposerFormSection(
+                type=section.type,
+                start_bar=section.start_bar,
+                bar_count=section.bar_count,
+            )
+            for section in active_constraints.sections
+        ]
+    else:
+        sections = [
+            ComposerFormSection(
+                type="verse",
+                start_bar=1,
+                bar_count=active_constraints.duration_bars,
+            )
+        ]
+
+    tempo = max(active_constraints.tempo_min, min(active_constraints.tempo_max, 120))
+    key = active_constraints.key or "C major"
+    form = ComposerFormPlan(
+        tempo=tempo,
+        key=key,
+        time_signature=active_constraints.time_signature,
+        bar_count=active_constraints.duration_bars,
+        sections=sections,
+        instrumentation=list(active_constraints.requested_instruments)
+        or list(active_constraints.required_instrument_families)
+        or ["piano", "bass"],
+    )
+    hints = [PlanInstrumentationHint(family=label) for label in form.instrumentation]
+    plan = CompositionPlan(
+        form=form,
+        harmony=ComposerHarmonyPlan(),
+        motifs_themes=empty_theme_plan(reason="fake_hybrid"),
+        modulation=PlanModulation(),
+        instrumentation=PlanInstrumentation(hints=hints),
+        density=PlanDensity(),
+    )
+    locked = ensure_plan_conforms(plan, active_constraints, stage="fake_hybrid_plan")
+    result = generate_symbolic_composition(
+        locked,
+        seed=seed,
+        genre=active_constraints.genre,
+        mood=active_constraints.mood,
+        prefer_fake=True,
+    )
+    music = result.composition
+    report = validate_generation_constraints(music, active_constraints)
+    if not report.ok:
+        codes = [item.code for item in report.errors]
+        raise FakeLLMError(
+            "Fake hybrid symbolic output failed constraint validation: " + ", ".join(codes)
+        )
+
+    warnings = [
+        "Fake hybrid mode: LLM plan + fake:symbolic-tiny notes (no API credits used).",
+    ]
+    provenance = {
+        "pipeline_id": "hybrid_plan_symbolic",
+        "stages": [
+            {
+                "operation": "generate_planner",
+                "model_id": f"{provider.provider}:{provider.model}",
+                "capability": "language_planner",
+                "runtime": "fake",
+            },
+            {
+                "operation": "generate_composer",
+                "model_id": FAKE_SYMBOLIC_MODEL_ID,
+                "capability": "symbolic_composer",
+                "runtime": "fake_symbolic",
+                "seed": seed,
+            },
+        ],
+        "plan_schema_version": COMPOSITION_PLAN_SCHEMA_VERSION,
+        "constraints_digest_prefix": (locked.constraints_digest or "")[:20] or None,
+        "seed": seed,
+    }
+    logger.info(
+        "Fake hybrid generation completed",
+        extra={
+            "pipeline_id": "hybrid_plan_symbolic",
+            "planner_model_id": f"{provider.provider}:{provider.model}",
+            "composer_model_id": FAKE_SYMBOLIC_MODEL_ID,
+            "seed": seed,
+            "bar_count": music.bar_count,
+            "track_count": len(music.tracks),
+            "event_count": sum(len(track.events) for track in music.tracks),
+            "fallback_applied": False,
+        },
+    )
+    return music, warnings, provider, report, provenance
 
 
 def _apply_fake_thematic_recurrence(

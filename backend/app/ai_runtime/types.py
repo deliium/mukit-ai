@@ -25,6 +25,8 @@ ModelRuntimeId = Literal[
     "stub",
     "local_openai_compatible",
     "symbolic_features",
+    "music_transformer",
+    "fake_symbolic",
 ]
 
 

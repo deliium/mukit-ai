@@ -159,6 +159,11 @@ export async function generateLlmMusicJson(payload) {
     generationValidationStatus: response.validation?.status || null,
     generationValidationErrorCount: response.validation?.errors?.length || 0,
     generationValidationWarningCount: response.validation?.warnings?.length || 0,
+    pipelineId: response.pipeline_id || null,
+    stageModelIds: Array.isArray(response.stages)
+      ? response.stages.map((stage) => stage.model_id).filter(Boolean)
+      : [],
+    seed: response.seed ?? null,
   });
   if (!validation.valid) {
     console.error('[musicApi] LLM music response failed validation', { message: validation.message });

@@ -72,6 +72,56 @@ def test_resolve_embed_defaults_to_symbolic_features(monkeypatch):
     assert card.model_id == "local:symbolic-features-v1"
 
 
+def test_list_ai_models_filter_by_symbolic_composer(monkeypatch):
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    registry_mod.reload_registry(dict(**{k: v for k, v in __import__("os").environ.items()}))
+    response = asyncio.run(list_ai_models(capability="symbolic_composer"))
+    assert len(response.models) >= 1
+    assert all(m.primary_capability == "symbolic_composer" for m in response.models)
+    ready = [m for m in response.models if m.status == "ready"]
+    assert any(m.id == "fake:symbolic-tiny" for m in ready)
+    assert any(m.runtime == "fake_symbolic" for m in ready)
+    assert response.operation_defaults.get("generate_composer") == "fake:symbolic-tiny"
+
+
+def test_resolve_generate_composer_uncollapsed_uses_symbolic(monkeypatch):
+    from app.ai_runtime.operations import AiOperation
+    from app.ai_runtime.routing import resolve_model_for_operation
+
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    env = dict(**{k: v for k, v in __import__("os").environ.items()})
+    registry_mod.reload_registry(env)
+    resolved = resolve_model_for_operation(
+        AiOperation.GENERATE_COMPOSER,
+        None,
+        env=env,
+        collapse_reserved_generate=False,
+    )
+    assert resolved.resolved_model_id == "fake:symbolic-tiny"
+    assert resolved.descriptor.primary_capability == "symbolic_composer"
+    assert resolved.descriptor.runtime == "fake_symbolic"
+    assert str(resolved.operation) == "generate_composer"
+
+
+def test_resolve_generate_planner_uncollapsed_uses_language(monkeypatch):
+    from app.ai_runtime.operations import AiOperation
+    from app.ai_runtime.routing import ModelSelectionInput, resolve_model_for_operation
+
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    env = dict(**{k: v for k, v in __import__("os").environ.items()})
+    registry_mod.reload_registry(env)
+    resolved = resolve_model_for_operation(
+        AiOperation.GENERATE_PLANNER,
+        ModelSelectionInput(provider="fake", model="fake-deterministic"),
+        env=env,
+        collapse_reserved_generate=False,
+    )
+    assert resolved.resolved_model_id.startswith("fake:")
+    assert resolved.descriptor.primary_capability == "language_planner"
+    assert AiOperation.GENERATE_PLANNER in resolved.descriptor.supported_operations
+    assert str(resolved.operation) == "generate_planner"
+
+
 def test_get_ai_model_detail(monkeypatch):
     monkeypatch.setenv("LLM_FAKE_MODE", "1")
     registry_mod.reload_registry(dict(**{k: v for k, v in __import__("os").environ.items()}))

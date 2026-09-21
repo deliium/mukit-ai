@@ -179,6 +179,43 @@ def build_registry_from_env(
             },
         )
 
+    # Symbolic composers: fake tiny (always ready) + Music Transformer (checkpoint-gated).
+    from .runtimes.music_transformer import (
+        default_fake_symbolic_descriptor,
+        music_transformer_descriptor,
+    )
+
+    fake_symbolic = default_fake_symbolic_descriptor()
+    if fake_symbolic.id not in models:
+        models[fake_symbolic.id] = fake_symbolic
+        logger.info(
+            "Registered fake symbolic composer model",
+            extra={
+                "model_id": fake_symbolic.id,
+                "runtime": fake_symbolic.runtime,
+                "status": fake_symbolic.status,
+                "primary_capability": fake_symbolic.primary_capability,
+            },
+        )
+
+    mt_descriptor = music_transformer_descriptor(source)
+    if mt_descriptor.id in models:
+        logger.warning(
+            "Music Transformer model id collides with existing entry",
+            extra={"model_id": mt_descriptor.id},
+        )
+    else:
+        models[mt_descriptor.id] = mt_descriptor
+        logger.info(
+            "Registered Music Transformer symbolic composer model",
+            extra={
+                "model_id": mt_descriptor.id,
+                "runtime": mt_descriptor.runtime,
+                "status": mt_descriptor.status,
+                "primary_capability": mt_descriptor.primary_capability,
+            },
+        )
+
     ready_embedders = [
         m
         for m in models.values()

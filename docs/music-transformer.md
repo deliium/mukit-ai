@@ -26,6 +26,9 @@ app.music_transformer (LM, train, sample, checkpoint)
 inference adapter → repair → decode → CompositionV2 validate
         ↓
 optional API (service/router; no torch in router)
+        ↓
+hybrid LangGraph generate (`options.pipeline=hybrid_plan_symbolic`) via
+`app.services.symbolic_composition_generate` (see docs/hybrid-generation.md)
 ```
 
 - Token + learned (or sinusoidal) positions, stacked pre-norm MHA+MLP, LM head (weight-tied by default).

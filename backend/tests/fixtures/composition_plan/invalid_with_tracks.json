@@ -1,0 +1,26 @@
+{
+  "schema_version": "composition.plan.v1",
+  "form": {
+    "tempo": 100,
+    "key": "A minor",
+    "time_signature": "3/4",
+    "bar_count": 4,
+    "sections": [
+      {"type": "verse", "start_bar": 1, "bar_count": 4}
+    ],
+    "instrumentation": ["guitar"]
+  },
+  "tracks": [
+    {
+      "id": "t1",
+      "name": "Lead",
+      "instrument": "guitar",
+      "role": "melody",
+      "events": [
+        {"pitch": "A4", "start_tick": 0, "duration_ticks": 480, "velocity": 80}
+      ]
+    }
+  ],
+  "harmony": {"events": []},
+  "motifs_themes": {"enabled": false, "no_theme_reason": "fixture"}
+}

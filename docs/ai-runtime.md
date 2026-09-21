@@ -32,8 +32,8 @@ creative motif — not multiple primary capabilities.
 | Operation | Env key | Default capability |
 |-----------|---------|-------------------|
 | `generate` | `AI_OP_GENERATE` | `language_planner` |
-| `generate_planner` | `AI_OP_GENERATE_PLANNER` | reserved; defaults to `AI_OP_GENERATE` |
-| `generate_composer` | `AI_OP_GENERATE_COMPOSER` | reserved; defaults to `AI_OP_GENERATE` |
+| `generate_planner` | `AI_OP_GENERATE_PLANNER` | `language_planner` (hybrid: uncollapsed via `collapse_reserved_generate=False`; discovery falls back to `AI_OP_GENERATE` when unset) |
+| `generate_composer` | `AI_OP_GENERATE_COMPOSER` | `symbolic_composer` (hybrid: uncollapsed; discovery defaults to first ready symbolic composer when unset) |
 | `region_edit` | `AI_OP_REGION_EDIT` | `symbolic_editor` |
 | `arrange_preview` | `AI_OP_ARRANGE_PREVIEW` | `symbolic_editor` |
 | `development_preview` | `AI_OP_DEVELOPMENT_PREVIEW` | `symbolic_editor` |
@@ -142,4 +142,4 @@ See also: `.ai-factory/ARCHITECTURE.md` (Composition/LLM module), `.env.example`
 | Provenance = provider/model | Additive `model_id`, `runtime`, `capability`, `operation`, `generation_parameters` via DTO + revision `summary_json` (no Alembic) |
 | No `/ai/` nginx proxy | Compose frontend nginx must proxy `/ai/` (same as `/llm/`); pass `AI_OP_*` / `AI_FALLBACK_*` / `AI_MODEL_REGISTRY_PATH` |
 
-FluidSynth WAV export remains outside `ai_runtime`. Reserved `AI_OP_GENERATE_PLANNER` / `AI_OP_GENERATE_COMPOSER` default to `AI_OP_GENERATE` until a future LangGraph per-node plan.
+FluidSynth WAV export remains outside `ai_runtime`. For hybrid generation (`options.pipeline=hybrid_plan_symbolic`), planner/composer ops are **not** collapsed to `generate` — see [hybrid-generation.md](hybrid-generation.md). Ready symbolic composers: `fake:symbolic-tiny` (always) and `local:music-transformer` (checkpoint + opt-in env).

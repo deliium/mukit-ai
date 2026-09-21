@@ -16,6 +16,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Harmony & Reharmonization**: Edit explicit V2 harmony tick spans on the Harmony tab; preview deterministic or AI reharmonization via `POST /harmony/reharmonize/preview` without dirtying the project until Apply (melody/accompaniment policies; events remain the only audible source)
 - **Composition Development**: Continue, add a named section, or vary a range via the Develop tab (`POST /composition/development/preview`); optional **musical reference** conditioning (project/section embedding — affinity, not artist style); 1–4 ephemeral candidates with Compare/Reject/Audition; Apply or Apply-as-branch commits (details: [docs/composition-development.md](docs/composition-development.md))
 - **Musical similarity / embeddings**: Handcrafted symbolic feature embeddings (`local:symbolic-features-v1`) for scoped similarity search and reference provenance; never auto-export projects into training corpora (details: [docs/embeddings.md](docs/embeddings.md))
+- **Hybrid generation**: Optional pipeline where the LLM plans (`composition.plan.v1`) and a symbolic composer writes notes; select Hybrid in the Music Generator when a ready `symbolic_composer` is available (details: [docs/hybrid-generation.md](docs/hybrid-generation.md))
 - **Composition Arrangement**: Orchestrate selected tracks / piano-to-ensemble and related texture ops via the Arrange tab (`GET /composition/arrangement/instruments`, `POST /composition/arrangement/preview`); session-only candidates until Apply / Apply-as-branch (details: [docs/composition-arrangement.md](docs/composition-arrangement.md))
 - **Safe AI Preview**: Full generation, AI region edit, and other substantial AI workflows keep candidates outside the canonical working composition until explicit Apply; Versions tab supports compare, audition, branch checkout, and restore
 - **Deterministic Export**: Download MusicXML, MIDI, and server-rendered WAV from the same canonical `tracks[].events[]`; export responses include projection status headers when approximations apply (motif metadata is intentionally omitted)
@@ -221,7 +222,7 @@ Example LLM request:
 }
 ```
 
-`POST /llm/generate-music-json` returns canonical `composition.v2` JSON in `music`, derived `musicxml`, human-readable `warnings`, and optional structured `validation` (constraint status, errors/warnings, repair attempts, tonality, instrumentation satisfaction/duplicates, ordered repair actions). Request bodies may still send V1 compositions for edit/migration paths; responses are always V2 after normalization. Hard/soft prompt constraints: [docs/composition-v1.md](docs/composition-v1.md). V2 timeline/expression: [docs/composition-v2.md](docs/composition-v2.md).
+`POST /llm/generate-music-json` returns canonical `composition.v2` JSON in `music`, derived `musicxml`, human-readable `warnings`, and optional structured `validation` (constraint status, errors/warnings, repair attempts, tonality, instrumentation satisfaction/duplicates, ordered repair actions). Request `options.pipeline` selects `llm_only` (default) or `hybrid_plan_symbolic` (LLM plan + symbolic notes) with additive multi-stage provenance — details: [docs/hybrid-generation.md](docs/hybrid-generation.md). Request bodies may still send V1 compositions for edit/migration paths; responses are always V2 after normalization. Hard/soft prompt constraints: [docs/composition-v1.md](docs/composition-v1.md). V2 timeline/expression: [docs/composition-v2.md](docs/composition-v2.md).
 
 `POST /llm/edit-composition-region` accepts an existing composition, bar/track selection, and instruction, then returns a validated `replace_region` `patch`, the applied `composition`, and preview `musicxml`. Outside-region notes and metadata stay unchanged unless the request explicitly expands scope. Invalid provider patches return `502` without mutating the input composition.
 
@@ -321,6 +322,7 @@ mukit-ai/
 | [Symbolic datasets](docs/datasets.md) | Offline licensed corpus pipeline (`DATASET_ROOT`, CLI build/verify) |
 | [Symbolic tokenizer](docs/tokenizer.md) | Composition V2 ↔ token ids (`tokenizer.v1`, CLI encode/decode) |
 | [Symbolic Music Transformer](docs/music-transformer.md) | PyTorch decoder-only LM train/generate (`tokenizer.v1` binding) |
+| [Hybrid generation](docs/hybrid-generation.md) | LLM plan + symbolic notes pipelines, seeds, provenance, repair lanes |
 | [Composition V1](docs/composition-v1.md) | V1 compatibility, staged generation, region editing |
 | [Project persistence](docs/project-persistence.md) | SQLite projects, migrate-on-open, autosave |
 | [Testing](docs/testing.md) | Backend/frontend tests, fixtures, acceptance scripts |

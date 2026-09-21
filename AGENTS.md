@@ -50,7 +50,7 @@ mukit-ai/
 │       └── utils/           # validation, editor selection/ops/nav, viewport, playback, analysis, motif, harmony, arrangement helpers
 ├── scripts/                 # run_tests.sh, v1/v2_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
-├── docs/                    # composition.v2/v1, ai-runtime, editor, analysis, arrangement, import, datasets, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, hybrid-generation, editor, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -71,7 +71,10 @@ mukit-ai/
 | `backend/app/music_transformer/cli.py` | Offline Music Transformer train/generate/eval/listen/compare CLI (`python -m app.music_transformer.cli`) |
 | `backend/app/routers/embeddings.py` | `POST /embeddings/compute`, `/similarity`, `/related-motifs`, `/reference/resolve` |
 | `scripts/run_tests.sh` | Local quality gate: ESLint + backend pytest + frontend unit tests |
-| `backend/app/composition_schemas.py` | Strict V1/V2 document models and timeline helpers |
+| `backend/app/composition_plan_schemas.py` | Strict `composition.plan.v1` DTOs (non-playable) |
+| `backend/app/services/composition_plan_constraints.py` | Plan ↔ hard `GenerationConstraints` conformance + digest |
+| `backend/app/services/symbolic_composition_generate.py` | Symbolic composer adapter (MT + fake tiny) for hybrid pipelines |
+| `backend/app/services/fake_symbolic_composer.py` | Deterministic CI symbolic note engine (`fake:symbolic-tiny`) |
 | `backend/app/analysis_schemas.py` | `composition.analysis.v1` DTOs, scopes, warning codes |
 | `backend/app/motif_schemas.py` | Motif apply request/response DTOs |
 | `backend/app/routers/analysis.py` | `POST /analysis/composition` |
@@ -163,6 +166,7 @@ mukit-ai/
 | Symbolic tokenizer | `docs/tokenizer.md` | Composition V2 ↔ token ids, quantization, CLI, versioning |
 | Symbolic embeddings | `docs/embeddings.md` | Handcrafted musical feature embeddings, similarity, reference conditioning |
 | Symbolic Music Transformer | `docs/music-transformer.md` | PyTorch decoder-only LM, train/generate CLI, checkpoint card, optional API |
+| Hybrid generation | `docs/hybrid-generation.md` | LLM plan + symbolic notes pipelines, seeds, multi-stage provenance |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |
 | Project persistence | `docs/project-persistence.md` | SQLite projects and migrations |
 | Testing | `docs/testing.md` | How to run backend/frontend tests |

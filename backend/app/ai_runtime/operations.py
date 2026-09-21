@@ -24,7 +24,7 @@ class AiOperation(StrEnum):
     AUDIO_RENDER = "audio_render"
 
 
-# Reserved planner/composer ops fall back to GENERATE for this plan.
+# Planner/composer ops have dedicated env keys; hybrid uncollapses them at resolve time.
 _OP_ENV_KEYS: dict[AiOperation, str] = {
     AiOperation.GENERATE: "AI_OP_GENERATE",
     AiOperation.GENERATE_PLANNER: "AI_OP_GENERATE_PLANNER",
@@ -56,6 +56,7 @@ def creative_chat_operations() -> tuple[AiOperation, ...]:
     """Operations backed by env-bootstrapped OpenAI/DeepSeek/Fake chat models."""
     return (
         AiOperation.GENERATE,
+        AiOperation.GENERATE_PLANNER,
         AiOperation.REGION_EDIT,
         AiOperation.ARRANGE_PREVIEW,
         AiOperation.DEVELOPMENT_PREVIEW,
