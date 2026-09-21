@@ -176,8 +176,9 @@ Contract, scopes, and warning codes: [docs/composition-analysis.md](docs/composi
 
 - `GET /` - API status
 - `GET /health` - Liveness probe
-- `GET /ready` - Readiness (DB openable; LLM provider names/count; WAV deps booleans — no secrets)
-- `GET /llm/models` - Return configured LLM provider/model options
+- `GET /ready` - Readiness (DB openable; LLM provider names/count; AI registry summary; WAV deps booleans — no secrets)
+- `GET /ai/models` - Capability-aware AI model catalog (canonical discovery)
+- `GET /llm/models` - Compat shim: language-capable LLM provider/model options
 - `POST /llm/generate-music-json` - Generate validated music JSON and derived MusicXML
 - `POST /llm/edit-composition-region` - Apply a validated `replace_region` AI edit to selected bars/tracks
 - `GET /projects` - List local project summaries

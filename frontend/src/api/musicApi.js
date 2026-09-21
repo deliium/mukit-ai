@@ -120,6 +120,26 @@ export async function getLlmModels() {
   return request('get', '/llm/models');
 }
 
+/**
+ * Canonical AI model catalog (capabilities, ops, stubs). Prefer over /llm/models for new UI.
+ * Current MusicGenerator selector may keep using getLlmModels until per-op UX lands.
+ */
+export async function fetchAiModels(params = {}) {
+  const query = {};
+  if (params.capability) query.capability = params.capability;
+  if (params.operation) query.operation = params.operation;
+  if (params.status) query.status = params.status;
+  const response = await request('get', '/ai/models', null, { params: query });
+  const modelCount = Array.isArray(response?.models) ? response.models.length : 0;
+  console.debug('[musicApi] AI model catalog loaded', {
+    modelCount,
+    defaultModelId: response?.default_model_id || null,
+    capability: params.capability || null,
+    operation: params.operation || null,
+  });
+  return response;
+}
+
 export async function generateLlmMusicJson(payload) {
   const response = await request('post', '/llm/generate-music-json', payload);
   const composition = normalizeApiComposition(response.music, { context: 'generate-response' });

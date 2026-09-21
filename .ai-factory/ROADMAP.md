@@ -24,6 +24,7 @@
 - [x] **Upgrade V2 music editing workflow** — Canonical multi-note selection/clipboard/transforms, edit cursor navigation, play-from-cursor and selection loops, viewport culling, and large-score editor acceptance
 - [x] **Safe AI experimentation and versioning** — Preview-first AI apply, immutable project revisions, named alternative branches, and restart-safe compare/restore
 - [x] **Expressive V2 playback and mixing** — Sampled/synth browser performance with velocity and V2 expression, ephemeral mixer (balance/pan/mute/solo/ambience), smooth transport, and local audited assets without changing export
+- [x] **Unified AI runtime and model-provider architecture (V3)** — Capability registry, operation routing, typed adapters, `/ai/models` discovery, explicit fallback, and enriched provenance without regressing V2 remote LLM workflows
 
 ## Completed
 
@@ -41,7 +42,7 @@
 | V1 acceptance suite | 2026-09-07 |
 | Canonical Composition V2 | 2026-09-08 |
 | MIDI and MusicXML import | 2026-09-08 |
-| Deterministic composition analysis | 2026-09-09 |
+| Deterministic composition analysis | 2026-09-08 |
 | Motif-aware composition | 2026-09-09 |
 | Interactive harmony and reharmonization | 2026-09-09 |
 | Context-aware composition development | 2026-09-09 |
@@ -49,3 +50,4 @@
 | Upgrade V2 music editing workflow | 2026-09-10 |
 | Safe AI experimentation and versioning | 2026-09-10 |
 | Expressive V2 playback and mixing | 2026-09-10 |
+| Unified AI runtime and model-provider architecture (V3) | 2026-09-21 |

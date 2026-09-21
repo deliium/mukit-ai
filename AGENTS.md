@@ -21,8 +21,11 @@ mukit-ai/
 │   ├── app/
 │   │   ├── main.py          # Composition / LLM / export routes
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
-│   │   ├── routers/         # Projects + imports + analysis + motifs + harmony + arrangement + development HTTP API
+│   │   ├── ai_runtime/      # Capability registry, operation routing, typed model adapters
+│   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
+│   │   ├── routers/         # Projects + imports + analysis + motifs + harmony + arrangement + development + ai_models HTTP API
 │   │   ├── services/        # Domain + orchestration (incl. import, analysis, motifs, theme, harmony, reharmonization, arrangement, fake_llm)
+│   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
 │   │   ├── arrangement_schemas.py  # Arrangement preview / catalog DTOs, error & warning codes
@@ -42,7 +45,7 @@ mukit-ai/
 │       ├── store/           # Zustand musicStore (composition transactions + session previews)
 │       └── utils/           # validation, editor selection/ops/nav, viewport, playback, analysis, motif, harmony, arrangement helpers
 ├── scripts/                 # run_tests.sh, v1/v2_docker_acceptance.sh
-├── docs/                    # composition.v2/v1, editor, analysis, arrangement, import, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, editor, analysis, arrangement, import, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -82,6 +85,8 @@ mukit-ai/
 | `backend/app/services/composition_projection.py` | Shared export projection report + issue codes |
 | `backend/app/services/fake_llm.py` | Deterministic `LLM_FAKE_MODE` generate/edit/arrangement (incl. V2 expressive fixture) |
 | `backend/app/ready.py` | Logging/CORS helpers and readiness report |
+| `backend/app/ai_runtime/` | Capability registry, operation routing, typed adapters |
+| `backend/app/routers/ai_models.py` | `GET /ai/models` (+ `/{id}`) discovery |
 | `backend/app/routers/projects.py` | Project CRUD + autosave + revision/branch history APIs |
 | `backend/app/services/project_history.py` | Revision list/detail, durable commit/restore, branch checkout/apply-as-branch |
 | `backend/app/services/project_history_store.py` | SQLite CAS history graph + compressed composition snapshots |
@@ -130,6 +135,7 @@ mukit-ai/
 | Document | Path | Description |
 |----------|------|-------------|
 | README | `README.md` | Install, features, env vars, run instructions |
+| AI Runtime | `docs/ai-runtime.md` | Capability registry, operation routing, `/ai/models`, fallback, provenance |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
 | Composition Editor | `docs/composition-editor.md` | Piano-roll selection, clipboard, transforms, cursor/loop |
 | Browser playback | `docs/browser-playback.md` | Tone.js instruments/mixer/transport; ephemeral session state |

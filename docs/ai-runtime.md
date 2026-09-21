@@ -121,3 +121,15 @@ backend/app/ai_runtime/
 ```
 
 See also: `.ai-factory/ARCHITECTURE.md` (Composition/LLM module), `.env.example`.
+
+## Migration notes
+
+| Before | After |
+|--------|--------|
+| Select via `provider` + `model` only | Prefer `model_id` (`provider:model`); legacy fields still accepted |
+| `GET /llm/models` only | Canonical `GET /ai/models`; `/llm/models` remains a language-capable shim |
+| Silent provider/model override | Registry-validated selection; unavailable models fail closed unless `AI_FALLBACK_*` is set |
+| Provenance = provider/model | Additive `model_id`, `runtime`, `capability`, `operation`, `generation_parameters` via DTO + revision `summary_json` (no Alembic) |
+| No `/ai/` nginx proxy | Compose frontend nginx must proxy `/ai/` (same as `/llm/`); pass `AI_OP_*` / `AI_FALLBACK_*` / `AI_MODEL_REGISTRY_PATH` |
+
+FluidSynth WAV export remains outside `ai_runtime`. Reserved `AI_OP_GENERATE_PLANNER` / `AI_OP_GENERATE_COMPOSER` default to `AI_OP_GENERATE` until a future LangGraph per-node plan.

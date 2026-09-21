@@ -204,7 +204,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Depends on: Task 2
 
 ### Phase 3: Discovery API, proxy, fallback, provenance
-- [ ] Task 7: Add `GET /ai/models` (+ optional `GET /ai/models/{id}`) and compat shim
+- [x] Task 7: Add `GET /ai/models` (+ optional `GET /ai/models/{id}`) and compat shim
   - New router `backend/app/routers/ai_models.py`; include from `main.py`.
   - DTOs in `backend/app/ai_runtime_schemas.py`: catalog + per-operation defaults + warnings.
   - Keep `GET /llm/models` behavior for language-capable models; docs mark shim as compat.
@@ -213,7 +213,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Files: router, schemas, `main.py`, `test_ai_models_routes.py`, `test_llm_routes.py`
   - Depends on: Tasks 2, 6
 
-- [ ] Task 7b: Docker nginx proxy + Compose env passthrough for AI runtime
+- [x] Task 7b: Docker nginx proxy + Compose env passthrough for AI runtime
   - Add `location /ai/` to `frontend/nginx.conf` (proxy to backend; use LLM-like read timeouts if discovery stays light — still required for future AI routes under `/ai/`).
   - Pass through `AI_OP_*`, `AI_FALLBACK_*`, `AI_MODEL_REGISTRY_PATH` (and document) in `docker-compose.yml` alongside existing `OPENAI_*` / `LLM_*` vars.
   - Confirm `.env.example` documents Compose-visible names.
@@ -221,7 +221,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Files: `frontend/nginx.conf`, `docker-compose.yml`, `.env.example`; optional smoke asserting `/ai/models` reachable via same-origin proxy in Compose docs/tests
   - Depends on: Task 7
 
-- [ ] Task 8: Graceful explicit fallback
+- [x] Task 8: Graceful explicit fallback
   - Implement fallback chain in resolver; surface `fallback_applied`, `requested_model_id`, `resolved_model_id` on AI **operation** responses:
     - generate, region edit, arrangement preview, development preview, reharmonize preview, creative motif responses (every DTO that already returns `provider`/`model`).
   - If fallback not configured and primary unavailable → 503 with stable code (no silent substitute).
@@ -230,7 +230,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Files: `routing.py`, response schemas listed in Task 4, service return enrichment, tests
   - Depends on: Tasks 4, 5 *(not Task 7)*
 
-- [ ] Task 9: Enrich AI provenance on revisions / generation meta (backend)
+- [x] Task 9: Enrich AI provenance on revisions / generation meta (backend)
   - Extend `AiProvenance` and `ProjectGenerationMeta` with additive fields: `model_id`, `model_version`, `runtime`, `capability`, `operation`, `generation_parameters` (bounded object); keep `provider`/`model` filled for compat.
   - Persist extended fields via existing revision **`summary_json`** / provenance DTO — **prefer no Alembic**; document in migration notes. Only add columns if a concrete list/filter query requires them.
   - Secret guard: parameters must not include prompts/keys; reuse `persistence_secret_guard`; keep `warning_codes` bounded (existing sanitization).
@@ -238,7 +238,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Files: `project_history_schemas.py`, history store/services, `project_schemas.py`, tests `test_persistence_secret_guard.py`, history tests
   - Depends on: Tasks 5, 8
 
-- [ ] Task 9b: Plumb provenance through frontend candidate Apply path
+- [x] Task 9b: Plumb provenance through frontend candidate Apply path
   - Extend `musicApi.js` response contracts to accept additive provenance/fallback fields from AI endpoints.
   - Extend `compositionCandidateLifecycle.js` envelopes beyond `provider`/`model` (`model_id`, `runtime`, `capability`, `operation`, `generation_parameters`, fallback flags as applicable).
   - Ensure durable Apply / `projectPersistRevision` / history commit payloads include extended `AiProvenance`; keep `toHistoryAiWarningCodes` sanitization.
@@ -248,7 +248,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Depends on: Task 9
 
 ### Phase 4: Frontend discovery, tests, docs
-- [ ] Task 10: Frontend discovery client without breaking global selector
+- [x] Task 10: Frontend discovery client without breaking global selector
   - Add `fetchAiModels()` in `musicApi.js` calling `/ai/models`; keep using `/llm/models` for current MusicGenerator selector until a follow-up UX plan.
   - Optionally store catalog in Zustand for future per-operation pickers; **do not** require per-op UI in this plan.
   - Ensure no secrets in client logs.
@@ -256,7 +256,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Files: `musicApi.js`, tests; light store hookup optional
   - Depends on: Tasks 7, 7b
 
-- [ ] Task 11: V2 regression tests through new abstraction + stub capability registrations
+- [x] Task 11: V2 regression tests through new abstraction + stub capability registrations
   - Prove generate/edit/arrange/develop/reharmonize/motif fake paths still pass via registry-resolved models.
   - New focused tests: registry bootstrap + reload; routing per operation; fallback flags; `/ai/models` shape + secret hygiene; provenance fields on apply/commit (Task 9b path); stub capabilities listed as unconfigured.
   - Run: backend pytest subset + full backend pytest; existing fake-provider and arrangement/development route tests must stay green.
@@ -264,7 +264,7 @@ Keep deterministic draft helpers (`generate_fake_*`, `edit_fake_*`, arrangement/
   - Files: `backend/tests/test_ai_runtime_*.py`, updates to existing LLM/history/frontend unit tests as needed
   - Depends on: Tasks 5–9b
 
-- [ ] Task 12: Documentation, migration notes, AGENTS/DESCRIPTION touch-ups
+- [x] Task 12: Documentation, migration notes, AGENTS/DESCRIPTION touch-ups
   - Complete `docs/ai-runtime.md` (architecture, capabilities shape, `AiOperation` catalog, registry lifecycle, routing env, discovery, nginx `/ai/`, fallback, provenance/`summary_json`, secrets, FluidSynth exclusion, reserved planner/composer keys).
   - Migration notes: old `provider`+`model` → `model_id`; `/llm/models` shim; additive provenance; no silent fallback; Compose/nginx requirements.
   - Update `README.md` API list, `.env.example`, `AGENTS.md`, `.ai-factory/DESCRIPTION.md`, `.ai-factory/ROADMAP.md` (unchecked milestone), `.ai-factory/ARCHITECTURE.md`.
