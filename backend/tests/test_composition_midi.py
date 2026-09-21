@@ -179,6 +179,111 @@ def test_v2_expressive_projection_emits_controllers_and_tempo_change():
     assert "sustain_projected" in result.report.compact_codes()
     assert "automation_sampled" in result.report.compact_codes()
     assert "marker_normalized" in result.report.compact_codes()
+    assert "section_exported_as_marker" in result.report.compact_codes()
+    marker_texts = {event.get("text") for event in markers}
+    assert "Opening" in marker_texts
+    assert "Close" in marker_texts
+
+
+def test_section_marker_skips_duplicate_of_existing_marker():
+    composition = CompositionV2.model_validate(
+        {
+            "schema_version": "composition.v2",
+            "tempo": 120,
+            "key": "C major",
+            "time_signature": "4/4",
+            "ticks_per_quarter": 480,
+            "bar_count": 2,
+            "duration_ticks": 3840,
+            "sections": [
+                {
+                    "id": "s1",
+                    "type": "intro",
+                    "label": "A",
+                    "start_bar": 1,
+                    "bar_count": 1,
+                    "start_tick": 0,
+                    "duration_ticks": 1920,
+                },
+                {
+                    "id": "s2",
+                    "type": "verse",
+                    "label": "Verse",
+                    "start_bar": 2,
+                    "bar_count": 1,
+                    "start_tick": 1920,
+                    "duration_ticks": 1920,
+                },
+            ],
+            "tracks": [
+                {
+                    "id": "t1",
+                    "name": "Piano",
+                    "instrument": "piano",
+                    "role": "harmony",
+                    "midi_program": 0,
+                    "channel": 1,
+                    "events": [
+                        {"type": "note", "pitch": "C4", "start_tick": 0, "duration_ticks": 480, "velocity": 80},
+                    ],
+                }
+            ],
+            "harmony": [],
+            "markers": [{"id": "m1", "tick": 0, "kind": "rehearsal", "label": "A"}],
+        }
+    )
+    result = render_midi_with_report(composition)
+    events = _parse_midi_absolute_events(result.midi_bytes)
+    markers = [event for event in events if event.get("meta") in {"marker", "text"}]
+    texts_at_zero = [event["text"] for event in markers if event["tick"] == 0]
+    assert texts_at_zero.count("A") == 1
+    assert any(event["tick"] == 1920 and event["text"] == "Verse" for event in markers)
+    issue = next(item for item in result.report.issues if item.code == "section_exported_as_marker")
+    assert issue.details["section_marker_count"] == 1
+    assert issue.details["skipped_duplicate"] == 1
+
+
+def test_section_marker_falls_back_to_type_when_label_missing():
+    composition = CompositionV2.model_validate(
+        {
+            "schema_version": "composition.v2",
+            "tempo": 120,
+            "key": "C major",
+            "time_signature": "4/4",
+            "ticks_per_quarter": 480,
+            "bar_count": 1,
+            "duration_ticks": 1920,
+            "sections": [
+                {
+                    "type": "chorus",
+                    "start_bar": 1,
+                    "bar_count": 1,
+                    "start_tick": 0,
+                    "duration_ticks": 1920,
+                }
+            ],
+            "tracks": [
+                {
+                    "id": "t1",
+                    "name": "Piano",
+                    "instrument": "piano",
+                    "role": "harmony",
+                    "midi_program": 0,
+                    "channel": 1,
+                    "events": [
+                        {"type": "note", "pitch": "C4", "start_tick": 0, "duration_ticks": 480, "velocity": 80},
+                    ],
+                }
+            ],
+            "harmony": [],
+            "markers": [],
+        }
+    )
+    result = render_midi_with_report(composition)
+    events = _parse_midi_absolute_events(result.midi_bytes)
+    markers = [event for event in events if event.get("meta") == "marker"]
+    assert any(event["tick"] == 0 and event["text"] == "chorus" for event in markers)
+    assert "section_exported_as_marker" in result.report.compact_codes()
 
 
 def test_same_tick_ordering_note_off_before_note_on():

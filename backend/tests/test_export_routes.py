@@ -121,9 +121,38 @@ def test_export_midi_endpoint_returns_projection_headers():
     assert status in {"approximated", "omitted", "exact"}
     issues = response.headers.get("X-Mukit-Projection-Issues", "")
     assert issues, "expressive MIDI should report at least one projection issue code"
+    assert "section_exported_as_marker" in issues
     assert int(response.headers.get("X-Mukit-Projection-Approximated-Count", "0")) + int(
         response.headers.get("X-Mukit-Projection-Omitted-Count", "0")
     ) >= 1
+    disposition = response.headers.get("content-disposition", "")
+    assert "attachment" in disposition
+    assert "-export.mid" in disposition
+
+
+def test_export_midi_uses_export_title_in_filename():
+    composition = load_v2_expressive()
+    payload = composition.model_dump(mode="json")
+    payload["export_title"] = "My Song / Ableton Drop"
+
+    response = client.post("/export/midi", json=payload)
+
+    assert response.status_code == 200
+    disposition = response.headers.get("content-disposition", "")
+    assert 'filename="my-song-ableton-drop-export.mid"' in disposition
+
+
+def test_cors_exposes_projection_headers_for_spa():
+    from app.services.composition_projection import PROJECTION_EXPOSE_HEADERS
+
+    cors_middleware = next(
+        m.cls for m in client.app.user_middleware if m.cls.__name__ == "CORSMiddleware"
+    )
+    # Starlette stores kwargs on the middleware stack entry.
+    cors_entry = next(m for m in client.app.user_middleware if m.cls.__name__ == "CORSMiddleware")
+    exposed = set(cors_entry.kwargs.get("expose_headers") or [])
+    assert set(PROJECTION_EXPOSE_HEADERS).issubset(exposed)
+    assert cors_middleware is not None
 
 
 def test_export_wav_endpoint_returns_projection_headers(monkeypatch):
@@ -157,7 +186,7 @@ def test_export_musicxml_endpoint_returns_attachment():
     assert response.status_code == 200
     assert "application/vnd.recordare.musicxml+xml" in response.headers["content-type"]
     assert "attachment" in response.headers["content-disposition"]
-    assert ".musicxml" in response.headers["content-disposition"]
+    assert "-export.musicxml" in response.headers["content-disposition"]
     assert "score-partwise" in response.text or "score-timewise" in response.text
     assert "<pitch>" in response.text
 
@@ -182,7 +211,7 @@ def test_export_midi_endpoint_returns_attachment():
     assert response.status_code == 200
     assert "audio/midi" in response.headers["content-type"]
     assert "attachment" in response.headers["content-disposition"]
-    assert ".mid" in response.headers["content-disposition"]
+    assert "-export.mid" in response.headers["content-disposition"]
     assert response.content[:4] == b"MThd"
 
 
@@ -198,7 +227,7 @@ def test_export_wav_endpoint_returns_attachment(monkeypatch, caplog):
     assert response.status_code == 200, "WAV export should succeed when render_wav_with_report is mocked"
     assert "audio/wav" in response.headers["content-type"]
     assert "attachment" in response.headers["content-disposition"]
-    assert ".wav" in response.headers["content-disposition"]
+    assert "-export.wav" in response.headers["content-disposition"]
     assert response.content == fake_wav
     assert response.headers.get("X-Mukit-Projection-Status") == "exact"
     assert "WAV export request completed" in caplog.text

@@ -140,12 +140,39 @@ def _composition_export_summary(composition: CompositionV2) -> dict:
     }
 
 
-def _safe_export_filename(composition: CompositionV2, extension: str) -> str:
-    raw = f"composition-{composition.key}-{composition.tempo}bpm".lower()
-    safe = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in raw)
+_EXPORT_TITLE_KEYS = ("export_title", "project_title")
+
+
+def _pop_export_title(payload: dict[str, Any]) -> str | None:
+    """Optional DAW-friendly filename stem; never part of the composition contract."""
+    for key in _EXPORT_TITLE_KEYS:
+        if key not in payload:
+            continue
+        raw = payload.pop(key)
+        if isinstance(raw, str):
+            cleaned = raw.strip()
+            if cleaned:
+                return cleaned[:80]
+    return None
+
+
+def _safe_export_filename(
+    composition: CompositionV2,
+    extension: str,
+    *,
+    title: str | None = None,
+) -> str:
+    """Stable Content-Disposition stem ending in ``-export.{ext}`` for DAW handoff."""
+    stem_source = (title or "").strip()
+    if not stem_source:
+        stem_source = f"composition-{composition.key}-{composition.tempo}bpm"
+    safe = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in stem_source.lower())
     while "--" in safe:
         safe = safe.replace("--", "-")
-    return f"{safe.strip('-') or 'composition'}.{extension}"
+    safe = safe.strip("-") or "composition"
+    if not safe.endswith("-export"):
+        safe = f"{safe}-export"
+    return f"{safe}.{extension}"
 
 
 def _normalize_export_composition(payload: dict[str, Any]) -> CompositionV2:
@@ -158,6 +185,21 @@ def _normalize_export_composition(payload: dict[str, Any]) -> CompositionV2:
         ValueError,
     ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)[:500]) from exc
+
+
+def _prepare_export_payload(payload: dict[str, Any] | CompositionV2 | Any) -> tuple[CompositionV2, str | None]:
+    """Accept HTTP JSON dicts or already-validated composition models (direct handler tests)."""
+    if isinstance(payload, CompositionV2):
+        return payload, None
+    if hasattr(payload, "model_dump") and getattr(payload, "schema_version", None):
+        # CompositionV1 or similar pydantic model — normalize via dump.
+        data = payload.model_dump(mode="json")
+        return _normalize_export_composition(data), None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Export payload must be a composition object")
+    data = dict(payload)
+    title = _pop_export_title(data)
+    return _normalize_export_composition(data), title
 
 
 def _export_response_headers(*extra: dict[str, str]) -> dict[str, str]:
@@ -498,12 +540,12 @@ async def edit_llm_composition_region(request: LLMCompositionEditRequest):
 @app.post("/export/musicxml")
 async def export_musicxml(payload: dict[str, Any]):
     """Render canonical Composition JSON (v1 or v2) to a downloadable MusicXML file."""
-    composition = _normalize_export_composition(payload)
+    composition, export_title = _prepare_export_payload(payload)
     summary = _composition_export_summary(composition)
     logger.info("MusicXML export request started", extra={"format": "musicxml", **summary})
     try:
         musicxml, report = render_musicxml(composition)
-        filename = _safe_export_filename(composition, "musicxml")
+        filename = _safe_export_filename(composition, "musicxml", title=export_title)
         if report.issues:
             logger.warning(
                 "MusicXML export completed with projection issues",
@@ -511,7 +553,14 @@ async def export_musicxml(payload: dict[str, Any]):
             )
         logger.info(
             "MusicXML export request completed",
-            extra={"format": "musicxml", "byte_length": len(musicxml.encode("utf-8")), **summary, **report.summary_extra()},
+            extra={
+                "format": "musicxml",
+                "byte_length": len(musicxml.encode("utf-8")),
+                "projection_status": report.status,
+                "projection_codes": report.compact_codes(),
+                **summary,
+                **report.summary_extra(),
+            },
         )
         logger.debug(
             "MusicXML export response metadata",
@@ -536,7 +585,7 @@ async def export_musicxml(payload: dict[str, Any]):
 @app.post("/export/musicxml/preview")
 async def export_musicxml_preview(payload: dict[str, Any]):
     """Render canonical Composition JSON (v1 or v2) to MusicXML text without download headers."""
-    composition = _normalize_export_composition(payload)
+    composition, _export_title = _prepare_export_payload(payload)
     summary = _composition_export_summary(composition)
     logger.info("MusicXML preview render started", extra={"format": "musicxml_preview", **summary})
     try:
@@ -571,14 +620,14 @@ async def export_musicxml_preview(payload: dict[str, Any]):
 @app.post("/export/midi")
 async def export_midi(payload: dict[str, Any]):
     """Render canonical Composition JSON (v1 or v2) to a downloadable Standard MIDI File."""
-    composition = _normalize_export_composition(payload)
+    composition, export_title = _prepare_export_payload(payload)
     summary = _composition_export_summary(composition)
     logger.info("MIDI export request started", extra={"format": "midi", **summary})
     try:
         result = render_midi_with_report(composition)
         midi_bytes = result.midi_bytes
         report = result.report
-        filename = _safe_export_filename(composition, "mid")
+        filename = _safe_export_filename(composition, "mid", title=export_title)
         if report.issues:
             logger.warning(
                 "MIDI export completed with projection issues",
@@ -586,7 +635,14 @@ async def export_midi(payload: dict[str, Any]):
             )
         logger.info(
             "MIDI export request completed",
-            extra={"format": "midi", "byte_length": len(midi_bytes), **summary, **report.summary_extra()},
+            extra={
+                "format": "midi",
+                "byte_length": len(midi_bytes),
+                "projection_status": report.status,
+                "projection_codes": report.compact_codes(),
+                **summary,
+                **report.summary_extra(),
+            },
         )
         logger.debug(
             "MIDI export response metadata",
@@ -611,7 +667,7 @@ async def export_midi(payload: dict[str, Any]):
 @app.post("/export/wav")
 async def export_wav(payload: dict[str, Any]):
     """Render canonical Composition JSON (v1 or v2) to a downloadable WAV file via FluidSynth."""
-    composition = _normalize_export_composition(payload)
+    composition, export_title = _prepare_export_payload(payload)
     summary = _composition_export_summary(composition)
     logger.info("WAV export request started", extra={"format": "wav", **summary})
     config = load_wav_renderer_config()
@@ -632,7 +688,7 @@ async def export_wav(payload: dict[str, Any]):
         result = render_wav_with_report(composition)
         wav_bytes = result.wav_bytes
         report = result.report
-        filename = _safe_export_filename(composition, "wav")
+        filename = _safe_export_filename(composition, "wav", title=export_title)
         if report.issues:
             logger.warning(
                 "WAV export completed with projection issues",

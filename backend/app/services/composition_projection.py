@@ -23,6 +23,8 @@ PROJECTION_ISSUE_CODES: dict[str, str] = {
     "tie_ids_lost": "Semantic tie group IDs cannot be retained in MIDI.",
     "pitch_spelling_lost": "Pitch spelling identity is lost in the target format.",
     "marker_normalized": "Marker text/kind was normalized for the target format.",
+    "section_exported_as_marker": "Composition section labels were projected as MIDI markers for DAW form navigation.",
+    "section_marker_skipped": "A section had no usable label/type and was not exported as a MIDI marker.",
     "midi_channel_control_conflict": "Track-local CC streams conflict on a shared MIDI channel.",
     "expression_combined": "Dynamic marks were combined into expression/CC11 values.",
     "sustain_projected": "Sustain spans were projected to CC64 or pedal directions.",

@@ -212,6 +212,7 @@ def render_midi_with_report(composition: CompositionV1 | CompositionV2) -> MidiR
             "event_count": event_count,
             "tempo_change_count": len(composition.tempo_changes),
             "marker_count": len(composition.markers),
+            "section_count": len(composition.sections),
         },
     )
 
@@ -225,6 +226,17 @@ def render_midi_with_report(composition: CompositionV1 | CompositionV2) -> MidiR
 
         stream = _build_projection_stream(composition, timeline, track_notes, cc_streams, report)
         midi_bytes = _encode_midi_file(composition, stream, track_notes, mido)
+        section_marker_count = sum(
+            1
+            for issue in report.issues
+            if issue.code == "section_exported_as_marker"
+        )
+        # Prefer details count when present on the section export issue.
+        for issue in report.issues:
+            if issue.code == "section_exported_as_marker":
+                section_marker_count = int(issue.details.get("section_marker_count", section_marker_count))
+                break
+        marker_event_count = sum(1 for event in stream if event.kind == "marker")
         logger.debug(
             "MIDI render completed",
             extra={
@@ -232,6 +244,8 @@ def render_midi_with_report(composition: CompositionV1 | CompositionV2) -> MidiR
                 "event_count": event_count,
                 "message_count": len(stream),
                 "byte_length": len(midi_bytes),
+                "section_marker_count": section_marker_count,
+                "marker_count": marker_event_count,
                 **report.summary_extra(),
             },
         )
@@ -239,6 +253,9 @@ def render_midi_with_report(composition: CompositionV1 | CompositionV2) -> MidiR
             "MIDI projection finished",
             extra={
                 "byte_length": len(midi_bytes),
+                "track_count": len(composition.tracks),
+                "section_marker_count": section_marker_count,
+                "marker_count": marker_event_count,
                 **report.summary_extra(),
             },
         )
@@ -651,6 +668,7 @@ def _build_projection_stream(
     events: list[ProjectionEvent] = []
     events.extend(_conductor_projection_events(composition, timeline, report))
     events.extend(_marker_projection_events(composition, report))
+    events.extend(_section_marker_projection_events(composition, report))
 
     for track_index, (track, notes, cc_stream) in enumerate(
         zip(composition.tracks, track_notes, cc_streams)
@@ -783,6 +801,113 @@ def _marker_projection_events(composition: CompositionV2, report: ProjectionRepo
                 kind="marker",
                 payload={"marker_kind": marker.kind, "label": marker.label.strip(), "index": index},
             )
+        )
+    return events
+
+
+def _section_label_for_marker(section) -> str:
+    """Prefer authored label; fall back to section type. Empty → skip."""
+    if section.label is not None:
+        label = section.label.strip()
+        if label:
+            return label
+    type_label = str(getattr(section, "type", "") or "").strip()
+    return type_label
+
+
+def _section_marker_projection_events(
+    composition: CompositionV2,
+    report: ProjectionReport,
+) -> list[ProjectionEvent]:
+    """Project V2 sections into conductor MIDI markers for DAW form navigation.
+
+    Never invents notes. Skips empty labels and duplicates already covered by
+    ``composition.markers`` (same tick + same text).
+    """
+    occupied: set[tuple[int, str]] = {
+        (marker.tick, marker.label.strip()) for marker in composition.markers if marker.label.strip()
+    }
+    events: list[ProjectionEvent] = []
+    exported = 0
+    skipped_empty = 0
+    skipped_duplicate = 0
+
+    for index, section in enumerate(composition.sections):
+        label = _section_label_for_marker(section)
+        section_id = getattr(section, "id", None) or f"section-{index}"
+        if not label:
+            skipped_empty += 1
+            logger.debug(
+                "Section marker skipped (empty label/type)",
+                extra={
+                    "section_id": section_id,
+                    "start_tick": section.start_tick,
+                    "reason": "empty_label",
+                },
+            )
+            continue
+        key = (section.start_tick, label)
+        if key in occupied:
+            skipped_duplicate += 1
+            truncated = label if len(label) <= 40 else f"{label[:37]}..."
+            logger.debug(
+                "Section marker skipped (duplicate)",
+                extra={
+                    "section_id": section_id,
+                    "start_tick": section.start_tick,
+                    "label_truncated": truncated,
+                    "reason": "duplicate_marker",
+                },
+            )
+            continue
+        occupied.add(key)
+        events.append(
+            ProjectionEvent(
+                tick=section.start_tick,
+                order=ORDER_MARKER,
+                sub_order=2,
+                track_index=None,
+                kind="marker",
+                payload={
+                    "marker_kind": "rehearsal",
+                    "label": label,
+                    "index": index,
+                    "source": "section",
+                    "section_id": section_id,
+                },
+            )
+        )
+        exported += 1
+        truncated = label if len(label) <= 40 else f"{label[:37]}..."
+        logger.debug(
+            "Section exported as MIDI marker",
+            extra={
+                "section_id": section_id,
+                "start_tick": section.start_tick,
+                "label_truncated": truncated,
+            },
+        )
+
+    if skipped_empty:
+        report.add_issue(
+            code="section_marker_skipped",
+            status="omitted",
+            details={"skipped_empty": skipped_empty, "skipped_duplicate": skipped_duplicate},
+        )
+    if exported:
+        report.add_issue(
+            code="section_exported_as_marker",
+            status="approximated",
+            details={
+                "section_marker_count": exported,
+                "skipped_duplicate": skipped_duplicate,
+                "section_count": len(composition.sections),
+            },
+        )
+    elif skipped_duplicate and not skipped_empty:
+        logger.debug(
+            "All section markers were duplicates of existing markers",
+            extra={"skipped_duplicate": skipped_duplicate},
         )
     return events
 
