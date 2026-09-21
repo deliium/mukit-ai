@@ -1,0 +1,86 @@
+"""Creative Director — typed brief + workflow plan (no draft mutation)."""
+
+from __future__ import annotations
+
+import logging
+
+from app.ai_agents.agents.common import BaseMusicAgent, selection_str
+from app.ai_agents.schemas import (
+    AGENT_SPINE_WORKFLOW_ID,
+    AgentArtifactKind,
+    AgentArtifactV1,
+    AgentBriefV1,
+    AgentOperation,
+    AgentRunRequest,
+    AgentRunResult,
+    AgentWorkflowPlanStep,
+    AgentWorkflowPlanV1,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class CreativeDirectorAgent(BaseMusicAgent):
+    """Language/planner-bound brief + spine workflow plan from composition context."""
+
+    async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
+        draft = request.context.working_draft_composition
+        selection = request.selection or {}
+        intent = selection_str(
+            selection,
+            "intent",
+            default=f"Develop {draft.key} {draft.time_signature} composition at tempo {draft.tempo}",
+        )
+        mood = selection_str(selection, "mood", default="balanced") or "balanced"
+        genre = selection_str(selection, "genre", default="contemporary") or "contemporary"
+        constraints = selection.get("constraints")
+        if not isinstance(constraints, list):
+            constraints = ["preserve_melody", "preview_first"]
+        constraints = [str(c)[:120] for c in constraints[:16]]
+
+        brief = AgentBriefV1(
+            intent=(intent or "multi-agent spine")[:500],
+            mood=mood[:64],
+            genre=genre[:64],
+            constraints=constraints,
+            stop_criteria=["critic_approve"],
+        )
+        plan = AgentWorkflowPlanV1(
+            workflow_id=AGENT_SPINE_WORKFLOW_ID,
+            steps=[
+                AgentWorkflowPlanStep(agent_id="creative_director"),
+                AgentWorkflowPlanStep(agent_id="harmony", operation=AgentOperation.PROPOSE),
+                AgentWorkflowPlanStep(agent_id="melody_motif", operation=AgentOperation.PROPOSE),
+                AgentWorkflowPlanStep(agent_id="arrangement", operation=AgentOperation.PROPOSE),
+                AgentWorkflowPlanStep(agent_id="critic", operation=AgentOperation.CRITIQUE),
+            ],
+            max_revisions=0,
+        )
+        brief_art = AgentArtifactV1(
+            kind=AgentArtifactKind.BRIEF,
+            producer_agent_id=self._descriptor.id,
+            content_type="agent.brief.v1",
+            payload=brief.model_dump(mode="json"),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_creative_director_plan", runtime="language_planner"),
+        )
+        plan_art = AgentArtifactV1(
+            kind=AgentArtifactKind.WORKFLOW_PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type="agent.workflow_plan.v1",
+            payload=plan.model_dump(mode="json"),
+            source_fingerprint=request.context.source_fingerprint,
+            parent_artifact_ids=[brief_art.artifact_id],
+            provenance=self._provenance("agent_creative_director_plan", runtime="language_planner"),
+        )
+        logger.debug(
+            "Creative director artifacts produced",
+            extra={"artifact_kinds": ["brief", "workflow_plan"]},
+        )
+        return AgentRunResult(
+            agent_id=self._descriptor.id,
+            operation=request.operation,
+            artifacts=[brief_art, plan_art],
+            updated_context_slots={"brief": brief_art, "workflow_plan": plan_art},
+            provenance_stage=self._stage("agent_creative_director_plan", runtime="language_planner"),
+        )
