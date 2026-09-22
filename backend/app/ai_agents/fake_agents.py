@@ -435,32 +435,73 @@ class FakeCriticAgent(FakeAgent):
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
         params = getattr(request, "parameters", None) or {}
         emit_climax = bool(params.get("fake_emit_climax_finding"))
+        # Scripted revise: recommend revise while revise_count < fake_revise_passes.
+        # After that many completed revise cycles, approve.
+        revise_passes = params.get("fake_revise_passes")
+        if revise_passes is None:
+            env_raw = os.environ.get("FAKE_CRITIC_REVISE_PASSES")
+            revise_passes = int(env_raw) if env_raw and str(env_raw).strip().isdigit() else 0
+        else:
+            try:
+                revise_passes = int(revise_passes)
+            except (TypeError, ValueError):
+                revise_passes = 0
+        force_hard = bool(params.get("fake_revise_hard_finding"))
+        should_revise = request.context.revise_count < max(0, revise_passes)
+
         findings = []
-        if emit_climax:
+        if emit_climax or (should_revise and force_hard):
             from app.critique_schemas import (
                 CritiqueAffectedRange,
                 CritiqueFindingEvidence,
                 CritiqueFindingV1,
             )
 
-            findings = [
-                CritiqueFindingV1(
-                    stratum="stylistic",
-                    category="contrast",
-                    code="climax_lacks_contrast",
-                    severity="info",
-                    explanation="Fake climax contrast observation for CI.",
-                    affected_range=CritiqueAffectedRange(start_bar=5, end_bar=8),
-                    evidence=CritiqueFindingEvidence(
-                        metrics={"fake": True},
-                        refs=["section_index:1"],
-                    ),
+            if emit_climax:
+                findings.append(
+                    CritiqueFindingV1(
+                        stratum="stylistic",
+                        category="contrast",
+                        code="climax_lacks_contrast",
+                        severity="info",
+                        explanation="Fake climax contrast observation for CI.",
+                        affected_range=CritiqueAffectedRange(start_bar=5, end_bar=8),
+                        evidence=CritiqueFindingEvidence(
+                            metrics={"fake": True},
+                            refs=["section_index:1"],
+                        ),
+                    )
                 )
-            ]
+            if should_revise and force_hard:
+                findings.append(
+                    CritiqueFindingV1(
+                        stratum="hard_constraint",
+                        category="structure",
+                        code="requested_structure_mismatch",
+                        severity="error",
+                        explanation="Fake hard driver for revision-loop CI.",
+                        affected_range=CritiqueAffectedRange(start_bar=5, end_bar=8),
+                        affected_tracks=["piano-1"],
+                        evidence=CritiqueFindingEvidence(
+                            metrics={"fake_hard": True},
+                            refs=["fake_revise_driver"],
+                        ),
+                    )
+                )
+
+        recommendation = (
+            CritiqueRecommendation.REVISE
+            if should_revise
+            else CritiqueRecommendation.APPROVE
+        )
         critique = AgentCritiqueV1(
-            recommendation=CritiqueRecommendation.APPROVE,
-            reason_codes=["fake_ok"],
-            summary="Fake critic approves the spine candidate.",
+            recommendation=recommendation,
+            reason_codes=["fake_revise"] if should_revise else ["fake_ok"],
+            summary=(
+                "Fake critic requests revise for scripted loop."
+                if should_revise
+                else "Fake critic approves the spine candidate."
+            ),
             findings=findings,
             model_critique_status="skipped",
         )
@@ -472,12 +513,45 @@ class FakeCriticAgent(FakeAgent):
             source_fingerprint=request.context.source_fingerprint,
             provenance=self._provenance("agent_critic_critique"),
         )
+        artifacts = [art]
+        if recommendation == CritiqueRecommendation.REVISE:
+            from app.ai_agents.agents.typed_emit import (
+                AGENT_REVISION_PLAN_SCHEMA,
+                make_plan_artifact,
+                revision_plan_payload,
+            )
+
+            revision = make_plan_artifact(
+                kind=AgentArtifactKind.PLAN,
+                producer_agent_id=self._descriptor.id,
+                content_type=AGENT_REVISION_PLAN_SCHEMA,
+                payload=revision_plan_payload(
+                    revise_targets=critique.reason_codes[:8],
+                    target_agent_ids=["harmony", "melody_motif"],
+                    affected_ranges=[{"start_bar": 5, "end_bar": 8}],
+                    affected_tracks=["piano-1"],
+                    pass_index=request.context.revise_count + 1,
+                ),
+                source_fingerprint=request.context.source_fingerprint,
+                provenance=self._provenance("agent_critic_critique"),
+                parent_artifact_ids=[art.artifact_id],
+            )
+            artifacts.append(revision)
+        logger.info(
+            "Fake critic recommendation",
+            extra={
+                "agent_id": self._descriptor.id,
+                "recommendation": recommendation.value,
+                "revise_count": request.context.revise_count,
+                "fake_revise_passes": revise_passes,
+            },
+        )
         return AgentRunResult(
             agent_id=self._descriptor.id,
             operation=request.operation,
-            artifacts=[art],
+            artifacts=artifacts,
             updated_context_slots={"critique": art},
-            recommendation=CritiqueRecommendation.APPROVE,
+            recommendation=recommendation,
             provenance_stage=self._stage("agent_critic_critique"),
         )
 
