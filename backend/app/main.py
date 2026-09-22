@@ -24,6 +24,7 @@ from .routers.arrangement import router as arrangement_router
 from .routers.ai_models import router as ai_models_router
 from .routers.ai_agents import router as ai_agents_router
 from .routers.embeddings import router as embeddings_router
+from .routers.composer_profiles import router as composer_profiles_router
 from .music_transformer.settings import load_music_transformer_settings
 from .schemas import (
     Composition,
@@ -119,6 +120,7 @@ app.include_router(arrangement_router)
 app.include_router(ai_models_router)
 app.include_router(ai_agents_router)
 app.include_router(embeddings_router)
+app.include_router(composer_profiles_router)
 
 _mt_settings = load_music_transformer_settings()
 if _mt_settings.api_enabled:
