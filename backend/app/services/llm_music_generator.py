@@ -224,6 +224,8 @@ class _GenerationState(TypedDict, total=False):
     symbolic_resample_count: int
     provenance_stages: list[dict[str, Any]]
     composer_model_id: str | None
+    profile_soft_fragment: str
+    profile_merge_provenance: dict[str, Any]
 
 
 def resolve_generation_pipeline(request: LLMMusicGenerationRequest) -> GenerationPipelineId:
@@ -246,6 +248,16 @@ async def generate_music_json(
     active_settings = settings or load_llm_settings()
     enforce_llm_generation_bounds(request)
     constraints = build_generation_constraints(request)
+    # Additive soft fragment only — never mutates request.prompt / hard constraints.
+    from app.services.composer_profile_merge import (
+        merge_provenance_keys,
+        resolve_profile_merge,
+    )
+
+    profile_merge = resolve_profile_merge(
+        profile_id=getattr(request, "profile_id", None),
+        profile_strength=getattr(request, "profile_strength", "off"),
+    )
     pipeline_id = resolve_generation_pipeline(request)
     seed = request.options.seed
     composer_model_id: str | None = None
@@ -324,7 +336,7 @@ async def generate_music_json(
                 generation_config_from_request,
             )
 
-            return music, warnings, provider, validation, attach_provenance_fragment(
+            provenance = attach_provenance_fragment(
                 {
                     "pipeline_id": pipeline_id,
                     "stages": [
@@ -341,6 +353,9 @@ async def generate_music_json(
                 },
                 generation_config=generation_config_from_request(request),
             )
+            return music, warnings, provider, validation, merge_provenance_keys(
+                provenance, profile_merge
+            )
         except FakeLLMError as exc:
             raise InvalidLLMOutputError(str(exc)) from exc
 
@@ -355,8 +370,11 @@ async def generate_music_json(
             },
         )
         try:
-            return await generate_fake_hybrid_music_json(
+            music, warnings, provider, validation, provenance = await generate_fake_hybrid_music_json(
                 request, provider, constraints=constraints
+            )
+            return music, warnings, provider, validation, merge_provenance_keys(
+                provenance, profile_merge
             )
         except FakeLLMError as exc:
             raise InvalidLLMOutputError(str(exc)) from exc
@@ -397,6 +415,8 @@ async def generate_music_json(
         "plan_ok": False,
         "symbolic_ok": False,
         "composer_model_id": composer_model_id,
+        "profile_soft_fragment": profile_merge.soft_fragment,
+        "profile_merge_provenance": dict(profile_merge.provenance),
     }
     logger.debug("Initialized staged composer state", extra=_stage_state_summary(state))
 
@@ -537,7 +557,9 @@ async def generate_music_json(
             composer_model_id=composer_model_id,
             generation_config=generation_config_from_request(request),
         )
-        return music, warnings, provider, validation_report, provenance
+        return music, warnings, provider, validation_report, merge_provenance_keys(
+            provenance, profile_merge
+        )
 
 
 def _build_generation_provenance(
@@ -3077,6 +3099,14 @@ def _draft_to_track(
     )
 
 
+def _profile_soft_block(state: _GenerationState) -> str:
+    """Additive composer-profile soft fragment (after prompt soft lines)."""
+    fragment = (state.get("profile_soft_fragment") or "").strip()
+    if not fragment:
+        return ""
+    return f"\n{fragment}\n"
+
+
 def _build_form_prompt(state: _GenerationState) -> str:
     request = state["request"]
     prompt = request.prompt
@@ -3134,6 +3164,7 @@ Rules:
 {instructions_block}
 - requested sections hint: {json.dumps(sections) if sections else "design coherent structure totaling duration_bars"}
 - requested instruments: {", ".join(prompt.instruments)}
+{_profile_soft_block(state)}
 """.strip()
 
 
@@ -3216,6 +3247,7 @@ Rules:
 - honor user instructions about motif/theme when present (e.g. invert opening motif in the bridge)
 - max {4} deployments; set truncated=true if you would exceed the bound
 - soft preferences: genre={request.prompt.genre}, mood={request.prompt.mood}, complexity={request.prompt.complexity}
+{_profile_soft_block(state)}
 """.strip()
 
 
@@ -3247,6 +3279,7 @@ Rules:
 - tonal center MUST remain {locked_key}; do not drift to a competing key
 - secondary dominants, borrowed chords, and chromatic color are allowed when the aggregate tonic stays {locked_key}
 - soft preferences: genre={request.prompt.genre}, mood={request.prompt.mood}, complexity={request.prompt.complexity}
+{_profile_soft_block(state)}
 """.strip()
 
 

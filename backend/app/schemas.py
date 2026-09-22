@@ -317,6 +317,9 @@ class LLMMusicGenerationRequest(BaseModel):
     options: LLMGenerationOptions = Field(default_factory=LLMGenerationOptions)
     # Optional musical reference for style conditioning (resolved by generate path when wired).
     style_reference: StyleReferenceRequest | None = None
+    # Optional durable composer profile soft conditioning (additive; never overrides prompt/hard).
+    profile_id: str | None = Field(default=None, max_length=64)
+    profile_strength: Literal["off", "light", "normal", "strong"] = "off"
 
 
 class LLMProviderModel(BaseModel):

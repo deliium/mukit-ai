@@ -572,6 +572,37 @@ async def generate_fake_music_json(
         "Fake LLM mode: returned deterministic fixture composition (no API credits used).",
     ]
 
+    # Profile soft marker: nudge velocities when strength ≠ off; never rewrite key/instruments.
+    from app.services.composer_profile_merge import profile_active_for_fake
+
+    if profile_active_for_fake(request):
+        strength = getattr(request, "profile_strength", "off") or "off"
+        bump = {"light": 2, "normal": 5, "strong": 8}.get(str(strength), 5)
+        new_tracks = []
+        for track in music.tracks:
+            new_events = []
+            for event in track.events:
+                vel = getattr(event, "velocity", None)
+                if isinstance(vel, int):
+                    new_events.append(
+                        event.model_copy(update={"velocity": max(1, min(127, vel + bump))})
+                    )
+                else:
+                    new_events.append(event)
+            new_tracks.append(track.model_copy(update={"events": new_events}))
+        music = music.model_copy(update={"tracks": new_tracks})
+        warnings.append(
+            f"Fake LLM applied composer-profile soft marker (strength={strength})."
+        )
+        logger.info(
+            "Fake LLM composer profile soft marker applied",
+            extra={
+                "profile_id": getattr(request, "profile_id", None),
+                "profile_strength": strength,
+                "velocity_bump": bump,
+            },
+        )
+
     # Transform soft-compatible hard fields; refuse contradictory hard mismatches.
     updates: dict[str, object] = {}
     if music.tempo < active_constraints.tempo_min:
