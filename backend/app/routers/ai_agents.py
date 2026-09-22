@@ -10,7 +10,7 @@ import time
 from typing import Annotated, Any, Literal
 from urllib.parse import unquote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.ai_agents.errors import AgentError, map_agent_error_to_http
@@ -20,6 +20,11 @@ from app.ai_agents.registry import (
     get_agent,
     get_descriptor,
     list_descriptors,
+)
+from app.ai_agents.revision_loop_schemas import (
+    RevisionLoopBudgets,
+    RevisionMode,
+    RevisionPassCandidateV1,
 )
 from app.ai_agents.schemas import (
     AGENT_SPINE_WORKFLOW_ID,
@@ -65,11 +70,16 @@ class AgentWorkflowPreviewRequest(BaseModel):
     brief: str | None = Field(default=None, max_length=500)
     workflow_id: str = Field(default=AGENT_SPINE_WORKFLOW_ID, max_length=64)
     max_revisions: int = Field(default=0, ge=0, le=8)
+    revision_mode: RevisionMode = RevisionMode.OFF
+    max_wall_ms: int | None = Field(default=None, ge=1, le=3_600_000)
+    max_prompt_tokens: int | None = Field(default=None, ge=1, le=10_000_000)
     agent_model_overrides: dict[str, str] = Field(default_factory=dict)
     selection: dict[str, Any] = Field(default_factory=dict)
     # Optional mid-preview inspectability — default remains session-only.
     project_id: str | None = Field(default=None, max_length=64)
     persist_workspace_artifacts: bool = False
+    # Test / advanced: critic parameters (e.g. revise_on_technical).
+    critic_parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentWorkflowPreviewResponse(BaseModel):
@@ -91,6 +101,14 @@ class AgentWorkflowPreviewResponse(BaseModel):
     mutates_composition: Literal[False] = False
     # Hint for FE Apply envelope
     operation_type: Literal["multi-agent-apply"] = "multi-agent-apply"
+    revision_mode: RevisionMode = RevisionMode.OFF
+    max_passes: int = Field(default=0, ge=0, le=8)
+    stop_reason: str | None = None
+    last_valid_fingerprint: str | None = None
+    revision_history: list[dict[str, Any]] = Field(default_factory=list)
+    # Session-only playable snapshots per pass for FE audition/compare (not durable).
+    pass_candidates: list[RevisionPassCandidateV1] = Field(default_factory=list)
+    usage: dict[str, Any] | None = None
 
 
 def _raise_agent_http(exc: AgentError) -> None:
@@ -176,12 +194,16 @@ async def run_ai_agent(agent_id: str, body: AgentRunHttpRequest) -> AgentRunResu
 
 
 @router.post("/agents/workflows/preview", response_model=AgentWorkflowPreviewResponse)
-async def preview_agent_workflow(body: AgentWorkflowPreviewRequest) -> AgentWorkflowPreviewResponse:
+async def preview_agent_workflow(
+    body: AgentWorkflowPreviewRequest,
+    request: Request,
+) -> AgentWorkflowPreviewResponse:
     logger.info(
         "AI agent workflow preview requested",
         extra={
             "workflow_id": body.workflow_id,
             "max_revisions": body.max_revisions,
+            "revision_mode": body.revision_mode.value,
             "brief_len": len(body.brief or ""),
         },
     )
@@ -191,13 +213,24 @@ async def preview_agent_workflow(body: AgentWorkflowPreviewRequest) -> AgentWork
             detail={"code": "workflow_not_found", "message": f"Unknown workflow: {body.workflow_id}"},
         )
     ensure_registry()
+    budgets = None
+    if body.max_wall_ms is not None or body.max_prompt_tokens is not None:
+        budgets = RevisionLoopBudgets(
+            max_wall_ms=body.max_wall_ms,
+            max_prompt_tokens=body.max_prompt_tokens,
+        )
+
     try:
         result = await run_spine_workflow(
             body.composition,
             max_revisions=body.max_revisions,
+            revision_mode=body.revision_mode.value,
+            budgets=budgets,
+            cancel_check=request.is_disconnected,
             agent_model_overrides=body.agent_model_overrides,
             selection=body.selection,
             workflow_id=AGENT_SPINE_WORKFLOW_ID,
+            critic_parameters=body.critic_parameters or None,
         )
     except AgentError as exc:
         _raise_agent_http(exc)
@@ -232,6 +265,40 @@ async def preview_agent_workflow(body: AgentWorkflowPreviewRequest) -> AgentWork
             extra={"workflow_id": result.workflow_id},
         )
 
+    history_payload = [
+        rec.model_dump(mode="json") if hasattr(rec, "model_dump") else dict(rec)
+        for rec in (result.revision_history or ())
+    ]
+    pass_candidate_payload: list[RevisionPassCandidateV1] = []
+    for item in result.pass_candidates or ():
+        if isinstance(item, RevisionPassCandidateV1):
+            pass_candidate_payload.append(item)
+        elif hasattr(item, "model_dump"):
+            pass_candidate_payload.append(
+                RevisionPassCandidateV1.model_validate(item.model_dump(mode="json"))
+            )
+        else:
+            pass_candidate_payload.append(RevisionPassCandidateV1.model_validate(item))
+    usage_payload = None
+    if result.usage is not None:
+        usage_payload = (
+            result.usage.model_dump(mode="json")
+            if hasattr(result.usage, "model_dump")
+            else dict(result.usage)
+        )
+    stop_reason = (
+        result.stop_reason.value
+        if result.stop_reason is not None and hasattr(result.stop_reason, "value")
+        else (str(result.stop_reason) if result.stop_reason else None)
+    )
+    revision_mode = (
+        result.revision_mode
+        if isinstance(result.revision_mode, RevisionMode)
+        else RevisionMode(
+            getattr(result.revision_mode, "value", None) or body.revision_mode.value
+        )
+    )
+
     logger.info(
         "AI agent workflow preview ready",
         extra={
@@ -240,7 +307,20 @@ async def preview_agent_workflow(body: AgentWorkflowPreviewRequest) -> AgentWork
             "candidate_prefix": edit_fingerprint_log_prefix(result.candidate_fingerprint),
             "duration_ms": result.duration_ms,
             "recommendation": result.recommendation.value if result.recommendation else None,
+            "revision_mode": revision_mode.value,
+            "stop_reason": stop_reason,
+            "pass_count": len(history_payload),
+            "pass_candidate_count": len(pass_candidate_payload),
             "persist_workspace": bool(body.persist_workspace_artifacts and body.project_id),
+        },
+    )
+    # Avoid logging full history / candidate payloads at INFO.
+    logger.debug(
+        "Workflow revision history summary",
+        extra={
+            "pass_indices": [h.get("pass_index") for h in history_payload[:8]],
+            "stop_reason": stop_reason,
+            "pass_candidate_indices": [c.pass_index for c in pass_candidate_payload[:8]],
         },
     )
     return AgentWorkflowPreviewResponse(
@@ -259,4 +339,11 @@ async def preview_agent_workflow(body: AgentWorkflowPreviewRequest) -> AgentWork
         duration_ms=result.duration_ms,
         mutates_composition=False,
         operation_type="multi-agent-apply",
+        revision_mode=revision_mode,
+        max_passes=int(result.max_passes or 0),
+        stop_reason=stop_reason,
+        last_valid_fingerprint=result.last_valid_fingerprint,
+        revision_history=history_payload,
+        pass_candidates=pass_candidate_payload,
+        usage=usage_payload,
     )

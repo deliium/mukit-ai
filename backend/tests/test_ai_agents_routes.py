@@ -99,6 +99,7 @@ def test_workflow_preview_stateless(client):
             "composition": _composition_payload(),
             "workflow_id": "agent_spine_v1",
             "max_revisions": 0,
+            "revision_mode": "off",
         },
     )
     assert response.status_code == 200, response.text
@@ -107,6 +108,24 @@ def test_workflow_preview_stateless(client):
     assert payload["operation_type"] == "multi-agent-apply"
     assert payload["candidate"]["schema_version"] == "composition.v2"
     assert payload["candidate_fingerprint"]
+    assert payload["revision_mode"] == "off"
+    assert payload["max_passes"] == 0
+    assert payload["stop_reason"] in {
+        "critic_approve",
+        "hard_requirements_satisfied",
+        "revise_exhausted",
+        "max_passes_reached",
+    }
+    assert isinstance(payload["revision_history"], list)
+    assert len(payload["revision_history"]) >= 1
+    assert payload["revision_history"][0]["pass_index"] == 0
+    assert "candidate_fingerprint" in payload["revision_history"][0]
+    assert "composition" not in payload["revision_history"][0]
+    assert isinstance(payload["pass_candidates"], list)
+    assert len(payload["pass_candidates"]) >= 1
+    assert payload["pass_candidates"][0]["pass_index"] == 0
+    assert payload["pass_candidates"][0]["composition"]["schema_version"] == "composition.v2"
+    assert payload["pass_candidates"][0]["candidate_fingerprint"]
     assert payload["agent_sequence"] == [
         "creative_director",
         "harmony",
@@ -117,3 +136,31 @@ def test_workflow_preview_stateless(client):
     assert all(s.get("agent_id") for s in payload["stages"])
     after = client.get("/projects").json()["projects"]
     assert after == before
+
+
+def test_workflow_preview_revision_mode_fast_history(client):
+    response = client.post(
+        "/ai/agents/workflows/preview",
+        json={
+            "composition": _composition_payload(),
+            "workflow_id": "agent_spine_v1",
+            "revision_mode": "fast",
+            "critic_parameters": {
+                "fake_revise_passes": 1,
+                "fake_revise_hard_finding": True,
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["revision_mode"] == "fast"
+    assert payload["max_passes"] == 1
+    assert payload["stop_reason"]
+    assert len(payload["revision_history"]) >= 1
+    assert len(payload["pass_candidates"]) == len(payload["revision_history"])
+    for rec, cand in zip(payload["revision_history"], payload["pass_candidates"], strict=True):
+        assert rec["pass_index"] == cand["pass_index"]
+        assert rec["candidate_fingerprint"] == cand["candidate_fingerprint"]
+        assert cand["composition"]["schema_version"] == "composition.v2"
+        assert "composition" not in rec
+    assert payload["mutates_composition"] is False
