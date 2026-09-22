@@ -1,8 +1,9 @@
-"""Critic agent — bounded MusicAnalysis + typed critique (+ optional RevisionPlan)."""
+"""Critic agent — EvaluationEngine + optional model critique + RevisionPlan."""
 
 from __future__ import annotations
 
 import logging
+import os
 
 from app.ai_agents.agents.common import BaseMusicAgent
 from app.ai_agents.agents.typed_emit import (
@@ -16,33 +17,60 @@ from app.ai_agents.agents.typed_emit import (
 from app.ai_agents.schemas import (
     AgentArtifactKind,
     AgentArtifactV1,
-    AgentCritiqueV1,
     AgentRunRequest,
     AgentRunResult,
     CritiqueRecommendation,
 )
-from app.analysis_schemas import CompositionAnalysisError
-from app.services.composition_analysis import analyze_composition
+from app.services.composition_critique import evaluate_composition
+from app.services.composition_critique_scope import resolve_critique_scope
+from app.services.llm_composition_critique import run_model_critique
 
 logger = logging.getLogger(__name__)
 
 
 class CriticAgent(BaseMusicAgent):
-    """Critique via analysis sidecar; approve unless analysis failed."""
+    """Critique via EvaluationEngine; never mutates Composition."""
 
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
         draft = request.context.working_draft_composition
-        warning_codes: list[str] = []
-        analysis_art = None
-        recommendation = CritiqueRecommendation.APPROVE
-        reason_codes = ["analysis_ok"]
-        summary = "Critic approves working draft after deterministic analysis."
+        params = request.parameters or {}
+        include_model = bool(params.get("include_model_critique"))
+        revise_on_technical = bool(params.get("revise_on_technical"))
+        climax_idx = params.get("requested_climax_section_index")
+        if climax_idx is not None:
+            try:
+                climax_idx = int(climax_idx)
+            except (TypeError, ValueError):
+                climax_idx = None
+        brief_text = None
+        if request.context.brief is not None:
+            brief_payload = request.context.brief.payload or {}
+            brief_text = str(brief_payload.get("intent") or "")[:200]
 
-        try:
-            report = analyze_composition(draft)
-            analysis_payload = bounded_analysis_payload(report)
-            # Session content_type remains composition.analysis.v1 allow-list;
-            # payload is already the bounded projection (safe to promote).
+        resolved = resolve_critique_scope(draft, None)
+        model_findings, model_status = run_model_critique(
+            analysis_report=None,
+            resolved=resolved,
+            brief_excerpt=brief_text,
+            include_model_critique=include_model,
+            env=os.environ,
+        )
+
+        result = evaluate_composition(
+            draft,
+            revise_on_technical=revise_on_technical,
+            requested_climax_section_index=climax_idx,
+            brief_text=brief_text,
+            extra_findings=model_findings,
+            model_critique_status=model_status,
+        )
+        critique = result.critique
+        recommendation = critique.recommendation
+        warning_codes: list[str] = list(critique.reason_codes[:8])
+
+        analysis_art = None
+        if result.analysis_report is not None:
+            analysis_payload = bounded_analysis_payload(result.analysis_report)
             analysis_art = AgentArtifactV1(
                 kind=AgentArtifactKind.ANALYSIS,
                 producer_agent_id=self._descriptor.id,
@@ -50,54 +78,10 @@ class CriticAgent(BaseMusicAgent):
                 payload=analysis_payload,
                 source_fingerprint=request.context.source_fingerprint,
                 provenance=self._provenance(
-                    "agent_critic_critique", runtime="composition_analysis"
+                    "agent_critic_critique", runtime="composition_critique"
                 ),
             )
-            if report.status == "failed":
-                recommendation = CritiqueRecommendation.REVISE
-                reason_codes = ["analysis_failed"]
-                summary = "Critic requests revision: analysis status failed."
-            elif report.status == "empty":
-                reason_codes = ["analysis_empty"]
-                summary = "Critic approves with empty analysis scope (no blocking findings)."
-                warning_codes.append("critic_empty_analysis")
-            elif report.status == "partial":
-                reason_codes = ["analysis_partial"]
-                summary = "Critic approves with partial analysis coverage."
-                warning_codes.append("critic_partial_analysis")
 
-            for warning in (report.warnings or [])[:8]:
-                code = getattr(warning, "code", None)
-                if code:
-                    warning_codes.append(str(code)[:80])
-        except CompositionAnalysisError as exc:
-            logger.info(
-                "Critic analysis soft-failed",
-                extra={
-                    "agent_id": self._descriptor.id,
-                    "code": getattr(exc, "code", type(exc).__name__),
-                },
-            )
-            recommendation = CritiqueRecommendation.REVISE
-            reason_codes = [getattr(exc, "code", "analysis_error")[:80]]
-            summary = "Critic requests revision: analysis could not run."
-            warning_codes.append(getattr(exc, "code", "analysis_error")[:80])
-        except Exception as exc:  # noqa: BLE001
-            logger.info(
-                "Critic unexpected analysis failure",
-                extra={"agent_id": self._descriptor.id, "reason": type(exc).__name__},
-            )
-            recommendation = CritiqueRecommendation.REVISE
-            reason_codes = [f"analysis_{type(exc).__name__}"[:80]]
-            summary = "Critic requests revision: unexpected analysis failure."
-            warning_codes.append(reason_codes[0])
-
-        critique = AgentCritiqueV1(
-            recommendation=recommendation,
-            reason_codes=reason_codes[:16],
-            summary=summary[:400],
-            analysis_warning_count=len(warning_codes),
-        )
         parents = parent_ids_from_context(
             request.context,
             "harmony_artifact",
@@ -119,7 +103,7 @@ class CriticAgent(BaseMusicAgent):
                 request.context.arrangement_candidate,
             ),
             provenance=self._provenance(
-                "agent_critic_critique", runtime="composition_analysis"
+                "agent_critic_critique", runtime="composition_critique"
             ),
             warning_codes=warning_codes,
         )
@@ -134,25 +118,33 @@ class CriticAgent(BaseMusicAgent):
                 kind=AgentArtifactKind.PLAN,
                 producer_agent_id=self._descriptor.id,
                 content_type=AGENT_REVISION_PLAN_SCHEMA,
-                payload=revision_plan_payload(revise_targets=reason_codes[:8]),
+                payload=revision_plan_payload(revise_targets=critique.reason_codes[:8]),
                 source_fingerprint=request.context.source_fingerprint,
                 provenance=self._provenance(
-                    "agent_critic_critique", runtime="composition_analysis"
+                    "agent_critic_critique", runtime="composition_critique"
                 ),
                 parent_artifact_ids=[critique_art.artifact_id],
                 depends_on=depends_on_edges(critique_art),
             )
             artifacts.append(revision)
-            slots["critique"] = critique_art
 
         logger.info(
             "Critic recommendation",
             extra={
                 "agent_id": self._descriptor.id,
                 "recommendation": recommendation.value,
+                "finding_count": len(critique.findings),
+                "hard_constraint": critique.stratum_counts.hard_constraint,
+                "technical": critique.stratum_counts.technical,
+                "stylistic": critique.stratum_counts.stylistic,
+                "subjective": critique.stratum_counts.subjective,
+                "model_critique_status": model_status,
                 "content_types": [a.content_type for a in artifacts],
-                "warning_count": len(warning_codes),
             },
+        )
+        logger.debug(
+            "Critic reason codes",
+            extra={"agent_id": self._descriptor.id, "reason_codes": critique.reason_codes},
         )
         return AgentRunResult(
             agent_id=self._descriptor.id,
@@ -161,7 +153,7 @@ class CriticAgent(BaseMusicAgent):
             updated_context_slots=slots,
             recommendation=recommendation,
             provenance_stage=self._stage(
-                "agent_critic_critique", runtime="composition_analysis"
+                "agent_critic_critique", runtime="composition_critique"
             ),
             warning_codes=warning_codes,
         )

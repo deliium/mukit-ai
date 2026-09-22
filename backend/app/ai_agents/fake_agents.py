@@ -433,10 +433,36 @@ class FakeArrangementAgent(FakeAgent):
 
 class FakeCriticAgent(FakeAgent):
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
+        params = getattr(request, "parameters", None) or {}
+        emit_climax = bool(params.get("fake_emit_climax_finding"))
+        findings = []
+        if emit_climax:
+            from app.critique_schemas import (
+                CritiqueAffectedRange,
+                CritiqueFindingEvidence,
+                CritiqueFindingV1,
+            )
+
+            findings = [
+                CritiqueFindingV1(
+                    stratum="stylistic",
+                    category="contrast",
+                    code="climax_lacks_contrast",
+                    severity="info",
+                    explanation="Fake climax contrast observation for CI.",
+                    affected_range=CritiqueAffectedRange(start_bar=5, end_bar=8),
+                    evidence=CritiqueFindingEvidence(
+                        metrics={"fake": True},
+                        refs=["section_index:1"],
+                    ),
+                )
+            ]
         critique = AgentCritiqueV1(
             recommendation=CritiqueRecommendation.APPROVE,
             reason_codes=["fake_ok"],
             summary="Fake critic approves the spine candidate.",
+            findings=findings,
+            model_critique_status="skipped",
         )
         art = AgentArtifactV1(
             kind=AgentArtifactKind.CRITIQUE,
