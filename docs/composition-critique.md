@@ -75,6 +75,10 @@ finding with concrete bars is returned. Findings without `affected_range` /
 
 ## See also
 
-- [Multi-agent (V4)](multi-agent.md) — Critic agent + workspace promote
+- [Multi-agent (V4)](multi-agent.md) — Critic agent, controlled revision loops, workspace promote
 - [Composition Analysis](composition-analysis.md) — metric sidecar
 - [Project persistence](project-persistence.md) — revision AI artifact summary
+
+> Note: automatic Critic → revise → re-critique is owned by the multi-agent
+> `revision_loop` controller (session preview). The Evaluation Engine and Critic
+> agent remain read-only and never mutate `composition.v2`.

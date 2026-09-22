@@ -41,8 +41,13 @@ mukit-ai/
 │   │   │   └── runtimes/           # openai_compatible_chat, fake, stub, local_openai_compatible
 │   │   ├── ai_agents/              # V4 multi-agent layer above ai_runtime (typed artifacts; no DB writes)
 │   │   │   ├── registry.py         # AgentRegistry + bootstrap
-│   │   │   ├── workflow.py         # Acceptance spine orchestrator
+│   │   │   ├── workflow.py         # Spine + delegates revision modes to revision_loop
+│   │   │   ├── revision_loop.py    # Bounded critique → revise → re-critique (session preview only)
+│   │   │   ├── revision_loop_schemas.py  # Modes, stop reasons, pass records (non-playable)
+│   │   │   ├── revision_plan_builder.py  # Finding → RevisionPlan targeting
+│   │   │   ├── revision_stop_policy.py   # Multi-condition stop + score digests
 │   │   │   └── progressive_realize.py  # working_draft trust boundary
+│   │   ├── revision_loop_settings.py  # REVISION_LOOP_* thresholds / budgets
 │   │   ├── routers/
 │   │   │   ├── projects.py         # Projects module HTTP routes
 │   │   │   ├── imports.py          # MIDI / MusicXML multipart import
@@ -51,8 +56,9 @@ mukit-ai/
 │   │   │   ├── composition_development.py
 │   │   │   ├── harmony.py
 │   │   │   ├── motifs.py
+│   │   │   ├── critique.py         # POST /critique/evaluate (session-only)
 │   │   │   ├── ai_models.py        # GET /ai/models discovery
-│   │   │   └── ai_agents.py        # GET/POST /ai/agents* multi-agent API
+│   │   │   └── ai_agents.py        # GET/POST /ai/agents* (+ workflow preview revision modes)
 │   │   ├── services/               # Application services (orchestration + domain helpers)
 │   │   │   ├── llm_music_generator.py
 │   │   │   ├── llm_composition_editor.py
@@ -92,6 +98,8 @@ mukit-ai/
 │   │   │   ├── project_store.py         # SQLite persistence
 │   │   │   ├── project_history_store.py # Snapshots, revisions, branches, bootstrap
 │   │   │   ├── composition_snapshot_encoding.py  # composition.snapshot.v1 zlib encoding
+│   │   │   ├── composition_revision_preserve.py  # Outside-target event fingerprints for revise
+│   │   │   ├── agent_artifact_workspace.py       # Immutable typed artifact INSERT/promote/GC
 │   │   │   └── project_composition.py   # Project ↔ composition mapping
 │   │   ├── fixtures/               # composition.v1 + composition_v2_expressive + arrangement_instruments.v1.json
 │   │   └── db/                     # Shared infrastructure: connection + Alembic
@@ -109,8 +117,8 @@ mukit-ai/
 │       │   └── projectApi.js
 │       ├── store/
 │       │   └── musicStore.js       # Zustand — shared UI/application state (incl. analysis/arrangement/MIDI session)
-│       ├── components/             # Feature UI (projects, import, analysis, arrangement, generate, piano roll, playback, MidiInputPanel, export)
-│       ├── utils/                  # Client-side composition/playback/analysis/arrangement/midiInput* helpers
+│       ├── components/             # Feature UI (projects, import, analysis, arrangement, generate, MultiAgentPanel, piano roll, playback, MidiInputPanel, export)
+│       ├── utils/                  # Client-side composition/playback/analysis/arrangement/revisionLoopModes/midiInput* helpers
 │       ├── App.jsx
 │       └── main.jsx
 ├── docs/                           # composition.v2/v1, ai-runtime, local-ai, analysis, arrangement, embeddings, midi-live-input, import, datasets, tokenizer, music-transformer, persistence, testing
@@ -138,6 +146,8 @@ mukit-ai/
 | **Harmony / reharmonize** | `routers/harmony.py`, `harmony_schemas.py`, `composition_harmony_*`, `composition_reharmonization.py`, `llm_reharmonizer.py` | `HarmonyTimelinePanel`, `previewReharmonization` in `musicApi.js`, `compositionHarmony*.js`, reharmonize slice of `musicStore` |
 | **Composition / LLM** | `main.py` LLM routes, `schemas.py`, `llm_*`, `composition_*` (plan/validate/normalize/patch); bounded analysis advisory via `build_llm_analysis_context` | `MusicGenerator`, `PromptJsonEditor`, `AiRegionEditPanel`, `musicApi.js` |
 | **AI runtime** | `ai_runtime/` (capability registry, operation routing, typed protocols/adapters including `local_openai_compatible`); `local_llm_settings.py` + `local_health.py` for optional OpenAI-compatible sidecars; discovery via `/ai/models` (compat `/llm/models`); FluidSynth stays outside; app never loads GGUF/safetensors | `musicApi.js` model catalog clients; global selector remains `/llm/models` (includes ready `local:*` when enabled) |
+| **AI agents (V4)** | `ai_agents/` (registry, spine `workflow`, `revision_loop` controller, typed artifact schemas, progressive realize); `revision_loop_settings.py`; `routers/ai_agents.py` preview/run; Critic uses Evaluation Engine read-only. Session `revision_history` + sibling `pass_candidates` (audition) — never auto-Apply / never embed playable scores in pass records. `ai_agents/` must not import workspace or SQLite; promote stays in `agent_artifact_workspace` on Apply CAS | `MultiAgentPanel`, `previewMultiAgentWorkflow` in `musicApi.js`, `revisionLoopModes.js`, multi-agent + audition slice of `musicStore` / `playbackSource` |
+| **Critique** | `routers/critique.py`, `critique_schemas.py`, `critique_settings.py`, `services/composition_critique.py` — session evaluate only; does not mutate V2 | Critique UI; cross-links to multi-agent revision loops |
 | **Rendering / Export** | `music_json_renderer`, `composition_midi`, `composition_wav` | `NotationViewer`, `ExportControls`, playback components + `utils/playback*` / `tonePlaybackEngine` |
 | **MIDI live input (browser)** | None (no backend MIDI stream / WebSocket bridge) | `MidiInputPanel`, session slice in `musicStore`, `utils/midiInput*` / `midiPerformanceCapture` / `midiTakeApply` / `midiMetronome` / `computerKeyboardMidi` — Web MIDI or QWERTY → one V2 take commit; never required at startup; not file import |
 | **Shared infrastructure** | `db/`, `llm_settings.py`, CORS/lifespan in `main.py` | `api/*`, shared store fields, `utils/downloadFile.js` |
@@ -146,12 +156,14 @@ Prefer growing these boundaries (new routers under `routers/`, cohesive service 
 
 ## Dependency Rules
 
-Backend flow is strict downward: **HTTP handlers → services → persistence / external I/O**. Models (Pydantic schemas) are shared data contracts, not a layer that imports services.
+Backend flow is strict downward: **HTTP handlers → services → persistence / external I/O**. Models (Pydantic schemas) are shared data contracts, not a layer that imports services. Multi-agent code sits above the runtime and must not touch SQLite.
 
 ```text
 routers / main.py handlers
         ↓
    services/  (orchestration + composition rules)
+        ↓
+   ai_agents/  (typed agents + revision_loop; session preview; no SQLite)
         ↓
    ai_runtime/  (model registry + typed adapters; not FluidSynth)
         ↓
@@ -171,12 +183,15 @@ FastAPI backend
 ```
 
 - ✅ Route handlers call services; services call `db` / LLM / render libraries
+- ✅ Multi-agent workflow preview may run `ai_agents/revision_loop` then return session candidates; durable mutation is only client Apply via `multi-agent-apply` CAS
 - ✅ Frontend components call Zustand actions and API modules; playback/notation utils stay free of React components
 - ✅ Cross-module use goes through service functions or shared schemas (`composition.v2` operational, `composition.v1` migration input), not private helpers inside another module’s files when avoidable
 - ❌ Services must not import FastAPI routers or request objects
+- ❌ `ai_agents/` must not import `agent_artifact_workspace`, `db/`, or project stores
 - ❌ `db/` / store implementations must not import route handlers
 - ❌ Frontend `utils/` must not import React components or the Zustand store (keep pure functions testable)
 - ❌ Do not skip the service layer from routers to raw SQL / LLM clients for new features
+- ❌ Critic / Evaluation Engine must not mutate `composition.v2`; revision loops must not auto-commit project revisions
 
 ## Layer/Module Communication
 
@@ -184,7 +199,7 @@ FastAPI backend
 - **Canonical contract:** `composition.v2` (see `docs/composition-v2.md` and `composition_schemas.py`) is the operational shared language between generate, edit, persist, render, export, and the frontend editors/playback. `composition.v1` remains migration/parser input (`docs/composition-v1.md`). Derived `composition.analysis.v1` is advisory only (`docs/composition-analysis.md`) and must not become a second source of truth.
 - **Projects module:** `project_store` owns SQLite; `project_composition` normalizes stored JSON to the canonical model before API responses.
 - **Composition pipeline:** LLM generate/edit services produce or patch JSON; validator/normalizer/timing services enforce and shape the model; render/export services consume validated compositions only. Analysis may feed a bounded advisory projection into edit/repair prompts without mutating events.
-- **Frontend state:** Zustand `musicStore` holds API status, models, project browser/save status, edited composition, piano-roll and playback transport state, a single derived analysis report, and ephemeral session slices (analysis/arrangement/development/MIDI live input). Feature components subscribe to slices; they do not own parallel sources of truth for the same composition. MIDI session fields (device ids, active notes, raw takes) must never enter project autosave / revision payloads.
+- **Frontend state:** Zustand `musicStore` holds API status, models, project browser/save status, edited composition, piano-roll and playback transport state, a single derived analysis report, and ephemeral session slices (analysis/arrangement/development/multi-agent revision passes/MIDI live input). Feature components subscribe to slices; they do not own parallel sources of truth for the same composition. MIDI session fields (device ids, active notes, raw takes) must never enter project autosave / revision payloads. Multi-agent `pass_candidates` are session audition sources only — Apply remains explicit.
 - **Client ↔ server:** `musicApi.js` / `projectApi.js` are the only HTTP clients; components and store actions go through them. Browser Web MIDI / QWERTY performance capture stays frontend-only and commits into validated `composition.v2` via store transactions — it is not the file MIDI import path.
 
 ## Key Principles
@@ -196,6 +211,7 @@ FastAPI backend
 5. **Frontend purity where it matters:** Keep event math, validation mirrors, and Tone.js engine code in `utils/` with unit tests; keep UI in `components/`.
 6. **Infrastructure stays small and shared:** `db/`, env-based `llm_settings`, Docker, and CORS belong to shared infrastructure — not copied per feature.
 7. **AI provider boundary:** Orchestrators resolve models via `ai_runtime` (capability + operation), not by constructing LangChain clients inline. Remote and optional local chat must use `llm_chat_client` / OpenAI-compatible HTTP only (`LocalLanguageModel` for `runtime=local_openai_compatible`); never import llama.cpp/vLLM/MusicGen weights in FastAPI. FluidSynth WAV export is not an AI runtime. Optional local sidecars live under Compose profiles in `compose.local-ai.yml` / `compose.neural-audio.yml` — default `docker compose up` must not require GPU or multi-GB inference images.
+8. **Multi-agent preview vs Apply:** `ai_agents/revision_loop` is a bounded session controller (modes Fast/Balanced/Thorough, stop reasons, last_valid rollback, optional `pass_candidates` for audition). Critic approve never persists; only `multi-agent-apply` CAS commits. Typed pass records stay non-playable; do not invent `composition.v4`.
 
 ## Code Organization Note
 

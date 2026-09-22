@@ -22,7 +22,7 @@ mukit-ai/
 │   │   ├── main.py          # Composition / LLM / export routes
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
 │   │   ├── ai_runtime/      # Capability registry, operation routing, typed model adapters
-│   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas)
+│   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas, revision_loop)
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
 │   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + critique + motifs + harmony + arrangement + development + embeddings + ai_models + ai_agents HTTP API
@@ -95,6 +95,12 @@ mukit-ai/
 | `backend/app/analysis_schemas.py` | `composition.analysis.v1` DTOs, scopes, warning codes |
 | `backend/app/critique_schemas.py` | Critique findings, scopes, evaluate error codes |
 | `backend/app/services/composition_critique.py` | Music Evaluation Engine orchestrator |
+| `backend/app/ai_agents/revision_loop.py` | Bounded critique → revise → re-critique preview controller |
+| `backend/app/ai_agents/revision_loop_schemas.py` | Revision modes, stop reasons, pass records, usage DTOs |
+| `backend/app/ai_agents/revision_stop_policy.py` | Pure multi-condition stop evaluation |
+| `backend/app/ai_agents/revision_plan_builder.py` | Findings → targeted `agent.revision_plan.v1` |
+| `backend/app/revision_loop_settings.py` | `REVISION_LOOP_*` thresholds / budgets |
+| `backend/app/services/composition_revision_preserve.py` | Preserve-outside-targets event fingerprint helper |
 | `backend/app/routers/critique.py` | `POST /critique/evaluate` (session-only) |
 | `backend/app/motif_schemas.py` | Motif apply request/response DTOs |
 | `backend/app/routers/analysis.py` | `POST /analysis/composition` |
@@ -124,7 +130,7 @@ mukit-ai/
 | `backend/app/services/fake_llm.py` | Deterministic `LLM_FAKE_MODE` generate/edit/arrangement (incl. V2 expressive fixture) |
 | `backend/app/ready.py` | Logging/CORS helpers and readiness report |
 | `backend/app/ai_runtime/` | Capability registry, operation routing, typed adapters |
-| `backend/app/ai_agents/` | V4 multi-agent registry, spine workflow, progressive realize |
+| `backend/app/ai_agents/` | V4 multi-agent registry, spine workflow, progressive realize, revision_loop |
 | `backend/app/local_llm_settings.py` | Optional `LOCAL_*` sidecar settings (memory-safe defaults) |
 | `backend/app/ai_runtime/local_health.py` | Bounded local sidecar health probe |
 | `backend/app/ai_runtime/runtimes/local_language.py` | `LocalLanguageModel` (OpenAI-compatible HTTP only) |

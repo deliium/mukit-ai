@@ -85,14 +85,75 @@ Envelopes use `agent.artifact.v1` with known `content_type` values (`agent.brief
 - `artifact_log`, `stages` (each with durable `agent_id`)
 - `operation_type: "multi-agent-apply"`
 - `mutates_composition: false`
+- optional revision-loop fields: `revision_mode`, `max_passes`, `stop_reason`,
+  `revision_history[]`, `pass_candidates[]` (session playable snapshots for
+  audition/compare; not embedded in pass records), `last_valid_fingerprint`,
+  `usage`
 
 Critic `approve` does **not** persist. Client Apply uses the existing CAS path with `RevisionOperationType.MULTI_AGENT_APPLY`.
+
+## Controlled critique → revision loops
+
+Default product posture is **`revision_mode=off`** / `max_passes=0` (single Critic at end of spine; no automatic revise).
+
+Named modes clamp revise passes (never unbounded):
+
+| Mode | `max_passes` |
+|------|--------------|
+| `off` | 0 |
+| `fast` | 1 |
+| `balanced` | 2 |
+| `thorough` | 3 |
+
+Raw `max_revisions` (0–8) remains an API escape hatch when mode is `off`. When a
+named mode is set, `max_revisions=0` (the request default) means “use the mode
+cap”; a positive `max_revisions` may only further clamp downward. Product UI only
+exposes Off / Fast / Balanced / Thorough.
+
+Controller: `ai_agents/revision_loop.py` (no SQLite). Flow:
+
+```text
+spine → Critic (pass 0)
+  → while revise + budget:
+        RevisionPlan (ranges / tracks / target agents)
+        → targeted spine agents only
+        → CompositionPatch + progressive realize + preserve-outside-targets
+        → validate → last_valid snapshot (or rollback on failure)
+        → Critic again
+  → stop_reason + revision_history[] + pass_candidates[] + final last_valid candidate
+```
+
+`revision_history` entries are non-playable digests (critique / plan / patch /
+validation / fingerprints). Sibling `pass_candidates` carry fingerprintable
+`composition.v2` snapshots for UI audition and compare; they are session-only
+and never auto-committed.
+**Stop reasons:** `critic_approve`, `hard_requirements_satisfied`, `improvement_below_threshold`,
+`max_passes_reached`, `resource_budget_exhausted`, `cancelled`, `revise_exhausted`,
+`validation_failed_kept_last_valid`.
+
+**Preserve:** when `affected_ranges` / `affected_tracks` are set, events outside targets must
+fingerprint-stable; violation fails the pass and restores `last_valid`.
+
+**Cancellation:** cooperative between agents/passes (`Request.is_disconnected` / FE AbortController).
+Never leaves an invalid working draft.
+
+**Usage:** optional `prompt_tokens` / `completion_tokens` / `latency_ms_total` with
+`usage_status: available|partial|unavailable` — never invents currency.
+
+**Logging:** INFO logs mode, pass_index, stop_reason, max_passes, duration_ms, usage_status,
+fingerprint prefixes, target agent ids. Never INFO full findings, prompts, or event arrays.
+
+Settings knobs: `REVISION_LOOP_*` in `.env.example` (improvement delta, wall/token caps, hard-ok policy).
+
+Session `revision_history` is preview-only; durable promote of critique / revision_plan on Apply is unchanged.
+Pass records do not require Alembic.
 
 ## Critic / Music Evaluation Engine
 
 The Critic agent calls `services/composition_critique.evaluate_composition` (deterministic
 checks + analysis warnings + optional model critique). Session UI can also call
-`POST /critique/evaluate` without running the full spine.
+`POST /critique/evaluate` without running the full spine. Critic remains **read-only**;
+the revision **loop** is a workflow controller above Critic (see above).
 
 - Structured findings use four strata (`hard_constraint` / `technical` / `stylistic` / `subjective`).
 - Stylistic and subjective findings **never** alone force `revise`.
@@ -168,7 +229,9 @@ Never log prompts, API keys, full V2 event arrays, full payloads, or full critiq
 
 ## Frontend
 
-Thin **Agents** tab (`MultiAgentPanel`): Preview spine → Apply / Discard. Setting a multi-agent candidate discards competing arrangement / development / reharmonize session candidates. Versions panel shows AI role summary for multi-agent revisions.
+Thin **Agents** tab (`MultiAgentPanel`): revision mode selector (Off/Fast/Balanced/Thorough),
+Preview spine → Cancel / Apply / Discard, inspectable pass history + fingerprint compare.
+Setting a multi-agent candidate discards competing arrangement / development / reharmonize session candidates. Versions panel shows AI role summary for multi-agent revisions.
 
 ## See also
 

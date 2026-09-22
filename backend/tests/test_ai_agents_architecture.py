@@ -161,6 +161,32 @@ def test_nine_agents_registered():
     assert set(agent_registry.list_agent_ids()) == set(KNOWN_AGENT_IDS)
 
 
+def test_revision_loop_has_hard_pass_cap_and_no_workspace_import():
+    from app.ai_agents.revision_loop_schemas import (
+        REVISION_PRODUCT_MAX_PASSES,
+        max_passes_for_mode,
+    )
+
+    assert max_passes_for_mode("thorough") == REVISION_PRODUCT_MAX_PASSES == 3
+    package = Path(__file__).resolve().parents[1] / "app" / "ai_agents"
+    loop_path = package / "revision_loop.py"
+    text = loop_path.read_text(encoding="utf-8")
+    assert "agent_artifact_workspace" not in text
+    assert "PROJECT_DB_PATH" not in text
+    # Controller must resolve a finite max_passes (no bare while True without cap).
+    assert "resolve_max_passes" in text
+    assert "max_passes" in text
+
+
+def test_revision_loop_default_off_matches_spine():
+    from app.ai_agents.revision_loop_schemas import RevisionStopReason
+
+    result = asyncio.run(run_spine_workflow(_source(), max_revisions=0))
+    assert result.recommendation == CritiqueRecommendation.APPROVE
+    assert result.stop_reason == RevisionStopReason.CRITIC_APPROVE
+    assert result.max_passes == 0
+
+
 def test_mocked_agent_run_via_registry():
     agent = agent_registry.get_agent("creative_director")
     ctx = build_initial_context(_source())
