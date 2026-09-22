@@ -22,6 +22,7 @@ from app.embeddings.schemas import (
     CompositionStyleConditioningV1,
     StyleReferenceRequest,
 )
+from app.reference_conditioning_schemas import ReferenceConditioningPolicy
 from app.schemas import LLMModelSelection
 
 
@@ -596,6 +597,8 @@ class CompositionDevelopmentPreviewRequest(BaseModel):
     options: CompositionDevelopmentOptions = Field(default_factory=CompositionDevelopmentOptions)
     style_reference: StyleReferenceRequest | None = None
     style_references: list[StyleReferenceRequest] | None = Field(default=None, max_length=8)
+    reference_conditioning_policy: ReferenceConditioningPolicy | None = None
+    active_project_id: str | None = Field(default=None, min_length=1, max_length=80)
 
     @field_validator("target_section_type")
     @classmethod

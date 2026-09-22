@@ -176,18 +176,36 @@ def merge_reference_feature_provenance(
     provenance: dict[str, Any],
     condition: ReferenceFeatureConditionResult,
 ) -> dict[str, Any]:
-    """Nest ``reference_features[]`` under generation_parameters (no summaries)."""
-    if not condition.provenance_entries:
-        return provenance
+    """Nest ``reference_features[]`` under generation_parameters (no summaries).
+
+    Prefer ``merge_reference_conditioning_provenance`` when a policy digest is present.
+    """
+    if not condition.provenance_entries and not getattr(
+        condition, "policy_provenance", None
+    ):
+        # Still merge warnings if present on a thin result.
+        if not condition.warning_codes:
+            return provenance
     out = dict(provenance)
     generation_parameters = dict(out.get("generation_parameters") or {})
-    generation_parameters["reference_features"] = list(condition.provenance_entries)
+    if condition.provenance_entries:
+        generation_parameters["reference_features"] = list(condition.provenance_entries)
     if condition.warning_codes:
         existing = list(generation_parameters.get("reference_feature_warnings") or [])
         for code in condition.warning_codes:
             if code not in existing:
                 existing.append(code)
         generation_parameters["reference_feature_warnings"] = existing
+    policy_prov = getattr(condition, "policy_provenance", None)
+    if policy_prov:
+        generation_parameters["reference_conditioning_policy"] = policy_prov
+        logger.info(
+            "Reference conditioning policy provenance attached",
+            extra={
+                "has_policy": True,
+                "policy_digest_prefix": str(policy_prov.get("policy_digest") or "")[:8],
+            },
+        )
     out["generation_parameters"] = generation_parameters
     return out
 

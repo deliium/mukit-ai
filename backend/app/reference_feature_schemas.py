@@ -119,6 +119,22 @@ REFERENCE_FEATURE_ERROR_CODES: dict[str, str] = {
     "reference_feature_cap_exceeded": "A configured reference-features cap was exceeded.",
     "reference_feature_forbidden_payload": "Payload contains forbidden playable, vector, or identity fields.",
     "reference_feature_dataset_forbidden": "Reference feature analysis must not write to DATASET_ROOT.",
+    # reference.conditioning.policy.v1 (shared mapper)
+    "reference_conditioning_partition_overlap": (
+        "A dimension appears in more than one of preserve, borrow, or regenerate."
+    ),
+    "reference_conditioning_borrow_dimension_conflict": (
+        "The same dimension is borrowed from more than one reference binding."
+    ),
+    "reference_conditioning_preserve_without_source": (
+        "Preserve dimensions require a current composition scope (not available on generate)."
+    ),
+    "reference_conditioning_motif_reuse_forbidden": (
+        "allow_motif_reuse requires active_project_id matching every borrow binding project_id."
+    ),
+    "reference_conditioning_unknown_strength": (
+        "dimension_strengths keys must be a subset of the borrow dimension union."
+    ),
 }
 
 ReferenceFeatureErrorCode = Literal[
@@ -131,6 +147,11 @@ ReferenceFeatureErrorCode = Literal[
     "reference_feature_cap_exceeded",
     "reference_feature_forbidden_payload",
     "reference_feature_dataset_forbidden",
+    "reference_conditioning_partition_overlap",
+    "reference_conditioning_borrow_dimension_conflict",
+    "reference_conditioning_preserve_without_source",
+    "reference_conditioning_motif_reuse_forbidden",
+    "reference_conditioning_unknown_strength",
 ]
 
 REFERENCE_FEATURE_WARNING_CODES: dict[str, str] = {
@@ -142,6 +163,12 @@ REFERENCE_FEATURE_WARNING_CODES: dict[str, str] = {
     "reference_feature_insufficient_motifs": "Motif metadata is absent; motif characteristics unavailable.",
     "reference_feature_monophonic_texture": "Texture evidence is monophonic-only; orchestration summary degraded.",
     "reference_feature_compare_omitted": "Embedding affinity omitted because no compare target was provided.",
+    "reference_conditioning_strength_off_dropped": (
+        "Borrow dimension dropped because strength=off (unspecified; not forced to regenerate)."
+    ),
+    "reference_conditioning_preserve_degraded": (
+        "Preserve summary for one or more dimensions used thin evidence."
+    ),
 }
 
 ReferenceFeatureWarningCode = Literal[
@@ -153,6 +180,8 @@ ReferenceFeatureWarningCode = Literal[
     "reference_feature_insufficient_motifs",
     "reference_feature_monophonic_texture",
     "reference_feature_compare_omitted",
+    "reference_conditioning_strength_off_dropped",
+    "reference_conditioning_preserve_degraded",
 ]
 
 
@@ -505,6 +534,8 @@ def map_reference_feature_error_to_http(
         status = 404
     elif exc.code == "reference_feature_dataset_forbidden":
         status = 403
+    elif str(exc.code).startswith("reference_conditioning_"):
+        status = 422
     elif status < 400:
         status = 422
     detail: dict[str, Any] = {
@@ -513,4 +544,8 @@ def map_reference_feature_error_to_http(
     }
     if exc.details:
         detail["details"] = exc.details
+    logger.warning(
+        "Mapped reference feature / conditioning error to HTTP",
+        extra={"error_code": exc.code, "http_status": status},
+    )
     return status, detail

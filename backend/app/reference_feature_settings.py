@@ -13,6 +13,8 @@ _DEFAULT_MAX_REFERENCES = 3
 _DEFAULT_SUMMARY_MAX_CHARS = 280
 _DEFAULT_SOFT_FRAGMENT_MAX_CHARS = 1_600
 _DEFAULT_ANALYZE_LRU_SIZE = 0  # 0 = disabled
+_DEFAULT_POLICY_DIGEST_PREFIX_LEN = 16
+_DEFAULT_STRENGTH_LEGEND_MAX_CHARS = 240
 
 _caps_logged = False
 
@@ -23,6 +25,8 @@ class ReferenceFeatureSettings:
     summary_max_chars: int
     soft_fragment_max_chars: int
     analyze_lru_size: int
+    policy_digest_prefix_len: int
+    strength_legend_max_chars: int
 
 
 def load_reference_feature_settings(
@@ -60,6 +64,20 @@ def load_reference_feature_settings(
             minimum=0,
             maximum=256,
         ),
+        policy_digest_prefix_len=_int_env(
+            source,
+            "REFERENCE_FEATURES_POLICY_DIGEST_PREFIX_LEN",
+            _DEFAULT_POLICY_DIGEST_PREFIX_LEN,
+            minimum=8,
+            maximum=64,
+        ),
+        strength_legend_max_chars=_int_env(
+            source,
+            "REFERENCE_FEATURES_STRENGTH_LEGEND_MAX_CHARS",
+            _DEFAULT_STRENGTH_LEGEND_MAX_CHARS,
+            minimum=64,
+            maximum=1_000,
+        ),
     )
     if not _caps_logged or env is not None:
         logger.debug(
@@ -69,6 +87,8 @@ def load_reference_feature_settings(
                 "summary_max_chars": settings.summary_max_chars,
                 "soft_fragment_max_chars": settings.soft_fragment_max_chars,
                 "analyze_lru_size": settings.analyze_lru_size,
+                "policy_digest_prefix_len": settings.policy_digest_prefix_len,
+                "strength_legend_max_chars": settings.strength_legend_max_chars,
             },
         )
         if env is None:

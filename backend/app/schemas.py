@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .embeddings.schemas import StyleReferenceRequest
+from .reference_conditioning_schemas import ReferenceConditioningPolicy
 from .composition_schemas import (
     COMPOSITION_SCHEMA_VERSION,
     COMPOSITION_SCHEMA_VERSION_V1,
@@ -322,6 +323,10 @@ class LLMMusicGenerationRequest(BaseModel):
     # Optional durable composer profile soft conditioning (additive; never overrides prompt/hard).
     profile_id: str | None = Field(default=None, max_length=64)
     profile_strength: Literal["off", "light", "normal", "strong"] = "off"
+    # Optional preserve/borrow/regenerate policy (strengths policy-owned; never on StyleReferenceRequest).
+    reference_conditioning_policy: ReferenceConditioningPolicy | None = None
+    # Workspace project id for own-project motif-reuse gating vs borrow binding project_id.
+    active_project_id: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class LLMProviderModel(BaseModel):
@@ -714,6 +719,10 @@ class LLMCompositionEditRequest(BaseModel):
     edit: CompositionEditInstruction
     selection: LLMModelSelection = Field(default_factory=LLMModelSelection)
     options: LLMGenerationOptions = Field(default_factory=LLMGenerationOptions)
+    style_reference: StyleReferenceRequest | None = None
+    style_references: list[StyleReferenceRequest] | None = Field(default=None, max_length=8)
+    reference_conditioning_policy: ReferenceConditioningPolicy | None = None
+    active_project_id: str | None = Field(default=None, min_length=1, max_length=80)
 
     @field_validator("composition", mode="before")
     @classmethod
