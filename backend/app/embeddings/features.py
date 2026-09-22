@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 from app.composition_schemas import (
     CompositionV2,
@@ -77,6 +77,42 @@ SYMBOLIC_FEATURES_V1_DIMS = (
     + MOTIF_EXTRA_DIMS
 )
 
+# Offsets for public group slices (must stay aligned with layout above).
+_OFF_RANGE = PC_DIMS
+_OFF_DUR = _OFF_RANGE + RANGE_DIMS
+_OFF_ONSET = _OFF_DUR + DUR_BINS
+_OFF_DENSITY = _OFF_ONSET + ONSET_BINS
+_OFF_INTERVAL = _OFF_DENSITY + DENSITY_DIMS
+_OFF_CONTOUR = _OFF_INTERVAL + INTERVAL_BINS
+_OFF_CONCURRENT = _OFF_CONTOUR + CONTOUR_DIMS
+_OFF_ROLE = _OFF_CONCURRENT + CONCURRENT_BINS
+_OFF_TRACK = _OFF_ROLE + ROLE_DIMS
+_OFF_FORM = _OFF_TRACK + TRACK_COUNT_DIMS
+_OFF_SECTION = _OFF_FORM + FORM_POS_DIMS
+
+FeatureGroupId = Literal["rhythm", "contour", "texture", "form"]
+
+FEATURE_GROUP_SLICES: dict[FeatureGroupId, tuple[int, int]] = {
+    # DUR_BINS + ONSET_BINS + DENSITY_DIMS
+    "rhythm": (_OFF_DUR, DUR_BINS + ONSET_BINS + DENSITY_DIMS),
+    # INTERVAL_BINS + CONTOUR_DIMS
+    "contour": (_OFF_INTERVAL, INTERVAL_BINS + CONTOUR_DIMS),
+    # CONCURRENT_BINS + ROLE_DIMS + TRACK_COUNT_DIMS
+    "texture": (_OFF_CONCURRENT, CONCURRENT_BINS + ROLE_DIMS + TRACK_COUNT_DIMS),
+    # FORM_POS_DIMS + SECTION_TYPE_DIMS
+    "form": (_OFF_FORM, FORM_POS_DIMS + SECTION_TYPE_DIMS),
+}
+
+# Dimension → embedding group (analysis-only dims omit affinity).
+DIMENSION_TO_FEATURE_GROUP: dict[str, FeatureGroupId] = {
+    "rhythm": "rhythm",
+    "density": "rhythm",  # correlated with rhythm slice
+    "melodic_contour": "contour",
+    "texture": "texture",
+    "instrumentation": "texture",
+    "form": "form",
+}
+
 SECTION_TYPE_ORDER = (
     "intro",
     "verse",
@@ -120,6 +156,28 @@ class ResolvedEmbedWindow:
 
 def symbolic_features_v1_dims() -> int:
     return SYMBOLIC_FEATURES_V1_DIMS
+
+
+def feature_group_vector(
+    raw_features: list[float] | Sequence[float],
+    group_id: FeatureGroupId | str,
+) -> list[float]:
+    """Return the raw (pre-L2) vector slice for an embedding feature group.
+
+    Groups:
+      rhythm  — DUR_BINS + ONSET_BINS + DENSITY_DIMS
+      contour — INTERVAL_BINS + CONTOUR_DIMS
+      texture — CONCURRENT_BINS + ROLE_DIMS + TRACK_COUNT_DIMS
+      form    — FORM_POS_DIMS + SECTION_TYPE_DIMS
+    """
+    if group_id not in FEATURE_GROUP_SLICES:
+        raise ValueError(f"unknown feature group_id: {group_id}")
+    start, length = FEATURE_GROUP_SLICES[group_id]  # type: ignore[index]
+    if len(raw_features) < start + length:
+        raise ValueError(
+            f"raw_features length {len(raw_features)} too short for group {group_id}"
+        )
+    return [float(raw_features[i]) for i in range(start, start + length)]
 
 
 def extract_symbolic_features_v1(

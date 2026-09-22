@@ -115,9 +115,20 @@ async def draft_fake_composition_development(
 
     # Style/reference conditioning: shift contour/harmony so realized V2 fingerprints
     # differ from the reference material while still validating through realization.
-    style_conditioned = getattr(request, "style_reference", None) is not None
+    style_conditioned = (
+        getattr(request, "style_reference", None) is not None
+        or bool(getattr(request, "style_references", None))
+    )
     if style_conditioned:
-        pitch_cycle = _pitch_cycle((candidate_ordinal - 1 + 2) % 4)
+        dims = None
+        singular = getattr(request, "style_reference", None)
+        if singular is not None:
+            dims = getattr(singular, "dimensions", None)
+        # Deterministic contour shift keyed by sorted dim ids when masked.
+        dim_nudge = 2
+        if dims:
+            dim_nudge = 2 + (sum(ord(c) for c in "".join(sorted(dims))) % 3)
+        pitch_cycle = _pitch_cycle((candidate_ordinal - 1 + dim_nudge) % 4)
         density_step = 1
         onset_nudge = onset_nudge + (request.composition.ticks_per_quarter // 4)
 
@@ -574,6 +585,7 @@ async def generate_fake_music_json(
 
     # Profile soft marker: nudge velocities when strength ≠ off; never rewrite key/instruments.
     from app.services.composer_profile_merge import profile_active_for_fake
+    from app.services.reference_feature_condition import reference_features_active_for_fake
 
     if profile_active_for_fake(request):
         strength = getattr(request, "profile_strength", "off") or "off"
@@ -599,6 +611,37 @@ async def generate_fake_music_json(
             extra={
                 "profile_id": getattr(request, "profile_id", None),
                 "profile_strength": strength,
+                "velocity_bump": bump,
+            },
+        )
+
+    if reference_features_active_for_fake(request):
+        singular = getattr(request, "style_reference", None)
+        dims = getattr(singular, "dimensions", None) if singular is not None else None
+        dim_key = ",".join(sorted(dims)) if dims else "legacy"
+        bump = 3 + (sum(ord(c) for c in dim_key) % 5)
+        new_tracks = []
+        for track in music.tracks:
+            new_events = []
+            for event in track.events:
+                vel = getattr(event, "velocity", None)
+                if isinstance(vel, int):
+                    new_events.append(
+                        event.model_copy(
+                            update={"velocity": max(1, min(127, vel + bump))}
+                        )
+                    )
+                else:
+                    new_events.append(event)
+            new_tracks.append(track.model_copy(update={"events": new_events}))
+        music = music.model_copy(update={"tracks": new_tracks})
+        warnings.append(
+            f"Fake LLM applied reference-feature soft marker (dims={dim_key})."
+        )
+        logger.info(
+            "Fake LLM reference feature soft marker applied",
+            extra={
+                "dimension_count": len(dims) if dims else 0,
                 "velocity_bump": bump,
             },
         )

@@ -254,34 +254,48 @@ async def run_composition_development_preview(
     reference_provenance = None
     reference_embedding = None
     style_conditioning_fragment: dict[str, Any] | None = None
-    if request.style_reference is not None:
-        try:
-            resolved = resolve_style_reference(request.style_reference, include_conditioning=True)
-        except EmbeddingError as exc:
-            raise CompositionDevelopmentError(
-                "development_invalid_operation",
-                message=exc.message,
-                http_status=404 if exc.code == "reference_not_found" else 422,
-                details={"embedding_error_code": exc.code, **(exc.details or {})},
-            ) from exc
-        style_conditioning = resolved.conditioning
-        reference_provenance = resolved.provenance
-        reference_embedding = resolved.embedding
-        if style_conditioning is not None:
-            style_conditioning_fragment = conditioning_context_fragment(style_conditioning)
-            context_payload = {
-                **context_payload,
-                "style_conditioning": style_conditioning_fragment,
-            }
+    reference_feature_warnings: list[str] = []
+    from app.reference_feature_schemas import ReferenceFeatureError
+    from app.services.reference_feature_condition import (
+        resolve_reference_feature_conditioning,
+    )
+
+    try:
+        ref_condition = resolve_reference_feature_conditioning(
+            style_reference=request.style_reference,
+            style_references=getattr(request, "style_references", None),
+        )
+    except ReferenceFeatureError as exc:
+        raise CompositionDevelopmentError(
+            "development_invalid_operation",
+            message=exc.message,
+            http_status=exc.http_status,
+            details={"reference_feature_error_code": exc.code, **(exc.details or {})},
+        ) from exc
+
+    reference_feature_warnings = list(ref_condition.warning_codes)
+    if ref_condition.soft_fragment or ref_condition.legacy_feature_summary:
+        style_conditioning_fragment = {
+            "feature_summary": (
+                ref_condition.soft_fragment
+                or ref_condition.legacy_feature_summary
+                or ""
+            ),
+            "reference_features": list(ref_condition.provenance_entries),
+            "artist_label_used": False,
+        }
+        context_payload = {
+            **context_payload,
+            "style_conditioning": style_conditioning_fragment,
+        }
         logger.info(
-            "Composition development style conditioning attached",
+            "Composition development reference feature conditioning attached",
             extra={
-                "conditioning_mode": request.style_reference.mode,
-                "project_id": request.style_reference.project_id,
-                "fingerprint_prefix": reference_provenance.fingerprint_prefix()
-                if reference_provenance
-                else None,
-                "scope_kind": request.style_reference.scope.kind,
+                "binding_count": ref_condition.binding_count,
+                "applied_dimension_count": len(ref_condition.applied_dimension_ids),
+                "fragment_chars": len(ref_condition.soft_fragment or ""),
+                "has_legacy_summary": bool(ref_condition.legacy_feature_summary),
+                "warning_count": len(reference_feature_warnings),
             },
         )
 

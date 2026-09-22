@@ -595,6 +595,7 @@ class CompositionDevelopmentPreviewRequest(BaseModel):
     selection: LLMModelSelection = Field(default_factory=LLMModelSelection)
     options: CompositionDevelopmentOptions = Field(default_factory=CompositionDevelopmentOptions)
     style_reference: StyleReferenceRequest | None = None
+    style_references: list[StyleReferenceRequest] | None = Field(default=None, max_length=8)
 
     @field_validator("target_section_type")
     @classmethod

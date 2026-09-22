@@ -352,6 +352,33 @@ class StyleReferenceRequest(StrictModel):
     # Optional expected fingerprint for CAS-style mismatch detection.
     expected_fingerprint: str | None = Field(default=None, min_length=16, max_length=128)
     mode: StyleConditioningMode = "prompt_features"
+    # Optional dimension mask (reference.features.v1). None = legacy whole summary;
+    # empty list is rejected at conditioning time as reference_feature_mask_empty.
+    dimensions: list[str] | None = Field(default=None, max_length=32)
+
+    @field_validator("dimensions")
+    @classmethod
+    def _validate_dimension_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        # Lazy import avoids cycles with reference_feature_schemas.
+        from app.reference_feature_schemas import DIMENSION_ID_SET
+
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            dim = str(item).strip()
+            if dim not in DIMENSION_ID_SET:
+                logger.debug(
+                    "Style reference dimension validation failed",
+                    extra={"field_names": ["dimensions"], "dimension": dim},
+                )
+                raise ValueError(f"unknown reference feature dimension: {dim}")
+            if dim in seen:
+                continue
+            seen.add(dim)
+            cleaned.append(dim)
+        return cleaned
 
     @model_validator(mode="after")
     def _require_source(self) -> StyleReferenceRequest:

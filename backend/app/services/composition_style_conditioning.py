@@ -243,6 +243,11 @@ def candidate_reference_similarity(
     return round(sim, 6), round(dist, 6)
 
 
+def load_style_reference_composition(style_reference: StyleReferenceRequest) -> CompositionV2:
+    """Public loader for style / reference-feature analysis (read-only V2)."""
+    return _load_reference_composition(style_reference)
+
+
 def _load_reference_composition(style_reference: StyleReferenceRequest) -> CompositionV2:
     if style_reference.composition is not None:
         try:

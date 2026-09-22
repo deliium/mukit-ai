@@ -315,8 +315,10 @@ class LLMMusicGenerationRequest(BaseModel):
     prompt: LLMPromptParameters
     selection: LLMModelSelection = Field(default_factory=LLMModelSelection)
     options: LLMGenerationOptions = Field(default_factory=LLMGenerationOptions)
-    # Optional musical reference for style conditioning (resolved by generate path when wired).
+    # Optional musical reference for style conditioning (resolved + injected on generate).
     style_reference: StyleReferenceRequest | None = None
+    # Multi-reference bindings (authoritative when non-empty; singular ignored with warning).
+    style_references: list[StyleReferenceRequest] | None = Field(default=None, max_length=8)
     # Optional durable composer profile soft conditioning (additive; never overrides prompt/hard).
     profile_id: str | None = Field(default=None, max_length=64)
     profile_strength: Literal["off", "light", "normal", "strong"] = "off"

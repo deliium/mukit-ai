@@ -226,6 +226,9 @@ class _GenerationState(TypedDict, total=False):
     composer_model_id: str | None
     profile_soft_fragment: str
     profile_merge_provenance: dict[str, Any]
+    reference_soft_fragment: str
+    reference_legacy_summary: str | None
+    reference_condition_provenance: dict[str, Any]
 
 
 def resolve_generation_pipeline(request: LLMMusicGenerationRequest) -> GenerationPipelineId:
@@ -249,14 +252,41 @@ async def generate_music_json(
     enforce_llm_generation_bounds(request)
     constraints = build_generation_constraints(request)
     # Additive soft fragment only — never mutates request.prompt / hard constraints.
+    from app.reference_feature_schemas import ReferenceFeatureError
     from app.services.composer_profile_merge import (
         merge_provenance_keys,
         resolve_profile_merge,
     )
+    from app.services.reference_feature_condition import (
+        combined_reference_soft_block,
+        merge_reference_feature_provenance,
+        resolve_reference_feature_conditioning,
+    )
+
+    def _attach_soft_provenance(base: dict[str, Any]) -> dict[str, Any]:
+        return merge_reference_feature_provenance(
+            merge_provenance_keys(base, profile_merge),
+            reference_condition,
+        )
 
     profile_merge = resolve_profile_merge(
         profile_id=getattr(request, "profile_id", None),
         profile_strength=getattr(request, "profile_strength", "off"),
+    )
+    try:
+        reference_condition = resolve_reference_feature_conditioning(
+            style_reference=getattr(request, "style_reference", None),
+            style_references=getattr(request, "style_references", None),
+        )
+    except ReferenceFeatureError as exc:
+        logger.warning(
+            "Reference feature conditioning failed at generate",
+            extra={"error_code": exc.code, "http_status": exc.http_status},
+        )
+        raise
+    reference_soft = combined_reference_soft_block(
+        masked_fragment=reference_condition.soft_fragment,
+        legacy_summary=reference_condition.legacy_feature_summary,
     )
     pipeline_id = resolve_generation_pipeline(request)
     seed = request.options.seed
@@ -353,8 +383,8 @@ async def generate_music_json(
                 },
                 generation_config=generation_config_from_request(request),
             )
-            return music, warnings, provider, validation, merge_provenance_keys(
-                provenance, profile_merge
+            return music, warnings, provider, validation, _attach_soft_provenance(
+                provenance
             )
         except FakeLLMError as exc:
             raise InvalidLLMOutputError(str(exc)) from exc
@@ -373,8 +403,8 @@ async def generate_music_json(
             music, warnings, provider, validation, provenance = await generate_fake_hybrid_music_json(
                 request, provider, constraints=constraints
             )
-            return music, warnings, provider, validation, merge_provenance_keys(
-                provenance, profile_merge
+            return music, warnings, provider, validation, _attach_soft_provenance(
+                provenance
             )
         except FakeLLMError as exc:
             raise InvalidLLMOutputError(str(exc)) from exc
@@ -417,6 +447,13 @@ async def generate_music_json(
         "composer_model_id": composer_model_id,
         "profile_soft_fragment": profile_merge.soft_fragment,
         "profile_merge_provenance": dict(profile_merge.provenance),
+        "reference_soft_fragment": reference_soft,
+        "reference_legacy_summary": reference_condition.legacy_feature_summary,
+        "reference_condition_provenance": {
+            "binding_count": reference_condition.binding_count,
+            "applied_dimension_ids": list(reference_condition.applied_dimension_ids),
+            "warning_codes": list(reference_condition.warning_codes),
+        },
     }
     logger.debug("Initialized staged composer state", extra=_stage_state_summary(state))
 
@@ -557,8 +594,8 @@ async def generate_music_json(
             composer_model_id=composer_model_id,
             generation_config=generation_config_from_request(request),
         )
-        return music, warnings, provider, validation_report, merge_provenance_keys(
-            provenance, profile_merge
+        return music, warnings, provider, validation_report, _attach_soft_provenance(
+            provenance
         )
 
 
@@ -3107,6 +3144,14 @@ def _profile_soft_block(state: _GenerationState) -> str:
     return f"\n{fragment}\n"
 
 
+def _reference_soft_block(state: _GenerationState) -> str:
+    """Additive masked/legacy reference soft fragment (after profile)."""
+    fragment = (state.get("reference_soft_fragment") or "").strip()
+    if not fragment:
+        return ""
+    return f"\n{fragment}\n"
+
+
 def _build_form_prompt(state: _GenerationState) -> str:
     request = state["request"]
     prompt = request.prompt
@@ -3165,6 +3210,7 @@ Rules:
 - requested sections hint: {json.dumps(sections) if sections else "design coherent structure totaling duration_bars"}
 - requested instruments: {", ".join(prompt.instruments)}
 {_profile_soft_block(state)}
+{_reference_soft_block(state)}
 """.strip()
 
 
@@ -3248,6 +3294,7 @@ Rules:
 - max {4} deployments; set truncated=true if you would exceed the bound
 - soft preferences: genre={request.prompt.genre}, mood={request.prompt.mood}, complexity={request.prompt.complexity}
 {_profile_soft_block(state)}
+{_reference_soft_block(state)}
 """.strip()
 
 
@@ -3280,6 +3327,7 @@ Rules:
 - secondary dominants, borrowed chords, and chromatic color are allowed when the aggregate tonic stays {locked_key}
 - soft preferences: genre={request.prompt.genre}, mood={request.prompt.mood}, complexity={request.prompt.complexity}
 {_profile_soft_block(state)}
+{_reference_soft_block(state)}
 """.strip()
 
 

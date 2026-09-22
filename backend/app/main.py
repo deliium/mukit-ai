@@ -26,6 +26,10 @@ from .routers.ai_agents import router as ai_agents_router
 from .routers.embeddings import router as embeddings_router
 from .routers.composer_profiles import router as composer_profiles_router
 from .routers.reference_features import router as reference_features_router
+from .reference_feature_schemas import (
+    ReferenceFeatureError,
+    map_reference_feature_error_to_http,
+)
 from .music_transformer.settings import load_music_transformer_settings
 from .schemas import (
     Composition,
@@ -391,6 +395,13 @@ async def generate_llm_music_json(request: LLMMusicGenerationRequest):
             extra={"code": "oversized_generation_request", "detail": str(exc)[:200]},
         )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ReferenceFeatureError as exc:
+        status, detail = map_reference_feature_error_to_http(exc)
+        logger.warning(
+            "LLM generation reference feature error",
+            extra={"error_code": exc.code, "http_status": status},
+        )
+        raise HTTPException(status_code=status, detail=detail) from exc
     except NoLLMProviderConfiguredError as exc:
         logger.warning("LLM provider unavailable", extra={"reason": "no_configured_providers"})
         raise HTTPException(status_code=503, detail=str(exc)) from exc
