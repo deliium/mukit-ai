@@ -16,6 +16,7 @@ from .routers.imports import router as imports_router
 from .routers.transcription import router as transcription_router
 from .routers.neural_audio import router as neural_audio_router
 from .routers.analysis import router as analysis_router
+from .routers.critique import router as critique_router
 from .routers.motifs import router as motifs_router
 from .routers.harmony import router as harmony_router
 from .routers.composition_development import router as composition_development_router
@@ -110,6 +111,7 @@ app.include_router(imports_router)
 app.include_router(transcription_router)
 app.include_router(neural_audio_router)
 app.include_router(analysis_router)
+app.include_router(critique_router)
 app.include_router(motifs_router)
 app.include_router(harmony_router)
 app.include_router(composition_development_router)

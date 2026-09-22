@@ -3,6 +3,12 @@ import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { listAnalysisSectionOptions } from '../utils/compositionAnalysis.js';
+import {
+  CRITIQUE_STRATA,
+  CRITIQUE_STRATUM_LABELS,
+  filterFindingsByStratum,
+  formatFindingRange,
+} from '../utils/compositionCritique.js';
 
 const Root = styled.div`
   display: flex;
@@ -936,7 +942,88 @@ const CompositionAnalysisPanel = () => {
           </WarningList>
         </div>
       ) : null}
+
+      <CritiqueSection />
     </Root>
+  );
+};
+
+const CritiqueSection = () => {
+  const critiqueResult = useMusicStore((s) => s.critiqueResult);
+  const critiqueStatus = useMusicStore((s) => s.critiqueStatus);
+  const critiqueError = useMusicStore((s) => s.critiqueError);
+  const stratumFilter = useMusicStore((s) => s.critiqueStratumFilter);
+  const setFilter = useMusicStore((s) => s.setCritiqueStratumFilter);
+  const requestCritique = useMusicStore((s) => s.requestCritique);
+  const findings = filterFindingsByStratum(critiqueResult?.findings, stratumFilter);
+  const busy = critiqueStatus === 'loading';
+
+  return (
+    <div data-testid="critique-findings-section">
+      <HeaderRow>
+        <div>
+          <CardTitle as="h5">Critique findings</CardTitle>
+          <Hint>
+            Structured evaluation (hard / technical / stylistic / subjective).
+            Does not modify the composition.
+          </Hint>
+        </div>
+        <button
+          type="button"
+          onClick={() => requestCritique({ force: true, reason: 'analysis-panel' })}
+          disabled={busy}
+        >
+          {busy ? 'Evaluating…' : 'Evaluate'}
+        </button>
+      </HeaderRow>
+      {critiqueError ? (
+        <Hint role="alert">{critiqueError}</Hint>
+      ) : null}
+      {critiqueResult ? (
+        <>
+          <Hint>
+            Recommendation: <strong>{critiqueResult.recommendation}</strong>
+            {critiqueResult.engine_version
+              ? ` · ${critiqueResult.engine_version}`
+              : ''}
+          </Hint>
+          <ScopeGroup>
+            <label htmlFor="critique-stratum-filter">Stratum</label>
+            <select
+              id="critique-stratum-filter"
+              value={stratumFilter || 'all'}
+              onChange={(e) => setFilter(e.target.value)}
+            >
+              <option value="all">All</option>
+              {CRITIQUE_STRATA.map((s) => (
+                <option key={s} value={s}>{CRITIQUE_STRATUM_LABELS[s] || s}</option>
+              ))}
+            </select>
+          </ScopeGroup>
+          {findings.length ? (
+            <WarningList data-testid="critique-findings" aria-label="Critique findings">
+              {findings.map((finding, index) => (
+                <WarningItem
+                  key={`${finding.code}-${finding.finding_id || index}`}
+                  $severity={finding.severity || 'info'}
+                >
+                  <strong>{finding.code}</strong>
+                  {' · '}
+                  {CRITIQUE_STRATUM_LABELS[finding.stratum] || finding.stratum}
+                  {formatFindingRange(finding) ? ` · ${formatFindingRange(finding)}` : ''}
+                  <div>{finding.explanation || finding.code}</div>
+                  {finding.suggested_action ? (
+                    <div><em>Suggested:</em> {finding.suggested_action}</div>
+                  ) : null}
+                </WarningItem>
+              ))}
+            </WarningList>
+          ) : (
+            <Hint>No findings in this stratum.</Hint>
+          )}
+        </>
+      ) : null}
+    </div>
   );
 };
 

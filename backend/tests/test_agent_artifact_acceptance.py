@@ -154,6 +154,17 @@ def test_spine_apply_binds_artifact_roles(project_db):
     assert roles["critique"]["artifact_id"] == role_map["critique"]["artifact_id"]
     assert roles["revision_plan"] is None
 
+    # Extended critique payloads remain promote-valid (findings optional / structured).
+    critique_art = next(a for a in result.artifact_log if a.content_type == "agent.critique.v1")
+    critique_payload = critique_art.payload or {}
+    assert critique_payload.get("schema_version") == "agent.critique.v1"
+    assert "tracks" not in critique_payload
+    findings = critique_payload.get("findings") or []
+    assert isinstance(findings, list)
+    for finding in findings:
+        assert "tracks" not in finding
+        assert "events" not in finding
+
 
 def test_ai_agents_forbid_workspace_imports():
     package = Path(__file__).resolve().parents[1] / "app" / "ai_agents"

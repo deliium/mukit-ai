@@ -2,6 +2,7 @@ import React from 'react';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
 import { isCanonicalComposition } from '../utils/musicJsonValidation.js';
+import { critiqueSummaryFromArtifact } from '../utils/compositionCritique.js';
 
 const Panel = styled.section`
   display: flex;
@@ -75,6 +76,12 @@ const MultiAgentPanel = () => {
 
   const canPreview = isCanonicalComposition(composition);
   const loading = status === 'loading';
+  const critiqueSummary = (() => {
+    const log = candidate?.artifact_log || candidate?.artifactLog || [];
+    if (!Array.isArray(log)) return null;
+    const art = log.find((a) => a?.content_type === 'agent.critique.v1');
+    return critiqueSummaryFromArtifact(art);
+  })();
 
   return (
     <Panel data-testid="multi-agent-panel">
@@ -114,6 +121,17 @@ const MultiAgentPanel = () => {
         </Button>
       </Row>
       {error ? <ErrorText>{error}</ErrorText> : null}
+      {critiqueSummary ? (
+        <Hint data-testid="multi-agent-critique-summary">
+          Critique: {critiqueSummary.recommendation}
+          {critiqueSummary.findings?.length
+            ? ` · ${critiqueSummary.findings.length} finding(s)`
+            : ''}
+          {critiqueSummary.stratum_counts?.stylistic
+            ? ` · stylistic ${critiqueSummary.stratum_counts.stylistic}`
+            : ''}
+        </Hint>
+      ) : null}
       {candidate ? (
         <Meta>
           {JSON.stringify(

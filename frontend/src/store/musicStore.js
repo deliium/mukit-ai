@@ -7,6 +7,7 @@ import {
   computeEmbedding,
   DevelopmentApiError,
   EmbeddingApiError,
+  evaluateCritique,
   importMidi,
   importMusicXml,
   loadArrangementInstruments,
@@ -52,6 +53,7 @@ import {
   SIMILARITY_DEFAULT_TOP_K,
 } from '../utils/compositionEmbeddingReference.js';
 import { listAnalysisSectionOptions } from '../utils/compositionAnalysis.js';
+import { normalizeCritiqueResult } from '../utils/compositionCritique.js';
 import {
   activityLevelsMateriallyChanged,
   buildDefaultMixerControls,
@@ -1106,6 +1108,11 @@ export const useMusicStore = create((set, get) => ({
   analysisWarnings: [],
   analysisTabVisible: false,
 
+  critiqueResult: null,
+  critiqueStatus: 'idle',
+  critiqueError: '',
+  critiqueStratumFilter: 'all',
+
   ...initialHarmonyUiState,
   ...initialReharmonizePreviewState,
   multiAgentStatus: 'idle',
@@ -1993,6 +2000,74 @@ export const useMusicStore = create((set, get) => ({
     console.debug('[musicStore] Analysis state reset');
     cancelAnalysisLifecycle();
     set(clearedAnalysisState({ preserveScope: true }));
+  },
+
+  setCritiqueStratumFilter: (filter) => {
+    set({ critiqueStratumFilter: filter || 'all' });
+  },
+
+  resetCritique: () => {
+    set({
+      critiqueResult: null,
+      critiqueStatus: 'idle',
+      critiqueError: '',
+    });
+  },
+
+  requestCritique: async ({
+    force = false,
+    includeModelCritique = false,
+    reason = 'request',
+  } = {}) => {
+    const state = get();
+    const composition = state.editedMusicJson || state.generatedMusicJson;
+    if (!composition || !isCanonicalComposition(composition)) {
+      set({
+        critiqueStatus: 'error',
+        critiqueError: 'Critique requires a valid composition.v2 document',
+      });
+      return null;
+    }
+    if (!force && state.critiqueStatus === 'loading') {
+      return null;
+    }
+    console.debug('[musicStore] Critique evaluate started', { reason, includeModelCritique });
+    set({ critiqueStatus: 'loading', critiqueError: '' });
+    try {
+      let scope = { kind: 'composition' };
+      try {
+        scope = buildAnalysisRequestScope({
+          analysisScope: state.analysisScope,
+          composition,
+          sectionKey: state.analysisSelectedSectionKey,
+          trackId: state.pianoRollTrackId,
+        });
+      } catch {
+        scope = { kind: 'composition' };
+      }
+      const response = await evaluateCritique(composition, {
+        scope,
+        includeModelCritique,
+      });
+      const normalized = normalizeCritiqueResult(response);
+      set({
+        critiqueResult: normalized,
+        critiqueStatus: 'success',
+        critiqueError: '',
+      });
+      return normalized;
+    } catch (error) {
+      const message = error?.message || 'Critique evaluate failed';
+      console.warn('[musicStore] Critique evaluate failed', {
+        code: error?.code,
+        message,
+      });
+      set({
+        critiqueStatus: 'error',
+        critiqueError: message,
+      });
+      return null;
+    }
   },
 
   setEditedMusicJson: (editedMusicJson) => {

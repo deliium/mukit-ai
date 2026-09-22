@@ -1013,6 +1013,71 @@ export async function analyzeComposition(composition, scope = { kind: 'compositi
   }
 }
 
+/**
+ * POST /critique/evaluate — session Music Evaluation Engine (non-mutating).
+ */
+export async function evaluateCritique(composition, options = {}) {
+  let normalized;
+  try {
+    normalized = normalizeApiComposition(composition, { context: 'critique-request' });
+  } catch (error) {
+    if (error instanceof CompositionVersionError) {
+      throw new AnalysisApiError(error.message, {
+        status: null,
+        code: 'critique_invalid_composition',
+        details: { schemaVersion: error.schemaVersion, reason: error.code },
+      });
+    }
+    throw error;
+  }
+  validateCanonicalForApi(normalized, { action: 'composition critique' });
+  if (normalized.schema_version !== 'composition.v2') {
+    throw new AnalysisApiError('Critique accepts only composition.v2 documents', {
+      code: 'critique_invalid_composition',
+    });
+  }
+
+  const scope = options.scope && typeof options.scope === 'object'
+    ? options.scope
+    : { kind: 'composition' };
+  const body = {
+    composition: normalized,
+    scope,
+    include_model_critique: Boolean(options.includeModelCritique),
+    revise_on_technical: Boolean(options.reviseOnTechnical),
+  };
+  if (options.requestedClimaxSectionIndex != null) {
+    body.requested_climax_section_index = options.requestedClimaxSectionIndex;
+  }
+  if (typeof options.briefExcerpt === 'string' && options.briefExcerpt.trim()) {
+    body.brief_excerpt = options.briefExcerpt.trim().slice(0, 200);
+  }
+
+  console.debug('[musicApi] Critique evaluate request', {
+    scopeKind: scope.kind,
+    includeModelCritique: body.include_model_critique,
+  });
+
+  try {
+    const response = await axios.post('/critique/evaluate', body);
+    const data = response.data;
+    if (!data || typeof data !== 'object' || !data.critique) {
+      throw new AnalysisApiError('Critique response missing critique payload', {
+        code: 'critique_payload_rejected',
+      });
+    }
+    return data;
+  } catch (error) {
+    if (error instanceof AnalysisApiError) throw error;
+    const status = error.response?.status ?? null;
+    const detail = error.response?.data?.detail;
+    const code = (detail && detail.code) || 'critique_invalid_composition';
+    const message = (detail && detail.message) || error.message || 'Critique evaluate failed';
+    console.warn('[musicApi] Critique evaluate failed', { status, code });
+    throw new AnalysisApiError(message, { status, code, details: detail?.details || null });
+  }
+}
+
 function buildAnalysisRequestScopeFromPayload(composition, scope) {
   if (!scope || typeof scope !== 'object') {
     return { kind: 'composition' };
