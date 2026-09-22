@@ -98,6 +98,7 @@ import {
   aiCandidateLogFields,
   aiRuntimeFieldsFromResponse,
   buildAiCandidateEnvelope,
+  buildArtifactRoleMapFromLog,
   buildHistoryAiProvenance,
   captureAiRequestContext,
   detectAiRequestStale,
@@ -105,6 +106,7 @@ import {
   makeAiCandidateId,
   toHistoryAiWarningCodes,
   buildGenerationMetaFromCandidate,
+  validateArtifactRoleMap,
 } from '../utils/compositionCandidateLifecycle.js';
 import { compareCompositions } from '../utils/compositionVersionComparison.js';
 import {
@@ -9881,13 +9883,22 @@ export const useMusicStore = create((set, get) => ({
       const sourceFingerprint = await compositionEditFingerprint(source);
       const candidateFingerprint = response.candidate_fingerprint
         || await compositionEditFingerprint(response.candidate);
+      const roleMap = buildArtifactRoleMapFromLog(response.artifact_log || [], {
+        requireRevisionPlan: response.recommendation === 'revise',
+      });
+      const generationParameters = {
+        ...(response.generation_parameters && typeof response.generation_parameters === 'object'
+          ? response.generation_parameters
+          : {}),
+        artifact_role_map: roleMap,
+      };
       const envelope = buildAiCandidateEnvelope({
         candidateId: `multi-agent-${Date.now()}`,
         operationType: 'multi-agent-apply',
         composition: response.candidate,
         sourceFingerprint: response.source_fingerprint || sourceFingerprint,
         candidateFingerprint,
-        generationParameters: response.generation_parameters || null,
+        generationParameters,
         warnings: response.warning_codes || [],
         extras: {
           agent_sequence: response.agent_sequence || [],
@@ -9895,6 +9906,7 @@ export const useMusicStore = create((set, get) => ({
           recommendation: response.recommendation || null,
           artifact_log: response.artifact_log || [],
           pipeline_id: response.pipeline_id || 'agent_spine_v1',
+          artifact_role_map: roleMap,
         },
       });
       // Discard competing session candidates when multi-agent candidate is set.
@@ -9941,11 +9953,35 @@ export const useMusicStore = create((set, get) => ({
       return false;
     }
     const prepared = candidate.composition;
+    const roleMap = candidate.artifact_role_map
+      || candidate.generation_parameters?.artifact_role_map
+      || buildArtifactRoleMapFromLog(candidate.artifact_log || [], {
+        requireRevisionPlan: candidate.recommendation === 'revise',
+      });
+    const roleCheck = validateArtifactRoleMap(roleMap, {
+      requireRevisionPlan: candidate.recommendation === 'revise',
+    });
+    if (!roleCheck.ok) {
+      set({
+        multiAgentStatus: 'error',
+        multiAgentError: `Missing artifact roles for Apply: ${roleCheck.missing.join(', ')}`,
+      });
+      return false;
+    }
+    const generationParameters = {
+      ...(candidate.generation_parameters && typeof candidate.generation_parameters === 'object'
+        ? candidate.generation_parameters
+        : {}),
+      artifact_role_map: roleMap,
+      artifact_envelopes: Array.isArray(candidate.artifact_log)
+        ? candidate.artifact_log.slice(0, 64)
+        : [],
+    };
     const historySnapshot = {
       provider: candidate.provider,
       model: candidate.model,
       model_id: candidate.model_id,
-      generation_parameters: candidate.generation_parameters,
+      generation_parameters: generationParameters,
     };
     const localStatePatch = {
       multiAgentCandidate: null,
@@ -9957,7 +9993,7 @@ export const useMusicStore = create((set, get) => ({
       model: candidate.model || null,
       model_id: candidate.model_id || null,
       warning_codes: toHistoryAiWarningCodes(candidate.warnings),
-      generation_parameters: candidate.generation_parameters || null,
+      generation_parameters: generationParameters,
     };
 
     if (!state.currentProjectId) {

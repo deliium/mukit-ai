@@ -6,8 +6,21 @@ import logging
 from typing import Any
 
 from app.ai_agents.agents.common import BaseMusicAgent
+from app.ai_agents.artifact_schemas import (
+    AgentFormPlanV1,
+    AgentOrchestrationPlanV1,
+    AgentPerformancePlanV1,
+    AgentProductionPlanV1,
+    AgentRenderPlanV1,
+    FormPlanSection,
+)
 from app.ai_agents.schemas import (
     AGENT_CONTENT_TYPES,
+    AGENT_FORM_PLAN_SCHEMA,
+    AGENT_ORCHESTRATION_PLAN_SCHEMA,
+    AGENT_PERFORMANCE_PLAN_SCHEMA,
+    AGENT_PRODUCTION_PLAN_SCHEMA,
+    AGENT_RENDER_PLAN_SCHEMA,
     AgentArtifactKind,
     AgentArtifactV1,
     AgentRunRequest,
@@ -17,10 +30,10 @@ from app.ai_agents.schemas import (
 logger = logging.getLogger(__name__)
 
 _STUB_CONTENT: dict[str, str] = {
-    "structure_form": "composition.plan.v1",
-    "orchestration": "orchestration.recommendation",
-    "performance_expression": "expression.recommendation",
-    "production": "production.notes",
+    "structure_form": AGENT_FORM_PLAN_SCHEMA,
+    "orchestration": AGENT_ORCHESTRATION_PLAN_SCHEMA,
+    "performance_expression": AGENT_PERFORMANCE_PLAN_SCHEMA,
+    "production": AGENT_PRODUCTION_PLAN_SCHEMA,
 }
 
 _STUB_SLOT: dict[str, str] = {
@@ -29,6 +42,26 @@ _STUB_SLOT: dict[str, str] = {
     "performance_expression": "expression_artifact",
     "production": "production_artifact",
 }
+
+
+def _stub_payload(agent_id: str, content_type: str) -> dict[str, Any]:
+    """Minimal valid typed payloads for non-spine stubs."""
+    if content_type == AGENT_FORM_PLAN_SCHEMA:
+        return AgentFormPlanV1(
+            sections=[FormPlanSection(label="A", start_bar=1, bar_count=4)],
+            comment=f"stub_{agent_id}",
+        ).model_dump(mode="json")
+    if content_type == AGENT_ORCHESTRATION_PLAN_SCHEMA:
+        return AgentOrchestrationPlanV1(comment=f"stub_{agent_id}").model_dump(mode="json")
+    if content_type == AGENT_PERFORMANCE_PLAN_SCHEMA:
+        return AgentPerformancePlanV1(expression_notes=f"stub_{agent_id}").model_dump(
+            mode="json"
+        )
+    if content_type == AGENT_PRODUCTION_PLAN_SCHEMA:
+        return AgentProductionPlanV1(mix_notes=f"stub_{agent_id}").model_dump(mode="json")
+    if content_type == AGENT_RENDER_PLAN_SCHEMA:
+        return AgentRenderPlanV1(comment=f"stub_{agent_id}").model_dump(mode="json")
+    return {"schema": content_type, "note": f"stub_{agent_id}", "mutates_composition": False}
 
 
 class StubAgent(BaseMusicAgent):
@@ -40,16 +73,10 @@ class StubAgent(BaseMusicAgent):
             content_type = "agent.recommendation.v1"
         kind = (
             AgentArtifactKind.PLAN
-            if content_type == "composition.plan.v1"
+            if content_type.endswith("_plan.v1") or content_type == "composition.plan.v1"
             else AgentArtifactKind.RECOMMENDATION
         )
-        payload: dict[str, Any] = {
-            "schema": content_type,
-            "note": f"stub_{self._descriptor.id}",
-            "mutates_composition": False,
-        }
-        if self._descriptor.id == "production":
-            payload["neural_job_ref"] = None
+        payload = _stub_payload(self._descriptor.id, content_type)
         art = AgentArtifactV1(
             kind=kind,
             producer_agent_id=self._descriptor.id,
@@ -60,9 +87,12 @@ class StubAgent(BaseMusicAgent):
         )
         slot = _STUB_SLOT.get(self._descriptor.id)
         slots = {slot: art} if slot else {}
-        logger.debug(
+        logger.info(
             "Stub agent run",
-            extra={"agent_id": self._descriptor.id, "content_type": content_type},
+            extra={
+                "agent_id": self._descriptor.id,
+                "content_types": [content_type],
+            },
         )
         return AgentRunResult(
             agent_id=self._descriptor.id,

@@ -479,6 +479,76 @@ def _scope_payloads(
     return ranges_json, tracks_json, meta
 
 
+def _promote_multi_agent_artifacts(
+    conn: Any,
+    *,
+    project_id: str,
+    revision_id: str,
+    ai: AiProvenance | None,
+    summary: dict[str, Any],
+) -> None:
+    """Promote typed artifacts + link roles in the same transaction as Apply."""
+    from app.ai_agents.errors import AgentError
+    from app.ai_agents.schemas import AgentArtifactV1
+    from app.services.agent_artifact_workspace import (
+        promote_and_link_revision,
+        summarize_revision_artifacts,
+    )
+    from app.services.artifact_role_map import validate_artifact_role_map
+
+    gp: dict[str, Any] = {}
+    if ai is not None and isinstance(ai.generation_parameters, dict):
+        gp = dict(ai.generation_parameters)
+    role_map_raw = gp.get("artifact_role_map")
+    envelopes_raw = gp.get("artifact_envelopes") or []
+    require_revision = False
+    if isinstance(role_map_raw, dict) and role_map_raw.get("revision_plan"):
+        require_revision = True
+    try:
+        role_map = validate_artifact_role_map(
+            role_map_raw if isinstance(role_map_raw, dict) else None,
+            require_revision_plan=require_revision,
+        )
+        envelopes: list[AgentArtifactV1] = []
+        if isinstance(envelopes_raw, list):
+            for item in envelopes_raw[:64]:
+                if isinstance(item, dict):
+                    envelopes.append(AgentArtifactV1.model_validate(item))
+        promote_and_link_revision(
+            project_id,
+            revision_id,
+            role_map,
+            envelopes,
+            conn=conn,
+        )
+        summary["ai_artifacts"] = summarize_revision_artifacts(revision_id, conn=conn)
+        conn.execute(
+            "UPDATE project_revisions SET summary_json = ? WHERE id = ? AND project_id = ?",
+            (
+                json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
+                revision_id,
+                project_id,
+            ),
+        )
+        logger.info(
+            "Multi-agent artifact promote complete",
+            extra={
+                "project_id_prefix": project_id[:12],
+                "revision_id_prefix": revision_id[:12],
+                "role_keys": sorted(k for k, v in role_map.items() if v),
+            },
+        )
+    except AgentError:
+        logger.error(
+            "Multi-agent artifact promote failed",
+            extra={
+                "project_id_prefix": project_id[:12],
+                "revision_id_prefix": revision_id[:12],
+            },
+        )
+        raise
+
+
 def commit_revision(
     project_id: str,
     request: DurableCommitRequest,
@@ -535,6 +605,18 @@ def commit_revision(
             affected_track_ids_json=tracks_json,
             summary_json=json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
         )
+        if (
+            request.operation_type == RevisionOperationType.MULTI_AGENT_APPLY
+            and result.revision_created
+            and result.head_revision_id
+        ):
+            _promote_multi_agent_artifacts(
+                conn,
+                project_id=project_id,
+                revision_id=result.head_revision_id,
+                ai=request.ai,
+                summary=summary,
+            )
         from app.services.composition_embedding_invalidation import (
             maybe_invalidate_project_embeddings,
         )
@@ -906,6 +988,17 @@ def apply_as_branch_command(
             affected_track_ids_json=tracks_json,
             summary_json=json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
         )
+        if (
+            request.operation_type == RevisionOperationType.MULTI_AGENT_APPLY
+            and result.head_revision_id
+        ):
+            _promote_multi_agent_artifacts(
+                conn,
+                project_id=project_id,
+                revision_id=result.head_revision_id,
+                ai=request.ai,
+                summary=summary,
+            )
         from app.services.composition_embedding_invalidation import (
             maybe_invalidate_project_embeddings,
         )

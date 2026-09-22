@@ -301,7 +301,8 @@ export function formatRevisionProvenanceSummary(summary) {
   const seed = gp.seed ?? null;
   const stages = Array.isArray(gp.stages) ? gp.stages : [];
   const modelIds = stages.map((stage) => stage?.model_id).filter(Boolean);
-  if (!pipeline && seed == null && !modelIds.length && !summary.model_id) {
+  const artifactLine = formatRevisionAiArtifactSummary(summary);
+  if (!pipeline && seed == null && !modelIds.length && !summary.model_id && !artifactLine) {
     return null;
   }
   const parts = [];
@@ -316,7 +317,103 @@ export function formatRevisionProvenanceSummary(summary) {
   if (seed != null) {
     parts.push(`seed ${seed}`);
   }
+  if (artifactLine) {
+    parts.push(artifactLine);
+  }
   return parts.join(' · ') || null;
+}
+
+/** Product role labels for Versions UI (never raw slot names). */
+export const AI_ARTIFACT_ROLE_LABELS = {
+  brief: 'Brief',
+  harmony_plan: 'Harmony',
+  motif_plan: 'Motif',
+  arrangement_plan: 'Arrangement',
+  critique: 'Critique',
+  revision_plan: 'Revision plan',
+};
+
+const ROLE_CONTENT_TYPES = {
+  brief: 'agent.brief.v1',
+  harmony_plan: 'agent.harmony_plan.v1',
+  motif_plan: 'agent.motif_plan.v1',
+  arrangement_plan: 'agent.arrangement_plan.v1',
+  critique: 'agent.critique.v1',
+  revision_plan: 'agent.revision_plan.v1',
+};
+
+/**
+ * Build generation_parameters.artifact_role_map from preview artifact_log.
+ * @param {Array<object>|null|undefined} artifactLog
+ * @param {{ requireRevisionPlan?: boolean }} [options]
+ * @returns {object}
+ */
+export function buildArtifactRoleMapFromLog(artifactLog, options = {}) {
+  const log = Array.isArray(artifactLog) ? artifactLog : [];
+  const byType = new Map();
+  for (const entry of log) {
+    if (!entry || typeof entry !== 'object') continue;
+    const contentType = String(entry.content_type || '');
+    const artifactId = String(entry.artifact_id || '');
+    if (!contentType || !artifactId) continue;
+    // Prefer last matching typed plan of each role.
+    byType.set(contentType, { artifact_id: artifactId, content_type: contentType });
+  }
+  const roleMap = {};
+  for (const [role, contentType] of Object.entries(ROLE_CONTENT_TYPES)) {
+    roleMap[role] = byType.get(contentType) || null;
+  }
+  if (!options.requireRevisionPlan) {
+    // revision_plan remains optional on approve path.
+  }
+  return roleMap;
+}
+
+/**
+ * Validate spine Apply role map presence (client-side mirror of server rules).
+ * @param {object|null|undefined} roleMap
+ * @param {{ requireRevisionPlan?: boolean }} [options]
+ * @returns {{ ok: boolean, missing: string[] }}
+ */
+export function validateArtifactRoleMap(roleMap, options = {}) {
+  const required = ['brief', 'harmony_plan', 'motif_plan', 'arrangement_plan', 'critique'];
+  if (options.requireRevisionPlan) {
+    required.push('revision_plan');
+  }
+  const missing = [];
+  const map = roleMap && typeof roleMap === 'object' ? roleMap : {};
+  for (const role of required) {
+    const entry = map[role];
+    if (!entry || !entry.artifact_id || !entry.content_type) {
+      missing.push(role);
+    }
+  }
+  return { ok: missing.length === 0, missing };
+}
+
+/**
+ * Human-readable AI artifact role summary for Versions panel.
+ * @param {object|null|undefined} summary
+ * @returns {string|null}
+ */
+export function formatRevisionAiArtifactSummary(summary) {
+  if (!summary || typeof summary !== 'object') {
+    return null;
+  }
+  const block = summary.ai_artifacts && typeof summary.ai_artifacts === 'object'
+    ? summary.ai_artifacts
+    : null;
+  const roles = block?.roles && typeof block.roles === 'object' ? block.roles : null;
+  if (!roles) {
+    return null;
+  }
+  const labels = [];
+  for (const [role, label] of Object.entries(AI_ARTIFACT_ROLE_LABELS)) {
+    if (roles[role] && roles[role].artifact_id) {
+      labels.push(label);
+    }
+  }
+  return labels.length ? `AI: ${labels.join(', ')}` : null;
 }
 
 /**

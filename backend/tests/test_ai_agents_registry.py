@@ -62,6 +62,8 @@ def test_no_project_db_imports_in_ai_agents_package():
         "from app.services.project_store",
         "import project_store",
         "from app.services.project_history",
+        "agent_artifact_workspace",
+        "agent_artifact_settings",
         'os.environ.get("PROJECT_DB_PATH"',
         "os.environ['PROJECT_DB_PATH']",
         'os.environ.get("PROJECT_DB_PATH"',

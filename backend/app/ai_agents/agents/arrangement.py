@@ -6,6 +6,15 @@ import logging
 from typing import Any
 
 from app.ai_agents.agents.common import BaseMusicAgent, selection_str
+from app.ai_agents.agents.typed_emit import (
+    AGENT_ARRANGEMENT_PLAN_SCHEMA,
+    AGENT_COMPOSITION_PATCH_SCHEMA,
+    arrangement_plan_from_composition,
+    composition_patch_payload,
+    depends_on_edges,
+    make_plan_artifact,
+    parent_ids_from_context,
+)
 from app.ai_agents.progressive_realize import RealizeService, apply_realized_composition
 from app.ai_agents.schemas import (
     AgentArtifactKind,
@@ -251,11 +260,58 @@ class ArrangementAgent(BaseMusicAgent):
             ),
             warning_codes=warning_codes,
         )
+        form = request.context.structure_plan
+        harmony = request.context.harmony_artifact
+        arrangement_plan = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_ARRANGEMENT_PLAN_SCHEMA,
+            payload=arrangement_plan_from_composition(working_draft_update or draft),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance(
+                "agent_arrangement_propose", runtime="arrangement_service"
+            ),
+            parent_artifact_ids=parent_ids_from_context(
+                request.context, "structure_plan", "harmony_artifact", "melody_artifact"
+            ),
+            depends_on=depends_on_edges(form, harmony),
+        )
+        patch = make_plan_artifact(
+            kind=AgentArtifactKind.CANDIDATE_PATCH,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_COMPOSITION_PATCH_SCHEMA,
+            payload=composition_patch_payload(
+                realize_service="arrangement_candidate",
+                op_refs=["reinstrument_or_preview"],
+                recipe="arrangement_service",
+                source_fingerprint=request.context.source_fingerprint,
+            ),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance(
+                "agent_arrangement_propose", runtime="arrangement_service"
+            ),
+            parent_artifact_ids=[arrangement_plan.artifact_id],
+            depends_on=depends_on_edges(arrangement_plan),
+            warning_codes=warning_codes,
+        )
+        logger.info(
+            "Arrangement typed plans produced",
+            extra={
+                "agent_id": self._descriptor.id,
+                "content_types": [
+                    arrangement_plan.content_type,
+                    patch.content_type,
+                    art.content_type,
+                ],
+            },
+        )
         return AgentRunResult(
             agent_id=self._descriptor.id,
             operation=request.operation,
-            artifacts=[art],
-            updated_context_slots={"arrangement_candidate": art},
+            artifacts=[arrangement_plan, patch, art],
+            updated_context_slots={
+                "arrangement_candidate": arrangement_plan,
+            },
             working_draft_update=working_draft_update,
             provenance_stage=self._stage(
                 "agent_arrangement_propose", runtime="arrangement_service"

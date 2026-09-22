@@ -6,6 +6,15 @@ import logging
 from typing import Any
 
 from app.ai_agents.agents.common import BaseMusicAgent, selection_str
+from app.ai_agents.agents.typed_emit import (
+    AGENT_COMPOSITION_PATCH_SCHEMA,
+    AGENT_MOTIF_PLAN_SCHEMA,
+    composition_patch_payload,
+    depends_on_edges,
+    make_plan_artifact,
+    motif_plan_from_composition,
+    parent_ids_from_context,
+)
 from app.ai_agents.progressive_realize import RealizeService, apply_realized_composition
 from app.ai_agents.schemas import (
     AgentArtifactKind,
@@ -101,11 +110,48 @@ class MelodyMotifAgent(BaseMusicAgent):
             provenance=self._provenance("agent_melody_motif_propose", runtime="motif_service"),
             warning_codes=warning_codes,
         )
+        brief = request.context.brief
+        harmony = request.context.harmony_artifact
+        motif_plan = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_MOTIF_PLAN_SCHEMA,
+            payload=motif_plan_from_composition(working_draft_update or draft),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_melody_motif_propose", runtime="motif_service"),
+            parent_artifact_ids=parent_ids_from_context(
+                request.context, "brief", "harmony_artifact"
+            ),
+            depends_on=depends_on_edges(brief, harmony),
+        )
+        patch = make_plan_artifact(
+            kind=AgentArtifactKind.CANDIDATE_PATCH,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_COMPOSITION_PATCH_SCHEMA,
+            payload=composition_patch_payload(
+                realize_service="motif_apply",
+                op_refs=["motif_or_passthrough"],
+                recipe="motif_service",
+                source_fingerprint=request.context.source_fingerprint,
+            ),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_melody_motif_propose", runtime="motif_service"),
+            parent_artifact_ids=[motif_plan.artifact_id],
+            depends_on=depends_on_edges(motif_plan),
+            warning_codes=warning_codes,
+        )
+        logger.info(
+            "Melody/motif typed plans produced",
+            extra={
+                "agent_id": self._descriptor.id,
+                "content_types": [motif_plan.content_type, patch.content_type, art.content_type],
+            },
+        )
         return AgentRunResult(
             agent_id=self._descriptor.id,
             operation=request.operation,
-            artifacts=[art],
-            updated_context_slots={"melody_artifact": art},
+            artifacts=[motif_plan, patch, art],
+            updated_context_slots={"melody_artifact": motif_plan},
             working_draft_update=working_draft_update,
             provenance_stage=self._stage("agent_melody_motif_propose", runtime="motif_service"),
             warning_codes=warning_codes,

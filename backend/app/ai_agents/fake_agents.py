@@ -17,8 +17,33 @@ from app.ai_agents.progressive_realize import (
     RealizeService,
     apply_realized_composition,
 )
+from app.ai_agents.artifact_schemas import (
+    AgentFormPlanV1,
+    AgentOrchestrationPlanV1,
+    AgentPerformancePlanV1,
+    AgentProductionPlanV1,
+    FormPlanSection,
+)
+from app.ai_agents.agents.typed_emit import (
+    AGENT_ARRANGEMENT_PLAN_SCHEMA,
+    AGENT_COMPOSITION_PATCH_SCHEMA,
+    AGENT_FORM_PLAN_SCHEMA,
+    AGENT_HARMONY_PLAN_SCHEMA,
+    AGENT_MOTIF_PLAN_SCHEMA,
+    arrangement_plan_from_composition,
+    composition_patch_payload,
+    depends_on_edges,
+    form_plan_from_composition,
+    harmony_plan_from_composition,
+    make_plan_artifact,
+    motif_plan_from_composition,
+)
 from app.ai_agents.schemas import (
     AGENT_CONTENT_TYPES,
+    AGENT_FORM_PLAN_SCHEMA,
+    AGENT_ORCHESTRATION_PLAN_SCHEMA,
+    AGENT_PERFORMANCE_PLAN_SCHEMA,
+    AGENT_PRODUCTION_PLAN_SCHEMA,
     AGENT_SPINE_WORKFLOW_ID,
     AgentArtifactKind,
     AgentArtifactProvenance,
@@ -64,10 +89,10 @@ _OPS: dict[str, list[AgentOperation]] = {
 }
 
 _STUB_CONTENT: dict[str, str] = {
-    "structure_form": "composition.plan.v1",
-    "orchestration": "orchestration.recommendation",
-    "performance_expression": "expression.recommendation",
-    "production": "production.notes",
+    "structure_form": AGENT_FORM_PLAN_SCHEMA,
+    "orchestration": AGENT_ORCHESTRATION_PLAN_SCHEMA,
+    "performance_expression": AGENT_PERFORMANCE_PLAN_SCHEMA,
+    "production": AGENT_PRODUCTION_PLAN_SCHEMA,
 }
 
 _STUB_SLOT: dict[str, str] = {
@@ -76,6 +101,23 @@ _STUB_SLOT: dict[str, str] = {
     "performance_expression": "expression_artifact",
     "production": "production_artifact",
 }
+
+
+def _fake_stub_payload(agent_id: str, content_type: str) -> dict[str, Any]:
+    if content_type == AGENT_FORM_PLAN_SCHEMA:
+        return AgentFormPlanV1(
+            sections=[FormPlanSection(label="A", start_bar=1, bar_count=4)],
+            comment=f"fake_{agent_id}",
+        ).model_dump(mode="json")
+    if content_type == AGENT_ORCHESTRATION_PLAN_SCHEMA:
+        return AgentOrchestrationPlanV1(comment=f"fake_{agent_id}").model_dump(mode="json")
+    if content_type == AGENT_PERFORMANCE_PLAN_SCHEMA:
+        return AgentPerformancePlanV1(expression_notes=f"fake_{agent_id}").model_dump(
+            mode="json"
+        )
+    if content_type == AGENT_PRODUCTION_PLAN_SCHEMA:
+        return AgentProductionPlanV1(mix_notes=f"fake_{agent_id}").model_dump(mode="json")
+    return {"schema": content_type, "note": f"fake_{agent_id}", "mutates_composition": False}
 
 
 class FakeAgent:
@@ -168,6 +210,15 @@ class FakeCreativeDirectorAgent(FakeAgent):
             source_fingerprint=request.context.source_fingerprint,
             provenance=self._provenance("agent_creative_director_plan"),
         )
+        form_art = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_FORM_PLAN_SCHEMA,
+            payload=form_plan_from_composition(request.context.working_draft_composition),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_creative_director_plan"),
+            parent_artifact_ids=[brief_art.artifact_id],
+        )
         plan_art = AgentArtifactV1(
             kind=AgentArtifactKind.WORKFLOW_PLAN,
             producer_agent_id=self._descriptor.id,
@@ -180,8 +231,12 @@ class FakeCreativeDirectorAgent(FakeAgent):
         return AgentRunResult(
             agent_id=self._descriptor.id,
             operation=request.operation,
-            artifacts=[brief_art, plan_art],
-            updated_context_slots={"brief": brief_art, "workflow_plan": plan_art},
+            artifacts=[brief_art, form_art, plan_art],
+            updated_context_slots={
+                "brief": brief_art,
+                "structure_plan": form_art,
+                "workflow_plan": plan_art,
+            },
             provenance_stage=self._stage("agent_creative_director_plan"),
         )
 
@@ -194,6 +249,33 @@ class FakeHarmonyAgent(FakeAgent):
             current_draft=draft,
             realized=nudged,
             service=RealizeService.REHARMONIZE_CANDIDATE,
+        )
+        harmony_plan = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_HARMONY_PLAN_SCHEMA,
+            payload=harmony_plan_from_composition(realized),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_harmony_propose"),
+            parent_artifact_ids=[request.context.brief.artifact_id]
+            if request.context.brief
+            else [],
+            depends_on=depends_on_edges(request.context.brief),
+        )
+        patch = make_plan_artifact(
+            kind=AgentArtifactKind.CANDIDATE_PATCH,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_COMPOSITION_PATCH_SCHEMA,
+            payload=composition_patch_payload(
+                realize_service="reharmonize_candidate",
+                op_refs=["fake_tempo_nudge"],
+                recipe="fake_harmony",
+                source_fingerprint=request.context.source_fingerprint,
+            ),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_harmony_propose"),
+            parent_artifact_ids=[harmony_plan.artifact_id],
+            depends_on=depends_on_edges(harmony_plan),
         )
         art = AgentArtifactV1(
             kind=AgentArtifactKind.CANDIDATE_PATCH,
@@ -210,8 +292,8 @@ class FakeHarmonyAgent(FakeAgent):
         return AgentRunResult(
             agent_id=self._descriptor.id,
             operation=request.operation,
-            artifacts=[art],
-            updated_context_slots={"harmony_artifact": art},
+            artifacts=[harmony_plan, patch, art],
+            updated_context_slots={"harmony_artifact": harmony_plan},
             working_draft_update=realized,
             provenance_stage=self._stage("agent_harmony_propose"),
         )
@@ -220,6 +302,44 @@ class FakeHarmonyAgent(FakeAgent):
 class FakeMelodyMotifAgent(FakeAgent):
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
         draft = request.context.working_draft_composition
+        motif_plan = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_MOTIF_PLAN_SCHEMA,
+            payload=motif_plan_from_composition(draft),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_melody_motif_propose"),
+            parent_artifact_ids=[
+                *(
+                    [request.context.brief.artifact_id]
+                    if request.context.brief
+                    else []
+                ),
+                *(
+                    [request.context.harmony_artifact.artifact_id]
+                    if request.context.harmony_artifact
+                    else []
+                ),
+            ],
+            depends_on=depends_on_edges(
+                request.context.brief, request.context.harmony_artifact
+            ),
+        )
+        patch = make_plan_artifact(
+            kind=AgentArtifactKind.CANDIDATE_PATCH,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_COMPOSITION_PATCH_SCHEMA,
+            payload=composition_patch_payload(
+                realize_service="motif_apply",
+                op_refs=["fake_passthrough"],
+                recipe="fake_melody",
+                source_fingerprint=request.context.source_fingerprint,
+            ),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_melody_motif_propose"),
+            parent_artifact_ids=[motif_plan.artifact_id],
+            depends_on=depends_on_edges(motif_plan),
+        )
         art = AgentArtifactV1(
             kind=AgentArtifactKind.CANDIDATE_PATCH,
             producer_agent_id=self._descriptor.id,
@@ -236,8 +356,8 @@ class FakeMelodyMotifAgent(FakeAgent):
         return AgentRunResult(
             agent_id=self._descriptor.id,
             operation=request.operation,
-            artifacts=[art],
-            updated_context_slots={"melody_artifact": art},
+            artifacts=[motif_plan, patch, art],
+            updated_context_slots={"melody_artifact": motif_plan},
             working_draft_update=realized,
             provenance_stage=self._stage("agent_melody_motif_propose"),
         )
@@ -246,6 +366,44 @@ class FakeMelodyMotifAgent(FakeAgent):
 class FakeArrangementAgent(FakeAgent):
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
         draft = request.context.working_draft_composition
+        arrangement_plan = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_ARRANGEMENT_PLAN_SCHEMA,
+            payload=arrangement_plan_from_composition(draft),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_arrangement_propose"),
+            parent_artifact_ids=[
+                *(
+                    [request.context.structure_plan.artifact_id]
+                    if request.context.structure_plan
+                    else []
+                ),
+                *(
+                    [request.context.harmony_artifact.artifact_id]
+                    if request.context.harmony_artifact
+                    else []
+                ),
+            ],
+            depends_on=depends_on_edges(
+                request.context.structure_plan, request.context.harmony_artifact
+            ),
+        )
+        patch = make_plan_artifact(
+            kind=AgentArtifactKind.CANDIDATE_PATCH,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_COMPOSITION_PATCH_SCHEMA,
+            payload=composition_patch_payload(
+                realize_service="arrangement_candidate",
+                op_refs=["fake_passthrough"],
+                recipe="fake_arrangement",
+                source_fingerprint=request.context.source_fingerprint,
+            ),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_arrangement_propose"),
+            parent_artifact_ids=[arrangement_plan.artifact_id],
+            depends_on=depends_on_edges(arrangement_plan),
+        )
         art = AgentArtifactV1(
             kind=AgentArtifactKind.CANDIDATE_PATCH,
             producer_agent_id=self._descriptor.id,
@@ -266,8 +424,8 @@ class FakeArrangementAgent(FakeAgent):
         return AgentRunResult(
             agent_id=self._descriptor.id,
             operation=request.operation,
-            artifacts=[art],
-            updated_context_slots={"arrangement_candidate": art},
+            artifacts=[arrangement_plan, patch, art],
+            updated_context_slots={"arrangement_candidate": arrangement_plan},
             working_draft_update=realized,
             provenance_stage=self._stage("agent_arrangement_propose"),
         )
@@ -307,16 +465,10 @@ class FakeStubAgent(FakeAgent):
             content_type = "agent.recommendation.v1"
         kind = (
             AgentArtifactKind.PLAN
-            if content_type == "composition.plan.v1"
+            if content_type.endswith("_plan.v1") or content_type == "composition.plan.v1"
             else AgentArtifactKind.RECOMMENDATION
         )
-        payload: dict[str, Any] = {
-            "schema": content_type,
-            "note": f"fake_{self._descriptor.id}",
-            "mutates_composition": False,
-        }
-        if self._descriptor.id == "production":
-            payload["neural_job_ref"] = None
+        payload = _fake_stub_payload(self._descriptor.id, content_type)
         art = AgentArtifactV1(
             kind=kind,
             producer_agent_id=self._descriptor.id,

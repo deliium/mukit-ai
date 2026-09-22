@@ -1,10 +1,18 @@
-"""Critic agent — deterministic composition.analysis.v1 + typed critique."""
+"""Critic agent — bounded MusicAnalysis + typed critique (+ optional RevisionPlan)."""
 
 from __future__ import annotations
 
 import logging
 
 from app.ai_agents.agents.common import BaseMusicAgent
+from app.ai_agents.agents.typed_emit import (
+    AGENT_REVISION_PLAN_SCHEMA,
+    bounded_analysis_payload,
+    depends_on_edges,
+    make_plan_artifact,
+    parent_ids_from_context,
+    revision_plan_payload,
+)
 from app.ai_agents.schemas import (
     AgentArtifactKind,
     AgentArtifactV1,
@@ -32,21 +40,13 @@ class CriticAgent(BaseMusicAgent):
 
         try:
             report = analyze_composition(draft)
-            # Bounded analysis payload for artifact (never full event dump).
-            analysis_payload = {
-                "schema": "composition.analysis.v1",
-                "status": report.status,
-                "algorithm_version": getattr(report, "algorithm_version", None),
-                "source_fingerprint": getattr(report, "source_fingerprint", None),
-                "warning_count": len(report.warnings or []),
-                "warning_codes": [
-                    getattr(w, "code", "unknown") for w in (report.warnings or [])[:16]
-                ],
-            }
+            analysis_payload = bounded_analysis_payload(report)
+            # Session content_type remains composition.analysis.v1 allow-list;
+            # payload is already the bounded projection (safe to promote).
             analysis_art = AgentArtifactV1(
                 kind=AgentArtifactKind.ANALYSIS,
                 producer_agent_id=self._descriptor.id,
-                content_type="composition.analysis.v1",
+                content_type="composition.analysis.bounded.v1",
                 payload=analysis_payload,
                 source_fingerprint=request.context.source_fingerprint,
                 provenance=self._provenance(
@@ -96,14 +96,28 @@ class CriticAgent(BaseMusicAgent):
             recommendation=recommendation,
             reason_codes=reason_codes[:16],
             summary=summary[:400],
+            analysis_warning_count=len(warning_codes),
         )
+        parents = parent_ids_from_context(
+            request.context,
+            "harmony_artifact",
+            "melody_artifact",
+            "arrangement_candidate",
+        )
+        if analysis_art is not None:
+            parents = [analysis_art.artifact_id, *parents][:16]
         critique_art = AgentArtifactV1(
             kind=AgentArtifactKind.CRITIQUE,
             producer_agent_id=self._descriptor.id,
             content_type="agent.critique.v1",
             payload=critique.model_dump(mode="json"),
             source_fingerprint=request.context.source_fingerprint,
-            parent_artifact_ids=[analysis_art.artifact_id] if analysis_art else [],
+            parent_artifact_ids=parents,
+            depends_on=depends_on_edges(
+                request.context.harmony_artifact,
+                request.context.melody_artifact,
+                request.context.arrangement_candidate,
+            ),
             provenance=self._provenance(
                 "agent_critic_critique", runtime="composition_analysis"
             ),
@@ -115,10 +129,28 @@ class CriticAgent(BaseMusicAgent):
             slots["analysis"] = analysis_art
             artifacts = [analysis_art, critique_art]
 
-        logger.debug(
+        if recommendation == CritiqueRecommendation.REVISE:
+            revision = make_plan_artifact(
+                kind=AgentArtifactKind.PLAN,
+                producer_agent_id=self._descriptor.id,
+                content_type=AGENT_REVISION_PLAN_SCHEMA,
+                payload=revision_plan_payload(revise_targets=reason_codes[:8]),
+                source_fingerprint=request.context.source_fingerprint,
+                provenance=self._provenance(
+                    "agent_critic_critique", runtime="composition_analysis"
+                ),
+                parent_artifact_ids=[critique_art.artifact_id],
+                depends_on=depends_on_edges(critique_art),
+            )
+            artifacts.append(revision)
+            slots["critique"] = critique_art
+
+        logger.info(
             "Critic recommendation",
             extra={
+                "agent_id": self._descriptor.id,
                 "recommendation": recommendation.value,
+                "content_types": [a.content_type for a in artifacts],
                 "warning_count": len(warning_codes),
             },
         )

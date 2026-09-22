@@ -1,10 +1,15 @@
-"""Creative Director — typed brief + workflow plan (no draft mutation)."""
+"""Creative Director — typed brief + form plan + workflow plan (no draft mutation)."""
 
 from __future__ import annotations
 
 import logging
 
 from app.ai_agents.agents.common import BaseMusicAgent, selection_str
+from app.ai_agents.agents.typed_emit import (
+    AGENT_FORM_PLAN_SCHEMA,
+    form_plan_from_composition,
+    make_plan_artifact,
+)
 from app.ai_agents.schemas import (
     AGENT_SPINE_WORKFLOW_ID,
     AgentArtifactKind,
@@ -64,6 +69,16 @@ class CreativeDirectorAgent(BaseMusicAgent):
             source_fingerprint=request.context.source_fingerprint,
             provenance=self._provenance("agent_creative_director_plan", runtime="language_planner"),
         )
+        form_art = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_FORM_PLAN_SCHEMA,
+            payload=form_plan_from_composition(draft),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_creative_director_plan", runtime="language_planner"),
+            parent_artifact_ids=[brief_art.artifact_id],
+            depends_on=[],
+        )
         plan_art = AgentArtifactV1(
             kind=AgentArtifactKind.WORKFLOW_PLAN,
             producer_agent_id=self._descriptor.id,
@@ -73,14 +88,25 @@ class CreativeDirectorAgent(BaseMusicAgent):
             parent_artifact_ids=[brief_art.artifact_id],
             provenance=self._provenance("agent_creative_director_plan", runtime="language_planner"),
         )
-        logger.debug(
+        logger.info(
             "Creative director artifacts produced",
-            extra={"artifact_kinds": ["brief", "workflow_plan"]},
+            extra={
+                "agent_id": self._descriptor.id,
+                "content_types": [
+                    brief_art.content_type,
+                    form_art.content_type,
+                    plan_art.content_type,
+                ],
+            },
         )
         return AgentRunResult(
             agent_id=self._descriptor.id,
             operation=request.operation,
-            artifacts=[brief_art, plan_art],
-            updated_context_slots={"brief": brief_art, "workflow_plan": plan_art},
+            artifacts=[brief_art, form_art, plan_art],
+            updated_context_slots={
+                "brief": brief_art,
+                "structure_plan": form_art,
+                "workflow_plan": plan_art,
+            },
             provenance_stage=self._stage("agent_creative_director_plan", runtime="language_planner"),
         )

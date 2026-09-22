@@ -428,17 +428,27 @@ async def commit_project_revision(
     )
     try:
         result = commit_revision(project_id, request)
-    except (
-        ProjectNotFoundError,
-        ProjectHistoryNotFoundError,
-        ProjectHistoryValidationError,
-        ProjectHistoryError,
-        ProjectRevisionConflictError,
-        CompositionScopeError,
-        PersistenceSecretError,
-        ProjectCompositionError,
-    ) as exc:
-        raise _map_history_error(exc) from exc
+    except Exception as exc:
+        from app.ai_agents.errors import AgentError, map_agent_error_to_http
+
+        if isinstance(exc, AgentError):
+            status, detail = map_agent_error_to_http(exc)
+            raise HTTPException(status_code=status, detail=detail) from exc
+        if isinstance(
+            exc,
+            (
+                ProjectNotFoundError,
+                ProjectHistoryNotFoundError,
+                ProjectHistoryValidationError,
+                ProjectHistoryError,
+                ProjectRevisionConflictError,
+                CompositionScopeError,
+                PersistenceSecretError,
+                ProjectCompositionError,
+            ),
+        ):
+            raise _map_history_error(exc) from exc
+        raise
     logger.info(
         "Durable revision commit completed",
         extra={
@@ -596,17 +606,27 @@ async def apply_as_branch_route(
     )
     try:
         result = apply_as_branch_command(project_id, request)
-    except (
-        ProjectNotFoundError,
-        ProjectHistoryNotFoundError,
-        ProjectHistoryValidationError,
-        ProjectHistoryError,
-        ProjectRevisionConflictError,
-        CompositionScopeError,
-        PersistenceSecretError,
-        ProjectCompositionError,
-    ) as exc:
-        raise _map_history_error(exc) from exc
+    except Exception as exc:
+        from app.ai_agents.errors import AgentError, map_agent_error_to_http
+
+        if isinstance(exc, AgentError):
+            status, detail = map_agent_error_to_http(exc)
+            raise HTTPException(status_code=status, detail=detail) from exc
+        if isinstance(
+            exc,
+            (
+                ProjectNotFoundError,
+                ProjectHistoryNotFoundError,
+                ProjectHistoryValidationError,
+                ProjectHistoryError,
+                ProjectRevisionConflictError,
+                CompositionScopeError,
+                PersistenceSecretError,
+                ProjectCompositionError,
+            ),
+        ):
+            raise _map_history_error(exc) from exc
+        raise
     logger.info(
         "Apply-as-branch completed",
         extra={

@@ -10,6 +10,15 @@ from app.ai_agents.agents.common import (
     selection_int,
     selection_str,
 )
+from app.ai_agents.agents.typed_emit import (
+    AGENT_COMPOSITION_PATCH_SCHEMA,
+    AGENT_HARMONY_PLAN_SCHEMA,
+    composition_patch_payload,
+    depends_on_edges,
+    harmony_plan_from_composition,
+    make_plan_artifact,
+    parent_ids_from_context,
+)
 from app.ai_agents.progressive_realize import RealizeService, apply_realized_composition
 from app.ai_agents.schemas import (
     AgentArtifactKind,
@@ -114,11 +123,49 @@ class HarmonyAgent(BaseMusicAgent):
             provenance=self._provenance("agent_harmony_propose", runtime="reharmonize_deterministic"),
             warning_codes=warning_codes,
         )
+        brief = request.context.brief
+        harmony_plan = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_HARMONY_PLAN_SCHEMA,
+            payload=harmony_plan_from_composition(working_draft_update or draft),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_harmony_propose", runtime="reharmonize_deterministic"),
+            parent_artifact_ids=parent_ids_from_context(request.context, "brief"),
+            depends_on=depends_on_edges(brief),
+        )
+        patch = make_plan_artifact(
+            kind=AgentArtifactKind.CANDIDATE_PATCH,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_COMPOSITION_PATCH_SCHEMA,
+            payload=composition_patch_payload(
+                realize_service="reharmonize_candidate",
+                op_refs=["reharmonize_preview"],
+                recipe="deterministic_reharmonize",
+                source_fingerprint=request.context.source_fingerprint,
+            ),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_harmony_propose", runtime="reharmonize_deterministic"),
+            parent_artifact_ids=[harmony_plan.artifact_id],
+            depends_on=depends_on_edges(harmony_plan),
+            warning_codes=warning_codes,
+        )
+        logger.info(
+            "Harmony typed plans produced",
+            extra={
+                "agent_id": self._descriptor.id,
+                "content_types": [
+                    harmony_plan.content_type,
+                    patch.content_type,
+                    art.content_type,
+                ],
+            },
+        )
         return AgentRunResult(
             agent_id=self._descriptor.id,
             operation=request.operation,
-            artifacts=[art],
-            updated_context_slots={"harmony_artifact": art},
+            artifacts=[harmony_plan, patch, art],
+            updated_context_slots={"harmony_artifact": harmony_plan},
             working_draft_update=working_draft_update,
             provenance_stage=self._stage(
                 "agent_harmony_propose", runtime="reharmonize_deterministic"
