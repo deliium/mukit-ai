@@ -33,11 +33,12 @@ def test_migrations_apply_cleanly(project_db, caplog):
             ).fetchall()
         }
 
-    assert alembic_revisions == ["20260914_0001"]
+    assert alembic_revisions == ["20260922_0004"]
     assert "projects" in tables
     assert "composition_snapshots" in tables
     assert "project_revisions" in tables
     assert "project_branches" in tables
+    assert "composer_profiles" in tables
     assert "alembic_version" in tables
     assert "schema_migrations" not in tables
     assert "Project database ready" in caplog.text or "Alembic upgrade complete" in caplog.text
