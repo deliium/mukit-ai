@@ -89,6 +89,8 @@ mukit-ai/
 | `backend/app/routers/embeddings.py` | `POST /embeddings/compute`, `/similarity`, `/related-motifs`, `/reference/resolve` |
 | `backend/app/routers/composer_profiles.py` | Composer profile CRUD / derive / promote / preview / compare / export/import |
 | `backend/app/routers/reference_features.py` | `POST /reference-features/analyze` (dimension-masked reference reports) |
+| `backend/app/reference_conditioning_schemas.py` | `reference.conditioning.policy.v1` DTOs / partition validators |
+| `backend/app/services/reference_conditioning_policy.py` | Preserve/borrow/regenerate soft assembly + policy digest |
 | `backend/app/composer_profile_schemas.py` | `composer.profile.v1` + export envelope DTOs |
 | `backend/app/services/composer_profile_store.py` | SQLite profile persistence + CAS |
 | `backend/app/services/composer_profile_derive.py` | Multi-project abstract preference aggregate |
@@ -212,7 +214,7 @@ mukit-ai/
 | Symbolic tokenizer | `docs/tokenizer.md` | Composition V2 ↔ token ids, quantization, CLI, versioning |
 | Symbolic embeddings | `docs/embeddings.md` | Handcrafted musical feature embeddings, similarity, reference conditioning |
 | Composer profiles | `docs/composer-profiles.md` | Durable preference profiles, soft generate conditioning, derive/promote |
-| Reference features | `docs/reference-features.md` | Selective reference dimension masks for generate/develop |
+| Reference features | `docs/reference-features.md` | Selective dimension masks + preserve/borrow/regenerate policy for generate/develop/edit |
 | Symbolic Music Transformer | `docs/music-transformer.md` | PyTorch decoder-only LM, train/generate CLI, checkpoint card, optional API |
 | Hybrid generation | `docs/hybrid-generation.md` | LLM plan + symbolic notes pipelines, seeds, multi-stage provenance |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |

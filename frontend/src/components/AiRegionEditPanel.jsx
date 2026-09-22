@@ -5,6 +5,13 @@ import { useMusicStore } from '../store/musicStore.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import { countV2FeatureSummary } from '../utils/pianoRollEvents.js';
 import { defaultTargetTrackIds } from '../utils/pianoRollSelection.js';
+import { buildStyleReferenceFromMusicalReference } from '../utils/compositionEmbeddingReference.js';
+import {
+  buildConditioningRequestFields,
+  collectMultiRefBorrowRows,
+  loadConditioningSession,
+} from '../utils/referenceConditioningPolicy.js';
+import ReferenceFeaturesControls from './ReferenceFeaturesControls.jsx';
 
 const Panel = styled.section`
   margin: 16px 0;
@@ -98,6 +105,18 @@ const AiRegionEditPanel = () => {
   const aiEditCompareResult = useMusicStore((state) => state.aiEditCompareResult);
   const currentProjectId = useMusicStore((state) => state.currentProjectId);
   const openDevelopWithAiSelection = useMusicStore((state) => state.openDevelopWithAiSelection);
+  const musicalReferenceEnabled = useMusicStore((state) => state.musicalReferenceEnabled);
+  const musicalReference = useMusicStore((state) => state.musicalReference);
+  const musicalReferenceComposition = useMusicStore((state) => state.musicalReferenceComposition);
+  const musicalReferenceB = useMusicStore((state) => state.musicalReferenceB);
+  const musicalReferenceBComposition = useMusicStore((state) => state.musicalReferenceBComposition);
+  const musicalReferenceBStatus = useMusicStore((state) => state.musicalReferenceBStatus);
+  const projectList = useMusicStore((state) => state.projectList);
+  const setMusicalReferenceFeatureMask = useMusicStore(
+    (state) => state.setMusicalReferenceFeatureMask,
+  );
+  const selectMusicalReferenceBProject = useMusicStore((state) => state.selectMusicalReferenceBProject);
+  const clearMusicalReferenceB = useMusicStore((state) => state.clearMusicalReferenceB);
   const [branchNameDraft, setBranchNameDraft] = React.useState('');
   const [applyBusy, setApplyBusy] = React.useState(false);
 
@@ -190,12 +209,49 @@ const AiRegionEditPanel = () => {
       },
     };
 
+    if (musicalReferenceEnabled && musicalReference) {
+      const refInput = {
+        ...musicalReference,
+        composition: musicalReferenceComposition || musicalReference.composition,
+      };
+      if (musicalReference.referenceFeatureMaskEnabled) {
+        refInput.dimensions = musicalReference.dimensions;
+      } else {
+        delete refInput.dimensions;
+      }
+      const built = buildStyleReferenceFromMusicalReference(refInput);
+      if (built.ok && built.styleReference) {
+        payload.style_reference = built.styleReference;
+      }
+      const policyState = loadConditioningSession();
+      const { rows: borrowRows } = collectMultiRefBorrowRows({
+        enabled: Boolean(musicalReference.referenceFeatureMaskEnabled),
+        dimensions: musicalReference.dimensions,
+        borrowSourceByDim: policyState.borrowSourceByDim,
+        primary: musicalReference,
+        primaryComposition: refInput.composition,
+        secondary: musicalReferenceB,
+        secondaryComposition: musicalReferenceBComposition,
+      });
+      const conditioning = buildConditioningRequestFields({
+        policyState,
+        borrowRows,
+        activeProjectId: currentProjectId,
+        includePolicy: true,
+      });
+      if (conditioning.ok) {
+        Object.assign(payload, conditioning.fields);
+      }
+    }
+
     console.info('[AiRegionEditPanel] User-initiated AI region edit', {
       startBar: aiEditStartBar,
       endBar: aiEditEndBar,
       trackScopeCount: trackIds.length,
       provider: selectedProvider,
       model: selectedModel,
+      hasStyleReference: Boolean(payload.style_reference || payload.style_references),
+      hasPolicy: Boolean(payload.reference_conditioning_policy),
     });
 
     try {
@@ -253,6 +309,25 @@ const AiRegionEditPanel = () => {
         onChange={(event) => setAiEditInstruction(event.target.value)}
         placeholder="Example: make this phrase more dramatic but keep the harmony"
       />
+      {musicalReferenceEnabled && musicalReference && (
+        <ReferenceFeaturesControls
+          enabled={Boolean(musicalReference?.referenceFeatureMaskEnabled)}
+          dimensions={musicalReference?.dimensions ?? null}
+          onChange={({ enabled, dimensions }) => {
+            setMusicalReferenceFeatureMask({ enabled, dimensions });
+          }}
+          policyMode
+          activeProjectId={currentProjectId}
+          borrowProjectId={musicalReference?.projectId || musicalReference?.project_id || null}
+          compact
+          allowMultiRef
+          projectList={projectList}
+          secondaryReference={musicalReferenceB}
+          secondaryStatus={musicalReferenceBStatus}
+          onSelectSecondaryProject={(id) => selectMusicalReferenceBProject(id)}
+          onClearSecondary={() => clearMusicalReferenceB()}
+        />
+      )}
       <ButtonRow>
         <Button
           type="button"

@@ -52,6 +52,11 @@ import {
   RELATED_MOTIFS_DEFAULT_TOP_K,
   SIMILARITY_DEFAULT_TOP_K,
 } from '../utils/compositionEmbeddingReference.js';
+import {
+  buildConditioningRequestFields,
+  collectMultiRefBorrowRows,
+  loadConditioningSession,
+} from '../utils/referenceConditioningPolicy.js';
 import { listAnalysisSectionOptions } from '../utils/compositionAnalysis.js';
 import { normalizeCritiqueResult } from '../utils/compositionCritique.js';
 import {
@@ -497,6 +502,11 @@ const initialMusicalReferenceSessionState = {
   musicalReferenceStatus: 'idle',
   musicalReferenceError: '',
   musicalReferenceRequestId: 0,
+  musicalReferenceB: null,
+  musicalReferenceBComposition: null,
+  musicalReferenceBStatus: 'idle',
+  musicalReferenceBError: '',
+  musicalReferenceBRequestId: 0,
   similarityHits: [],
   similarityStatus: 'idle',
   similarityError: '',
@@ -647,6 +657,7 @@ let developmentRequestSeq = 0;
 let arrangementRequestSeq = 0;
 let arrangementCatalogRequestSeq = 0;
 let musicalReferenceRequestSeq = 0;
+let musicalReferenceBRequestSeq = 0;
 let similarityRequestSeq = 0;
 let relatedMotifRequestSeq = 0;
 let versionBranchesRequestSeq = 0;
@@ -7413,6 +7424,11 @@ export const useMusicStore = create((set, get) => ({
         musicalReferenceEnabled: false,
         musicalReferenceError: '',
         musicalReferenceStatus: 'idle',
+        musicalReferenceB: null,
+        musicalReferenceBComposition: null,
+        musicalReferenceBStatus: 'idle',
+        musicalReferenceBError: '',
+        musicalReferenceBRequestId: 0,
       });
       return;
     }
@@ -7551,6 +7567,101 @@ export const useMusicStore = create((set, get) => ({
         musicalReferenceStatus: 'error',
         musicalReferenceError: error.message || 'Failed to load reference project',
         musicalReferenceComposition: null,
+      });
+      return false;
+    }
+  },
+
+  clearMusicalReferenceB: () => {
+    embeddingLogger.debug('Musical reference B cleared');
+    set({
+      musicalReferenceB: null,
+      musicalReferenceBComposition: null,
+      musicalReferenceBStatus: 'idle',
+      musicalReferenceBError: '',
+      musicalReferenceBRequestId: 0,
+    });
+  },
+
+  /**
+   * Load a second musical reference (ephemeral) for multi-ref conditioning (A + B).
+   */
+  selectMusicalReferenceBProject: async (projectId) => {
+    const id = typeof projectId === 'string' ? projectId.trim() : '';
+    if (!id) {
+      get().clearMusicalReferenceB();
+      return false;
+    }
+
+    musicalReferenceBRequestSeq += 1;
+    const requestId = musicalReferenceBRequestSeq;
+    const listed = (get().projectList || []).find((item) => item.id === id);
+    set({
+      musicalReferenceEnabled: true,
+      musicalReferenceBStatus: 'loading',
+      musicalReferenceBError: '',
+      musicalReferenceBRequestId: requestId,
+      musicalReferenceB: normalizeMusicalReferenceSession({
+        projectId: id,
+        projectName: listed?.name || null,
+        scope: { kind: 'composition' },
+        scoreVsCurrent: null,
+        referenceFeatureMaskEnabled: true,
+      }),
+      musicalReferenceBComposition: null,
+    });
+
+    embeddingLogger.debug('Musical reference B project load started', {
+      projectId: id,
+      requestId,
+    });
+
+    try {
+      const project = await getProjectRequest(id);
+      if (requestId !== get().musicalReferenceBRequestId) {
+        return false;
+      }
+      const composition = project?.composition
+        ? prepareCompositionForStore(project.composition)
+        : null;
+      if (!composition || !isCanonicalComposition(composition)) {
+        set({
+          musicalReferenceBStatus: 'error',
+          musicalReferenceBError: 'Reference B project has no canonical composition.v2',
+          musicalReferenceBComposition: null,
+        });
+        return false;
+      }
+      const session = normalizeMusicalReferenceSession({
+        projectId: id,
+        projectName: project.name || listed?.name || null,
+        scope: { kind: 'composition' },
+        scoreVsCurrent: null,
+        referenceFeatureMaskEnabled: true,
+      });
+      set({
+        musicalReferenceB: session,
+        musicalReferenceBComposition: composition,
+        musicalReferenceBStatus: 'ready',
+        musicalReferenceBError: '',
+      });
+      embeddingLogger.debug('Musical reference B project ready', {
+        projectId: id,
+        requestId,
+      });
+      return true;
+    } catch (error) {
+      if (requestId !== get().musicalReferenceBRequestId) {
+        return false;
+      }
+      embeddingLogger.error('Musical reference B project load failed', {
+        projectId: id,
+        message: error.message || null,
+      });
+      set({
+        musicalReferenceBStatus: 'error',
+        musicalReferenceBError: error.message || 'Failed to load reference B project',
+        musicalReferenceBComposition: null,
       });
       return false;
     }
@@ -7976,6 +8087,35 @@ export const useMusicStore = create((set, get) => ({
         styleReference = built.styleReference || undefined;
       }
 
+      const conditioningExtras = {};
+      if (styleReference) {
+        const policyState = loadConditioningSession();
+        const { rows: borrowRows } = collectMultiRefBorrowRows({
+          enabled: Boolean(state.musicalReference?.referenceFeatureMaskEnabled),
+          dimensions: state.musicalReference?.dimensions,
+          borrowSourceByDim: policyState.borrowSourceByDim,
+          primary: state.musicalReference,
+          primaryComposition: state.musicalReferenceComposition || state.musicalReference?.composition,
+          secondary: state.musicalReferenceB,
+          secondaryComposition: state.musicalReferenceBComposition,
+        });
+        const conditioning = buildConditioningRequestFields({
+          policyState,
+          borrowRows,
+          activeProjectId: state.currentProjectId,
+          includePolicy: true,
+        });
+        if (conditioning.ok) {
+          Object.assign(conditioningExtras, conditioning.fields);
+          if (conditioningExtras.style_references) {
+            styleReference = undefined;
+          } else if (conditioningExtras.style_reference) {
+            styleReference = conditioningExtras.style_reference;
+            delete conditioningExtras.style_reference;
+          }
+        }
+      }
+
       const response = await previewCompositionDevelopment({
         composition,
         operation,
@@ -7995,6 +8135,7 @@ export const useMusicStore = create((set, get) => ({
           model: state.selectedModel || null,
         },
         ...(styleReference ? { style_reference: styleReference } : {}),
+        ...conditioningExtras,
       });
 
       const latest = get();

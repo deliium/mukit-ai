@@ -54,6 +54,12 @@ export function buildLlmRequest(prompt, selectedProvider, selectedModel, pipelin
   if (Array.isArray(pipelineOptions.styleReferences) && pipelineOptions.styleReferences.length) {
     body.style_references = pipelineOptions.styleReferences;
   }
+  if (pipelineOptions.referenceConditioningPolicy) {
+    body.reference_conditioning_policy = pipelineOptions.referenceConditioningPolicy;
+  }
+  if (pipelineOptions.activeProjectId) {
+    body.active_project_id = pipelineOptions.activeProjectId;
+  }
   return body;
 }
 

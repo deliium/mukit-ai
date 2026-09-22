@@ -228,6 +228,8 @@ const CompositionDevelopmentPanel = () => {
   const musicalReferenceComposition = useMusicStore((state) => state.musicalReferenceComposition);
   const musicalReferenceStatus = useMusicStore((state) => state.musicalReferenceStatus);
   const musicalReferenceError = useMusicStore((state) => state.musicalReferenceError);
+  const musicalReferenceB = useMusicStore((state) => state.musicalReferenceB);
+  const musicalReferenceBStatus = useMusicStore((state) => state.musicalReferenceBStatus);
   const similarityHits = useMusicStore((state) => state.similarityHits);
   const similarityStatus = useMusicStore((state) => state.similarityStatus);
   const similarityError = useMusicStore((state) => state.similarityError);
@@ -236,6 +238,8 @@ const CompositionDevelopmentPanel = () => {
   const selectMusicalReferenceProject = useMusicStore((state) => state.selectMusicalReferenceProject);
   const selectMusicalReferenceSection = useMusicStore((state) => state.selectMusicalReferenceSection);
   const clearMusicalReference = useMusicStore((state) => state.clearMusicalReference);
+  const selectMusicalReferenceBProject = useMusicStore((state) => state.selectMusicalReferenceBProject);
+  const clearMusicalReferenceB = useMusicStore((state) => state.clearMusicalReferenceB);
   const setMusicalReferenceFeatureMask = useMusicStore(
     (state) => state.setMusicalReferenceFeatureMask,
   );
@@ -604,6 +608,15 @@ const CompositionDevelopmentPanel = () => {
                   onChange={({ enabled, dimensions }) => {
                     setMusicalReferenceFeatureMask({ enabled, dimensions });
                   }}
+                  policyMode
+                  activeProjectId={currentProjectId}
+                  borrowProjectId={musicalReference?.projectId || musicalReference?.project_id || null}
+                  allowMultiRef
+                  projectList={projectList}
+                  secondaryReference={musicalReferenceB}
+                  secondaryStatus={musicalReferenceBStatus}
+                  onSelectSecondaryProject={(id) => selectMusicalReferenceBProject(id)}
+                  onClearSecondary={() => clearMusicalReferenceB()}
                 />
                 <ButtonRow>
                   <Button

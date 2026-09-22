@@ -47,11 +47,48 @@ not musical quality or artist style.
 
 ```text
 prompt hard/soft lines
-  → composer-profile soft fragment (when strength ≠ off)
-  → masked reference feature fragments (or legacy whole summary when dimensions omitted)
+  → composer-profile soft fragment (generate only; when strength ≠ off)
+  → PRESERVE abstract lines (current scope; develop/edit)
+  → BORROW strength-tagged reference fragments
+  → REGENERATE invent-new lines
+  → anti-melody / gated own-project motif-reuse instruction
+  → legacy whole summary only when no masks and no policy borrow
 ```
 
-Hard `GenerationConstraints` / prompt instruments / key are never rewritten.
+Hard `GenerationConstraints` / prompt instruments / key / edit bar-track selection are never rewritten.
+
+## Conditioning policy (`reference.conditioning.policy.v1`)
+
+Operation-level **preserve / borrow / regenerate** disposition with per-dimension
+borrow strength (`off|light|normal|strong`). Strengths live **only** on the policy
+DTO — never on `StyleReferenceRequest`.
+
+| Disposition | Meaning |
+|-------------|---------|
+| preserve | Keep property family from **current** scope (abstract summary only) |
+| borrow | Transfer masked reference soft fragments × strength |
+| regenerate | Invent new; never inject reference fragments for these dims |
+
+**Partition:** `strict_partition` is **disjoint-only** — overlaps → 422
+`reference_conditioning_partition_overlap`. Unspecified dims get no soft guidance
+(not forced into regenerate). Same dimension on two borrow bindings → 422
+`reference_conditioning_borrow_dimension_conflict`.
+
+**Motif reuse:** `allow_motif_reuse` requires `active_project_id` equal to every
+borrow binding `project_id`. Still never pastes note sequences.
+
+**Operations:** generate, develop preview, and AI region edit (`replace_region`).
+Edit keeps `in_region_events` for the patch contract; anti-copy applies to
+**reference** material only. Edit responses include `generation_parameters` for
+Apply CAS provenance.
+
+**AC example:** borrow A:`texture` + B:`rhythm`, regenerate `melodic_contour` +
+`harmony` → soft block contains only those tagged borrow lines (not A melody /
+B harmony). FE presets and multi-ref A/B assignment live in
+`ReferenceFeaturesControls` / `referenceConditioningPolicy.js`.
+
+Composer Profile soft merge remains **generate-only** in this path (develop
+`profile_id` is a follow-on).
 
 ## API
 
@@ -59,14 +96,18 @@ Hard `GenerationConstraints` / prompt instruments / key are never rewritten.
 |--------|------|---------|
 | `POST` | `/reference-features/analyze` | Analyze → `reference.features.v1` (+ optional `compare_to`) |
 
-Generate (`LLMMusicGenerationRequest`) and develop preview accept:
+Generate / develop / edit accept:
 
-- `style_reference.dimensions[]`
-- `style_references[]` (cap `REFERENCE_FEATURES_MAX_REFERENCES`)
+- `style_reference.dimensions[]` / `style_references[]`
+- `reference_conditioning_policy`
+- `active_project_id` (motif-reuse gate)
 
-Provenance under `generation_parameters.reference_features[]`:
-`project_id?`, `revision_id?`, `scope_kind`, `fingerprint_prefix`, `dimensions[]`,
-`unavailable_codes[]` — never summaries or vectors.
+Provenance under `generation_parameters`:
+
+- `reference_features[]` — ids, scope, fingerprint prefix, dimensions, optional strengths
+- `reference_conditioning_policy` — preserve/regenerate lists, borrow digests, `policy_digest`
+
+Never summaries, vectors, or event arrays.
 
 ## Configuration
 
@@ -75,6 +116,8 @@ Provenance under `generation_parameters.reference_features[]`:
 # REFERENCE_FEATURES_SUMMARY_MAX_CHARS=280
 # REFERENCE_FEATURES_SOFT_FRAGMENT_MAX_CHARS=1600
 # REFERENCE_FEATURES_ANALYZE_LRU_SIZE=0
+# REFERENCE_FEATURES_POLICY_DIGEST_PREFIX_LEN=16
+# REFERENCE_FEATURES_STRENGTH_LEGEND_MAX_CHARS=240
 ```
 
 ## Privacy

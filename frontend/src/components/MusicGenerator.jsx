@@ -4,6 +4,11 @@ import { fetchAiModels, generateLlmMusicJson } from '../api/musicApi.js';
 import { listComposerProfiles } from '../api/composerProfileApi.js';
 import { buildLlmRequest } from '../utils/llmGenerateRequest.js';
 import { buildStyleReferenceFromMusicalReference } from '../utils/compositionEmbeddingReference.js';
+import {
+  buildConditioningRequestFields,
+  collectMultiRefBorrowRows,
+  loadConditioningSession,
+} from '../utils/referenceConditioningPolicy.js';
 import ComposerWorkspace from './ComposerWorkspace.jsx';
 import ImportControls from './ImportControls.jsx';
 import ProjectComposerBar from './ProjectComposerBar.jsx';
@@ -201,9 +206,15 @@ const MusicGenerator = () => {
   const musicalReferenceEnabled = useMusicStore((state) => state.musicalReferenceEnabled);
   const musicalReference = useMusicStore((state) => state.musicalReference);
   const musicalReferenceComposition = useMusicStore((state) => state.musicalReferenceComposition);
+  const musicalReferenceB = useMusicStore((state) => state.musicalReferenceB);
+  const musicalReferenceBComposition = useMusicStore((state) => state.musicalReferenceBComposition);
+  const musicalReferenceBStatus = useMusicStore((state) => state.musicalReferenceBStatus);
+  const projectList = useMusicStore((state) => state.projectList);
   const setMusicalReferenceFeatureMask = useMusicStore(
     (state) => state.setMusicalReferenceFeatureMask,
   );
+  const selectMusicalReferenceBProject = useMusicStore((state) => state.selectMusicalReferenceBProject);
+  const clearMusicalReferenceB = useMusicStore((state) => state.clearMusicalReferenceB);
   const setComposerProfileList = useMusicStore((state) => state.setComposerProfileList);
   const setComposerProfileSelection = useMusicStore((state) => state.setComposerProfileSelection);
 
@@ -302,6 +313,36 @@ const MusicGenerator = () => {
       const built = buildStyleReferenceFromMusicalReference(refInput);
       if (built.ok && built.styleReference) {
         requestData.style_reference = built.styleReference;
+      }
+      const policyState = loadConditioningSession();
+      const { rows: borrowRows } = collectMultiRefBorrowRows({
+        enabled: Boolean(musicalReference.referenceFeatureMaskEnabled),
+        dimensions: musicalReference.dimensions,
+        borrowSourceByDim: policyState.borrowSourceByDim,
+        primary: musicalReference,
+        primaryComposition: refInput.composition,
+        secondary: musicalReferenceB,
+        secondaryComposition: musicalReferenceBComposition,
+      });
+      const conditioning = buildConditioningRequestFields({
+        policyState,
+        borrowRows,
+        activeProjectId: currentProjectId,
+        includePolicy: true,
+      });
+      if (conditioning.ok) {
+        if (conditioning.fields.reference_conditioning_policy) {
+          requestData.reference_conditioning_policy = conditioning.fields.reference_conditioning_policy;
+        }
+        if (conditioning.fields.active_project_id) {
+          requestData.active_project_id = conditioning.fields.active_project_id;
+        }
+        if (conditioning.fields.style_references) {
+          requestData.style_references = conditioning.fields.style_references;
+          delete requestData.style_reference;
+        } else if (conditioning.fields.style_reference) {
+          requestData.style_reference = conditioning.fields.style_reference;
+        }
       }
     }
     console.debug('[MusicGenerator] LLM generation requested', {
@@ -539,7 +580,16 @@ const MusicGenerator = () => {
                 onChange={({ enabled, dimensions }) => {
                   setMusicalReferenceFeatureMask({ enabled, dimensions });
                 }}
+                policyMode
                 compact
+                allowMultiRef
+                activeProjectId={currentProjectId}
+                borrowProjectId={musicalReference?.projectId || musicalReference?.project_id || null}
+                projectList={projectList}
+                secondaryReference={musicalReferenceB}
+                secondaryStatus={musicalReferenceBStatus}
+                onSelectSecondaryProject={(id) => selectMusicalReferenceBProject(id)}
+                onClearSecondary={() => clearMusicalReferenceB()}
               />
             </FormGroup>
           )}
