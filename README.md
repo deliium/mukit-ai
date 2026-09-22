@@ -329,6 +329,7 @@ mukit-ai/
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |
 | [Symbolic embeddings](docs/embeddings.md) | Handcrafted musical feature embeddings, similarity, reference conditioning |
 | [Composition Arrangement](docs/composition-arrangement.md) | Instrumentation / texture redistribution; catalog + preview + Apply |
+| [Composition Critique](docs/composition-critique.md) | Evaluation engine, strata policy, climax AC, evaluate API |
 | [Composition Analysis](docs/composition-analysis.md) | Deterministic sidecar, scopes, warnings, Analysis tab |
 | [MIDI / MusicXML import](docs/import.md) | Ingestion mappings, limits, issue codes, security |
 | [Symbolic datasets](docs/datasets.md) | Offline licensed corpus pipeline (`DATASET_ROOT`, CLI build/verify) |

@@ -25,11 +25,13 @@ mukit-ai/
 │   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas)
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
-│   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + motifs + harmony + arrangement + development + embeddings + ai_models + ai_agents HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. agent_artifact_workspace, import, audio_transcription, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
+│   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + critique + motifs + harmony + arrangement + development + embeddings + ai_models + ai_agents HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
+│   │   ├── critique_schemas.py     # CritiqueFindingV1 + critique scopes / errors
+│   │   ├── critique_settings.py    # EvaluationEngine thresholds (climax deltas)
 │   │   ├── arrangement_schemas.py  # Arrangement preview / catalog DTOs, error & warning codes
 │   │   ├── motif_schemas.py        # Motif apply DTOs
 │   │   ├── harmony_schemas.py      # Harmony timeline + reharmonize preview DTOs
@@ -91,6 +93,9 @@ mukit-ai/
 | `backend/app/services/symbolic_composition_generate.py` | Symbolic composer adapter (MT + fake tiny) for hybrid pipelines |
 | `backend/app/services/fake_symbolic_composer.py` | Deterministic CI symbolic note engine (`fake:symbolic-tiny`) |
 | `backend/app/analysis_schemas.py` | `composition.analysis.v1` DTOs, scopes, warning codes |
+| `backend/app/critique_schemas.py` | Critique findings, scopes, evaluate error codes |
+| `backend/app/services/composition_critique.py` | Music Evaluation Engine orchestrator |
+| `backend/app/routers/critique.py` | `POST /critique/evaluate` (session-only) |
 | `backend/app/motif_schemas.py` | Motif apply request/response DTOs |
 | `backend/app/routers/analysis.py` | `POST /analysis/composition` |
 | `backend/app/routers/motifs.py` | `POST /motifs/apply` |
@@ -187,6 +192,7 @@ mukit-ai/
 | Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument jobs; licenses; Compose profile |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
+| Composition Critique | `docs/composition-critique.md` | Evaluation engine, strata, climax AC, `/critique/evaluate` |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |
 | MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
 | Symbolic datasets | `docs/datasets.md` | Offline `DATASET_ROOT` corpus pipeline, provenance, CLI |

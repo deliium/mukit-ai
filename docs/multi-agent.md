@@ -88,6 +88,17 @@ Envelopes use `agent.artifact.v1` with known `content_type` values (`agent.brief
 
 Critic `approve` does **not** persist. Client Apply uses the existing CAS path with `RevisionOperationType.MULTI_AGENT_APPLY`.
 
+## Critic / Music Evaluation Engine
+
+The Critic agent calls `services/composition_critique.evaluate_composition` (deterministic
+checks + analysis warnings + optional model critique). Session UI can also call
+`POST /critique/evaluate` without running the full spine.
+
+- Structured findings use four strata (`hard_constraint` / `technical` / `stylistic` / `subjective`).
+- Stylistic and subjective findings **never** alone force `revise`.
+- Climax near-identical density emits `climax_lacks_contrast` (stylistic) without mutating V2.
+- Full policy, scopes, and logging: [composition-critique.md](composition-critique.md).
+
 ## Discovery and single-agent run
 
 - `GET /ai/agents` (+ `/{id}`) — descriptors, status, bound model public fields
@@ -99,7 +110,7 @@ Filters: `capability`, `status`. Never exposes API keys or weight paths.
 
 Default ops are mapped in `ai_agents/binding.py`. Override via request `agent_model_overrides` or env `AI_AGENT_<AGENT_ID>_MODEL`.
 
-**Bootstrap:** `LLM_FAKE_MODE=1` registers deterministic fake agents (CI default). Otherwise the spine binds **real service wrappers** (`Harmony` → reharm preview, `Melody` → motif apply / validated pass-through, `Arrangement` → retain realize or preview, `Critic` → `composition.analysis.v1`) and the remaining four agents stay as typed stubs.
+**Bootstrap:** `LLM_FAKE_MODE=1` registers deterministic fake agents (CI default). Otherwise the spine binds **real service wrappers** (`Harmony` → reharm preview, `Melody` → motif apply / validated pass-through, `Arrangement` → retain realize or preview, `Critic` → Music Evaluation Engine / `composition_critique`) and the remaining four agents stay as typed stubs.
 
 ## Error codes
 

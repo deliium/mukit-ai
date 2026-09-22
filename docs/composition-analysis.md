@@ -1,8 +1,10 @@
-[← Composition Arrangement](composition-arrangement.md) · [Back to README](../README.md) · [MIDI/MusicXML Import →](import.md)
+[← Composition Arrangement](composition-arrangement.md) · [Back to README](../README.md) · [Composition Critique →](composition-critique.md)
 
 # Composition Analysis
 
 Deterministic musical analysis over strict `composition.v2`. The API returns a separate `composition.analysis.v1` sidecar report. Analysis is **not** part of the canonical composition, is **not** stored in project `composition_json`, and is never consumed by playback, notation, or export.
+
+**Related:** Judgment / approve-revise reports live in [composition-critique.md](composition-critique.md) (`agent.critique.v1`). Analysis = metrics sidecar; Critique = evaluation findings. Do not replace Analysis metric cards with critique-only UX.
 
 Native Python over integer ticks and MIDI pitch classes is authoritative. `music21` is optional and non-authoritative for public results.
 
