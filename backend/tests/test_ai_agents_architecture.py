@@ -81,6 +81,8 @@ def test_forbidden_persistence_imports_in_ai_agents():
         "from app.services.project_store",
         "from app.services.project_history_store",
         "from app.services.project_history import",
+        "agent_artifact_workspace",
+        "agent_artifact_settings",
         'os.environ.get("PROJECT_DB_PATH"',
         "os.environ['PROJECT_DB_PATH']",
     )

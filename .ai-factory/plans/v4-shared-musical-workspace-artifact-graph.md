@@ -321,7 +321,7 @@ GC: best-effort on workspace write + project delete; not a microservice. Env key
 
 ### Phase 0: Inventory lock
 
-- [ ] Task 1: Inventory existing schemas and freeze non-goals
+- [x] Task 1: Inventory existing schemas and freeze non-goals
   Deliverable: Short audit module docstring / checklist in the new workspace package stub documenting: (a) existing `AgentArtifactV1` / brief / critique / `composition.plan.v1` / `composition.analysis.v1` reuse; (b) forbidden playable field set shared with plan schemas; (c) agents must not write SQLite / import workspace; (d) no `composition.v4`; (e) default session-only until Apply. Add focused tests that current spine workflow still returns `artifact_log` without requiring durable workspace rows (non-regression).
   LOGGING: DEBUG checklist ids; INFO skip reasons only.
   Files: `backend/app/services/agent_artifact_workspace.py` (stub + docstring), `backend/tests/test_agent_artifact_inventory.py` (new), references to `backend/app/ai_agents/schemas.py`, `composition_plan_schemas.py`.
@@ -329,25 +329,25 @@ GC: best-effort on workspace write + project delete; not a microservice. Env key
 
 ### Phase 1: Typed contracts
 
-- [ ] Task 2: Define typed content schemas for all required artifact kinds
+- [x] Task 2: Define typed content schemas for all required artifact kinds
   Deliverable: Pydantic models for FormPlan, HarmonyPlan, MotifPlan, ArrangementPlan, OrchestrationPlan, PerformancePlan, ProductionPlan, RevisionPlan, CompositionPatch, RenderPlan; extend CreativeBrief / CritiqueReport only if missing required fields. Each schema: `schema_version` literal, `extra=forbid`, shared forbidden-playable guards (tracks/events/notes/musicxml/midi/wav). CompositionPlan continues to use `composition.plan.v1`. **MusicAnalysis durable bound:** define a bounded projection / hard byte cap for promote (warning_codes + counts + scope digests); full `composition.analysis.v1` remains session-only unless under cap; oversized → `artifact_payload_rejected`. CompositionPatch must describe realize ops/refs — reject embedding a full `tracks[].events[]` score. Unit-test accept/reject fixtures per type.
   LOGGING: INFO schema load counts; DEBUG reject codes; never payload bodies at INFO.
   Files: `backend/app/ai_agents/artifact_schemas.py` (new) and/or extend `ai_agents/schemas.py`; `backend/tests/test_agent_artifact_typed_schemas.py`.
   Depends on: Task 1.
 
-- [ ] Task 3: Dependency registry + validation
+- [x] Task 3: Dependency registry + validation
   Deliverable: Declarative dependency map (MotifPlan→Brief+HarmonyPlan; ArrangementPlan→CompositionPlan|+source revision; etc.). Validator that checks `depends_on` / `parent_artifact_ids` + available context slots / source_revision_id. Stable error `artifact_dependency_unsatisfied`. Unit tests for happy path + missing HarmonyPlan for MotifPlan + ArrangementPlan without revision/fingerprint.
   LOGGING: INFO validation pass/fail with content_type + missing dependency types; DEBUG artifact id prefixes.
   Files: `backend/app/ai_agents/artifact_dependencies.py` (new), tests `backend/tests/test_agent_artifact_dependencies.py`.
   Depends on: Task 2.
 
-- [ ] Task 4: Extend `AgentArtifactV1` envelope metadata + payload validate
+- [x] Task 4: Extend `AgentArtifactV1` envelope metadata + payload validate
   Deliverable: Add `created_at`, `source_revision_id`, `depends_on`, `supersedes_artifact_id`, `retention_class`, `expires_at` with validators; extend `AGENT_CONTENT_TYPES` allow-list; ensure `mutates_composition` remains false. Provide `validate_artifact_payload(content_type, payload)` used on envelope construction (and later on workspace insert). Session artifacts default temporary TTL only when persisted; in-memory envelopes may omit `expires_at`. Tests for immutability of validated model.
   LOGGING: DEBUG envelope field presence; INFO reject codes.
   Files: `backend/app/ai_agents/schemas.py`, payload validate helper (schemas or `artifact_schemas.py`), `backend/tests/test_ai_agents_schemas.py` (extend).
   Depends on: Task 2, Task 3.
 
-- [ ] Task 5: Extend agent/workspace error HTTP map
+- [x] Task 5: Extend agent/workspace error HTTP map
   Deliverable: Add stable codes to `ai_agents/errors.py` + `_HTTP_STATUS` / `map_agent_error_to_http`: `artifact_dependency_unsatisfied`, `artifact_immutable_violation`, `artifact_not_found`, `artifact_payload_rejected`, `artifact_playable_fields_forbidden`, `artifact_retention_rejected`, `workspace_quota_exceeded`. Exception subclasses or factory as needed. Unit-test code → status mapping. Sanitized `detail` only (no payloads/prompts).
   LOGGING: WARN/ERROR with code + artifact_id/project_id prefixes only.
   Files: `backend/app/ai_agents/errors.py`, `backend/tests/test_ai_agents_errors.py` (extend).
@@ -355,7 +355,7 @@ GC: best-effort on workspace write + project delete; not a microservice. Env key
 
 ### Phase 2: Durable workspace
 
-- [ ] Task 6: Alembic migration for immutable artifact tables
+- [x] Task 6: Alembic migration for immutable artifact tables
   Deliverable: Migration after `20260921_0002` (e.g. `20260922_0003_agent_artifacts`) creating:
   - `agent_artifacts` (id PK, project_id FK CASCADE, content_type, kind, producer_agent_id, source_revision_id, source_fingerprint, payload_json, parent_ids_json, depends_on_json, provenance_json, supersedes_artifact_id, retention_class, expires_at, content_digest, created_at; CHECK retention; indexes on project+created, expires, revision)
   - `revision_artifact_links` (revision_id, role, artifact_id, PRIMARY KEY(revision_id, role); FK cascade; **CHECK role IN** (`brief`,`harmony_plan`,`motif_plan`,`arrangement_plan`,`critique`,`revision_plan`))
@@ -364,13 +364,13 @@ GC: best-effort on workspace write + project delete; not a microservice. Env key
   Files: `backend/app/db/alembic/versions/20260922_0003_agent_artifacts.py` (new).
   Depends on: Task 4.
 
-- [ ] Task 7: Workspace service — insert, fetch, promote, GC + env passthrough
+- [x] Task 7: Workspace service — insert, fetch, promote, GC + env passthrough
   Deliverable: `agent_artifact_workspace` APIs: `insert_temporary` (optional preview path only), `get_artifact`, `list_project_artifacts` (metadata only), `promote_and_link_revision`, `gc_expired_temporary`. INSERT-only payloads; UPDATE payload → `artifact_immutable_violation`. Call `validate_artifact_payload` + secret guard before insert. Enforce temp quota. **Must not be imported by `ai_agents/` agent modules.** Settings: `AGENT_ARTIFACT_TEMP_TTL_HOURS`, `AGENT_ARTIFACT_TEMP_MAX_PER_PROJECT` in `agent_artifact_settings.py` + `.env.example` + **`docker-compose.yml` passthrough** (and compose.dev if present).
   LOGGING: INFO insert/promote/gc counts + project_id + retention; DEBUG id prefixes; ERROR codes only.
   Files: `backend/app/services/agent_artifact_workspace.py`, `backend/app/agent_artifact_settings.py` (new), `.env.example`, `docker-compose.yml`, tests `backend/tests/test_agent_artifact_workspace.py`.
   Depends on: Task 5, Task 6.
 
-- [ ] Task 8: History projection DTOs + API enrichment (backend only)
+- [x] Task 8: History projection DTOs + API enrichment (backend only)
   Deliverable: `revision.ai_artifact_summary.v1` DTO; enrich revision detail (and list when cheap) for `multi-agent-apply` revisions with role map. Optional `GET /projects/{id}/artifacts/{artifact_id}` for inspect (payload allowed under size cap, secret-guarded, never on list). **No FE panel work in this task** (Task 13).
   LOGGING: INFO summary role counts; DEBUG missing roles; never payloads at INFO.
   Files: `backend/app/project_history_schemas.py`, `backend/app/services/project_history.py` / store join helpers, `backend/app/routers/projects.py` as needed, backend tests for summary shape.
@@ -378,31 +378,31 @@ GC: best-effort on workspace write + project delete; not a microservice. Env key
 
 ### Phase 3: Wire spine + Apply
 
-- [ ] Task 9: Update spine agents to emit typed plans
+- [x] Task 9: Update spine agents to emit typed plans
   Deliverable: Creative Director → CreativeBrief (+ CompositionPlan or FormPlan as available); Harmony → HarmonyPlan (+ CompositionPatch for realize); Melody/Motif → MotifPlan (+ patch); Arrangement → ArrangementPlan (+ arrangement candidate/patch); Critic → bounded MusicAnalysis + CritiqueReport + optional RevisionPlan when revise. Set `depends_on` / parents correctly. Progressive realize still only via existing trust-boundary helpers. Fake agents updated for deterministic CI. Non-spine agents: stub/recommendation emit only (schemas exist; no full adapter expansion).
   LOGGING: INFO agent_id + content_types produced; DEBUG dependency edges; never prompts.
   Files: `backend/app/ai_agents/agents/*.py`, `fake_agents.py`, `progressive_realize.py` adapters if needed; tests `test_ai_agents_workflow.py` / new typed emit tests.
   Depends on: Task 2, Task 3, Task 4.
 
-- [ ] Task 10: Lock `artifact_role_map` Apply / FE contract
+- [x] Task 10: Lock `artifact_role_map` Apply / FE contract
   Deliverable: Define and document `generation_parameters.artifact_role_map` (role → `{artifact_id, content_type}`). Update `buildAiCandidateEnvelope` / multi-agent extras so preview `artifact_log` produces the map; `applyMultiAgentCandidate` forwards it on DurableCommit / ApplyAsBranch. Server-side validator rejects missing required roles for spine Apply (`brief`, `harmony_plan`, `motif_plan`, `arrangement_plan`, `critique`; `revision_plan` required only on revise path). Unit tests FE + backend schema accept/reject.
   LOGGING: INFO role keys present/absent; DEBUG artifact_id prefixes; never payloads.
   Files: `frontend/src/utils/compositionCandidateLifecycle.js` (+ multiAgent test), `frontend/src/store/musicStore.js`, `backend/app/project_history_schemas.py` / AiProvenance as needed, tests.
   Depends on: Task 9.
 
-- [ ] Task 11: Promote artifacts on `multi-agent-apply`
+- [x] Task 11: Promote artifacts on `multi-agent-apply`
   Deliverable: When FE/API commits multi-agent candidate with project open, Apply path validates `artifact_role_map`, promotes envelopes into durable rows + `revision_artifact_links` **in the same transaction** as the revision commit. Fingerprint gate unchanged. No project → skip promote (local apply only). Competing session candidates discard policy unchanged. Acceptance: after Apply, revision detail exposes non-null brief, harmony_plan, motif_plan, arrangement_plan, critique (`revision_plan` null when approve).
   LOGGING: INFO promote role map + revision_id prefix; WARN missing optional roles; ERROR on promote failure (no half-linked state).
   Files: `backend/app/services/project_history.py` (or apply helper), routers as needed, tests `backend/tests/test_agent_artifact_apply_binding.py`.
   Depends on: Task 7, Task 8, Task 9, Task 10.
 
-- [ ] Task 12: Acceptance spine integration test
+- [x] Task 12: Acceptance spine integration test
   Deliverable: End-to-end (fake mode): workflow preview → Apply → GET revision shows exact artifact ids for brief, harmony_plan, motif_plan, arrangement_plan, critique, and revision_plan when revise path used. Assert payloads are non-playable (no tracks/events). Assert `ai_agents/` still has no DB / workspace imports.
   LOGGING: INFO workflow_id + revision_id prefixes + role keys present.
   Files: `backend/tests/test_agent_artifact_acceptance.py` (new); extend architecture import gate.
   Depends on: Task 8, Task 11.
 
-- [ ] Task 13: Thin Versions UI surfacing
+- [x] Task 13: Thin Versions UI surfacing
   Deliverable: Show meaningful AI artifact role summary on multi-agent revisions using `ai_artifacts` / summary DTO from Task 8. Product role labels only (no raw slot names like `harmony_artifact`). Extend or complement `formatRevisionProvenanceSummary`. Accessibility: text summary sufficient.
   LOGGING: FE debug only under existing VITE_LOG_LEVEL; no payload dumps.
   Files: `frontend/src/components/ProjectVersionsPanel.jsx`, `frontend/src/utils/compositionCandidateLifecycle.js` (or small helper) + unit test.
@@ -410,13 +410,13 @@ GC: best-effort on workspace write + project delete; not a microservice. Env key
 
 ### Phase 4: Retention, hardening, docs
 
-- [ ] Task 14: GC/retention tests + architecture gates
+- [x] Task 14: GC/retention tests + architecture gates
   Deliverable: Tests for TTL expiry deletion, quota enforcement, immutable update rejection, forbidden playable fields, dependency failures, project CASCADE cleanup, payload validate on insert, and `ai_agents/` forbidden import of workspace write entrypoints / `PROJECT_DB_PATH`. Structured logging assertions where practical.
   LOGGING: INFO GC deleted counts in tests via caplog where useful.
   Files: `backend/tests/test_agent_artifact_gc.py`, extend `test_ai_agents_architecture.py` / registry forbidden-import tests.
   Depends on: Task 7, Task 11.
 
-- [ ] Task 15: Documentation checkpoint
+- [x] Task 15: Documentation checkpoint
   Deliverable: Update `docs/multi-agent.md` with Shared Musical Workspace section: typed inventory, dependency examples, session-default vs optional temps, immutability/`content_digest`, `artifact_role_map`, promote-on-Apply, history summary DTO, retention env knobs, anti-patterns. Cross-link `docs/project-persistence.md`. Update `AGENTS.md` if structure changed significantly. Note that artifact graph completes inspectability AC for V4 (do not uncheck completed roadmap milestone unless product owner requests).
   LOGGING: n/a for docs prose; keep log policy section accurate.
   Files: `docs/multi-agent.md`, optional `docs/project-persistence.md`, `AGENTS.md` if needed, `.env.example`.

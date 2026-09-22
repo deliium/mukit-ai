@@ -135,9 +135,14 @@ RUN_DOCKER_ACCEPTANCE=1 ./scripts/v1_docker_acceptance.sh
 
 No persistence test requires provider API keys.
 
+## Multi-agent AI artifacts
+
+`multi-agent-apply` revisions may bind typed, immutable agent artifacts (`agent_artifacts` + `revision_artifact_links`) in the same SQLite transaction as DurableCommit. Revision list/detail expose `summary.ai_artifacts` (`revision.ai_artifact_summary.v1`) — role metadata only, never full payloads. See [Multi-agent](multi-agent.md#shared-musical-workspace-typed-agent-artifact-graph).
+
 ## See Also
 
 - [Composition V2](composition-v2.md) — V2 contract and migrate-on-open fidelity rules (history lives outside the V2 document)
+- [Multi-agent](multi-agent.md) — typed agent-artifact workspace, promote-on-Apply, retention
 - [Composition Development](composition-development.md) — preview-first develop + Apply / Apply-as-branch
 - [Composition Arrangement](composition-arrangement.md) — session-only previews; applied V2 only
 - [Composition Analysis](composition-analysis.md) — derived reports are not stored in `composition_json`

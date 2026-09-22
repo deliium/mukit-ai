@@ -22,10 +22,11 @@ mukit-ai/
 │   │   ├── main.py          # Composition / LLM / export routes
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
 │   │   ├── ai_runtime/      # Capability registry, operation routing, typed model adapters
-│   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize)
+│   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas)
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
+│   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
 │   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + motifs + harmony + arrangement + development + embeddings + ai_models + ai_agents HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. import, audio_transcription, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
+│   │   ├── services/        # Domain + orchestration (incl. agent_artifact_workspace, import, audio_transcription, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
@@ -123,7 +124,9 @@ mukit-ai/
 | `backend/app/ai_runtime/local_health.py` | Bounded local sidecar health probe |
 | `backend/app/ai_runtime/runtimes/local_language.py` | `LocalLanguageModel` (OpenAI-compatible HTTP only) |
 | `backend/app/routers/ai_models.py` | `GET /ai/models` (+ `/{id}`) discovery |
-| `backend/app/routers/ai_agents.py` | `GET /ai/agents`, `POST /ai/agents/{id}/run`, workflow preview |
+| `backend/app/routers/ai_agents.py` | `GET /ai/agents`, `POST /ai/agents/{id}/run`, workflow preview (optional `persist_workspace_artifacts`) |
+| `backend/app/services/agent_artifact_workspace.py` | Immutable typed artifact INSERT/promote/GC; never imported by `ai_agents/` |
+| `backend/app/services/artifact_role_map.py` | Validate `artifact_role_map` for `multi-agent-apply` |
 | `backend/app/routers/projects.py` | Project CRUD + autosave + revision/branch history APIs |
 | `backend/app/services/project_history.py` | Revision list/detail, durable commit/restore, branch checkout/apply-as-branch |
 | `backend/app/services/project_history_store.py` | SQLite CAS history graph + compressed composition snapshots |
@@ -212,6 +215,6 @@ mukit-ai/
 - Decompose shell command chains; do not combine unrelated git operations with `&&` when a failure mid-chain is confusing
   - Incorrect: `git checkout main && git pull`
   - Correct: First `git checkout main`, then `git pull origin main`
-- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data. Arrangement catalog IDs/ranges are not V2 fields; only applied V2 is persisted. Symbolic embeddings measure affinity from note material — never artist≡style ids; never auto-export projects into `DATASET_ROOT`.
+- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data. Arrangement catalog IDs/ranges are not V2 fields; only applied V2 is persisted. Typed agent plans live in `agent.artifact.v1` envelopes / `agent_artifact_workspace` — never as alternate playable scores (`composition.v4` unsupported); `ai_agents/` must not import the workspace or SQLite. Symbolic embeddings measure affinity from note material — never artist≡style ids; never auto-export projects into `DATASET_ROOT`.
 - Prefer extending `routers/` + `services/` over growing unrelated logic in `main.py`
 - Never log API keys, full prompts, raw MusicXML/MIDI/WAV payloads, uploaded import source bytes, full analysis reports, event arrays, or arrangement catalog override contents

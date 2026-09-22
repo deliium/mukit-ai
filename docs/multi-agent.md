@@ -112,15 +112,52 @@ Default ops are mapped in `ai_agents/binding.py`. Override via request `agent_mo
 | `workflow_revise_exhausted` | 422 |
 | `agent_model_unresolved` | 503 |
 | `working_draft_invalid` | 422 |
+| `artifact_dependency_unsatisfied` | 422 |
+| `artifact_immutable_violation` | 422 |
+| `artifact_not_found` | 404 |
+| `artifact_payload_rejected` | 422 |
+| `artifact_playable_fields_forbidden` | 422 |
+| `artifact_retention_rejected` | 422 |
+| `workspace_quota_exceeded` | 429 |
+
+## Shared Musical Workspace (typed agent-artifact graph)
+
+Cooperating agents exchange **typed, immutable** plans/analysis inside `agent.artifact.v1` envelopes. Canonical playable notes stay on `composition.v2` only — plans never become an alternate score (`composition.v4` unsupported).
+
+```text
+composition.v2 revision
+  → AgentWorkflowContext (session slots + working_draft)
+  → agents emit typed payloads (brief / harmony_plan / motif_plan / …)
+  → [default] session-only artifact_log until Apply
+  → [optional] temporary SQLite rows when preview sets persist_workspace_artifacts
+  → progressive realize → fingerprintable candidate V2
+  → Apply (multi-agent-apply CAS) + artifact_role_map
+  → INSERT durable rows + revision_artifact_links (same transaction)
+  → Versions UI shows role summary (Brief / Harmony / Motif / …)
+```
+
+**Inventory (content types):** `agent.brief.v1`, `composition.plan.v1`, `agent.form_plan.v1`, `agent.harmony_plan.v1`, `agent.motif_plan.v1`, `agent.arrangement_plan.v1`, `agent.orchestration_plan.v1`, `agent.performance_plan.v1`, `agent.production_plan.v1`, `composition.analysis.v1` / bounded projection, `agent.critique.v1`, `agent.revision_plan.v1`, `agent.composition_patch.v1`, `agent.render_plan.v1`.
+
+**Dependencies (examples):** MotifPlan → Brief + HarmonyPlan; ArrangementPlan → CompositionPlan or (FormPlan + HarmonyPlan) plus source revision/fingerprint; RevisionPlan → Critique with `recommendation=revise`; CompositionPatch → at least one realize-understood plan.
+
+**Immutability:** INSERT-only payloads; `content_digest = sha256(canonical_json(payload))`. Corrections = new `artifact_id` + `supersedes_artifact_id`. Agents never import `agent_artifact_workspace` / SQLite.
+
+**Apply contract:** FE builds `generation_parameters.artifact_role_map` from preview `artifact_log` (roles: `brief`, `harmony_plan`, `motif_plan`, `arrangement_plan`, `critique`, optional `revision_plan`) and sends envelopes for promote. Server validates roles and promotes in the DurableCommit transaction.
+
+**History:** Revision list/detail for `multi-agent-apply` include `summary.ai_artifacts` (`revision.ai_artifact_summary.v1`) — role metadata only. Optional `GET /projects/{id}/artifacts/{artifact_id}` for size-capped inspect.
+
+**Retention:** Temporary TTL `AGENT_ARTIFACT_TEMP_TTL_HOURS` (default 24); cap `AGENT_ARTIFACT_TEMP_MAX_PER_PROJECT` (default 200). Durable rows live with the project (CASCADE delete).
+
+**Anti-patterns:** mutable blackboard; agents writing SQLite; embedding full V2 in CompositionPatch; dumping payloads on revision list; auto-applying Critic approve.
 
 ## Logging / security
 
-INFO: workflow_id, agent_id, artifact kind/content_type, model_id, duration_ms, recommendation.  
-Never log prompts, API keys, full V2 event arrays, or full critique prose at INFO.
+INFO: workflow_id, agent_id, artifact kind/content_type, model_id, duration_ms, recommendation, promote role keys, GC deleted counts.  
+Never log prompts, API keys, full V2 event arrays, full payloads, or full critique prose at INFO.
 
 ## Frontend
 
-Thin **Agents** tab (`MultiAgentPanel`): Preview spine → Apply / Discard. Setting a multi-agent candidate discards competing arrangement / development / reharmonize session candidates.
+Thin **Agents** tab (`MultiAgentPanel`): Preview spine → Apply / Discard. Setting a multi-agent candidate discards competing arrangement / development / reharmonize session candidates. Versions panel shows AI role summary for multi-agent revisions.
 
 ## See also
 
