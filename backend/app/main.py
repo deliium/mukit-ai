@@ -489,7 +489,9 @@ async def edit_llm_composition_region(request: LLMCompositionEditRequest):
 
     try:
         settings = load_llm_settings()
-        composition, patch, warnings, provider = await edit_composition_region(request, settings)
+        composition, patch, warnings, provider, generation_parameters = await edit_composition_region(
+            request, settings
+        )
         musicxml, render_report = render_musicxml(composition)
         all_warnings = [*warnings, *projection_issues_as_warnings(render_report), *patch.warnings]
         logger.info(
@@ -503,6 +505,7 @@ async def edit_llm_composition_region(request: LLMCompositionEditRequest):
                 "end_bar": patch.end_bar,
                 "warning_count": len(all_warnings),
                 "event_count": sum(len(track.events) for track in composition.tracks),
+                "has_generation_parameters": bool(generation_parameters),
             },
         )
         logger.debug(
@@ -523,8 +526,16 @@ async def edit_llm_composition_region(request: LLMCompositionEditRequest):
             model=provider.model,
             musicxml=musicxml,
             warnings=all_warnings,
+            generation_parameters=generation_parameters,
             **_ai_resolution_response_fields(),
         )
+    except ReferenceFeatureError as exc:
+        status, detail = map_reference_feature_error_to_http(exc)
+        logger.warning(
+            "Reference conditioning rejected on region edit",
+            extra={"error_code": exc.code, "http_status": status},
+        )
+        raise HTTPException(status_code=status, detail=detail) from exc
     except NoLLMProviderConfiguredError as exc:
         logger.warning(
             "LLM region edit provider unavailable",

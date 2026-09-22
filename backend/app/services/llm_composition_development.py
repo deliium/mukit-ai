@@ -256,14 +256,24 @@ async def run_composition_development_preview(
     style_conditioning_fragment: dict[str, Any] | None = None
     reference_feature_warnings: list[str] = []
     from app.reference_feature_schemas import ReferenceFeatureError
-    from app.services.reference_feature_condition import (
-        resolve_reference_feature_conditioning,
+    from app.services.reference_conditioning_policy import (
+        assemble_reference_conditioning,
+        preserve_scope_for_develop,
     )
 
     try:
-        ref_condition = resolve_reference_feature_conditioning(
+        preserve_scope = preserve_scope_for_develop(
+            source_start_bar=context.scope.source_start_bar,
+            source_end_bar=context.scope.source_end_bar,
+        )
+        ref_condition = assemble_reference_conditioning(
             style_reference=request.style_reference,
             style_references=getattr(request, "style_references", None),
+            policy=getattr(request, "reference_conditioning_policy", None),
+            active_project_id=getattr(request, "active_project_id", None),
+            operation="develop",
+            current_composition=request.composition,
+            preserve_scope=preserve_scope,
         )
     except ReferenceFeatureError as exc:
         raise CompositionDevelopmentError(
@@ -284,6 +294,10 @@ async def run_composition_development_preview(
             "reference_features": list(ref_condition.provenance_entries),
             "artist_label_used": False,
         }
+        if ref_condition.policy_provenance:
+            style_conditioning_fragment["reference_conditioning_policy"] = (
+                ref_condition.policy_provenance
+            )
         context_payload = {
             **context_payload,
             "style_conditioning": style_conditioning_fragment,
@@ -293,8 +307,12 @@ async def run_composition_development_preview(
             extra={
                 "binding_count": ref_condition.binding_count,
                 "applied_dimension_count": len(ref_condition.applied_dimension_ids),
+                "preserve_count": len(ref_condition.applied_preserve_dimension_ids),
+                "borrow_count": len(ref_condition.applied_borrow_dimension_ids),
+                "regenerate_count": len(ref_condition.applied_regenerate_dimension_ids),
                 "fragment_chars": len(ref_condition.soft_fragment or ""),
                 "has_legacy_summary": bool(ref_condition.legacy_feature_summary),
+                "has_policy": ref_condition.policy_provenance is not None,
                 "warning_count": len(reference_feature_warnings),
             },
         )

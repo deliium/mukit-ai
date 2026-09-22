@@ -51,6 +51,8 @@ class _EditState(TypedDict, total=False):
     provider: LLMProviderSettings
     scope_summary: RegionSelectionSummary
     analysis_context: str
+    reference_soft_block: str
+    generation_parameters: dict[str, Any]
     raw_output: str
     parsed_json: dict[str, Any]
     patch: CompositionRegionReplacementPatch
@@ -141,8 +143,18 @@ def _safe_edit_analysis_context(
 async def edit_composition_region(
     request: LLMCompositionEditRequest,
     settings: LLMSettings | None = None,
-) -> tuple[CompositionV2, CompositionRegionReplacementPatch, list[str], LLMProviderSettings]:
-    """Edit only the selected region via a replace_region patch graph; returns CompositionV2."""
+) -> tuple[
+    CompositionV2,
+    CompositionRegionReplacementPatch,
+    list[str],
+    LLMProviderSettings,
+    dict[str, Any] | None,
+]:
+    """Edit only the selected region via a replace_region patch graph; returns CompositionV2.
+
+    Fifth return value is secret-safe ``generation_parameters`` (reference features +
+    policy digest) for Apply CAS provenance — never soft fragment text.
+    """
     active_settings = settings or load_llm_settings()
     # Reuse provider selection from the full-generation service; request shape shares selection fields.
     from app.ai_runtime.operations import AiOperation
@@ -155,6 +167,8 @@ async def edit_composition_region(
     normalized_composition = normalize_composition_json(request.composition)
     request = request.model_copy(update={"composition": normalized_composition})
 
+    reference_soft_block, generation_parameters = _resolve_edit_reference_conditioning(request)
+
     if is_fake_provider(provider):
         logger.info(
             "Routing composition region edit to fake LLM provider",
@@ -163,10 +177,15 @@ async def edit_composition_region(
                 "model": model_name,
                 "start_bar": request.edit.selection.start_bar,
                 "end_bar": request.edit.selection.end_bar,
+                "has_reference_policy": bool(generation_parameters),
             },
         )
         try:
-            return await edit_fake_composition_region(request, provider)
+            return await edit_fake_composition_region(
+                request,
+                provider,
+                generation_parameters=generation_parameters,
+            )
         except FakeLLMError as exc:
             raise InvalidLLMOutputError(str(exc)) from exc
         except CompositionRegionPatchError as exc:
@@ -197,6 +216,7 @@ async def edit_composition_region(
             "allow_added_tracks": request.edit.allow_added_tracks,
             "instruction_length": len(request.edit.instruction),
             "schema_version": request.composition.schema_version,
+            "has_reference_soft_block": bool(reference_soft_block.strip()),
         },
     )
     logger.debug(
@@ -222,6 +242,8 @@ async def edit_composition_region(
         "repair_count": 0,
         "retry_limit": min(request.options.max_retries, MAX_EDIT_REPAIR_ATTEMPTS),
         "current_stage": "analyze_edit_scope",
+        "reference_soft_block": reference_soft_block,
+        "generation_parameters": generation_parameters or {},
     }
 
     graph = _build_edit_graph()
@@ -261,9 +283,62 @@ async def edit_composition_region(
             "final_event_count": event_count,
             "repair_count": final_state.get("repair_count", 0),
             "schema_version": composition.schema_version,
+            "has_generation_parameters": bool(generation_parameters),
         },
     )
-    return composition, patch, warnings, provider
+    return composition, patch, warnings, provider, generation_parameters
+
+
+def _resolve_edit_reference_conditioning(
+    request: LLMCompositionEditRequest,
+) -> tuple[str, dict[str, Any] | None]:
+    """Assemble policy soft block + provenance for region edit (reference-only anti-copy)."""
+    from app.services.reference_conditioning_policy import (
+        assemble_reference_conditioning,
+        merge_reference_conditioning_provenance,
+        preserve_scope_for_edit,
+    )
+    from app.services.reference_feature_condition import combined_reference_soft_block
+
+    selection = request.edit.selection
+    track_id = None
+    if selection.track_ids and len(selection.track_ids) == 1:
+        track_id = selection.track_ids[0]
+    preserve_scope = preserve_scope_for_edit(
+        start_bar=selection.start_bar,
+        end_bar=selection.end_bar,
+        track_id=track_id,
+    )
+    assembly = assemble_reference_conditioning(
+        style_reference=getattr(request, "style_reference", None),
+        style_references=getattr(request, "style_references", None),
+        policy=getattr(request, "reference_conditioning_policy", None),
+        active_project_id=getattr(request, "active_project_id", None),
+        operation="edit",
+        current_composition=request.composition,
+        preserve_scope=preserve_scope,
+    )
+    soft = combined_reference_soft_block(
+        masked_fragment=assembly.soft_fragment,
+        legacy_summary=assembly.legacy_feature_summary,
+    )
+    provenance = merge_reference_conditioning_provenance({}, assembly)
+    generation_parameters = provenance.get("generation_parameters") or None
+    if generation_parameters is not None and not generation_parameters:
+        generation_parameters = None
+    logger.info(
+        "Edit reference conditioning resolved",
+        extra={
+            "start_bar": selection.start_bar,
+            "end_bar": selection.end_bar,
+            "preserve_count": len(assembly.applied_preserve_dimension_ids),
+            "borrow_count": len(assembly.applied_borrow_dimension_ids),
+            "regenerate_count": len(assembly.applied_regenerate_dimension_ids),
+            "fragment_chars": len(soft),
+            "has_generation_parameters": bool(generation_parameters),
+        },
+    )
+    return soft, generation_parameters
 
 
 def _build_edit_graph():
@@ -342,6 +417,7 @@ async def _draft_region_patch(state: _EditState) -> _EditState:
         summary,
         diagnostics=None,
         analysis_context=state.get("analysis_context") or "",
+        reference_soft_block=state.get("reference_soft_block") or "",
     )
     try:
         raw_output = await _invoke_edit_chat(state, prompt)
@@ -480,6 +556,7 @@ async def _repair_patch(state: _EditState) -> _EditState:
         summary,
         diagnostics=diagnostics,
         analysis_context=analysis_context,
+        reference_soft_block=state.get("reference_soft_block") or "",
     )
     try:
         raw_output = await _invoke_edit_chat(state, prompt)
@@ -554,6 +631,7 @@ def _build_draft_prompt(
     summary: RegionSelectionSummary,
     diagnostics: list[dict[str, Any]] | None,
     analysis_context: str = "",
+    reference_soft_block: str = "",
 ) -> str:
     selection = request.edit.selection
     composition = request.composition
@@ -675,6 +753,11 @@ def _build_draft_prompt(
     )
     if analysis_context:
         prompt += f"\n{analysis_context}\n"
+    # Soft conditioning after analysis; anti-copy applies to reference material only.
+    # Keep in_region_events / harmony-in-region above for the replace_region patch contract.
+    soft = (reference_soft_block or "").strip()
+    if soft:
+        prompt += f"\nReference conditioning (abstract soft guidance only):\n{soft}\n"
     if diagnostics:
         prompt += (
             "Previous patch failed validation. Fix these diagnostics without changing out-of-scope notes:\n"

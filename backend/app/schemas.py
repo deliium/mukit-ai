@@ -798,6 +798,8 @@ class LLMCompositionEditResponse(BaseModel):
     musicxml: str | None = None
     musicxml_filename: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    # Secret-safe provenance for Apply CAS (reference_features + policy digest).
+    generation_parameters: dict[str, Any] | None = None
 
 
 def _measure_quarter_length(time_signature: str) -> float:

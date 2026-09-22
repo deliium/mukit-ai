@@ -116,7 +116,7 @@ def test_edit_composition_region_dramatic_melody_preserves_outside_and_harmony(m
     monkeypatch.setattr(llm_composition_editor, "_invoke_edit_chat", fake_chat)
 
     with caplog.at_level(logging.INFO):
-        composition, patch, warnings, provider = asyncio.run(edit_composition_region(request, _settings()))
+        composition, patch, warnings, provider, _gen = asyncio.run(edit_composition_region(request, _settings()))
 
     assert provider.provider == "openai"
     assert composition.schema_version == "composition.v2"
@@ -179,7 +179,7 @@ def test_edit_composition_region_accepts_expressive_v2_patch(monkeypatch):
         return json.dumps(patch_payload)
 
     monkeypatch.setattr(llm_composition_editor, "_invoke_edit_chat", fake_chat)
-    composition, patch, _warnings, _provider = asyncio.run(edit_composition_region(request, _settings()))
+    composition, patch, _warnings, _provider, _gen = asyncio.run(edit_composition_region(request, _settings()))
     assert composition.schema_version == "composition.v2"
     assert patch.schema_version == "composition.v2"
     melody = next(track for track in composition.tracks if track.id == "melody-1")
@@ -202,7 +202,7 @@ def test_edit_composition_region_supported_melody_scenarios(monkeypatch, instruc
         return patch_json
 
     monkeypatch.setattr(llm_composition_editor, "_invoke_edit_chat", fake_chat)
-    composition, patch, _warnings, _provider = asyncio.run(edit_composition_region(request, _settings()))
+    composition, patch, _warnings, _provider, _gen = asyncio.run(edit_composition_region(request, _settings()))
     assert patch.target_track_ids == ["melody-1"]
     melody = next(track for track in composition.tracks if track.id == "melody-1")
     in_region = [event for event in melody.events if 8 * BAR_TICKS_4_4 <= event.start_tick < 12 * BAR_TICKS_4_4]
@@ -236,7 +236,7 @@ def test_edit_composition_region_simplify_accompaniment(monkeypatch):
         return json.dumps(payload)
 
     monkeypatch.setattr(llm_composition_editor, "_invoke_edit_chat", fake_chat)
-    composition, patch, _warnings, _provider = asyncio.run(edit_composition_region(request, _settings()))
+    composition, patch, _warnings, _provider, _gen = asyncio.run(edit_composition_region(request, _settings()))
     assert patch.target_track_ids == ["harmony-1"]
     harmony = next(track for track in composition.tracks if track.id == "harmony-1")
     assert len([e for e in harmony.events if 8 * BAR_TICKS_4_4 <= e.start_tick < 12 * BAR_TICKS_4_4]) == 4
@@ -250,7 +250,7 @@ def test_edit_composition_region_change_bass_line(monkeypatch):
         return json.dumps(payload)
 
     monkeypatch.setattr(llm_composition_editor, "_invoke_edit_chat", fake_chat)
-    composition, patch, _warnings, _provider = asyncio.run(edit_composition_region(request, _settings()))
+    composition, patch, _warnings, _provider, _gen = asyncio.run(edit_composition_region(request, _settings()))
     assert patch.target_track_ids == ["bass-1"]
     bass = next(track for track in composition.tracks if track.id == "bass-1")
     assert [e.pitch for e in bass.events if 8 * BAR_TICKS_4_4 <= e.start_tick < 12 * BAR_TICKS_4_4] == [
@@ -284,7 +284,7 @@ def test_edit_composition_region_added_counter_melody(monkeypatch):
         return json.dumps(payload)
 
     monkeypatch.setattr(llm_composition_editor, "_invoke_edit_chat", fake_chat)
-    composition, patch, _warnings, _provider = asyncio.run(edit_composition_region(request, _settings()))
+    composition, patch, _warnings, _provider, _gen = asyncio.run(edit_composition_region(request, _settings()))
     assert any(track.id == "counter-1" for track in composition.tracks)
     assert len(patch.added_tracks) == 1
 

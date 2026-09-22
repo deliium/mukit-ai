@@ -4165,6 +4165,7 @@ export const useMusicStore = create((set, get) => ({
     warnings = [],
     provider = null,
     model = null,
+    generation_parameters = null,
   } = {}) => {
     const capture = get().aiEditRequestCapture;
     if (!capture || get().aiEditStatus !== 'loading') {
@@ -4221,11 +4222,16 @@ export const useMusicStore = create((set, get) => ({
       declaredRanges: [{ start_bar: capture.startBar, end_bar: capture.endBar }],
       declaredTrackIds: capture.trackIds || [],
       musicXml: musicxml || '',
+      generationParameters:
+        generation_parameters && typeof generation_parameters === 'object'
+          ? generation_parameters
+          : null,
     });
     console.info('[musicStore] AI edit candidate staged', {
       ...aiCandidateLogFields(candidate),
       startBar: capture.startBar,
       endBar: capture.endBar,
+      hasGenerationParameters: Boolean(candidate.generation_parameters),
     });
     set({
       aiEditCandidate: candidate,

@@ -206,6 +206,7 @@ const AiRegionEditPanel = () => {
         warnings: response.warnings || [],
         provider: response.provider,
         model: response.model,
+        generation_parameters: response.generation_parameters || null,
       });
       if (!staged) {
         return;
@@ -214,6 +215,7 @@ const AiRegionEditPanel = () => {
         eventCount: Array.isArray(response.composition?.tracks)
           ? response.composition.tracks.reduce((total, track) => total + (track.events?.length || 0), 0)
           : 0,
+        hasGenerationParameters: Boolean(response.generation_parameters),
       });
     } catch (error) {
       const message = error.message || 'AI region edit failed';

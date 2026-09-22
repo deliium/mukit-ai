@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 from ..llm_settings import FAKE_PROVIDER, LLMProviderSettings
 from ..schemas import (
@@ -617,8 +618,26 @@ async def generate_fake_music_json(
 
     if reference_features_active_for_fake(request):
         singular = getattr(request, "style_reference", None)
-        dims = getattr(singular, "dimensions", None) if singular is not None else None
-        dim_key = ",".join(sorted(dims)) if dims else "legacy"
+        multi = getattr(request, "style_references", None) or []
+        policy = getattr(request, "reference_conditioning_policy", None)
+        dim_parts: list[str] = []
+        if multi:
+            for binding in multi:
+                dims = getattr(binding, "dimensions", None)
+                if dims:
+                    dim_parts.extend(sorted(dims))
+        elif singular is not None:
+            dims = getattr(singular, "dimensions", None)
+            dim_parts.extend(sorted(dims) if dims else ["legacy"])
+        else:
+            dim_parts.append("legacy")
+        strength_key = ""
+        if policy is not None:
+            strength_key = ",".join(
+                f"{k}:{v}"
+                for k, v in sorted((policy.dimension_strengths or {}).items())
+            )
+        dim_key = ",".join(sorted(set(dim_parts))) + "|" + strength_key
         bump = 3 + (sum(ord(c) for c in dim_key) % 5)
         new_tracks = []
         for track in music.tracks:
@@ -641,8 +660,9 @@ async def generate_fake_music_json(
         logger.info(
             "Fake LLM reference feature soft marker applied",
             extra={
-                "dimension_count": len(dims) if dims else 0,
+                "dimension_count": len(dim_parts),
                 "velocity_bump": bump,
+                "has_policy_strengths": bool(strength_key),
             },
         )
 
@@ -1118,7 +1138,15 @@ def _apply_fake_thematic_recurrence(
 async def edit_fake_composition_region(
     request: LLMCompositionEditRequest,
     provider: LLMProviderSettings,
-) -> tuple[CompositionV2, CompositionRegionReplacementPatch, list[str], LLMProviderSettings]:
+    *,
+    generation_parameters: dict[str, Any] | None = None,
+) -> tuple[
+    CompositionV2,
+    CompositionRegionReplacementPatch,
+    list[str],
+    LLMProviderSettings,
+    dict[str, Any] | None,
+]:
     """Build and apply a deterministic replace_region patch for the selection."""
     _maybe_inject_malformed("edit")
 
@@ -1132,6 +1160,7 @@ async def edit_fake_composition_region(
             "end_bar": selection.end_bar,
             "target_track_count": len(selection.track_ids or []),
             "bar_count": request.composition.bar_count,
+            "has_generation_parameters": bool(generation_parameters),
         },
     )
 
@@ -1143,6 +1172,49 @@ async def edit_fake_composition_region(
         selection.start_bar,
         selection.end_bar,
     )
+
+    # Soft markers when borrow/policy active: nudge in-region velocities only.
+    from app.services.reference_feature_condition import reference_features_active_for_fake
+
+    if reference_features_active_for_fake(request) or getattr(
+        request, "reference_conditioning_policy", None
+    ) is not None:
+        policy = getattr(request, "reference_conditioning_policy", None)
+        strengths = ""
+        if policy is not None:
+            strengths = ",".join(
+                f"{k}:{v}"
+                for k, v in sorted((policy.dimension_strengths or {}).items())
+            )
+            dims = sorted(
+                set(policy.preserve_dimensions or [])
+                | set(policy.regenerate_dimensions or [])
+            )
+        else:
+            singular = getattr(request, "style_reference", None)
+            dims_raw = getattr(singular, "dimensions", None) if singular else None
+            dims = sorted(dims_raw) if dims_raw else ["legacy"]
+        dim_key = ",".join(dims) + "|" + strengths
+        bump = 2 + (sum(ord(c) for c in dim_key) % 6)
+        nudged_tracks = []
+        for track_patch in patch.replace_tracks:
+            new_events = []
+            for event in track_patch.events:
+                vel = getattr(event, "velocity", None)
+                if isinstance(vel, int):
+                    new_events.append(
+                        event.model_copy(
+                            update={"velocity": max(1, min(127, vel + bump))}
+                        )
+                    )
+                else:
+                    new_events.append(event)
+            nudged_tracks.append(track_patch.model_copy(update={"events": new_events}))
+        patch = patch.model_copy(update={"replace_tracks": nudged_tracks})
+        logger.info(
+            "Fake LLM edit reference conditioning soft marker applied",
+            extra={"velocity_bump": bump, "dim_key_chars": len(dim_key)},
+        )
 
     logger.debug(
         "Fake LLM region patch built",
@@ -1184,9 +1256,16 @@ async def edit_fake_composition_region(
             "replaced_event_count": result.replaced_event_count,
             "preserved_event_count": result.preserved_event_count,
             "warning_count": len(warnings),
+            "has_generation_parameters": bool(generation_parameters),
         },
     )
-    return normalize_composition_json(result.composition), result.patch, warnings, provider
+    return (
+        normalize_composition_json(result.composition),
+        result.patch,
+        warnings,
+        provider,
+        generation_parameters,
+    )
 
 
 def _build_deterministic_region_patch(

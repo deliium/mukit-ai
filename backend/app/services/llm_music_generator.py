@@ -257,14 +257,14 @@ async def generate_music_json(
         merge_provenance_keys,
         resolve_profile_merge,
     )
-    from app.services.reference_feature_condition import (
-        combined_reference_soft_block,
-        merge_reference_feature_provenance,
-        resolve_reference_feature_conditioning,
+    from app.services.reference_conditioning_policy import (
+        assemble_reference_conditioning,
+        merge_reference_conditioning_provenance,
     )
+    from app.services.reference_feature_condition import combined_reference_soft_block
 
     def _attach_soft_provenance(base: dict[str, Any]) -> dict[str, Any]:
-        return merge_reference_feature_provenance(
+        return merge_reference_conditioning_provenance(
             merge_provenance_keys(base, profile_merge),
             reference_condition,
         )
@@ -274,9 +274,14 @@ async def generate_music_json(
         profile_strength=getattr(request, "profile_strength", "off"),
     )
     try:
-        reference_condition = resolve_reference_feature_conditioning(
+        reference_condition = assemble_reference_conditioning(
             style_reference=getattr(request, "style_reference", None),
             style_references=getattr(request, "style_references", None),
+            policy=getattr(request, "reference_conditioning_policy", None),
+            active_project_id=getattr(request, "active_project_id", None),
+            operation="generate",
+            current_composition=None,
+            preserve_scope=None,
         )
     except ReferenceFeatureError as exc:
         logger.warning(
@@ -287,6 +292,16 @@ async def generate_music_json(
     reference_soft = combined_reference_soft_block(
         masked_fragment=reference_condition.soft_fragment,
         legacy_summary=reference_condition.legacy_feature_summary,
+    )
+    logger.info(
+        "Generate reference conditioning attached",
+        extra={
+            "borrow_count": len(reference_condition.applied_borrow_dimension_ids),
+            "preserve_count": len(reference_condition.applied_preserve_dimension_ids),
+            "regenerate_count": len(reference_condition.applied_regenerate_dimension_ids),
+            "has_policy": reference_condition.policy_provenance is not None,
+            "fragment_chars": len(reference_condition.soft_fragment or ""),
+        },
     )
     pipeline_id = resolve_generation_pipeline(request)
     seed = request.options.seed

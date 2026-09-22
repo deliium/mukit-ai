@@ -71,7 +71,7 @@ def test_edit_llm_composition_region_success(monkeypatch):
         composition = normalize_composition_json(_sixteen_bar_composition())
         region_patch = CompositionRegionReplacementPatch.model_validate(_melody_patch_payload())
         provider = LLMProviderSettings(provider="openai", model="test-model", api_key="secret", is_default=True)
-        return composition, region_patch, [], provider
+        return composition, region_patch, [], provider, None
 
     monkeypatch.setattr("app.main.edit_composition_region", fake_edit)
     monkeypatch.setattr("app.main.render_musicxml", lambda _composition: ("<score/>", __import__("app.services.composition_projection", fromlist=["empty_projection_report"]).empty_projection_report()))
