@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Literal, Mapping, Self
 
@@ -31,6 +32,20 @@ AGENT_ARTIFACT_SCHEMA: Literal["agent.artifact.v1"] = "agent.artifact.v1"
 AGENT_BRIEF_SCHEMA: Literal["agent.brief.v1"] = "agent.brief.v1"
 AGENT_WORKFLOW_PLAN_SCHEMA: Literal["agent.workflow_plan.v1"] = "agent.workflow_plan.v1"
 AGENT_CRITIQUE_SCHEMA: Literal["agent.critique.v1"] = "agent.critique.v1"
+AGENT_FORM_PLAN_SCHEMA: Literal["agent.form_plan.v1"] = "agent.form_plan.v1"
+AGENT_HARMONY_PLAN_SCHEMA: Literal["agent.harmony_plan.v1"] = "agent.harmony_plan.v1"
+AGENT_MOTIF_PLAN_SCHEMA: Literal["agent.motif_plan.v1"] = "agent.motif_plan.v1"
+AGENT_ARRANGEMENT_PLAN_SCHEMA: Literal["agent.arrangement_plan.v1"] = "agent.arrangement_plan.v1"
+AGENT_ORCHESTRATION_PLAN_SCHEMA: Literal["agent.orchestration_plan.v1"] = (
+    "agent.orchestration_plan.v1"
+)
+AGENT_PERFORMANCE_PLAN_SCHEMA: Literal["agent.performance_plan.v1"] = "agent.performance_plan.v1"
+AGENT_PRODUCTION_PLAN_SCHEMA: Literal["agent.production_plan.v1"] = "agent.production_plan.v1"
+AGENT_REVISION_PLAN_SCHEMA: Literal["agent.revision_plan.v1"] = "agent.revision_plan.v1"
+AGENT_COMPOSITION_PATCH_SCHEMA: Literal["agent.composition_patch.v1"] = (
+    "agent.composition_patch.v1"
+)
+AGENT_RENDER_PLAN_SCHEMA: Literal["agent.render_plan.v1"] = "agent.render_plan.v1"
 
 AGENT_SPINE_WORKFLOW_ID = "agent_spine_v1"
 AGENT_SPINE_PIPELINE_ALIAS = "multi_agent_v4"
@@ -45,7 +60,17 @@ WORKFLOW_PLAN_STEP_MAX = 16
 ARTIFACT_WARNING_MAX = 32
 ARTIFACT_WARNING_MAX_LEN = 80
 ARTIFACT_PARENT_MAX = 16
+ARTIFACT_DEPENDS_ON_MAX = 32
 BOUND_MODEL_ID_MAX = 160
+
+RetentionClass = Literal["temporary", "durable"]
+ArtifactDependencyRelation = Literal[
+    "requires",
+    "derived_from",
+    "supersedes",
+    "critiques",
+    "realizes",
+]
 
 # Named context slots that hold AgentArtifactV1 (not compositions).
 ARTIFACT_SLOT_NAMES: frozenset[str] = frozenset(
@@ -117,9 +142,20 @@ AGENT_CONTENT_TYPES: frozenset[str] = frozenset(
         AGENT_BRIEF_SCHEMA,
         AGENT_WORKFLOW_PLAN_SCHEMA,
         AGENT_CRITIQUE_SCHEMA,
+        AGENT_FORM_PLAN_SCHEMA,
+        AGENT_HARMONY_PLAN_SCHEMA,
+        AGENT_MOTIF_PLAN_SCHEMA,
+        AGENT_ARRANGEMENT_PLAN_SCHEMA,
+        AGENT_ORCHESTRATION_PLAN_SCHEMA,
+        AGENT_PERFORMANCE_PLAN_SCHEMA,
+        AGENT_PRODUCTION_PLAN_SCHEMA,
+        AGENT_REVISION_PLAN_SCHEMA,
+        AGENT_COMPOSITION_PATCH_SCHEMA,
+        AGENT_RENDER_PLAN_SCHEMA,
         "composition.v2",
         "composition.plan.v1",
         "composition.analysis.v1",  # critic deterministic sidecar
+        "composition.analysis.bounded.v1",
         "arrangement.candidate",
         "reharmonize.candidate",
         "motif.draft",
@@ -245,6 +281,19 @@ class AgentCritiqueV1(BaseModel):
         return str(value or "").strip()[:CRITIQUE_REASON_MAX_LEN]
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+class ArtifactDependencyEdge(BaseModel):
+    """Typed depends_on edge on ``agent.artifact.v1``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str = Field(..., min_length=1, max_length=80)
+    relation: ArtifactDependencyRelation = "requires"
+
+
 class AgentArtifactV1(BaseModel):
     """Cross-agent typed envelope — payload must use a known content_type."""
 
@@ -257,7 +306,15 @@ class AgentArtifactV1(BaseModel):
     content_type: str = Field(..., min_length=1, max_length=80)
     payload: dict[str, Any] = Field(default_factory=dict)
     source_fingerprint: str | None = Field(default=None, max_length=128)
+    source_revision_id: str | None = Field(default=None, max_length=80)
+    created_at: str = Field(default_factory=_utc_now_iso, max_length=40)
     parent_artifact_ids: list[str] = Field(default_factory=list, max_length=ARTIFACT_PARENT_MAX)
+    depends_on: list[ArtifactDependencyEdge] = Field(
+        default_factory=list, max_length=ARTIFACT_DEPENDS_ON_MAX
+    )
+    supersedes_artifact_id: str | None = Field(default=None, max_length=80)
+    retention_class: RetentionClass = "temporary"
+    expires_at: str | None = Field(default=None, max_length=40)
     provenance: AgentArtifactProvenance | None = None
     warning_codes: list[str] = Field(default_factory=list, max_length=ARTIFACT_WARNING_MAX)
     mutates_composition: Literal[False] = False
@@ -289,10 +346,68 @@ class AgentArtifactV1(BaseModel):
                 out.append(code)
         return out
 
+    @field_validator("created_at", "expires_at")
+    @classmethod
+    def _validate_iso_timestamp(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        # Accept Z-suffix UTC ISO-8601; normalize space separator.
+        probe = cleaned.replace("Z", "+00:00") if cleaned.endswith("Z") else cleaned
+        try:
+            datetime.fromisoformat(probe)
+        except ValueError as exc:
+            raise ValueError("timestamp must be UTC ISO-8601") from exc
+        return cleaned
+
     @model_validator(mode="after")
-    def _force_non_mutating(self) -> Self:
+    def _force_non_mutating_and_validate_payload(self) -> Self:
         if self.mutates_composition is not False:
             raise ValueError("mutates_composition must be false on agent artifacts")
+        if self.retention_class == "temporary" and self.expires_at is None:
+            # In-memory / session envelopes may omit expires_at; only durable
+            # promote / temp SQLite insert enforce TTL. Log at DEBUG.
+            logger.debug(
+                "Session artifact missing expires_at (allowed in-memory)",
+                extra={
+                    "artifact_id_prefix": self.artifact_id[:12],
+                    "content_type": self.content_type[:80],
+                    "retention_class": self.retention_class,
+                },
+            )
+        if self.retention_class == "durable" and self.expires_at is not None:
+            raise ValueError("durable artifacts must not set expires_at")
+        # Typed payload validate (lazy import avoids circular module init).
+        from app.ai_agents.artifact_schemas import validate_artifact_payload
+
+        try:
+            validated = validate_artifact_payload(self.content_type, self.payload)
+        except ValueError as exc:
+            logger.info(
+                "Agent artifact payload rejected",
+                extra={
+                    "code": "artifact_payload_rejected",
+                    "content_type": self.content_type[:80],
+                },
+            )
+            raise ValueError(str(exc)) from exc
+        # Prefer in-place assignment: returning model_copy from after-validator
+        # is unsupported when constructing via __init__.
+        object.__setattr__(self, "payload", validated)
+        logger.debug(
+            "Agent artifact envelope fields",
+            extra={
+                "artifact_id_prefix": self.artifact_id[:12],
+                "content_type": self.content_type[:80],
+                "has_source_revision": bool(self.source_revision_id),
+                "depends_on_count": len(self.depends_on),
+                "retention_class": self.retention_class,
+                "has_expires_at": bool(self.expires_at),
+                "has_supersedes": bool(self.supersedes_artifact_id),
+            },
+        )
         return self
 
 

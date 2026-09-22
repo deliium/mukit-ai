@@ -203,9 +203,52 @@ def test_known_content_types_include_core_schemas():
         "agent.brief.v1",
         "agent.workflow_plan.v1",
         "agent.critique.v1",
+        "agent.form_plan.v1",
+        "agent.harmony_plan.v1",
+        "agent.motif_plan.v1",
+        "agent.arrangement_plan.v1",
+        "agent.composition_patch.v1",
         "composition.v2",
         "composition.plan.v1",
         "composition.analysis.v1",
         "arrangement.candidate",
     ):
         assert required in AGENT_CONTENT_TYPES
+
+
+def test_artifact_envelope_metadata_and_payload_validate():
+    from app.ai_agents.schemas import ArtifactDependencyEdge
+
+    art = AgentArtifactV1(
+        kind=AgentArtifactKind.BRIEF,
+        producer_agent_id="creative_director",
+        content_type="agent.brief.v1",
+        payload=AgentBriefV1(intent="warm").model_dump(mode="json"),
+        source_revision_id=None,
+        retention_class="temporary",
+        depends_on=[ArtifactDependencyEdge(artifact_id="parent-1", relation="requires")],
+    )
+    assert art.created_at.endswith("Z") or "+" in art.created_at
+    assert art.mutates_composition is False
+    assert art.payload["intent"] == "warm"
+    assert len(art.depends_on) == 1
+
+    with pytest.raises(ValidationError):
+        AgentArtifactV1(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id="harmony",
+            content_type="agent.harmony_plan.v1",
+            payload={"tracks": []},
+        )
+
+    with pytest.raises(ValidationError):
+        AgentArtifactV1.model_validate(
+            {
+                "kind": "brief",
+                "producer_agent_id": "creative_director",
+                "content_type": "agent.brief.v1",
+                "payload": AgentBriefV1(intent="x").model_dump(mode="json"),
+                "retention_class": "durable",
+                "expires_at": "2026-09-23T00:00:00.000Z",
+            }
+        )

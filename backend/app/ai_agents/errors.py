@@ -18,6 +18,15 @@ WORKING_DRAFT_INVALID = "working_draft_invalid"
 AGENT_OPERATION_UNSUPPORTED = "agent_operation_unsupported"
 WORKFLOW_NOT_FOUND = "workflow_not_found"
 
+# Workspace / typed artifact graph (additive).
+ARTIFACT_DEPENDENCY_UNSATISFIED = "artifact_dependency_unsatisfied"
+ARTIFACT_IMMUTABLE_VIOLATION = "artifact_immutable_violation"
+ARTIFACT_NOT_FOUND = "artifact_not_found"
+ARTIFACT_PAYLOAD_REJECTED = "artifact_payload_rejected"
+ARTIFACT_PLAYABLE_FIELDS_FORBIDDEN = "artifact_playable_fields_forbidden"
+ARTIFACT_RETENTION_REJECTED = "artifact_retention_rejected"
+WORKSPACE_QUOTA_EXCEEDED = "workspace_quota_exceeded"
+
 _HTTP_STATUS: dict[str, int] = {
     AGENT_NOT_FOUND: 404,
     AGENT_UNAVAILABLE: 503,
@@ -28,6 +37,13 @@ _HTTP_STATUS: dict[str, int] = {
     WORKING_DRAFT_INVALID: 422,
     AGENT_OPERATION_UNSUPPORTED: 422,
     WORKFLOW_NOT_FOUND: 404,
+    ARTIFACT_DEPENDENCY_UNSATISFIED: 422,
+    ARTIFACT_IMMUTABLE_VIOLATION: 422,
+    ARTIFACT_NOT_FOUND: 404,
+    ARTIFACT_PAYLOAD_REJECTED: 422,
+    ARTIFACT_PLAYABLE_FIELDS_FORBIDDEN: 422,
+    ARTIFACT_RETENTION_REJECTED: 422,
+    WORKSPACE_QUOTA_EXCEEDED: 429,
 }
 
 
@@ -45,6 +61,8 @@ class AgentError(Exception):
         http_status: int | None = None,
         agent_id: str | None = None,
         workflow_id: str | None = None,
+        artifact_id: str | None = None,
+        project_id: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
@@ -56,6 +74,8 @@ class AgentError(Exception):
             self.http_status = _HTTP_STATUS.get(self.code, self.http_status)
         self.agent_id = agent_id
         self.workflow_id = workflow_id
+        self.artifact_id = artifact_id
+        self.project_id = project_id
         self.details = details or {}
         logger.warning(
             "Agent domain error",
@@ -63,6 +83,8 @@ class AgentError(Exception):
                 "code": self.code,
                 "agent_id": agent_id,
                 "workflow_id": workflow_id,
+                "artifact_id_prefix": (artifact_id or "")[:12] or None,
+                "project_id_prefix": (project_id or "")[:12] or None,
                 "http_status": self.http_status,
             },
         )
@@ -74,6 +96,10 @@ class AgentError(Exception):
             body["agent_id"] = self.agent_id
         if self.workflow_id:
             body["workflow_id"] = self.workflow_id
+        if self.artifact_id:
+            body["artifact_id"] = self.artifact_id[:80]
+        if self.project_id:
+            body["project_id"] = self.project_id[:80]
         # Only allow bounded scalar/list details (no nested blobs).
         safe_details: dict[str, Any] = {}
         for key, value in self.details.items():
@@ -132,6 +158,41 @@ class AgentOperationUnsupportedError(AgentError):
 class WorkflowNotFoundError(AgentError):
     code = WORKFLOW_NOT_FOUND
     http_status = 404
+
+
+class ArtifactDependencyUnsatisfiedError(AgentError):
+    code = ARTIFACT_DEPENDENCY_UNSATISFIED
+    http_status = 422
+
+
+class ArtifactImmutableViolationError(AgentError):
+    code = ARTIFACT_IMMUTABLE_VIOLATION
+    http_status = 422
+
+
+class ArtifactNotFoundError(AgentError):
+    code = ARTIFACT_NOT_FOUND
+    http_status = 404
+
+
+class ArtifactPayloadRejectedError(AgentError):
+    code = ARTIFACT_PAYLOAD_REJECTED
+    http_status = 422
+
+
+class ArtifactPlayableFieldsForbiddenError(AgentError):
+    code = ARTIFACT_PLAYABLE_FIELDS_FORBIDDEN
+    http_status = 422
+
+
+class ArtifactRetentionRejectedError(AgentError):
+    code = ARTIFACT_RETENTION_REJECTED
+    http_status = 422
+
+
+class WorkspaceQuotaExceededError(AgentError):
+    code = WORKSPACE_QUOTA_EXCEEDED
+    http_status = 429
 
 
 def http_status_for_code(code: str) -> int:
