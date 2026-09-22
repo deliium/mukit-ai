@@ -22,6 +22,16 @@ from pydantic import (
 
 from app.ai_runtime.capabilities import ModelCapability
 from app.composition_schemas import CompositionV2
+from app.critique_schemas import (
+    CRITIQUE_ENGINE_VERSION,
+    CRITIQUE_FINDING_MAX,
+    CritiqueFindingV1,
+    CritiqueModelStatus,
+    CritiqueScopeDigest,
+    CritiqueStratumCounts,
+    count_strata,
+    merge_reason_codes_from_findings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +262,7 @@ class AgentWorkflowPlanV1(BaseModel):
 
 
 class AgentCritiqueV1(BaseModel):
-    """Critic output — approve/revise recommendation with bounded reasons."""
+    """Critic output — approve/revise with structured findings (backward compatible)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -261,6 +271,12 @@ class AgentCritiqueV1(BaseModel):
     reason_codes: list[str] = Field(default_factory=list, max_length=CRITIQUE_REASON_CODE_MAX_COUNT)
     summary: str = Field(default="", max_length=CRITIQUE_REASON_MAX_LEN)
     analysis_warning_count: int = Field(default=0, ge=0)
+    findings: list[CritiqueFindingV1] = Field(default_factory=list, max_length=CRITIQUE_FINDING_MAX)
+    scope: CritiqueScopeDigest | None = None
+    stratum_counts: CritiqueStratumCounts = Field(default_factory=CritiqueStratumCounts)
+    engine_version: str = Field(default=CRITIQUE_ENGINE_VERSION, max_length=80)
+    algorithm_version: str | None = Field(default=None, max_length=80)
+    model_critique_status: CritiqueModelStatus | None = None
 
     @field_validator("reason_codes")
     @classmethod
@@ -279,6 +295,24 @@ class AgentCritiqueV1(BaseModel):
     @classmethod
     def _truncate_summary(cls, value: object) -> str:
         return str(value or "").strip()[:CRITIQUE_REASON_MAX_LEN]
+
+    @field_validator("findings")
+    @classmethod
+    def _cap_findings(cls, value: list[CritiqueFindingV1]) -> list[CritiqueFindingV1]:
+        if len(value) > CRITIQUE_FINDING_MAX:
+            raise ValueError(f"findings limited to {CRITIQUE_FINDING_MAX}")
+        return value
+
+    @model_validator(mode="after")
+    def _merge_codes_and_counts(self) -> Self:
+        # Auto-fill reason_codes from finding codes when empty.
+        if not self.reason_codes and self.findings:
+            merged = merge_reason_codes_from_findings(self.findings)
+            object.__setattr__(self, "reason_codes", merged)
+        # Refresh stratum_counts from findings when findings present.
+        if self.findings:
+            object.__setattr__(self, "stratum_counts", count_strata(list(self.findings)))
+        return self
 
 
 def _utc_now_iso() -> str:
@@ -520,6 +554,8 @@ class AgentRunRequest(BaseModel):
     context: AgentWorkflowContext
     agent_model_overrides: dict[str, str] = Field(default_factory=dict)
     selection: dict[str, Any] = Field(default_factory=dict)
+    # Non-secret agent options (e.g. include_model_critique, revise_on_technical).
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentRunResult(BaseModel):
