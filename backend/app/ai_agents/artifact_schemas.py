@@ -274,6 +274,19 @@ class AgentProductionPlanV1(_NonPlayableBase):
     mutates_composition: Literal[False] = False
 
 
+class RevisionPlanAffectedRange(_NonPlayableBase):
+    """Inclusive bar window for targeted revision (backward-compatible extension)."""
+
+    start_bar: int = Field(..., ge=1)
+    end_bar: int = Field(..., ge=1)
+
+    @model_validator(mode="after")
+    def _bounds(self) -> RevisionPlanAffectedRange:
+        if self.end_bar < self.start_bar:
+            raise ValueError("affected_ranges end_bar must be >= start_bar")
+        return self
+
+
 class AgentRevisionPlanV1(_NonPlayableBase):
     """Critic-driven revise targets / stop criteria."""
 
@@ -282,8 +295,16 @@ class AgentRevisionPlanV1(_NonPlayableBase):
     revise_targets: list[str] = Field(default_factory=list, max_length=PLAN_REVISION_TARGET_MAX)
     stop_criteria: list[str] = Field(default_factory=list, max_length=PLAN_REVISION_TARGET_MAX)
     comment: str | None = Field(default=None, max_length=240)
+    # Optional targeting (backward-compatible — omitted by older emitters).
+    pass_index: int | None = Field(default=None, ge=0, le=8)
+    affected_ranges: list[RevisionPlanAffectedRange] = Field(
+        default_factory=list, max_length=8
+    )
+    affected_tracks: list[str] = Field(default_factory=list, max_length=16)
+    target_agent_ids: list[str] = Field(default_factory=list, max_length=8)
+    preserve_outside_targets: bool = True
 
-    @field_validator("revise_targets", "stop_criteria")
+    @field_validator("revise_targets", "stop_criteria", "target_agent_ids", "affected_tracks")
     @classmethod
     def _truncate_items(cls, value: list[str]) -> list[str]:
         out: list[str] = []

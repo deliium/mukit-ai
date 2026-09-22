@@ -153,12 +153,23 @@ def revision_plan_payload(
     *,
     revise_targets: list[str] | None = None,
     stop_criteria: list[str] | None = None,
+    pass_index: int | None = None,
+    affected_ranges: list[dict[str, int]] | None = None,
+    affected_tracks: list[str] | None = None,
+    target_agent_ids: list[str] | None = None,
+    preserve_outside_targets: bool = True,
+    comment: str | None = None,
 ) -> dict[str, Any]:
     return AgentRevisionPlanV1(
         critique_recommendation=CritiqueRecommendation.REVISE,
         revise_targets=revise_targets or ["harmony", "melody_motif"],
         stop_criteria=stop_criteria or ["critic_approve"],
-        comment="critic_revise",
+        comment=comment or "critic_revise",
+        pass_index=pass_index,
+        affected_ranges=affected_ranges or [],
+        affected_tracks=affected_tracks or [],
+        target_agent_ids=target_agent_ids or [],
+        preserve_outside_targets=preserve_outside_targets,
     ).model_dump(mode="json")
 
 
