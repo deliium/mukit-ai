@@ -1119,6 +1119,14 @@ export const useMusicStore = create((set, get) => ({
   multiAgentError: '',
   multiAgentCandidate: null,
   multiAgentRequestId: 0,
+  multiAgentRevisionMode: 'off',
+  multiAgentRevisionHistory: [],
+  multiAgentPassCandidates: [],
+  multiAgentStopReason: null,
+  multiAgentRevisionLoopStatus: 'idle',
+  multiAgentComparePassIndex: null,
+  multiAgentAuditionActive: false,
+  multiAgentAbortController: null,
   ...initialDevelopmentPreviewState,
   ...initialMusicalReferenceSessionState,
   ...initialArrangementPreviewState,
@@ -9930,6 +9938,69 @@ export const useMusicStore = create((set, get) => ({
     return { ok: true };
   },
 
+  setMultiAgentRevisionMode: (mode) => {
+    const allowed = new Set(['off', 'fast', 'balanced', 'thorough']);
+    const next = allowed.has(mode) ? mode : 'off';
+    set({ multiAgentRevisionMode: next });
+  },
+
+  setMultiAgentComparePassIndex: (passIndex) => {
+    set({
+      multiAgentComparePassIndex: passIndex,
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+  },
+
+  setMultiAgentAuditionActive: (active) => {
+    const enabled = Boolean(active);
+    const state = get();
+    const hasPass = Array.isArray(state.multiAgentPassCandidates)
+      && state.multiAgentPassCandidates.some((c) => c?.composition);
+    const hasFinal = Boolean(state.multiAgentCandidate?.composition);
+    if (enabled && !hasPass && !hasFinal) {
+      return false;
+    }
+    console.info('[musicStore] Multi-agent audition toggled', {
+      active: enabled,
+      passIndex: state.multiAgentComparePassIndex,
+      passCandidateCount: Array.isArray(state.multiAgentPassCandidates)
+        ? state.multiAgentPassCandidates.length
+        : 0,
+    });
+    set({
+      multiAgentAuditionActive: enabled,
+      ...(enabled
+        ? {
+            ...exclusiveAuditionPatch(PLAYBACK_SOURCE_GENERATION, ARRANGEMENT_AUDITION_SOURCE),
+            generationAuditionActive: false,
+            aiEditAuditionActive: false,
+            motifAuditionActive: false,
+            reharmonizeAuditionActive: false,
+            multiAgentAuditionActive: true,
+          }
+        : {}),
+      playbackStatus: 'idle',
+      playbackSeconds: 0,
+      playbackBar: 1,
+    });
+    return true;
+  },
+
+  cancelMultiAgentPreview: () => {
+    const state = get();
+    const controller = state.multiAgentAbortController;
+    if (controller) {
+      controller.abort();
+    }
+    set({
+      multiAgentRevisionLoopStatus: 'cancelled',
+      multiAgentStatus: state.multiAgentCandidate ? 'success' : 'idle',
+      multiAgentAbortController: null,
+    });
+  },
+
   previewMultiAgentWorkflow: async () => {
     const state = get();
     const source = state.editedMusicJson || state.generatedMusicJson;
@@ -9940,18 +10011,34 @@ export const useMusicStore = create((set, get) => ({
       });
       return null;
     }
+    if (state.multiAgentAbortController) {
+      state.multiAgentAbortController.abort();
+    }
+    const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const requestId = (state.multiAgentRequestId || 0) + 1;
+    const revisionMode = state.multiAgentRevisionMode || 'off';
     set({
       multiAgentStatus: 'loading',
       multiAgentError: '',
       multiAgentRequestId: requestId,
+      multiAgentRevisionLoopStatus: 'running',
+      multiAgentAbortController: abortController,
+      multiAgentRevisionHistory: [],
+      multiAgentPassCandidates: [],
+      multiAgentStopReason: null,
+      multiAgentComparePassIndex: null,
+      multiAgentAuditionActive: false,
     });
     try {
-      const response = await previewMultiAgentWorkflow({
-        composition: source,
-        workflow_id: 'agent_spine_v1',
-        max_revisions: 0,
-      });
+      const response = await previewMultiAgentWorkflow(
+        {
+          composition: source,
+          workflow_id: 'agent_spine_v1',
+          max_revisions: 0,
+          revision_mode: revisionMode,
+        },
+        abortController ? { signal: abortController.signal } : {},
+      );
       if (get().multiAgentRequestId !== requestId) {
         return null;
       }
@@ -9967,6 +10054,9 @@ export const useMusicStore = create((set, get) => ({
           : {}),
         artifact_role_map: roleMap,
       };
+      const passCandidates = Array.isArray(response.pass_candidates)
+        ? response.pass_candidates
+        : [];
       const envelope = buildAiCandidateEnvelope({
         candidateId: `multi-agent-${Date.now()}`,
         operationType: 'multi-agent-apply',
@@ -9982,6 +10072,12 @@ export const useMusicStore = create((set, get) => ({
           artifact_log: response.artifact_log || [],
           pipeline_id: response.pipeline_id || 'agent_spine_v1',
           artifact_role_map: roleMap,
+          revision_history: response.revision_history || [],
+          pass_candidates: passCandidates,
+          stop_reason: response.stop_reason || null,
+          revision_mode: response.revision_mode || revisionMode,
+          last_valid_fingerprint: response.last_valid_fingerprint || candidateFingerprint,
+          usage: response.usage || null,
         },
       });
       // Discard competing session candidates when multi-agent candidate is set.
@@ -9989,6 +10085,15 @@ export const useMusicStore = create((set, get) => ({
         multiAgentStatus: 'success',
         multiAgentError: '',
         multiAgentCandidate: envelope,
+        multiAgentRevisionHistory: Array.isArray(response.revision_history)
+          ? response.revision_history
+          : [],
+        multiAgentPassCandidates: passCandidates,
+        multiAgentStopReason: response.stop_reason || null,
+        multiAgentRevisionLoopStatus: 'idle',
+        multiAgentAbortController: null,
+        multiAgentComparePassIndex: 0,
+        multiAgentAuditionActive: false,
         arrangementCandidates: [],
         arrangementSelectedCandidateId: null,
         developmentCandidates: [],
@@ -10002,10 +10107,15 @@ export const useMusicStore = create((set, get) => ({
       if (get().multiAgentRequestId !== requestId) {
         return null;
       }
+      const aborted = error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED'
+        || error?.name === 'AbortError';
       set({
-        multiAgentStatus: 'error',
-        multiAgentError: error?.message || 'Multi-agent workflow preview failed',
-        multiAgentCandidate: null,
+        multiAgentStatus: aborted ? (get().multiAgentCandidate ? 'success' : 'idle') : 'error',
+        multiAgentError: aborted ? '' : (error?.message || 'Multi-agent workflow preview failed'),
+        multiAgentCandidate: aborted ? get().multiAgentCandidate : null,
+        multiAgentRevisionLoopStatus: aborted ? 'cancelled' : 'idle',
+        multiAgentAbortController: null,
+        multiAgentStopReason: aborted ? 'cancelled' : null,
       });
       return null;
     }
@@ -10062,6 +10172,11 @@ export const useMusicStore = create((set, get) => ({
       multiAgentCandidate: null,
       multiAgentStatus: 'idle',
       multiAgentError: '',
+      multiAgentRevisionHistory: [],
+      multiAgentPassCandidates: [],
+      multiAgentStopReason: null,
+      multiAgentComparePassIndex: null,
+      multiAgentAuditionActive: false,
     };
     const aiPayload = {
       provider: candidate.provider || null,
@@ -10161,6 +10276,13 @@ export const useMusicStore = create((set, get) => ({
       multiAgentCandidate: null,
       multiAgentStatus: 'idle',
       multiAgentError: '',
+      multiAgentRevisionHistory: [],
+      multiAgentPassCandidates: [],
+      multiAgentStopReason: null,
+      multiAgentRevisionLoopStatus: 'idle',
+      multiAgentComparePassIndex: null,
+      multiAgentAuditionActive: false,
+      multiAgentAbortController: null,
     });
   },
 }));

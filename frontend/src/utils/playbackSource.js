@@ -22,6 +22,7 @@ export const PLAYBACK_SOURCE_KIND_GENERATION = 'generation';
 export const PLAYBACK_SOURCE_KIND_AI_EDIT = 'ai_edit';
 export const PLAYBACK_SOURCE_KIND_MOTIF = 'motif';
 export const PLAYBACK_SOURCE_KIND_REHARMONIZE = 'reharmonize';
+export const PLAYBACK_SOURCE_KIND_MULTI_AGENT = 'multi_agent';
 
 /** Mixer control buckets — AI preview kinds share one ephemeral scope. */
 export const PLAYBACK_MIXER_SCOPE_WORKING = 'working';
@@ -61,6 +62,7 @@ export function mixerScopeForSourceKind(sourceKind) {
     case PLAYBACK_SOURCE_KIND_AI_EDIT:
     case PLAYBACK_SOURCE_KIND_MOTIF:
     case PLAYBACK_SOURCE_KIND_REHARMONIZE:
+    case PLAYBACK_SOURCE_KIND_MULTI_AGENT:
       return PLAYBACK_MIXER_SCOPE_PREVIEW;
     case PLAYBACK_SOURCE_KIND_WORKING:
     default:
@@ -85,6 +87,7 @@ export function coarseSourceForKind(sourceKind) {
     case PLAYBACK_SOURCE_KIND_AI_EDIT:
     case PLAYBACK_SOURCE_KIND_MOTIF:
     case PLAYBACK_SOURCE_KIND_REHARMONIZE:
+    case PLAYBACK_SOURCE_KIND_MULTI_AGENT:
       return PLAYBACK_SOURCE_GENERATION;
     case PLAYBACK_SOURCE_KIND_WORKING:
     default:
@@ -128,7 +131,7 @@ export function buildPlaybackSourceResult(sourceKind, sourceId, composition) {
 
 /**
  * Resolve which composition the transport should play.
- * Priority: arrangement → generation → ai_edit → motif → reharmonize → version → development → working.
+ * Priority: arrangement → generation → ai_edit → motif → reharmonize → multi_agent → version → development → working.
  *
  * @param {object} state
  * @param {{
@@ -213,6 +216,35 @@ export function resolvePlaybackSource(state, deps = {}) {
     );
   }
 
+  if (state?.multiAgentAuditionActive) {
+    const passIndex = state.multiAgentComparePassIndex;
+    const candidates = Array.isArray(state.multiAgentPassCandidates)
+      ? state.multiAgentPassCandidates
+      : [];
+    let pass = null;
+    if (passIndex != null) {
+      pass = candidates.find((c) => c.pass_index === passIndex) || null;
+    }
+    if (!pass && candidates.length > 0) {
+      pass = candidates[0];
+    }
+    if (pass?.composition) {
+      return buildPlaybackSourceResult(
+        PLAYBACK_SOURCE_KIND_MULTI_AGENT,
+        `pass-${pass.pass_index}`,
+        pass.composition,
+      );
+    }
+    const finalCandidate = state.multiAgentCandidate;
+    if (finalCandidate?.composition) {
+      return buildPlaybackSourceResult(
+        PLAYBACK_SOURCE_KIND_MULTI_AGENT,
+        'final',
+        finalCandidate.composition,
+      );
+    }
+  }
+
   if (state?.versionAuditionActive) {
     const revisionId = state.versionSelectedRevisionId;
     const detail = revisionId ? state.versionRevisionDetails?.[revisionId] : null;
@@ -261,6 +293,7 @@ export function exclusiveAuditionPatch(source, arrangementSourceMode = 'source')
     aiEditAuditionActive: false,
     motifAuditionActive: false,
     reharmonizeAuditionActive: false,
+    multiAgentAuditionActive: false,
   };
   if (source === PLAYBACK_SOURCE_ARRANGEMENT) {
     return {
@@ -274,10 +307,11 @@ export function exclusiveAuditionPatch(source, arrangementSourceMode = 'source')
       developmentAuditionActive: false,
       arrangementAuditionMode: arrangementSourceMode,
       versionAuditionActive: false,
-      // Caller enables the specific generation/ai-edit/motif/reharm audition flag.
+      // Caller enables the specific generation/ai-edit/motif/reharm/multi-agent flag.
       aiEditAuditionActive: false,
       motifAuditionActive: false,
       reharmonizeAuditionActive: false,
+      multiAgentAuditionActive: false,
     };
   }
   if (source === PLAYBACK_SOURCE_DEVELOPMENT) {

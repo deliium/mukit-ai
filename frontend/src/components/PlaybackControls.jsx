@@ -638,13 +638,15 @@ const PlaybackControls = () => {
               ? ' · auditioning motif'
               : playbackResolved.sourceKind === 'reharmonize'
                 ? ' · auditioning reharmonize'
-                : playbackSource === 'generation'
-                  ? ' · auditioning generation candidate'
-                  : versionAudition
-                    ? ' · auditioning version'
-                    : developmentAuditionActive
-                      ? ' · auditioning candidate'
-                      : ''}
+                : playbackResolved.sourceKind === 'multi_agent'
+                  ? ' · auditioning multi-agent pass'
+                  : playbackSource === 'generation'
+                    ? ' · auditioning generation candidate'
+                    : versionAudition
+                      ? ' · auditioning version'
+                      : developmentAuditionActive
+                        ? ' · auditioning candidate'
+                        : ''}
         {' · '}
         <span data-testid="playback-loop-status">{loopLabel}</span>
         {' · '}

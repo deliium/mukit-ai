@@ -10,6 +10,7 @@ import {
   PLAYBACK_SOURCE_GENERATION,
   PLAYBACK_SOURCE_KIND_AI_EDIT,
   PLAYBACK_SOURCE_KIND_MOTIF,
+  PLAYBACK_SOURCE_KIND_MULTI_AGENT,
   PLAYBACK_SOURCE_KIND_REHARMONIZE,
   PLAYBACK_SOURCE_VERSION,
   PLAYBACK_SOURCE_WORKING,
@@ -130,6 +131,7 @@ test('exclusiveAuditionPatch clears competitors', () => {
     aiEditAuditionActive: false,
     motifAuditionActive: false,
     reharmonizeAuditionActive: false,
+    multiAgentAuditionActive: false,
   });
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_DEVELOPMENT, 'source'), {
     arrangementAuditionMode: 'source',
@@ -138,6 +140,7 @@ test('exclusiveAuditionPatch clears competitors', () => {
     aiEditAuditionActive: false,
     motifAuditionActive: false,
     reharmonizeAuditionActive: false,
+    multiAgentAuditionActive: false,
   });
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_WORKING, 'source'), {
     developmentAuditionActive: false,
@@ -147,6 +150,7 @@ test('exclusiveAuditionPatch clears competitors', () => {
     aiEditAuditionActive: false,
     motifAuditionActive: false,
     reharmonizeAuditionActive: false,
+    multiAgentAuditionActive: false,
   });
 });
 
@@ -201,4 +205,27 @@ test('generation outranks motif and ai_edit', () => {
   });
   assert.equal(resolved.sourceKind, 'generation');
   assert.equal(resolved.composition, generation);
+});
+
+test('resolvePlaybackSource wires multi-agent pass audition', () => {
+  const pass0 = { id: 'ma-pass-0' };
+  const pass1 = { id: 'ma-pass-1' };
+  const resolved = resolvePlaybackSource({
+    editedMusicJson: working,
+    multiAgentAuditionActive: true,
+    multiAgentComparePassIndex: 1,
+    multiAgentPassCandidates: [
+      { pass_index: 0, candidate_fingerprint: 'fp0', composition: pass0 },
+      { pass_index: 1, candidate_fingerprint: 'fp1', composition: pass1 },
+    ],
+    versionAuditionActive: true,
+    versionSelectedRevisionId: 'r1',
+    versionRevisionDetails: { r1: { composition: version } },
+  });
+  assert.equal(resolved.source, PLAYBACK_SOURCE_GENERATION);
+  assert.equal(resolved.sourceKind, PLAYBACK_SOURCE_KIND_MULTI_AGENT);
+  assert.equal(resolved.sourceId, 'pass-1');
+  assert.equal(resolved.sourceKey, 'multi_agent:pass-1');
+  assert.equal(resolved.mixerScope, PLAYBACK_MIXER_SCOPE_PREVIEW);
+  assert.equal(resolved.composition, pass1);
 });

@@ -1908,23 +1908,33 @@ export async function fetchAiAgents(params = {}) {
 /**
  * POST /ai/agents/workflows/preview — session candidate only; never mutates a project.
  */
-export async function previewMultiAgentWorkflow(payload) {
+export async function previewMultiAgentWorkflow(payload, { signal } = {}) {
   const composition = normalizeApiComposition(payload.composition, {
     context: 'multi-agent-workflow-preview-request',
   });
   validateCanonicalForApi(composition, { action: 'multi-agent workflow preview' });
+  const revisionMode = payload.revision_mode || 'off';
   console.info('[musicApi] Multi-agent workflow preview started', {
     workflowId: payload.workflow_id || 'agent_spine_v1',
     maxRevisions: payload.max_revisions ?? 0,
+    revisionMode,
   });
-  const axiosResponse = await axios.post('/ai/agents/workflows/preview', {
-    composition,
-    brief: payload.brief || null,
-    workflow_id: payload.workflow_id || 'agent_spine_v1',
-    max_revisions: payload.max_revisions ?? 0,
-    agent_model_overrides: payload.agent_model_overrides || {},
-    selection: payload.selection || {},
-  });
+  const axiosResponse = await axios.post(
+    '/ai/agents/workflows/preview',
+    {
+      composition,
+      brief: payload.brief || null,
+      workflow_id: payload.workflow_id || 'agent_spine_v1',
+      max_revisions: payload.max_revisions ?? 0,
+      revision_mode: revisionMode,
+      max_wall_ms: payload.max_wall_ms ?? null,
+      max_prompt_tokens: payload.max_prompt_tokens ?? null,
+      agent_model_overrides: payload.agent_model_overrides || {},
+      selection: payload.selection || {},
+      critic_parameters: payload.critic_parameters || {},
+    },
+    signal ? { signal } : undefined,
+  );
   const response = axiosResponse.data || {};
   const candidate = normalizeApiComposition(response.candidate, {
     context: 'multi-agent-workflow-preview-response',
@@ -1933,10 +1943,26 @@ export async function previewMultiAgentWorkflow(payload) {
     workflowId: response.workflow_id,
     agentSequenceLen: Array.isArray(response.agent_sequence) ? response.agent_sequence.length : 0,
     recommendation: response.recommendation || null,
+    stopReason: response.stop_reason || null,
+    revisionMode: response.revision_mode || revisionMode,
+    passCount: Array.isArray(response.revision_history) ? response.revision_history.length : 0,
+    passCandidateCount: Array.isArray(response.pass_candidates)
+      ? response.pass_candidates.length
+      : 0,
     mutatesComposition: response.mutates_composition === true,
   });
+  const passCandidates = Array.isArray(response.pass_candidates)
+    ? response.pass_candidates.map((item) => ({
+      pass_index: item.pass_index,
+      candidate_fingerprint: item.candidate_fingerprint || '',
+      composition: normalizeApiComposition(item.composition, {
+        context: 'multi-agent-pass-candidate',
+      }),
+    })).filter((item) => item.composition)
+    : [];
   return {
     ...response,
     candidate,
+    pass_candidates: passCandidates,
   };
 }
