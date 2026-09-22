@@ -7,6 +7,11 @@ condition development/generate on the reference embedding — without equating
 artist names with style ids, and without copying user projects into
 `DATASET_ROOT`.
 
+For **persistent, user-authored preference profiles** across projects (with
+explicit Off/Light/Normal/Strong soft conditioning on generate), see
+[composer-profiles.md](composer-profiles.md). Profiles complement — and do not
+replace — per-request musical style references.
+
 **`musical_quality_claim: false`** — cosine similarity is affinity, not aesthetic
 quality or copyright-safe “in the style of ⟨Artist⟩”.
 

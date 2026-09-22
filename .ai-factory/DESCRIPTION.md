@@ -2,7 +2,7 @@
 
 ## Overview
 
-Full-stack LLM music composer that generates and edits canonical playable `composition.v2` JSON. A FastAPI backend orchestrates multi-stage LangChain/LangGraph composition, validation, secure MIDI/MusicXML import into V2, deterministic `composition.analysis.v1` musical analysis, harmony timeline editing and reharmonization preview, AI-assisted arrangement/orchestration preview, MusicXML/MIDI/WAV export, and SQLite project persistence with durable revision/branch history. A React/Vite frontend provides prompt controls, import workflows, piano-roll and JSON editing, Analysis / Motifs / Harmony / Arrange / Develop / Versions tabs, OSMD notation, and Tone.js playback of the same canonical note events. Substantial AI results stay preview-first until Apply. `composition.v1` remains accepted migration/parser input.
+Full-stack LLM music composer that generates and edits canonical playable `composition.v2` JSON. A FastAPI backend orchestrates multi-stage LangChain/LangGraph composition, validation, secure MIDI/MusicXML import into V2, deterministic `composition.analysis.v1` musical analysis, harmony timeline editing and reharmonization preview, AI-assisted arrangement/orchestration preview, durable Composer Profiles (`composer.profile.v1`) for soft generate conditioning, MusicXML/MIDI/WAV export, and SQLite project persistence with durable revision/branch history. A React/Vite frontend provides prompt controls, import workflows, piano-roll and JSON editing, Analysis / Motifs / Harmony / Arrange / Develop / Profiles / Versions tabs, OSMD notation, and Tone.js playback of the same canonical note events. Substantial AI results stay preview-first until Apply. `composition.v1` remains accepted migration/parser input.
 
 ## Core Features
 
@@ -13,6 +13,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - Versioned Composition V2 tokenizer (`tokenizer.v1`) under `backend/app/tokenizer/` (CLI encode/decode/stats/viz; train+inference contract; never `PROJECT_DB_PATH` / weight load)
 - Optional PyTorch Music Transformer (`music_transformer.v1`) under `backend/app/music_transformer/` (offline experiment train/eval/listen/compare over tokenizer; resume + metrics; optional generate API; never `PROJECT_DB_PATH` / GGUF in FastAPI; symbolic metrics ≠ musical quality)
 - Deterministic composition analysis (`composition.analysis.v1`) over current V2 scopes; frontend-derived cache only; optional bounded advisory context for LLM edit/repair
+- Durable Composer Profiles (`composer.profile.v1`) with explicit vs derived prefs, Off/Light/Normal/Strong soft generate conditioning; prompt/hard constraints always win; never copies melodies or writes `DATASET_ROOT`
 - Explicit harmony tick-span timeline with local add/replace/remove/move/resize; `POST /harmony/reharmonize/preview` for deterministic/AI candidates (apply is client-side, fingerprint-gated)
 - AI-assisted arrangement / orchestration via `GET /composition/arrangement/instruments` and `POST /composition/arrangement/preview` (ephemeral candidates; Apply commits V2 only; curated catalog not persisted as catalog IDs/ranges)
 - Partial region editing via LLM patch (`replace_region`) without regenerating the full score

@@ -10,3 +10,4 @@
 - Never log API keys, full freeform prompts, or raw MusicXML/MIDI/WAV payloads; log sanitized codes, counts, and ids only.
 - Decompose unrelated shell/git steps instead of chaining them with `&&` when a mid-chain failure would obscure the failing command.
 - Backend runtime verbosity must stay controllable via `LOG_LEVEL` without code changes; keep frontend diagnostics removable through existing build/runtime logging policy.
+- Composer profiles (`composer.profile.v1`) are durable soft prefs only — never store event arrays, analysis reports, or embedding vectors; never override prompt / hard `GenerationConstraints`; never write profiles or source projects to `DATASET_ROOT`.

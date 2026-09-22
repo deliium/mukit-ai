@@ -69,6 +69,7 @@
 | Symbolic music PyTorch Music Transformer | 2026-09-21 |
 | Reproducible symbolic music training and evaluation | 2026-09-21 |
 | Style/semantic embeddings and conditioning for symbolic composition | 2026-09-21 |
+| Composer profiles follow-on (durable prefs + generate soft merge) | 2026-09-22 |
 | Hybrid LLM planner + symbolic note generation pipeline | 2026-09-21 |
 | MIDI keyboard / live MIDI performance input | 2026-09-21 |
 | Audio-to-symbolic musical input (monophonic) | 2026-09-21 |

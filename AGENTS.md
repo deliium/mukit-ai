@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop tabs, and plays note events with Tone.js. Projects persist in SQLite. V1 remains migration/parser input.
+Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js. Projects persist in SQLite. V1 remains migration/parser input.
 
 ## Tech Stack
 
@@ -25,7 +25,7 @@ mukit-ai/
 │   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas, revision_loop)
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
-│   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + critique + motifs + harmony + arrangement + development + embeddings + ai_models + ai_agents HTTP API
+│   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + ai_models + ai_agents HTTP API
 │   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
@@ -87,6 +87,12 @@ mukit-ai/
 | `backend/app/embeddings/cli.py` | Offline embedding eval CLI (`python -m app.embeddings.cli`) |
 | `backend/app/music_transformer/cli.py` | Offline Music Transformer train/generate/eval/listen/compare CLI (`python -m app.music_transformer.cli`) |
 | `backend/app/routers/embeddings.py` | `POST /embeddings/compute`, `/similarity`, `/related-motifs`, `/reference/resolve` |
+| `backend/app/routers/composer_profiles.py` | Composer profile CRUD / derive / promote / preview / compare / export/import |
+| `backend/app/composer_profile_schemas.py` | `composer.profile.v1` + export envelope DTOs |
+| `backend/app/services/composer_profile_store.py` | SQLite profile persistence + CAS |
+| `backend/app/services/composer_profile_derive.py` | Multi-project abstract preference aggregate |
+| `backend/app/services/composer_profile_resolve.py` | Explicit-over-derived + strength soft fragment |
+| `backend/app/services/composer_profile_merge.py` | Additive generate merge + provenance (never mutates prompt) |
 | `scripts/run_tests.sh` | Local quality gate: ESLint + backend pytest + frontend unit tests |
 | `backend/app/composition_plan_schemas.py` | Strict `composition.plan.v1` DTOs (non-playable) |
 | `backend/app/services/composition_plan_constraints.py` | Plan ↔ hard `GenerationConstraints` conformance + digest |
@@ -204,6 +210,7 @@ mukit-ai/
 | Symbolic datasets | `docs/datasets.md` | Offline `DATASET_ROOT` corpus pipeline, provenance, CLI |
 | Symbolic tokenizer | `docs/tokenizer.md` | Composition V2 ↔ token ids, quantization, CLI, versioning |
 | Symbolic embeddings | `docs/embeddings.md` | Handcrafted musical feature embeddings, similarity, reference conditioning |
+| Composer profiles | `docs/composer-profiles.md` | Durable preference profiles, soft generate conditioning, derive/promote |
 | Symbolic Music Transformer | `docs/music-transformer.md` | PyTorch decoder-only LM, train/generate CLI, checkpoint card, optional API |
 | Hybrid generation | `docs/hybrid-generation.md` | LLM plan + symbolic notes pipelines, seeds, multi-stage provenance |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |
@@ -227,6 +234,6 @@ mukit-ai/
 - Decompose shell command chains; do not combine unrelated git operations with `&&` when a failure mid-chain is confusing
   - Incorrect: `git checkout main && git pull`
   - Correct: First `git checkout main`, then `git pull origin main`
-- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data. Arrangement catalog IDs/ranges are not V2 fields; only applied V2 is persisted. Typed agent plans live in `agent.artifact.v1` envelopes / `agent_artifact_workspace` — never as alternate playable scores (`composition.v4` unsupported); `ai_agents/` must not import the workspace or SQLite. Symbolic embeddings measure affinity from note material — never artist≡style ids; never auto-export projects into `DATASET_ROOT`.
+- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data. Arrangement catalog IDs/ranges are not V2 fields; only applied V2 is persisted. Typed agent plans live in `agent.artifact.v1` envelopes / `agent_artifact_workspace` — never as alternate playable scores (`composition.v4` unsupported); `ai_agents/` must not import the workspace or SQLite. Symbolic embeddings measure affinity from note material — never artist≡style ids; never auto-export projects into `DATASET_ROOT`. Composer profiles (`composer.profile.v1`) are durable soft prefs only — never store event arrays / analysis reports / embedding vectors; never override prompt/hard `GenerationConstraints`; never write to `DATASET_ROOT`.
 - Prefer extending `routers/` + `services/` over growing unrelated logic in `main.py`
 - Never log API keys, full prompts, raw MusicXML/MIDI/WAV payloads, uploaded import source bytes, full analysis reports, event arrays, or arrangement catalog override contents

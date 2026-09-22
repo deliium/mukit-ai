@@ -121,7 +121,7 @@ mukit-ai/
 │       ├── utils/                  # Client-side composition/playback/analysis/arrangement/revisionLoopModes/midiInput* helpers
 │       ├── App.jsx
 │       └── main.jsx
-├── docs/                           # composition.v2/v1, ai-runtime, local-ai, analysis, arrangement, embeddings, midi-live-input, import, datasets, tokenizer, music-transformer, persistence, testing
+├── docs/                           # composition.v2/v1, ai-runtime, local-ai, analysis, arrangement, embeddings, composer-profiles, midi-live-input, import, datasets, tokenizer, music-transformer, persistence, testing
 ├── models/llm/                     # Optional host GGUF/weights for Compose local-ai profiles (gitignored)
 ├── docker-compose.yml              # Default stack: backend + frontend only (no GPU / no local AI pull)
 ├── compose.dev.yml                 # Hot-reload override; optional notes for local-ai compose
@@ -139,6 +139,7 @@ mukit-ai/
 | **Neural audio rendering** | `routers/neural_audio.py`, `neural_audio_schemas.py`, `neural_audio_settings.py`, `services/neural_audio_*`, `ai_runtime` `AUDIO_RENDER` adapters (`fake:neural-audio`, `sidecar:musicgen`) — egress only; never mutates V2 | `NeuralAudioRenderPanel`, neural audio APIs in `musicApi.js`, `neuralAudioRenderUi.js` |
 | **Datasets (offline)** | `app/dataset/` (`cli`, schemas, store, ingest/normalize/segment/dedup/split/stats); `DATASET_ROOT` filesystem only — never `PROJECT_DB_PATH` | CLI / docs only (no SPA) |
 | **Embeddings** | `app/embeddings/` (schemas/features/vector/cache/index); `routers/embeddings.py`; `services/composition_embedding.py` + style conditioning / invalidation; ready `local:symbolic-features-v1` — affinity ≠ quality; never artist≡style; never silent `DATASET_ROOT` ingest | Develop reference picker + similar sections; Motifs related; `compositionEmbeddingReference.js` |
+| **Composer profiles** | `composer_profile_schemas.py`, `composer_profile_settings.py`, `routers/composer_profiles.py`, `services/composer_profile_{store,derive,resolve,merge}.py` — durable soft prefs in `PROJECT_DB_PATH`; additive generate fragment only; never melodies / `DATASET_ROOT` | `ComposerProfilesPanel`, `composerProfileApi.js`, MusicGenerator profile/strength selectors, `llmGenerateRequest.js` |
 | **Tokenizer (offline)** | `app/tokenizer/` (encode/decode/vocab/repair/stats/viz/manifest/cli); Composition V2 ↔ `tokenizer.v1` tokens — never `PROJECT_DB_PATH` / FastAPI / weight load | CLI / docs only (no SPA) |
 | **Music Transformer (offline + optional API)** | `app/music_transformer/` (model, experiment store, train/resume, metrics, eval, listening, compare, checkpoint, inference, cli); optional `routers/music_transformer.py` generate-only behind env flag; torch via extras — never `PROJECT_DB_PATH` / GGUF in FastAPI; symbolic metrics ≠ musical quality | CLI default; HTTP opt-in generate only |
 | **Analysis** | `routers/analysis.py`, `analysis_schemas.py`, `composition_analysis.py` + analyzer cluster / fingerprint / warnings | `CompositionAnalysisPanel`, `analyzeComposition` in `musicApi.js`, `compositionAnalysis.js`, analysis slice of `musicStore` |
