@@ -115,21 +115,30 @@ Remaining agents (`structure_form`, `orchestration`, `performance_expression`, `
 | CAS revisions | `DurableCommitRequest` / `ApplyAsBranch` + `AiProvenance` | Sole durable mutation path |
 | Forbidden-import gate pattern | `test_dataset_pipeline.py` scans for `project_store` / `PROJECT_DB_PATH` | Reuse for `ai_agents/` package |
 
-### Gaps (must build)
+### Gaps (status after ship — do not reopen completed tasks)
 
-| Gap | Notes |
-|-----|-------|
-| Agent descriptor + registry | No agent id / artifact I/O / cost surface |
-| Typed artifact envelope | Cross-tool candidates exist but no shared agent artifact bus |
-| Progressive realize / `working_draft_composition` | Patches must accumulate into fingerprintable V2 via trust-boundary services |
-| Immutable workflow context | Generate uses TypedDict blob; not role-scoped slots |
-| Multi-agent workflow spine | No CreativeDirector→…→Critic orchestration |
-| Agent discovery + single-agent run HTTP | Missing `/ai/agents` and `/ai/agents/{id}/run` |
-| Durable `agent_id` on provenance stages | `_sanitize_stage` + `GenerationPipelineStageProvenance` drop unknown fields today |
-| Domain error codes | No agent/workflow → HTTP map |
-| Per-agent model selection | Ops exist; agent→op→model UI/API binding incomplete |
-| Architecture tests with mocked agents | Missing |
-| Docs diagram for V4 agent layer | Missing |
+| Gap | Status |
+|-----|--------|
+| Agent descriptor + registry | **Shipped** |
+| Typed artifact envelope (session `agent.artifact.v1`) | **Shipped** (session); durable typed graph → **Deferred to follow-on** |
+| Progressive realize / `working_draft_composition` | **Shipped** |
+| Immutable workflow context | **Shipped** |
+| Multi-agent workflow spine | **Shipped** |
+| Agent discovery + single-agent run HTTP | **Shipped** |
+| Durable `agent_id` on provenance stages | **Shipped** |
+| Domain error codes | **Shipped** |
+| Per-agent model selection | **Shipped** (env/request overrides) |
+| Architecture tests with mocked agents | **Shipped** |
+| Docs diagram for V4 agent layer | **Shipped** |
+| Durable typed plans + revision artifact links + history summary + GC | **Deferred to follow-on** (see below) |
+
+## Follow-on
+
+Inspectable durable agent-artifact workspace (typed plans, dependency graph, promote-on-Apply, Versions projection, temporary GC) is owned by:
+
+`.ai-factory/plans/v4-shared-musical-workspace-artifact-graph.md`
+
+Do **not** uncheck this plan’s Definition of Done or completed tasks for that follow-on.
 
 ### Coupling risks to avoid
 
@@ -578,3 +587,8 @@ Applied `/aif-improve` refinements:
 - Locked `max_revisions=0`, revise re-entry at harmony, `MULTI_AGENT_APPLY`, fake-mode binding, no silent LLM note fallback
 - Explicit dependencies and commit regrouping for 14 tasks
 - Deferred: Playwright mega-journey; nine-agent full spine expansion
+
+### Follow-on link (2026-09-22, second improve pass)
+
+- Relabeled Audit Gaps as Shipped vs Deferred (no `[x]` tasks modified)
+- Linked durable typed workspace / history / GC to `v4-shared-musical-workspace-artifact-graph.md`
