@@ -1062,6 +1062,15 @@ export const useMusicStore = create((set, get) => ({
   compositionEditUndoStack: [],
   compositionEditRedoStack: [],
 
+  /** Selected durable composer profile id for generate soft conditioning (session). */
+  composerProfileId: null,
+  /** Profile strength: off | light | normal | strong (default off). */
+  composerProfileStrength: 'off',
+  /** Cached list rows from GET /composer-profiles (id/name/updated_at/source_count). */
+  composerProfileList: [],
+  /** Last preview soft-fragment payload (session). */
+  composerProfilePreview: null,
+
   aiEditStartBar: null,
   aiEditEndBar: null,
   aiEditTrackMode: 'current',
@@ -1975,6 +1984,30 @@ export const useMusicStore = create((set, get) => ({
     } else {
       cancelAnalysisDebounce();
     }
+  },
+
+  setComposerProfileSelection: ({ profileId = null, strength = 'off' } = {}) => {
+    const nextStrength = ['off', 'light', 'normal', 'strong'].includes(strength)
+      ? strength
+      : 'off';
+    console.debug('[musicStore] Composer profile selection', {
+      profileId: profileId || null,
+      strength: nextStrength,
+    });
+    set({
+      composerProfileId: profileId || null,
+      composerProfileStrength: nextStrength,
+    });
+  },
+
+  setComposerProfileList: (items) => {
+    const list = Array.isArray(items) ? items : [];
+    console.debug('[musicStore] Composer profile list cached', { count: list.length });
+    set({ composerProfileList: list });
+  },
+
+  setComposerProfilePreview: (preview) => {
+    set({ composerProfilePreview: preview || null });
   },
 
   getAnalysisFreshness: () => {
@@ -10014,7 +10047,8 @@ export const useMusicStore = create((set, get) => ({
     if (state.multiAgentAbortController) {
       state.multiAgentAbortController.abort();
     }
-    const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const abortController =
+      typeof globalThis.AbortController !== 'undefined' ? new globalThis.AbortController() : null;
     const requestId = (state.multiAgentRequestId || 0) + 1;
     const revisionMode = state.multiAgentRevisionMode || 'off';
     set({

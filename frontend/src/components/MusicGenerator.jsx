@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { fetchAiModels, generateLlmMusicJson } from '../api/musicApi.js';
+import { listComposerProfiles } from '../api/composerProfileApi.js';
 import { buildLlmRequest } from '../utils/llmGenerateRequest.js';
 import ComposerWorkspace from './ComposerWorkspace.jsx';
 import ImportControls from './ImportControls.jsx';
@@ -192,6 +193,11 @@ const MusicGenerator = () => {
   const rejectGenerationCandidate = useMusicStore((state) => state.rejectGenerationCandidate);
   const applyGenerationCandidate = useMusicStore((state) => state.applyGenerationCandidate);
   const currentProjectId = useMusicStore((state) => state.currentProjectId);
+  const composerProfileId = useMusicStore((state) => state.composerProfileId);
+  const composerProfileStrength = useMusicStore((state) => state.composerProfileStrength);
+  const composerProfileList = useMusicStore((state) => state.composerProfileList);
+  const setComposerProfileSelection = useMusicStore((state) => state.setComposerProfileSelection);
+  const setComposerProfileList = useMusicStore((state) => state.setComposerProfileList);
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [branchNameDraft, setBranchNameDraft] = useState('');
@@ -201,6 +207,18 @@ const MusicGenerator = () => {
   const [symbolicReady, setSymbolicReady] = useState(false);
   const [lastProvenance, setLastProvenance] = useState(null);
   const startedAtRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listComposerProfiles()
+      .then((items) => {
+        if (!cancelled) setComposerProfileList(items || []);
+      })
+      .catch(() => {
+        if (!cancelled) setComposerProfileList([]);
+      });
+    return () => { cancelled = true; };
+  }, [setComposerProfileList]);
 
   useEffect(() => {
     let cancelled = false;
@@ -260,6 +278,8 @@ const MusicGenerator = () => {
     const requestData = buildLlmRequest(prompt, selectedProvider, selectedModel, {
       pipeline,
       seed: hybridSeed,
+      profileId: composerProfileId,
+      profileStrength: composerProfileStrength,
     });
     console.debug('[MusicGenerator] LLM generation requested', {
       provider: selectedProvider,
@@ -268,6 +288,8 @@ const MusicGenerator = () => {
       mood: prompt.mood,
       pipeline,
       seed: requestData.options?.seed ?? null,
+      profileId: requestData.profile_id || null,
+      profileStrength: requestData.profile_strength,
     });
 
     try {
@@ -437,6 +459,50 @@ const MusicGenerator = () => {
               <Input id="tempoMax" type="number" min="40" max="240" value={prompt.tempo_max} disabled={generating || !llmReady} onChange={(event) => updatePrompt('tempo_max', event.target.value)} />
             </FormGroup>
           </ParameterGrid>
+
+          <ParameterGrid>
+            <FormGroup>
+              <Label htmlFor="composerProfile">Composer profile</Label>
+              <Select
+                id="composerProfile"
+                data-testid="generate-composer-profile"
+                value={composerProfileId || ''}
+                disabled={generating || !llmReady}
+                onChange={(event) => setComposerProfileSelection({
+                  profileId: event.target.value || null,
+                  strength: event.target.value
+                    ? (composerProfileStrength === 'off' ? 'normal' : composerProfileStrength)
+                    : 'off',
+                })}
+              >
+                <option value="">None</option>
+                {(composerProfileList || []).map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </Select>
+            </FormGroup>
+            <FormGroup>
+              <Label htmlFor="composerProfileStrength">Profile strength</Label>
+              <Select
+                id="composerProfileStrength"
+                data-testid="generate-composer-profile-strength"
+                value={composerProfileStrength}
+                disabled={generating || !llmReady || !composerProfileId}
+                onChange={(event) => setComposerProfileSelection({
+                  profileId: composerProfileId,
+                  strength: event.target.value,
+                })}
+              >
+                <option value="off">Off</option>
+                <option value="light">Light</option>
+                <option value="normal">Normal</option>
+                <option value="strong">Strong</option>
+              </Select>
+            </FormGroup>
+          </ParameterGrid>
+          <StatusMessage className="info">
+            Composer profiles soft-condition generation only. Key, instruments, and other prompt fields always win. Manage profiles in the Profiles tab.
+          </StatusMessage>
 
           <FormGroup>
             <Label htmlFor="instruments">Instruments / Tracks</Label>

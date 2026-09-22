@@ -40,4 +40,28 @@ describe('buildLlmRequest pipeline options', () => {
     assert.equal(request.options.pipeline, 'hybrid_plan_symbolic');
     assert.equal(request.options.seed, undefined);
   });
+
+  it('defaults profile_strength to off without profile_id', () => {
+    const request = buildLlmRequest(basePrompt, 'fake', 'fake-v1');
+    assert.equal(request.profile_strength, 'off');
+    assert.equal(request.profile_id, undefined);
+  });
+
+  it('includes profile_id only when strength is not off', () => {
+    const off = buildLlmRequest(basePrompt, 'fake', 'fake-v1', {
+      profileId: 'prof_x',
+      profileStrength: 'off',
+    });
+    assert.equal(off.profile_strength, 'off');
+    assert.equal(off.profile_id, undefined);
+
+    const on = buildLlmRequest(basePrompt, 'fake', 'fake-v1', {
+      profileId: 'prof_x',
+      profileStrength: 'normal',
+    });
+    assert.equal(on.profile_strength, 'normal');
+    assert.equal(on.profile_id, 'prof_x');
+    assert.equal(on.prompt.key, 'C major');
+    assert.deepEqual(on.prompt.instruments, ['piano', 'bass']);
+  });
 });

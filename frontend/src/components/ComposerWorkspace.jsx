@@ -16,6 +16,7 @@ import CompositionDevelopmentPanel from './CompositionDevelopmentPanel.jsx';
 import ArrangementPanel from './ArrangementPanel.jsx';
 import MultiAgentPanel from './MultiAgentPanel.jsx';
 import ProjectVersionsPanel from './ProjectVersionsPanel.jsx';
+import ComposerProfilesPanel from './ComposerProfilesPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const Workspace = styled.div`
@@ -96,6 +97,7 @@ const TABS = [
   { id: 'agents', label: 'Agents' },
   { id: 'motifs', label: 'Motifs' },
   { id: 'harmony', label: 'Harmony' },
+  { id: 'profiles', label: 'Profiles' },
   { id: 'advanced', label: 'Advanced JSON' },
   { id: 'analysis', label: 'Analysis' },
 ];
@@ -248,6 +250,7 @@ const ComposerWorkspace = () => {
               <MotifPanel onOpenPianoTab={() => onTabChange('piano')} />
             ) : null}
             {tab.id === 'harmony' && selected ? <HarmonyTimelinePanel /> : null}
+            {tab.id === 'profiles' && selected ? <ComposerProfilesPanel /> : null}
           </Panel>
         );
       })}

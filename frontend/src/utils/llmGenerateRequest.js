@@ -19,7 +19,9 @@ export function buildLlmRequest(prompt, selectedProvider, selectedModel, pipelin
       options.seed = Number(rawSeed);
     }
   }
-  return {
+  const profileStrength = pipelineOptions.profileStrength || 'off';
+  const profileId = pipelineOptions.profileId || null;
+  const body = {
     selection: {
       provider: selectedProvider || null,
       model: selectedModel || null,
@@ -41,7 +43,12 @@ export function buildLlmRequest(prompt, selectedProvider, selectedModel, pipelin
       duration_bars: Number(prompt.duration_bars),
       instructions: prompt.instructions || null,
     },
+    profile_strength: profileStrength,
   };
+  if (profileId && profileStrength !== 'off') {
+    body.profile_id = profileId;
+  }
+  return body;
 }
 
 export function parseSections(value) {
