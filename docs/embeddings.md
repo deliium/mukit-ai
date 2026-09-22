@@ -142,5 +142,7 @@ or home-absolute paths.
 
 - [AI Runtime](ai-runtime.md) — capability registry / `AI_OP_EMBED`
 - [Composition Development](composition-development.md) — `style_reference` on preview
+- [Reference features](reference-features.md) — dimension masks for selective conditioning
+- [Composer profiles](composer-profiles.md) — durable soft preferences
 - [Symbolic tokenizer](tokenizer.md) — optional coarse conditioning labels
 - [Symbolic datasets](datasets.md) — provenance gates; no silent project ingest

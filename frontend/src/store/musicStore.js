@@ -2010,6 +2010,25 @@ export const useMusicStore = create((set, get) => ({
     set({ composerProfilePreview: preview || null });
   },
 
+  setMusicalReferenceFeatureMask: ({ enabled = false, dimensions = null } = {}) => {
+    const state = get();
+    const current = state.musicalReference;
+    if (!current) {
+      embeddingLogger.debug('Reference feature mask ignored; no musical reference');
+      return;
+    }
+    const next = normalizeMusicalReferenceSession({
+      ...current,
+      referenceFeatureMaskEnabled: Boolean(enabled),
+      dimensions: enabled ? dimensions : null,
+    });
+    embeddingLogger.debug('Musical reference feature mask updated', {
+      enabled: Boolean(enabled),
+      dimensionCount: Array.isArray(next?.dimensions) ? next.dimensions.length : 0,
+    });
+    set({ musicalReference: next });
+  },
+
   getAnalysisFreshness: () => {
     const state = get();
     const desired = buildDesiredAnalysisRequestKey(state);
@@ -7931,7 +7950,16 @@ export const useMusicStore = create((set, get) => ({
     try {
       let styleReference;
       if (state.musicalReferenceEnabled && state.musicalReference) {
-        const built = buildStyleReferenceFromMusicalReference(state.musicalReference);
+        const refInput = {
+          ...state.musicalReference,
+          composition: state.musicalReferenceComposition || state.musicalReference.composition,
+        };
+        if (state.musicalReference.referenceFeatureMaskEnabled) {
+          refInput.dimensions = state.musicalReference.dimensions;
+        } else {
+          delete refInput.dimensions;
+        }
+        const built = buildStyleReferenceFromMusicalReference(refInput);
         if (!built.ok) {
           set({
             developmentStatus: 'error',

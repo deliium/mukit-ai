@@ -11,3 +11,4 @@
 - Decompose unrelated shell/git steps instead of chaining them with `&&` when a mid-chain failure would obscure the failing command.
 - Backend runtime verbosity must stay controllable via `LOG_LEVEL` without code changes; keep frontend diagnostics removable through existing build/runtime logging policy.
 - Composer profiles (`composer.profile.v1`) are durable soft prefs only — never store event arrays, analysis reports, or embedding vectors; never override prompt / hard `GenerationConstraints`; never write profiles or source projects to `DATASET_ROOT`.
+- Reference features (`reference.features.v1`) are derived dimension-masked sidecars only — never mutate the reference Composition; never copy melodies or note events into prompts; never write references or reports to `DATASET_ROOT`.

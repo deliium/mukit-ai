@@ -20,6 +20,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Composition Development**: Continue, add a named section, or vary a range via the Develop tab (`POST /composition/development/preview`); optional **musical reference** conditioning (project/section embedding — affinity, not artist style); 1–4 ephemeral candidates with Compare/Reject/Audition; Apply or Apply-as-branch commits (details: [docs/composition-development.md](docs/composition-development.md))
 - **Musical similarity / embeddings**: Handcrafted symbolic feature embeddings (`local:symbolic-features-v1`) for scoped similarity search and reference provenance; never auto-export projects into training corpora (details: [docs/embeddings.md](docs/embeddings.md))
 - **Composer profiles**: Named durable musical preference documents (`composer.profile.v1`) with Off/Light/Normal/Strong soft conditioning on generate; prompt/hard constraints always win; never copies melodies or writes `DATASET_ROOT` (details: [docs/composer-profiles.md](docs/composer-profiles.md))
+- **Reference features**: Select dimension masks (`density`, `texture`, …) from a musical reference for generate/develop soft conditioning; derived `reference.features.v1` only — no melody copy (details: [docs/reference-features.md](docs/reference-features.md))
 - **Hybrid generation**: Optional pipeline where the LLM plans (`composition.plan.v1`) and a symbolic composer writes notes; select Hybrid in the Music Generator when a ready `symbolic_composer` is available (details: [docs/hybrid-generation.md](docs/hybrid-generation.md))
 - **Multi-agent (V4)**: Specialized cooperating agents (Creative Director → … → Critic) return typed session artifacts; Apply uses `multi-agent-apply` CAS only (details: [docs/multi-agent.md](docs/multi-agent.md))
 - **Composition Arrangement**: Orchestrate selected tracks / piano-to-ensemble and related texture ops via the Arrange tab (`GET /composition/arrangement/instruments`, `POST /composition/arrangement/preview`); session-only candidates until Apply / Apply-as-branch (details: [docs/composition-arrangement.md](docs/composition-arrangement.md))
@@ -330,6 +331,7 @@ mukit-ai/
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |
 | [Symbolic embeddings](docs/embeddings.md) | Handcrafted musical feature embeddings, similarity, reference conditioning |
 | [Composer profiles](docs/composer-profiles.md) | Durable preference profiles, soft generate conditioning, derive/promote |
+| [Reference features](docs/reference-features.md) | Selective reference dimension masks for generate/develop |
 | [Composition Arrangement](docs/composition-arrangement.md) | Instrumentation / texture redistribution; catalog + preview + Apply |
 | [Composition Critique](docs/composition-critique.md) | Evaluation engine, strata policy, climax AC, evaluate API |
 | [Composition Analysis](docs/composition-analysis.md) | Deterministic sidecar, scopes, warnings, Analysis tab |

@@ -34,7 +34,7 @@ separate per-request control.
 ```text
 prompt hard/soft lines
   → composer-profile soft fragment (strength-scaled; explicit over derived)
-  → style_reference fragment (when present)
+  → masked reference feature fragments (or legacy style_reference summary)
 ```
 
 | Strength | Behavior |

@@ -58,16 +58,25 @@ Mixed meter: append duration uses compiled active ending meter — never root me
 
 ## Style / reference conditioning
 
-Optional request field `style_reference` resolves a musical reference (inline composition or `project_id` / `revision_id` + embed `scope`) into bounded conditioning:
+Optional request fields `style_reference` / `style_references[]` resolve a musical
+reference (inline composition or `project_id` / `revision_id` + embed `scope`) into
+bounded soft conditioning:
 
-1. Embed the reference scope (`local:symbolic-features-v1`).
-2. Build a human-readable `feature_summary` (rounded histograms/stats — never a full vector dump).
-3. Attach `style_conditioning` + `reference_provenance` on the preview response.
-4. Advisory warning `reference_similarity_delta` compares each candidate embedding to the reference (affinity only, not quality).
+1. When `dimensions` is set: analyze selected `reference.features.v1` dimensions and
+   inject only those soft fragments (anti-melody instruction included). See
+   [Reference features](reference-features.md).
+2. When `dimensions` is omitted: legacy whole `feature_summary` from the embedding path.
+3. Attach conditioning + `reference_features` provenance on generate/develop
+   (`generation_parameters.reference_features[]`).
+4. Advisory affinity is available on analyze when `compare_to` is present
+   (`musical_quality_claim: false`).
 
-On Apply, clients should nest `reference_provenance.to_generation_parameters_fragment()` under `AiProvenance.generation_parameters` so revision `summary_json` retains bounded provenance (no full reference composition). Working fingerprint after apply must differ from the reference fingerprint; existing outside-range / topology preservation assertions still apply.
+On Apply, nest bounded provenance under `AiProvenance.generation_parameters` (no full
+reference composition). Working fingerprint after apply must differ from the reference;
+outside-range / topology preservation still applies.
 
-Resolve-only helper: `POST /embeddings/reference/resolve`.
+Analyze: `POST /reference-features/analyze`. Resolve-only helper:
+`POST /embeddings/reference/resolve`.
 
 ## Fake mode
 
@@ -95,5 +104,6 @@ Closer-to-reference: `vary_section` with `style_reference` (e.g. another project
 - [Composition V2](composition-v2.md) — canonical contract
 - [Project persistence](project-persistence.md) — revisions, branches, Apply-as-branch, restore
 - [Composition Arrangement](composition-arrangement.md) — instrumentation / texture redistribution preview
+- [Reference features](reference-features.md) — dimension-masked reference conditioning
 - [Testing](testing.md) — pytest / Playwright commands
 - [Composition Analysis](composition-analysis.md) — advisory sidecar (not editable authority)

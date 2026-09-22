@@ -1758,6 +1758,75 @@ export async function resolveMusicalReference(styleReference, modelId = null) {
   }
 }
 
+/**
+ * POST /reference-features/analyze — derived reference.features.v1 report (no V2 mutation).
+ */
+export async function analyzeReferenceFeatures(payload = {}) {
+  const body = { ...payload };
+  if (body.composition) {
+    body.composition = normalizeApiComposition(body.composition, {
+      context: 'reference-features-analyze',
+    });
+    validateCanonicalForApi(body.composition, { action: 'reference features analyze' });
+  }
+  if (!body.scope) {
+    body.scope = { kind: 'composition' };
+  } else {
+    const scopeResult = normalizeEmbedScope(body.scope);
+    if (!scopeResult.ok) {
+      throw new EmbeddingApiError(scopeResult.message, { code: scopeResult.code });
+    }
+    body.scope = scopeResult.scope;
+  }
+
+  embeddingLogger.debug('Reference features analyze started', {
+    projectId: body.project_id || null,
+    scopeKind: body.scope?.kind || null,
+    dimensionCount: Array.isArray(body.requested_dimensions)
+      ? body.requested_dimensions.length
+      : null,
+    hasCompareTo: Boolean(body.compare_to),
+  });
+
+  try {
+    const axiosResponse = await axios.post('/reference-features/analyze', body);
+    const response = axiosResponse.data || {};
+    if (!response.report || response.report.schema_version !== 'reference.features.v1') {
+      throw new EmbeddingApiError('Invalid reference features response', {
+        code: 'reference_feature_invalid',
+      });
+    }
+    embeddingLogger.debug('Reference features analyze ready', {
+      dimensionCount: Object.keys(response.report.dimensions || {}).length,
+      unavailableCount: Array.isArray(response.report.unavailable)
+        ? response.report.unavailable.length
+        : 0,
+      hasAffinity: Boolean(response.report.embedding_affinity),
+    });
+    return {
+      report: response.report,
+      warning_codes: Array.isArray(response.warning_codes)
+        ? response.warning_codes.slice(0, 32)
+        : [],
+    };
+  } catch (error) {
+    if (error instanceof EmbeddingApiError) {
+      throw error;
+    }
+    const status = error.response?.status ?? null;
+    const parsed = parseMotifErrorDetail(error.response?.data?.detail ?? error.message);
+    embeddingLogger.error('Reference features analyze failed', {
+      status,
+      code: parsed.code,
+    });
+    throw new EmbeddingApiError(parsed.message, {
+      status,
+      code: parsed.code || 'reference_feature_invalid',
+      details: parsed.details,
+    });
+  }
+}
+
 const neuralAudioLogger = createAppLogger('musicApi.neuralAudio');
 
 function parseNeuralAudioError(error) {

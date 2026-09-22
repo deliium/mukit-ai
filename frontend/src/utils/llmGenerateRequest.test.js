@@ -64,4 +64,17 @@ describe('buildLlmRequest pipeline options', () => {
     assert.equal(on.prompt.key, 'C major');
     assert.deepEqual(on.prompt.instruments, ['piano', 'bass']);
   });
+
+  it('includes style_reference with density+texture dimensions', () => {
+    const request = buildLlmRequest(basePrompt, 'fake', 'fake-v1', {
+      styleReference: {
+        project_id: 'proj_1',
+        scope: { kind: 'composition' },
+        mode: 'prompt_features',
+        dimensions: ['density', 'texture'],
+      },
+    });
+    assert.deepEqual(request.style_reference.dimensions, ['density', 'texture']);
+    assert.equal(request.style_reference.project_id, 'proj_1');
+  });
 });

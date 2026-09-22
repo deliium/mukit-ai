@@ -17,6 +17,7 @@ import {
 } from '../utils/compositionEmbeddingReference.js';
 import { listAnalysisSectionOptions } from '../utils/compositionAnalysis.js';
 import { isCanonicalComposition } from '../utils/musicJsonValidation.js';
+import ReferenceFeaturesControls from './ReferenceFeaturesControls.jsx';
 
 const Panel = styled.section`
   display: flex;
@@ -235,6 +236,9 @@ const CompositionDevelopmentPanel = () => {
   const selectMusicalReferenceProject = useMusicStore((state) => state.selectMusicalReferenceProject);
   const selectMusicalReferenceSection = useMusicStore((state) => state.selectMusicalReferenceSection);
   const clearMusicalReference = useMusicStore((state) => state.clearMusicalReference);
+  const setMusicalReferenceFeatureMask = useMusicStore(
+    (state) => state.setMusicalReferenceFeatureMask,
+  );
   const searchSimilarSections = useMusicStore((state) => state.searchSimilarSections);
   const loadProjectList = useMusicStore((state) => state.loadProjectList);
   const [branchNameDraft, setBranchNameDraft] = useState('');
@@ -594,6 +598,13 @@ const CompositionDevelopmentPanel = () => {
                 {musicalReferenceError && (
                   <Status $tone="error" role="status">{musicalReferenceError}</Status>
                 )}
+                <ReferenceFeaturesControls
+                  enabled={Boolean(musicalReference?.referenceFeatureMaskEnabled)}
+                  dimensions={musicalReference?.dimensions ?? null}
+                  onChange={({ enabled, dimensions }) => {
+                    setMusicalReferenceFeatureMask({ enabled, dimensions });
+                  }}
+                />
                 <ButtonRow>
                   <Button
                     type="button"

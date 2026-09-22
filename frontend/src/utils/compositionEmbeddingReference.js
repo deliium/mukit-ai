@@ -7,6 +7,7 @@
 
 import { listAnalysisSectionOptions } from './compositionAnalysis.js';
 import { createAppLogger } from './appLogger.js';
+import { normalizeDimensionMask } from './referenceFeatures.js';
 
 const logger = createAppLogger('embeddingReference');
 
@@ -206,6 +207,16 @@ export function normalizeStyleReference(input) {
     styleReference.expected_fingerprint = input.expected_fingerprint.slice(0, 128);
   }
 
+  if (Object.prototype.hasOwnProperty.call(input, 'dimensions')) {
+    const mask = normalizeDimensionMask(input.dimensions);
+    if (!mask.ok) {
+      return { ok: false, code: mask.code, message: mask.message };
+    }
+    if (mask.dimensions != null) {
+      styleReference.dimensions = mask.dimensions;
+    }
+  }
+
   return { ok: true, styleReference };
 }
 
@@ -227,6 +238,7 @@ export function buildStyleReferenceFromMusicalReference(musicalReference) {
     scope: musicalReference.scope,
     expected_fingerprint: musicalReference.sourceFingerprint || undefined,
     mode: musicalReference.mode || DEFAULT_STYLE_CONDITIONING_MODE,
+    dimensions: musicalReference.dimensions,
   });
 }
 
@@ -324,6 +336,14 @@ export function normalizeMusicalReferenceSession(input) {
     mode: STYLE_CONDITIONING_MODES.includes(input.mode)
       ? input.mode
       : DEFAULT_STYLE_CONDITIONING_MODE,
+    dimensions: (() => {
+      if (!Object.prototype.hasOwnProperty.call(input, 'dimensions')) {
+        return undefined;
+      }
+      const mask = normalizeDimensionMask(input.dimensions);
+      return mask.ok ? mask.dimensions : undefined;
+    })(),
+    referenceFeatureMaskEnabled: Boolean(input.referenceFeatureMaskEnabled),
   };
 }
 

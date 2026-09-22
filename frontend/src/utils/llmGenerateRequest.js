@@ -48,6 +48,12 @@ export function buildLlmRequest(prompt, selectedProvider, selectedModel, pipelin
   if (profileId && profileStrength !== 'off') {
     body.profile_id = profileId;
   }
+  if (pipelineOptions.styleReference) {
+    body.style_reference = pipelineOptions.styleReference;
+  }
+  if (Array.isArray(pipelineOptions.styleReferences) && pipelineOptions.styleReferences.length) {
+    body.style_references = pipelineOptions.styleReferences;
+  }
   return body;
 }
 

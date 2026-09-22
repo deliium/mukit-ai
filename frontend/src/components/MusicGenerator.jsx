@@ -3,9 +3,11 @@ import styled from 'styled-components';
 import { fetchAiModels, generateLlmMusicJson } from '../api/musicApi.js';
 import { listComposerProfiles } from '../api/composerProfileApi.js';
 import { buildLlmRequest } from '../utils/llmGenerateRequest.js';
+import { buildStyleReferenceFromMusicalReference } from '../utils/compositionEmbeddingReference.js';
 import ComposerWorkspace from './ComposerWorkspace.jsx';
 import ImportControls from './ImportControls.jsx';
 import ProjectComposerBar from './ProjectComposerBar.jsx';
+import ReferenceFeaturesControls from './ReferenceFeaturesControls.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const Container = styled.div`
@@ -196,8 +198,14 @@ const MusicGenerator = () => {
   const composerProfileId = useMusicStore((state) => state.composerProfileId);
   const composerProfileStrength = useMusicStore((state) => state.composerProfileStrength);
   const composerProfileList = useMusicStore((state) => state.composerProfileList);
-  const setComposerProfileSelection = useMusicStore((state) => state.setComposerProfileSelection);
+  const musicalReferenceEnabled = useMusicStore((state) => state.musicalReferenceEnabled);
+  const musicalReference = useMusicStore((state) => state.musicalReference);
+  const musicalReferenceComposition = useMusicStore((state) => state.musicalReferenceComposition);
+  const setMusicalReferenceFeatureMask = useMusicStore(
+    (state) => state.setMusicalReferenceFeatureMask,
+  );
   const setComposerProfileList = useMusicStore((state) => state.setComposerProfileList);
+  const setComposerProfileSelection = useMusicStore((state) => state.setComposerProfileSelection);
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [branchNameDraft, setBranchNameDraft] = useState('');
@@ -281,6 +289,21 @@ const MusicGenerator = () => {
       profileId: composerProfileId,
       profileStrength: composerProfileStrength,
     });
+    if (musicalReferenceEnabled && musicalReference) {
+      const refInput = {
+        ...musicalReference,
+        composition: musicalReferenceComposition || musicalReference.composition,
+      };
+      if (musicalReference.referenceFeatureMaskEnabled) {
+        refInput.dimensions = musicalReference.dimensions;
+      } else {
+        delete refInput.dimensions;
+      }
+      const built = buildStyleReferenceFromMusicalReference(refInput);
+      if (built.ok && built.styleReference) {
+        requestData.style_reference = built.styleReference;
+      }
+    }
     console.debug('[MusicGenerator] LLM generation requested', {
       provider: selectedProvider,
       model: selectedModel,
@@ -290,6 +313,7 @@ const MusicGenerator = () => {
       seed: requestData.options?.seed ?? null,
       profileId: requestData.profile_id || null,
       profileStrength: requestData.profile_strength,
+      styleReferenceDimensions: requestData.style_reference?.dimensions || null,
     });
 
     try {
@@ -503,6 +527,22 @@ const MusicGenerator = () => {
           <StatusMessage className="info">
             Composer profiles soft-condition generation only. Key, instruments, and other prompt fields always win. Manage profiles in the Profiles tab.
           </StatusMessage>
+          {musicalReferenceEnabled && musicalReference && (
+            <FormGroup>
+              <Label>Reference feature dimensions</Label>
+              <StatusMessage className="info">
+                Optional mask for the Develop-tab musical reference on generate. Does not copy melodies.
+              </StatusMessage>
+              <ReferenceFeaturesControls
+                enabled={Boolean(musicalReference?.referenceFeatureMaskEnabled)}
+                dimensions={musicalReference?.dimensions ?? null}
+                onChange={({ enabled, dimensions }) => {
+                  setMusicalReferenceFeatureMask({ enabled, dimensions });
+                }}
+                compact
+              />
+            </FormGroup>
+          )}
 
           <FormGroup>
             <Label htmlFor="instruments">Instruments / Tracks</Label>
