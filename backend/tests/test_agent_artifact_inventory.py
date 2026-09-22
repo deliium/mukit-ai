@@ -63,8 +63,8 @@ def test_inventory_checklist_frozen():
     assert ids == INVENTORY_CHECKLIST_IDS
     assert "no_composition_v4" in ids
     assert "session_only_until_apply_default" in ids
-    # Stub phase: durable writes not yet enabled; session artifact_log still works.
-    assert workspace_writes_enabled() is False
+    # Writes are implemented; default spine preview still must not require them.
+    assert workspace_writes_enabled() is True
 
 
 def test_spine_workflow_artifact_log_without_durable_workspace():

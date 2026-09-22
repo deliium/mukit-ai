@@ -67,6 +67,9 @@ class AgentWorkflowPreviewRequest(BaseModel):
     max_revisions: int = Field(default=0, ge=0, le=8)
     agent_model_overrides: dict[str, str] = Field(default_factory=dict)
     selection: dict[str, Any] = Field(default_factory=dict)
+    # Optional mid-preview inspectability — default remains session-only.
+    project_id: str | None = Field(default=None, max_length=64)
+    persist_workspace_artifacts: bool = False
 
 
 class AgentWorkflowPreviewResponse(BaseModel):
@@ -204,6 +207,31 @@ async def preview_agent_workflow(body: AgentWorkflowPreviewRequest) -> AgentWork
     if result.context.critique is not None:
         critique_payload = result.context.critique.model_dump(mode="json")
 
+    if body.persist_workspace_artifacts and body.project_id:
+        from app.services.agent_artifact_workspace import insert_temporary
+
+        try:
+            inserted = 0
+            for artifact in result.artifact_log[:64]:
+                insert_temporary(body.project_id, artifact)
+                inserted += 1
+        except AgentError as exc:
+            _raise_agent_http(exc)
+            raise  # pragma: no cover
+        logger.info(
+            "Optional workspace temporary artifacts staged",
+            extra={
+                "project_id_prefix": body.project_id[:12],
+                "inserted_count": inserted,
+                "workflow_id": result.workflow_id,
+            },
+        )
+    elif body.persist_workspace_artifacts and not body.project_id:
+        logger.info(
+            "persist_workspace_artifacts ignored without project_id",
+            extra={"workflow_id": result.workflow_id},
+        )
+
     logger.info(
         "AI agent workflow preview ready",
         extra={
@@ -212,6 +240,7 @@ async def preview_agent_workflow(body: AgentWorkflowPreviewRequest) -> AgentWork
             "candidate_prefix": edit_fingerprint_log_prefix(result.candidate_fingerprint),
             "duration_ms": result.duration_ms,
             "recommendation": result.recommendation.value if result.recommendation else None,
+            "persist_workspace": bool(body.persist_workspace_artifacts and body.project_id),
         },
     )
     return AgentWorkflowPreviewResponse(

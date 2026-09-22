@@ -117,6 +117,7 @@ def _revision_row_to_item(row: Any) -> RevisionListItem:
             "capability",
             "operation",
             "generation_parameters",
+            "ai_artifacts",
         }
     }
     return RevisionListItem(
@@ -242,10 +243,17 @@ def list_revisions(
                     f"Branch not found: {branch_id}"
                 )
         rows = conn.execute(query, params).fetchall()
+        items = [_revision_row_to_item(row) for row in rows[:page_limit]]
+        # Cheap enrichment: only multi-agent-apply revisions get AI artifact role summary.
+        for index, item in enumerate(items):
+            if item.operation_type == RevisionOperationType.MULTI_AGENT_APPLY:
+                from app.services.agent_artifact_workspace import summarize_revision_artifacts
+
+                summary = dict(item.summary)
+                summary["ai_artifacts"] = summarize_revision_artifacts(item.id, conn=conn)
+                items[index] = item.model_copy(update={"summary": summary})
 
     has_more = len(rows) > page_limit
-    page_rows = rows[:page_limit]
-    items = [_revision_row_to_item(row) for row in page_rows]
     next_before = items[-1].sequence if has_more and items else None
     logger.debug(
         "Listed project revisions",
@@ -279,7 +287,13 @@ def get_revision_detail(
         if row is None:
             raise ProjectHistoryNotFoundError(f"Revision not found: {revision_id}")
         composition = get_snapshot_composition(conn, row["snapshot_fingerprint"])
-    item = _revision_row_to_item(row)
+        item = _revision_row_to_item(row)
+        if item.operation_type == RevisionOperationType.MULTI_AGENT_APPLY:
+            from app.services.agent_artifact_workspace import summarize_revision_artifacts
+
+            summary = dict(item.summary)
+            summary["ai_artifacts"] = summarize_revision_artifacts(revision_id, conn=conn)
+            item = item.model_copy(update={"summary": summary})
     logger.debug(
         "Loaded revision detail",
         extra={

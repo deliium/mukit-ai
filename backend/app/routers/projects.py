@@ -383,6 +383,31 @@ async def get_project_revision(project_id: str, revision_id: str) -> RevisionDet
     return detail
 
 
+@router.get("/{project_id}/artifacts/{artifact_id}")
+async def get_project_artifact(project_id: str, artifact_id: str) -> dict[str, Any]:
+    """Inspect a single agent artifact (size-capped payload; never listed in bulk)."""
+    from app.ai_agents.errors import AgentError, map_agent_error_to_http
+    from app.services.agent_artifact_workspace import get_artifact
+
+    logger.info(
+        "Project artifact inspect requested",
+        extra={
+            "project_id_prefix": project_id[:12],
+            "artifact_id_prefix": artifact_id[:12],
+        },
+    )
+    try:
+        get_project(project_id)
+        return get_artifact(project_id, artifact_id, include_payload=True)
+    except AgentError as exc:
+        status, detail = map_agent_error_to_http(exc)
+        raise HTTPException(status_code=status, detail=detail) from exc
+    except (ProjectNotFoundError, ProjectHistoryNotFoundError, ProjectHistoryError) as exc:
+        raise _map_history_error(exc) from exc
+    except PersistenceSecretError as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
 @router.post(
     "/{project_id}/revisions",
     response_model=DurableCommandResponse,

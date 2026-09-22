@@ -106,6 +106,9 @@ services:
       NEURAL_AUDIO_MAX_AUDIO_SECONDS: ${NEURAL_AUDIO_MAX_AUDIO_SECONDS:-120}
       NEURAL_AUDIO_MAX_TOTAL_BYTES: ${NEURAL_AUDIO_MAX_TOTAL_BYTES:-524288000}
       AI_FALLBACK_AUDIO_RENDER: ${AI_FALLBACK_AUDIO_RENDER:-}
+      # Immutable agent artifact workspace (typed plans; promote on multi-agent-apply).
+      AGENT_ARTIFACT_TEMP_TTL_HOURS: ${AGENT_ARTIFACT_TEMP_TTL_HOURS:-24}
+      AGENT_ARTIFACT_TEMP_MAX_PER_PROJECT: ${AGENT_ARTIFACT_TEMP_MAX_PER_PROJECT:-200}
       # Optional: absolute path *inside this container* to arrangement.instruments.v1 JSON.
       # Bind-mount the file first (see compose.dev.yml). Empty = packaged fixture.
       ARRANGEMENT_INSTRUMENT_CATALOG_PATH: ${ARRANGEMENT_INSTRUMENT_CATALOG_PATH:-}
