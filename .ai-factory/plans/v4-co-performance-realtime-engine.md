@@ -384,25 +384,25 @@ Out of RT hot path and **out of predict v1 request**. Offline ACP plan (`.ai-fac
 
 ### Phase 3: Async AI path, gates, UI, docs
 
-- [ ] **Task 7: Non-blocking accompaniment predict API (fake-first) + cancel/stale ignore.**
+- [x] **Task 7: Non-blocking accompaniment predict API (fake-first) + cancel/stale ignore.**
   Deliverable: `POST /live/accompaniment/predict` validating bounded `live.accompaniment.predict.request.v1`; map `LivePerformanceError` → HTTP; fake deterministic chunk (harmony hash / `parse_chord_symbol`); client uses AbortController + session `request_id` / epoch; **at most one in-flight** predict per session; late responses discarded; **never** awaited inside MIDI/Transport callbacks. Register router via `app.include_router` in `main.py`. **No** new `AiOperation` for fake path. Document measurement gate for optional WS (stub comment only unless Task 8 fails the budget).
   Files: `backend/app/routers/live_performance.py`, `backend/app/services/live_accompaniment_predict.py`, `backend/app/services/fake_live_accompaniment.py`, `backend/app/main.py` (include_router only), `frontend/src/api/livePerformanceApi.js`; FE async filler wiring; `backend/tests/test_live_performance_*.py`.
   LOGGING: INFO predict accepted/completed with request_id, latency_ms, event_count; WARN stale discard / size reject codes; never log prompts/MIDI arrays.
   Dependencies: Tasks 1, 4–6.
 
-- [ ] **Task 8: Performance tests + communication evaluation record.**
+- [x] **Task 8: Performance tests + communication evaluation record.**
   Deliverable: Automated tests that (1) inject MIDI + advance fake Transport on shared fake engine, (2) assert accompaniment remains scheduled ≥ horizon under local engine, (3) assert transport continues when predict is delayed/aborted, (4) assert no V2 mutation without Commit, (5) assert midiPhase exclusion, (6) record measured budgets in test comments / docs table (HTTP vs local; Worker not required). If HTTP p95 exceeds budget in a documented stress harness, add WS stub **or** explicitly document “HTTP sufficient” with numbers — do not silently skip the evaluation requirement.
   Files: `frontend/src/utils/liveAccompanimentBuffer.perf.test.js` (or colocated performance tests), backend predict latency/size tests; short section reserved for Task 10 docs.
   LOGGING: tests may assert log spies for degradation / exclusion codes; no new production log noise.
   Dependencies: Task 7.
 
-- [ ] **Task 9: UI lifecycle + Commit boundary.**
+- [x] **Task 9: UI lifecycle + Commit boundary.**
   Deliverable: Start / Stop / Cancel controls; show clock, active harmony, horizon coverage, latency summary, degradation badge; engine-unavailable and midiPhase-exclusion messaging; Commit path that converts selected ephemeral accompaniment and/or stream into **one** V2 transaction onto a **user-selected destination track** (reuse `midiTakeApply` / `commitCompositionTransaction` patterns; action e.g. `co-performance-commit`); Cancel never mutates V2. Playwright smoke optional if fake MIDI harness exists; otherwise unit coverage + manual checklist is AC-sufficient for UI.
   Files: `frontend/src/components/CoPerformancePanel.jsx` (or MidiInputPanel extension), musicStore live UI wiring, commit helper if needed next to `midiTakeApply.js`, component tests as practical.
   LOGGING: INFO lifecycle transitions + commit summary (counts/track id only); never persist latency panels or event arrays.
   Dependencies: Tasks 1–8.
 
-- [ ] **Task 10: Docs, AGENTS, ROADMAP milestone.**
+- [x] **Task 10: Docs, AGENTS, ROADMAP milestone.**
   Deliverable: `docs/co-performance.md` (architecture, ephemeral vs canonical, clock, horizon, degradation, latency marks, communication evaluation table, lifecycle, Commit rules, explicit non-goals incl. Worker deferred + no reference-policy on predict); cross-links from `docs/browser-playback.md`, `docs/midi-live-input.md`, `README.md`; `AGENTS.md` entry; unchecked ROADMAP milestone for co-performance; `DESCRIPTION.md` one-liner if appropriate.
   Files: `docs/co-performance.md`, `docs/browser-playback.md`, `docs/midi-live-input.md`, `README.md`, `AGENTS.md`, `.ai-factory/ROADMAP.md`, `.ai-factory/DESCRIPTION.md` as needed.
   LOGGING: N/A for docs; note log namespaces and never-log rules in the docs page.

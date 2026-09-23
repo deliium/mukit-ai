@@ -27,6 +27,7 @@ import {
   TranscriptionApiError,
   transcribeAudio,
 } from '../api/musicApi.js';
+import { predictLiveAccompaniment } from '../api/livePerformanceApi.js';
 import { createAppLogger } from '../utils/appLogger.js';
 import {
   applyAudioTranscriptionToComposition,
@@ -52,9 +53,11 @@ import { createLivePatternEngine } from '../utils/livePatternEngine.js';
 import { createLiveLatencyTracker } from '../utils/liveLatency.js';
 import { activeHarmonyAtTick } from '../utils/liveHarmonyContext.js';
 import { requireLivePlaybackEngine } from '../utils/livePlaybackEngineAccess.js';
+import { applyCoPerformanceTakeToComposition } from '../utils/liveTakeApply.js';
 import {
   LIVE_ENGINE_UNAVAILABLE,
   LIVE_MIDI_PHASE_EXCLUSION,
+  LIVE_PREDICT_REQUEST_SCHEMA,
   createIdleLiveSession,
   readLiveHorizonBounds,
 } from '../utils/liveSessionContracts.js';
@@ -512,6 +515,11 @@ let liveAccompanimentSchedulerSession = null;
 let livePatternEngineSession = null;
 /** @type {ReturnType<typeof createLiveLatencyTracker> | null} */
 let liveLatencyTrackerSession = null;
+/** @type {AbortController | null} */
+let livePredictAbortController = null;
+/** @type {string | null} */
+let livePredictInFlightRequestId = null;
+let livePredictEpoch = 0;
 
 let playbackTransportSeq = 0;
 function nextPlaybackTransportSeq() {
@@ -1001,6 +1009,103 @@ function removeActiveMidiNote(activeNotes, pitch) {
     return activeNotes;
   }
   return activeNotes.filter((value) => value !== pitch);
+}
+
+/**
+ * Live MIDI → active-note highlights + capture buffer while recording.
+ */
+function abortLivePredictInFlight(reason = 'cancel') {
+  if (livePredictAbortController) {
+    try {
+      livePredictAbortController.abort();
+    } catch {
+      // ignore
+    }
+    livePredictAbortController = null;
+  }
+  livePredictInFlightRequestId = null;
+  liveLogger.info('live predict abort', { reason });
+}
+
+/**
+ * Fire-and-forget cold-path predict — max one in-flight; never awaited on hot path.
+ */
+function requestLivePredictFill(get, set, { clock, harmony, horizon, sessionId }) {
+  if (livePredictInFlightRequestId) {
+    liveLogger.debug('predict skip — in flight', {
+      inFlight: livePredictInFlightRequestId.slice(0, 12),
+    });
+    return;
+  }
+  if (!liveAccompanimentSchedulerSession) {
+    return;
+  }
+  const epoch = livePredictEpoch;
+  const requestId = `pred-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const controller = new AbortController();
+  livePredictAbortController = controller;
+  livePredictInFlightRequestId = requestId;
+
+  const body = {
+    schema_version: LIVE_PREDICT_REQUEST_SCHEMA,
+    session_id: sessionId,
+    request_id: requestId,
+    clock: {
+      tick: clock.tick,
+      bar: clock.bar,
+      beat: clock.beatInBar,
+      tempo: clock.tempo,
+    },
+    active_harmony: {
+      symbol: harmony.symbol,
+      start_tick: harmony.start_tick,
+      duration_ticks: harmony.duration_ticks,
+    },
+    features: {
+      density: 0.5,
+      recent_note_count: get().liveStreamNoteOnCount || 0,
+    },
+    horizon,
+  };
+
+  liveLatencyTrackerSession?.markStart('generation');
+  // Intentionally not awaited — cold path.
+  predictLiveAccompaniment(body, { signal: controller.signal })
+    .then((chunk) => {
+      liveLatencyTrackerSession?.markEnd('generation');
+      if (epoch !== livePredictEpoch) {
+        liveLogger.warn('predict stale discard', { request_id: requestId.slice(0, 12) });
+        return;
+      }
+      if (get().livePhase !== 'running' && get().livePhase !== 'degraded') {
+        return;
+      }
+      if (livePredictInFlightRequestId !== requestId) {
+        return;
+      }
+      if (chunk && liveAccompanimentSchedulerSession) {
+        liveAccompanimentSchedulerSession.ingestChunk(chunk);
+        if (chunk.latency_ms?.generation != null) {
+          liveLatencyTrackerSession?.record('generation', chunk.latency_ms.generation);
+        }
+      }
+    })
+    .catch((error) => {
+      liveLatencyTrackerSession?.markEnd('generation');
+      if (error?.code === 'aborted') {
+        return;
+      }
+      liveLogger.warn('predict fill failed', {
+        code: error?.code || 'error',
+        request_id: requestId.slice(0, 12),
+      });
+    })
+    .finally(() => {
+      if (livePredictInFlightRequestId === requestId) {
+        livePredictInFlightRequestId = null;
+        livePredictAbortController = null;
+      }
+    });
 }
 
 /**
@@ -9838,6 +9943,8 @@ export const useMusicStore = create((set, get) => ({
   },
 
   stopLiveCoPerformance: ({ reason = 'stop' } = {}) => {
+    livePredictEpoch += 1;
+    abortLivePredictInFlight(reason);
     if (!liveMidiStreamSession || !liveMidiStreamSession.isActive()) {
       const phase = get().livePhase;
       if (phase === 'idle' || phase === 'cancelled') {
@@ -9876,6 +9983,8 @@ export const useMusicStore = create((set, get) => ({
   },
 
   cancelLiveCoPerformance: ({ reason = 'cancel' } = {}) => {
+    livePredictEpoch += 1;
+    abortLivePredictInFlight(reason);
     if (liveAccompanimentSchedulerSession) {
       liveAccompanimentSchedulerSession.cancel({ reason });
       liveAccompanimentSchedulerSession = null;
@@ -9920,6 +10029,18 @@ export const useMusicStore = create((set, get) => ({
       patternEngine: livePatternEngineSession,
     });
     liveLatencyTrackerSession?.markEnd('scheduling');
+    // Cold-path AI fill — never awaited here.
+    if (result.coverage?.needsFill || result.degraded) {
+      requestLivePredictFill(get, set, {
+        clock,
+        harmony,
+        horizon: {
+          bars: get().liveHorizonBars,
+          ms: get().liveHorizonMs,
+        },
+        sessionId: get().liveSessionId || 'live',
+      });
+    }
     const deg = result.degradation || livePatternEngineSession.getDegradation();
     if (deg?.active && get().livePhase === 'running') {
       set({ livePhase: 'degraded' });
@@ -9973,6 +10094,85 @@ export const useMusicStore = create((set, get) => ({
       ? get().liveHorizonMs
       : Math.max(bounds.msMin, Math.min(bounds.msMax, Number(ms)));
     set({ liveHorizonBars: nextBars, liveHorizonMs: nextMs });
+  },
+
+  /**
+   * Explicit Commit of stream and/or accompaniment into one V2 transaction.
+   */
+  commitLiveCoPerformance: ({
+    trackId = null,
+    includeStream = true,
+    includeAccompaniment = true,
+  } = {}) => {
+    const state = get();
+    const destination =
+      trackId
+      || state.midiDestinationTrackId
+      || state.pianoRollTrackId
+      || (state.editedMusicJson?.tracks?.[0]?.id ?? null);
+    if (!destination) {
+      liveLogger.warn('live commit rejected — no destination', { code: 'midi_no_destination' });
+      set({
+        liveErrorCode: 'midi_no_destination',
+        liveErrorMessage: 'Select a destination track before commit.',
+      });
+      return { ok: false, code: 'midi_no_destination' };
+    }
+
+    const streamNotes = includeStream && liveMidiStreamSession
+      ? liveMidiStreamSession.getClosedNotes()
+      : [];
+    const accompanimentEvents = includeAccompaniment && liveAccompanimentSchedulerSession
+      ? liveAccompanimentSchedulerSession.getBuffer().getEvents()
+      : [];
+
+    const applied = applyCoPerformanceTakeToComposition(state.editedMusicJson, {
+      trackId: destination,
+      streamNotes,
+      accompanimentEvents,
+      lockedTrackIds: state.lockedTrackIds,
+    });
+    if (!applied.ok) {
+      liveLogger.warn('live commit failed', { code: applied.code });
+      set({
+        liveErrorCode: applied.code,
+        liveErrorMessage: applied.message || applied.code,
+      });
+      return { ok: false, code: applied.code };
+    }
+
+    const primary = applied.noteRefs[0] || null;
+    const ok = commitCompositionTransaction(set, get, {
+      nextComposition: applied.composition,
+      selectedTrackId: destination,
+      selectedNoteId: primary?.eventId || null,
+      selectedNoteIds: applied.noteRefs
+        .filter((ref) => ref.trackId === destination)
+        .map((ref) => ref.eventId),
+      editorSelectionRefs: applied.noteRefs,
+      editorSelectionPrimary: primary,
+      action: 'co-performance-commit',
+      noteSummary: {
+        noteCount: applied.noteRefs.length,
+        barsAdded: applied.barsAdded,
+      },
+      affectedNoteCount: applied.noteRefs.length,
+      affectedTrackCount: 1,
+      statePatch: {
+        liveErrorCode: null,
+        liveErrorMessage: '',
+      },
+    });
+    if (!ok) {
+      return { ok: false, code: 'live_commit_failed' };
+    }
+    liveLogger.info('live commit ok', {
+      noteCount: applied.noteRefs.length,
+      trackId: String(destination).slice(0, 24),
+    });
+    // Stop session after successful commit (keep phase idle; discard buffers).
+    get().cancelLiveCoPerformance({ reason: 'commit' });
+    return { ok: true, noteCount: applied.noteRefs.length };
   },
 
   /**

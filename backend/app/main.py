@@ -26,6 +26,7 @@ from .routers.ai_agents import router as ai_agents_router
 from .routers.embeddings import router as embeddings_router
 from .routers.composer_profiles import router as composer_profiles_router
 from .routers.reference_features import router as reference_features_router
+from .routers.live_performance import router as live_performance_router
 from .reference_feature_schemas import (
     ReferenceFeatureError,
     map_reference_feature_error_to_http,
@@ -127,6 +128,7 @@ app.include_router(ai_agents_router)
 app.include_router(embeddings_router)
 app.include_router(composer_profiles_router)
 app.include_router(reference_features_router)
+app.include_router(live_performance_router)
 
 _mt_settings = load_music_transformer_settings()
 if _mt_settings.api_enabled:
