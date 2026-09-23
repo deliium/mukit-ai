@@ -13,6 +13,24 @@ import {
 
 const log = createAppLogger('liveAccompaniment');
 
+/** Stable skip code when AbortController is missing (non-browser / broken env). */
+export const LIVE_PREDICT_NO_ABORT = 'live_predict_no_abort';
+
+/**
+ * Build an AbortController for cold-path predict without relying on bare
+ * `AbortController` (eslint no-undef) or throwing in odd runtimes.
+ *
+ * @returns {{ ok: true, controller: AbortController, code: null }
+ *   | { ok: false, controller: null, code: typeof LIVE_PREDICT_NO_ABORT }}
+ */
+export function createLivePredictAbortController() {
+  const AbortCtl = globalThis.AbortController;
+  if (typeof AbortCtl !== 'function') {
+    return { ok: false, controller: null, code: LIVE_PREDICT_NO_ABORT };
+  }
+  return { ok: true, controller: new AbortCtl(), code: null };
+}
+
 export class LivePerformanceApiError extends Error {
   constructor(message, { status = null, code = null, detail = null } = {}) {
     super(message);

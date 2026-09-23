@@ -27,7 +27,10 @@ import {
   TranscriptionApiError,
   transcribeAudio,
 } from '../api/musicApi.js';
-import { predictLiveAccompaniment } from '../api/livePerformanceApi.js';
+import {
+  createLivePredictAbortController,
+  predictLiveAccompaniment,
+} from '../api/livePerformanceApi.js';
 import { createAppLogger } from '../utils/appLogger.js';
 import {
   applyAudioTranscriptionToComposition,
@@ -1042,7 +1045,12 @@ function requestLivePredictFill(get, set, { clock, harmony, horizon, sessionId }
   }
   const epoch = livePredictEpoch;
   const requestId = `pred-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-  const controller = new AbortController();
+  const abortGate = createLivePredictAbortController();
+  if (!abortGate.ok) {
+    liveLogger.warn('predict skip — AbortController unavailable', { code: abortGate.code });
+    return;
+  }
+  const controller = abortGate.controller;
   livePredictAbortController = controller;
   livePredictInFlightRequestId = requestId;
 

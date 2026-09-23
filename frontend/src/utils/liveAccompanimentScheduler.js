@@ -27,7 +27,7 @@ export function createLiveAccompanimentScheduler(options = {}) {
   const onTrigger =
     typeof options.onTrigger === 'function'
       ? options.onTrigger
-      : (event, _audioTime) => {
+      : (event) => {
         log.debug('live note trigger (no voice adapter)', {
           pitch: event.pitch,
           start_tick: event.start_tick,
