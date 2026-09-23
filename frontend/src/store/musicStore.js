@@ -41,6 +41,17 @@ import { probeWebMidiSupport } from '../utils/midiInputSupport.js';
 import { createMidiPerformanceCapture } from '../utils/midiPerformanceCapture.js';
 import { createMidiMetronome } from '../utils/midiMetronome.js';
 import { applyMidiTakeToComposition } from '../utils/midiTakeApply.js';
+import { getLiveClock } from '../utils/liveClock.js';
+import {
+  assertLiveAllowedForMidiPhase,
+  assertMidiCaptureAllowedForLivePhase,
+  createLiveMidiStream,
+} from '../utils/liveMidiStream.js';
+import {
+  LIVE_MIDI_PHASE_EXCLUSION,
+  createIdleLiveSession,
+  readLiveHorizonBounds,
+} from '../utils/liveSessionContracts.js';
 import {
   buildCurrentEmbedScope,
   buildSectionEmbedScope,
@@ -365,6 +376,7 @@ const logger = createAppLogger('musicStore');
 const arrangementLogger = createAppLogger('musicStore.arrangement');
 const embeddingLogger = createAppLogger('musicStore.embeddings');
 const midiLogger = createAppLogger('midiInput');
+const liveLogger = createAppLogger('liveMidi');
 const audioLogger = createAppLogger('audioTranscription');
 
 export const AUDIO_PHASES = Object.freeze({
@@ -458,6 +470,20 @@ const initialMidiInputState = {
   midiErrorMessage: '',
 };
 
+const initialLivePerformanceState = {
+  /** @type {'idle'|'arming'|'running'|'degraded'|'stopping'|'cancelled'} */
+  livePhase: 'idle',
+  liveSessionId: null,
+  liveHorizonBars: readLiveHorizonBounds().barsDefault,
+  liveHorizonMs: readLiveHorizonBounds().msDefault,
+  liveStreamNoteOnCount: 0,
+  liveStreamNoteOffCount: 0,
+  liveStreamRingSize: 0,
+  liveErrorCode: null,
+  liveErrorMessage: '',
+  liveSessionSnapshot: null,
+};
+
 /** @type {ReturnType<typeof createMidiAccessSession> | null} */
 let midiAccessSession = null;
 /** @type {(() => void) | null} */
@@ -472,6 +498,8 @@ let midiPendingTake = null;
 let midiCountInTimer = null;
 /** @type {ReturnType<typeof createMidiMetronome> | null} */
 let midiMetronomeSession = null;
+/** @type {ReturnType<typeof createLiveMidiStream> | null} */
+let liveMidiStreamSession = null;
 
 let playbackTransportSeq = 0;
 function nextPlaybackTransportSeq() {
@@ -981,6 +1009,21 @@ function handleLiveMidiMessage(set, get, event) {
     });
   }
 
+  if (
+    liveMidiStreamSession
+    && liveMidiStreamSession.isActive()
+    && (get().livePhase === 'running' || get().livePhase === 'degraded')
+  ) {
+    const clock = getLiveClock(get().playbackSeconds, get().editedMusicJson);
+    liveMidiStreamSession.pushMessage(data, { tick: clock.tick });
+    const snap = liveMidiStreamSession.getSnapshot();
+    set({
+      liveStreamNoteOnCount: snap.noteOnCount,
+      liveStreamNoteOffCount: snap.noteOffCount,
+      liveStreamRingSize: snap.ringSize,
+    });
+  }
+
   if (parsed.kind === MIDI_MESSAGE_KINDS.NOTE_ON) {
     const { pitch } = midiToPitch(parsed.note);
     if (!pitch) {
@@ -1154,6 +1197,7 @@ export const useMusicStore = create((set, get) => ({
   composerTabRequestSeq: 0,
   ...initialMotifUiState,
   ...initialMidiInputState,
+  ...initialLivePerformanceState,
   ...initialAudioTranscriptionState,
 
   setApiStatus: (apiStatus) => {
@@ -9600,6 +9644,18 @@ export const useMusicStore = create((set, get) => ({
 
   armMidiRecording: () => {
     const state = get();
+    const liveGuard = assertMidiCaptureAllowedForLivePhase(state.livePhase);
+    if (!liveGuard.ok) {
+      midiLogger.warn('MIDI arm rejected — live session exclusion', {
+        code: liveGuard.code,
+        livePhase: state.livePhase,
+      });
+      set({
+        midiErrorCode: LIVE_MIDI_PHASE_EXCLUSION,
+        midiErrorMessage: 'Stop co-performance before arming MIDI record.',
+      });
+      return false;
+    }
     if (state.midiPhase !== MIDI_PHASES.READY && state.midiPhase !== MIDI_PHASES.ARMED) {
       midiLogger.warn('MIDI arm rejected — invalid phase', { phase: state.midiPhase });
       return false;
@@ -9653,6 +9709,139 @@ export const useMusicStore = create((set, get) => ({
   },
 
   /**
+   * Start co-performance MIDI stream (Transport-synced). Exclusive with midiPhase capture.
+   * Shared engine attach is Task 4 — v1 allows start without engine for stream capture only.
+   */
+  startLiveCoPerformance: ({ sessionId = null } = {}) => {
+    const state = get();
+    const midiGuard = assertLiveAllowedForMidiPhase(state.midiPhase);
+    if (!midiGuard.ok) {
+      liveLogger.info('live start rejected — midiPhase exclusion', {
+        code: midiGuard.code,
+        midiPhase: state.midiPhase,
+      });
+      set({
+        liveErrorCode: LIVE_MIDI_PHASE_EXCLUSION,
+        liveErrorMessage: 'Stop MIDI recording before starting co-performance.',
+        livePhase: 'idle',
+      });
+      return { ok: false, code: LIVE_MIDI_PHASE_EXCLUSION };
+    }
+    if (state.livePhase === 'running' || state.livePhase === 'degraded') {
+      liveLogger.info('live start ignored — already running', { phase: state.livePhase });
+      return { ok: false, code: 'live_session_already_active' };
+    }
+
+    const id = sessionId || `live-${Date.now().toString(36)}`;
+    const bounds = readLiveHorizonBounds();
+    const horizon = {
+      bars: Number(state.liveHorizonBars) || bounds.barsDefault,
+      ms: Number(state.liveHorizonMs) || bounds.msDefault,
+    };
+
+    if (!liveMidiStreamSession) {
+      liveMidiStreamSession = createLiveMidiStream({
+        sessionId: id,
+        getTick: () => getLiveClock(get().playbackSeconds, get().editedMusicJson).tick,
+      });
+    }
+    const started = liveMidiStreamSession.start({
+      sessionId: id,
+      getTick: () => getLiveClock(get().playbackSeconds, get().editedMusicJson).tick,
+    });
+    if (!started.ok) {
+      set({
+        liveErrorCode: started.code || 'live_session_context_invalid',
+        liveErrorMessage: 'Could not start live MIDI stream.',
+      });
+      return started;
+    }
+
+    const snapshot = createIdleLiveSession(id, { horizon });
+    snapshot.phase = 'running';
+    set({
+      livePhase: 'running',
+      liveSessionId: id,
+      liveHorizonBars: horizon.bars,
+      liveHorizonMs: horizon.ms,
+      liveStreamNoteOnCount: 0,
+      liveStreamNoteOffCount: 0,
+      liveStreamRingSize: 0,
+      liveErrorCode: null,
+      liveErrorMessage: '',
+      liveSessionSnapshot: snapshot,
+    });
+    liveLogger.info('live co-performance started', {
+      sessionId: id.slice(0, 12),
+      horizonBars: horizon.bars,
+      horizonMs: horizon.ms,
+    });
+    return { ok: true, sessionId: id };
+  },
+
+  stopLiveCoPerformance: ({ reason = 'stop' } = {}) => {
+    if (!liveMidiStreamSession || !liveMidiStreamSession.isActive()) {
+      const phase = get().livePhase;
+      if (phase === 'idle' || phase === 'cancelled') {
+        return { ok: false, phase };
+      }
+    }
+    set({ livePhase: 'stopping' });
+    const result = liveMidiStreamSession
+      ? liveMidiStreamSession.stop({ reason })
+      : { ok: true, snapshot: null };
+    set({
+      livePhase: 'idle',
+      liveStreamNoteOnCount: result.snapshot?.noteOnCount ?? get().liveStreamNoteOnCount,
+      liveStreamNoteOffCount: result.snapshot?.noteOffCount ?? get().liveStreamNoteOffCount,
+      liveStreamRingSize: result.snapshot?.ringSize ?? get().liveStreamRingSize,
+      liveSessionSnapshot: result.snapshot
+        ? {
+          ...createIdleLiveSession(get().liveSessionId || 'live', {
+            horizon: {
+              bars: get().liveHorizonBars,
+              ms: get().liveHorizonMs,
+            },
+          }),
+          phase: 'idle',
+        }
+        : get().liveSessionSnapshot,
+    });
+    liveLogger.info('live co-performance stopped', {
+      reason,
+      noteOnCount: result.snapshot?.noteOnCount ?? 0,
+    });
+    return { ok: true, reason, snapshot: result.snapshot };
+  },
+
+  cancelLiveCoPerformance: ({ reason = 'cancel' } = {}) => {
+    if (liveMidiStreamSession) {
+      liveMidiStreamSession.cancel({ reason });
+    }
+    set({
+      ...initialLivePerformanceState,
+      liveHorizonBars: get().liveHorizonBars,
+      liveHorizonMs: get().liveHorizonMs,
+      livePhase: 'idle',
+      liveErrorCode: null,
+      liveErrorMessage: '',
+    });
+    liveLogger.info('live co-performance cancelled', { reason });
+    return { ok: true, reason };
+  },
+
+  setLiveHorizon: ({ bars = null, ms = null } = {}) => {
+    const bounds = readLiveHorizonBounds();
+    const nextBars = bars == null
+      ? get().liveHorizonBars
+      : Math.max(bounds.barsMin, Math.min(bounds.barsMax, Number(bars)));
+    const nextMs = ms == null
+      ? get().liveHorizonMs
+      : Math.max(bounds.msMin, Math.min(bounds.msMax, Number(ms)));
+    set({ liveHorizonBars: nextBars, liveHorizonMs: nextMs });
+  },
+
+  /**
    * Test/QWERTY injection path — same capture + active-note handling as Web MIDI.
    * @param {Iterable<number> | ArrayLike<number>} data
    * @param {{ atMs?: number }} [meta]
@@ -9666,6 +9855,18 @@ export const useMusicStore = create((set, get) => ({
 
   startMidiRecording: ({ originTick = null, skipCountIn = false, Tone = null } = {}) => {
     const state = get();
+    const liveGuard = assertMidiCaptureAllowedForLivePhase(state.livePhase);
+    if (!liveGuard.ok) {
+      midiLogger.warn('MIDI start rejected — live session exclusion', {
+        code: liveGuard.code,
+        livePhase: state.livePhase,
+      });
+      set({
+        midiErrorCode: LIVE_MIDI_PHASE_EXCLUSION,
+        midiErrorMessage: 'Stop co-performance before recording MIDI.',
+      });
+      return false;
+    }
     if (
       state.midiPhase !== MIDI_PHASES.ARMED
       && state.midiPhase !== MIDI_PHASES.READY
