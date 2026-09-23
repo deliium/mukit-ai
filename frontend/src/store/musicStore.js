@@ -53,10 +53,21 @@ import {
 } from '../utils/liveMidiStream.js';
 import { createLiveAccompanimentScheduler } from '../utils/liveAccompanimentScheduler.js';
 import { createLivePatternEngine } from '../utils/livePatternEngine.js';
+import { createLiveJamRoleEngine } from '../utils/liveJamRoleEngine.js';
+import { createLiveJamContext } from '../utils/liveJamContext.js';
 import { createLiveLatencyTracker } from '../utils/liveLatency.js';
 import { activeHarmonyAtTick } from '../utils/liveHarmonyContext.js';
+import {
+  getHarmonyHoldCount,
+  updateHarmonyBelief,
+} from '../utils/liveHarmonyBelief.js';
+import { extractLivePerformanceFeatures } from '../utils/livePerformanceFeatures.js';
 import { requireLivePlaybackEngine } from '../utils/livePlaybackEngineAccess.js';
-import { applyCoPerformanceTakeToComposition } from '../utils/liveTakeApply.js';
+import {
+  applyAiJamTakeToComposition,
+  applyCoPerformanceTakeToComposition,
+  defaultCommitHarmonySpans,
+} from '../utils/liveTakeApply.js';
 import {
   LIVE_ENGINE_UNAVAILABLE,
   LIVE_MIDI_PHASE_EXCLUSION,
@@ -64,6 +75,15 @@ import {
   createIdleLiveSession,
   readLiveHorizonBounds,
 } from '../utils/liveSessionContracts.js';
+import {
+  JAM_PREDICT_UNAVAILABLE,
+  clampJamControls,
+  createDefaultJamControls,
+  createIdleHarmonyBelief,
+  isJamMode,
+  readLiveJamSettings,
+  resolveJamRolePartition,
+} from '../utils/liveJamContracts.js';
 import {
   buildCurrentEmbedScope,
   buildSectionEmbedScope,
@@ -389,6 +409,7 @@ const arrangementLogger = createAppLogger('musicStore.arrangement');
 const embeddingLogger = createAppLogger('musicStore.embeddings');
 const midiLogger = createAppLogger('midiInput');
 const liveLogger = createAppLogger('liveMidi');
+const jamLogger = createAppLogger('liveJam');
 const audioLogger = createAppLogger('audioTranscription');
 
 export const AUDIO_PHASES = Object.freeze({
@@ -494,6 +515,14 @@ const initialLivePerformanceState = {
   liveErrorCode: null,
   liveErrorMessage: '',
   liveSessionSnapshot: null,
+  /** @type {import('../utils/liveJamContracts.js').JamMode | null} */
+  jamMode: null,
+  jamControls: createDefaultJamControls(),
+  jamBelief: createIdleHarmonyBelief(),
+  jamPredictUnavailable: false,
+  jamHarmonyHoldCount: 0,
+  /** Last bounded features snapshot for cold predict (session-only). */
+  jamLastFeatures: null,
 };
 
 /** @type {ReturnType<typeof createMidiAccessSession> | null} */
@@ -516,6 +545,10 @@ let liveMidiStreamSession = null;
 let liveAccompanimentSchedulerSession = null;
 /** @type {ReturnType<typeof createLivePatternEngine> | null} */
 let livePatternEngineSession = null;
+/** @type {ReturnType<typeof createLiveJamContext> | null} */
+let liveJamContextSession = null;
+/** @type {ReturnType<typeof createLiveJamRoleEngine> | null} */
+let liveJamRoleEngineSession = null;
 /** @type {ReturnType<typeof createLiveLatencyTracker> | null} */
 let liveLatencyTrackerSession = null;
 /** @type {AbortController | null} */
@@ -1032,6 +1065,7 @@ function abortLivePredictInFlight(reason = 'cancel') {
 
 /**
  * Fire-and-forget cold-path predict — max one in-flight; never awaited on hot path.
+ * Jam mode wires belief → active_harmony, bounded features, controls, role_mask.
  */
 function requestLivePredictFill(get, set, { clock, harmony, horizon, sessionId }) {
   if (livePredictInFlightRequestId) {
@@ -1048,12 +1082,25 @@ function requestLivePredictFill(get, set, { clock, harmony, horizon, sessionId }
   const abortGate = createLivePredictAbortController();
   if (!abortGate.ok) {
     liveLogger.warn('predict skip — AbortController unavailable', { code: abortGate.code });
+    set({
+      jamPredictUnavailable: true,
+    });
+    jamLogger.info('fallback', { code: JAM_PREDICT_UNAVAILABLE, reason: abortGate.code });
     return;
   }
   const controller = abortGate.controller;
   livePredictAbortController = controller;
   livePredictInFlightRequestId = requestId;
 
+  const state = get();
+  const jamMode = state.jamMode;
+  const controls = state.jamControls || createDefaultJamControls();
+  const belief = state.jamBelief || createIdleHarmonyBelief();
+  const densityFactor = controls.density === 'high' ? 0.8
+    : controls.density === 'low' ? 0.35
+      : 0.55;
+
+  /** @type {Record<string, unknown>} */
   const body = {
     schema_version: LIVE_PREDICT_REQUEST_SCHEMA,
     session_id: sessionId,
@@ -1065,16 +1112,49 @@ function requestLivePredictFill(get, set, { clock, harmony, horizon, sessionId }
       tempo: clock.tempo,
     },
     active_harmony: {
-      symbol: harmony.symbol,
-      start_tick: harmony.start_tick,
-      duration_ticks: harmony.duration_ticks,
+      symbol: belief.symbol ?? harmony?.symbol ?? null,
+      start_tick: harmony?.start_tick ?? null,
+      duration_ticks: harmony?.duration_ticks ?? null,
     },
-    features: {
-      density: 0.5,
-      recent_note_count: get().liveStreamNoteOnCount || 0,
-    },
+    features: state.jamLastFeatures && typeof state.jamLastFeatures === 'object'
+      ? {
+        schema_version: state.jamLastFeatures.schema || 'live.performance.features.v1',
+        pitch_activity: state.jamLastFeatures.pitch_activity,
+        beat: state.jamLastFeatures.beat,
+        probable_key: state.jamLastFeatures.probable_key,
+        probable_harmony: state.jamLastFeatures.probable_harmony,
+        phrase: state.jamLastFeatures.phrase,
+        density: densityFactor,
+        recent_note_count: state.liveStreamNoteOnCount || 0,
+      }
+      : {
+        density: densityFactor,
+        recent_note_count: state.liveStreamNoteOnCount || 0,
+      },
     horizon,
   };
+
+  if (isJamMode(jamMode)) {
+    body.jam_mode = jamMode;
+    body.controls = {
+      complexity: controls.complexity,
+      density: controls.density,
+      style: controls.style,
+      responsiveness: controls.responsiveness,
+    };
+    body.belief = {
+      symbol: belief.symbol,
+      confidence: belief.confidence,
+      held: Boolean(belief.held),
+      reason_code: belief.reason_code,
+    };
+    try {
+      const partition = resolveJamRolePartition(jamMode, controls.complexity);
+      body.role_mask = partition.ai_roles;
+    } catch {
+      // leave role_mask unset
+    }
+  }
 
   liveLatencyTrackerSession?.markStart('generation');
   // Intentionally not awaited — cold path.
@@ -1096,12 +1176,28 @@ function requestLivePredictFill(get, set, { clock, harmony, horizon, sessionId }
         if (chunk.latency_ms?.generation != null) {
           liveLatencyTrackerSession?.record('generation', chunk.latency_ms.generation);
         }
+        if (get().jamPredictUnavailable) {
+          set({ jamPredictUnavailable: false });
+          jamLogger.info('predict recovered', { request_id: requestId.slice(0, 12) });
+        }
       }
     })
     .catch((error) => {
       liveLatencyTrackerSession?.markEnd('generation');
       if (error?.code === 'aborted') {
         return;
+      }
+      const unavailable = error?.status === 503
+        || error?.code === 'LIVE_PREDICT_UNAVAILABLE'
+        || error?.code === JAM_PREDICT_UNAVAILABLE
+        || !error?.status;
+      if (unavailable) {
+        set({ jamPredictUnavailable: true });
+        jamLogger.info('fallback', {
+          code: JAM_PREDICT_UNAVAILABLE,
+          status: error?.status ?? null,
+          errCode: error?.code || 'error',
+        });
       }
       liveLogger.warn('predict fill failed', {
         code: error?.code || 'error',
@@ -9834,7 +9930,8 @@ export const useMusicStore = create((set, get) => ({
   },
 
   /**
-   * Start co-performance MIDI stream (Transport-synced). Exclusive with midiPhase capture.
+   * Start co-performance / AI Jam MIDI stream (Transport-synced).
+   * Exclusive with midiPhase capture. Requires jamMode (set via setJamMode).
    * Requires shared PlaybackControls engine for accompaniment scheduling.
    */
   startLiveCoPerformance: ({ sessionId = null, requireEngine = true } = {}) => {
@@ -9856,6 +9953,15 @@ export const useMusicStore = create((set, get) => ({
       liveLogger.info('live start ignored — already running', { phase: state.livePhase });
       return { ok: false, code: 'live_session_already_active' };
     }
+    if (!isJamMode(state.jamMode)) {
+      jamLogger.info('live start rejected — jam mode required', { mode: state.jamMode });
+      set({
+        liveErrorCode: 'jam_mode_required',
+        liveErrorMessage: 'Select a jam mode (User melody or User chords) before Start.',
+        livePhase: 'idle',
+      });
+      return { ok: false, code: 'jam_mode_required' };
+    }
 
     const engineGate = requireLivePlaybackEngine();
     if (requireEngine && !engineGate.ok) {
@@ -9874,6 +9980,8 @@ export const useMusicStore = create((set, get) => ({
       bars: Number(state.liveHorizonBars) || bounds.barsDefault,
       ms: Number(state.liveHorizonMs) || bounds.msDefault,
     };
+    const jamMode = state.jamMode;
+    const controls = state.jamControls || createDefaultJamControls();
 
     if (!liveMidiStreamSession) {
       liveMidiStreamSession = createLiveMidiStream({
@@ -9902,6 +10010,16 @@ export const useMusicStore = create((set, get) => ({
           ticksPerBeat: Number(get().editedMusicJson?.ticks_per_quarter) || 480,
         });
       }
+      if (!liveJamRoleEngineSession) {
+        liveJamRoleEngineSession = createLiveJamRoleEngine({
+          ticksPerBeat: Number(get().editedMusicJson?.ticks_per_quarter) || 480,
+        });
+      }
+      if (!liveJamContextSession) {
+        liveJamContextSession = createLiveJamContext({
+          barTicks: (Number(get().editedMusicJson?.ticks_per_quarter) || 480) * 4,
+        });
+      }
       if (!liveLatencyTrackerSession) {
         liveLatencyTrackerSession = createLiveLatencyTracker();
       }
@@ -9916,19 +10034,42 @@ export const useMusicStore = create((set, get) => ({
         });
         return schedStart;
       }
-      // Seed local pattern into horizon immediately (hot path; no AI await).
+      // Seed jam roles into horizon immediately (hot path; no AI await).
       const clock = getLiveClock(get().playbackSeconds, get().editedMusicJson);
       const harmony = activeHarmonyAtTick(get().editedMusicJson, clock.tick);
-      liveAccompanimentSchedulerSession.maintainHorizonWithPattern({
-        playheadTick: clock.tick,
-        harmonySymbol: harmony.symbol,
-        horizon,
-        patternEngine: livePatternEngineSession,
+      const seedBelief = updateHarmonyBelief(
+        createIdleHarmonyBelief(),
+        null,
+        harmony,
+        controls.responsiveness,
+      );
+      liveJamContextSession.refresh({
+        belief: seedBelief,
+        features: null,
+        v2HarmonySpans: get().editedMusicJson?.harmony || [],
+        nowTick: clock.tick,
       });
+      liveAccompanimentSchedulerSession.maintainHorizonWithJam({
+        playheadTick: clock.tick,
+        belief: seedBelief,
+        jamMode,
+        controls,
+        jamContext: liveJamContextSession.getSnapshot(),
+        jamRoleEngine: liveJamRoleEngineSession,
+        horizon,
+      });
+      set({ jamBelief: seedBelief, jamHarmonyHoldCount: getHarmonyHoldCount() });
     }
 
-    const snapshot = createIdleLiveSession(id, { horizon });
+    const snapshot = createIdleLiveSession(id, { horizon, jam_mode: jamMode });
     snapshot.phase = 'running';
+    snapshot.jam_controls = {
+      complexity: controls.complexity,
+      density: controls.density,
+      style: controls.style,
+      responsiveness: controls.responsiveness,
+    };
+    snapshot.belief = get().jamBelief || createIdleHarmonyBelief();
     set({
       livePhase: 'running',
       liveSessionId: id,
@@ -9940,12 +10081,20 @@ export const useMusicStore = create((set, get) => ({
       liveErrorCode: null,
       liveErrorMessage: '',
       liveSessionSnapshot: snapshot,
+      jamPredictUnavailable: false,
     });
     liveLogger.info('live co-performance started', {
       sessionId: id.slice(0, 12),
       horizonBars: horizon.bars,
       horizonMs: horizon.ms,
       hasEngine: engineGate.ok,
+      jamMode,
+    });
+    jamLogger.info('mode/control', {
+      jamMode,
+      complexity: controls.complexity,
+      density: controls.density,
+      style: controls.style,
     });
     return { ok: true, sessionId: id };
   },
@@ -9963,6 +10112,8 @@ export const useMusicStore = create((set, get) => ({
     if (liveAccompanimentSchedulerSession) {
       liveAccompanimentSchedulerSession.stop({ clearBuffer: false, reason });
     }
+    // Freeze jam context for optional Commit harmony spans (Task 8).
+    liveJamContextSession?.freeze?.();
     const result = liveMidiStreamSession
       ? liveMidiStreamSession.stop({ reason })
       : { ok: true, snapshot: null };
@@ -9978,8 +10129,14 @@ export const useMusicStore = create((set, get) => ({
               bars: get().liveHorizonBars,
               ms: get().liveHorizonMs,
             },
+            jam_mode: get().jamMode,
           }),
           phase: 'idle',
+          belief: get().jamBelief,
+          jam_flags: {
+            predict_unavailable: Boolean(get().jamPredictUnavailable),
+            harmony_hold_count: get().jamHarmonyHoldCount || 0,
+          },
         }
         : get().liveSessionSnapshot,
     });
@@ -9998,14 +10155,23 @@ export const useMusicStore = create((set, get) => ({
       liveAccompanimentSchedulerSession = null;
     }
     livePatternEngineSession = null;
+    liveJamRoleEngineSession = null;
+    if (liveJamContextSession) {
+      liveJamContextSession.clear({ reason });
+      liveJamContextSession = null;
+    }
     liveLatencyTrackerSession = null;
     if (liveMidiStreamSession) {
       liveMidiStreamSession.cancel({ reason });
     }
+    const preservedMode = get().jamMode;
+    const preservedControls = get().jamControls;
     set({
       ...initialLivePerformanceState,
       liveHorizonBars: get().liveHorizonBars,
       liveHorizonMs: get().liveHorizonMs,
+      jamMode: preservedMode,
+      jamControls: preservedControls,
       livePhase: 'idle',
       liveErrorCode: null,
       liveErrorMessage: '',
@@ -10014,42 +10180,151 @@ export const useMusicStore = create((set, get) => ({
     return { ok: true, reason };
   },
 
+  setJamMode: (mode) => {
+    if (mode == null || mode === '') {
+      set({ jamMode: null });
+      jamLogger.info('mode clear');
+      return { ok: true, jamMode: null };
+    }
+    if (!isJamMode(mode)) {
+      jamLogger.info('mode reject', { mode: String(mode).slice(0, 32) });
+      return { ok: false, code: 'jam_mode_invalid' };
+    }
+    if (get().livePhase === 'running' || get().livePhase === 'degraded') {
+      return { ok: false, code: 'live_session_already_active' };
+    }
+    set({ jamMode: mode });
+    jamLogger.info('mode set', { jamMode: mode });
+    return { ok: true, jamMode: mode };
+  },
+
+  setJamControls: (partial = {}) => {
+    const merged = {
+      ...(get().jamControls || createDefaultJamControls()),
+      ...(partial && typeof partial === 'object' ? partial : {}),
+    };
+    const clamped = clampJamControls(merged);
+    if (!clamped.ok) {
+      return { ok: false, code: clamped.code };
+    }
+    set({ jamControls: clamped.controls });
+    jamLogger.info('controls set', {
+      complexity: clamped.controls.complexity,
+      density: clamped.controls.density,
+      style: clamped.controls.style,
+      responsiveness: clamped.controls.responsiveness,
+    });
+    return { ok: true, controls: clamped.controls };
+  },
+
   /**
    * Warm-path horizon maintain (rAF / position poll). Never awaits predict.
+   * When jamMode is set: features → belief → jamContext → maintainHorizonWithJam.
    */
   pumpLiveAccompaniment: () => {
     if (get().livePhase !== 'running' && get().livePhase !== 'degraded') {
       return { ok: false };
     }
-    if (!liveAccompanimentSchedulerSession || !livePatternEngineSession) {
+    if (!liveAccompanimentSchedulerSession) {
       return { ok: false };
     }
+    const jamMode = get().jamMode;
+    const useJam = isJamMode(jamMode) && liveJamRoleEngineSession;
+    if (!useJam && !livePatternEngineSession) {
+      return { ok: false };
+    }
+
     const clock = getLiveClock(get().playbackSeconds, get().editedMusicJson);
     const harmony = activeHarmonyAtTick(get().editedMusicJson, clock.tick);
-    liveLatencyTrackerSession?.markStart('scheduling');
-    const result = liveAccompanimentSchedulerSession.maintainHorizonWithPattern({
-      playheadTick: clock.tick,
-      harmonySymbol: harmony.symbol,
-      horizon: {
-        bars: get().liveHorizonBars,
-        ms: get().liveHorizonMs,
-      },
-      patternEngine: livePatternEngineSession,
-    });
-    liveLatencyTrackerSession?.markEnd('scheduling');
+    const controls = get().jamControls || createDefaultJamControls();
+    const horizon = {
+      bars: get().liveHorizonBars,
+      ms: get().liveHorizonMs,
+    };
+
+    let belief = get().jamBelief || createIdleHarmonyBelief();
+    let features = get().jamLastFeatures;
+    let result;
+
+    if (useJam) {
+      const jamSettings = readLiveJamSettings();
+      const fromTick = Math.max(0, clock.tick - jamSettings.analysisMaxTicks);
+      const recent = liveMidiStreamSession?.getRecentEvents?.({
+        fromTick,
+        maxEvents: jamSettings.analysisMaxEvents,
+      }) || [];
+      features = extractLivePerformanceFeatures({
+        events: recent,
+        clock: {
+          tick: clock.tick,
+          bar: clock.bar,
+          beatInBar: clock.beatInBar,
+          tickInBar: clock.tickInBar,
+          ticksPerBeat: clock.ticksPerBeat,
+          tempo: clock.tempo,
+        },
+        settings: jamSettings,
+        latencyTracker: liveLatencyTrackerSession,
+      });
+      belief = updateHarmonyBelief(
+        belief,
+        features,
+        harmony,
+        controls.responsiveness,
+        jamSettings,
+      );
+      if (!liveJamContextSession) {
+        liveJamContextSession = createLiveJamContext({
+          barTicks: (Number(get().editedMusicJson?.ticks_per_quarter) || 480) * 4,
+        });
+      }
+      liveJamContextSession.refresh({
+        belief,
+        features,
+        v2HarmonySpans: get().editedMusicJson?.harmony || [],
+        nowTick: clock.tick,
+      });
+      liveLatencyTrackerSession?.markStart('scheduling');
+      result = liveAccompanimentSchedulerSession.maintainHorizonWithJam({
+        playheadTick: clock.tick,
+        belief,
+        jamMode,
+        controls,
+        jamContext: liveJamContextSession.getSnapshot(),
+        jamRoleEngine: liveJamRoleEngineSession,
+        horizon,
+      });
+      liveLatencyTrackerSession?.markEnd('scheduling');
+      set({
+        jamBelief: belief,
+        jamLastFeatures: features,
+        jamHarmonyHoldCount: getHarmonyHoldCount(),
+      });
+    } else {
+      liveLatencyTrackerSession?.markStart('scheduling');
+      result = liveAccompanimentSchedulerSession.maintainHorizonWithPattern({
+        playheadTick: clock.tick,
+        harmonySymbol: harmony.symbol,
+        horizon,
+        patternEngine: livePatternEngineSession,
+      });
+      liveLatencyTrackerSession?.markEnd('scheduling');
+    }
+
     // Cold-path AI fill — never awaited here.
     if (result.coverage?.needsFill || result.degraded) {
       requestLivePredictFill(get, set, {
         clock,
         harmony,
-        horizon: {
-          bars: get().liveHorizonBars,
-          ms: get().liveHorizonMs,
-        },
+        horizon,
         sessionId: get().liveSessionId || 'live',
       });
     }
-    const deg = result.degradation || livePatternEngineSession.getDegradation();
+
+    const deg = result.degradation
+      || (useJam
+        ? liveJamRoleEngineSession?.getDegradation?.()
+        : livePatternEngineSession?.getDegradation?.());
     if (deg?.active && get().livePhase === 'running') {
       set({ livePhase: 'degraded' });
       liveMidiStreamSession?.markDegraded?.();
@@ -10063,6 +10338,13 @@ export const useMusicStore = create((set, get) => ({
         liveSessionSnapshot: {
           ...get().liveSessionSnapshot,
           phase: get().livePhase,
+          jam_mode: jamMode,
+          jam_controls: {
+            complexity: controls.complexity,
+            density: controls.density,
+            style: controls.style,
+            responsiveness: controls.responsiveness,
+          },
           transport: {
             playing: get().playbackStatus === 'playing',
             tick: clock.tick,
@@ -10070,14 +10352,24 @@ export const useMusicStore = create((set, get) => ({
             beat: clock.beatInBar,
           },
           active_harmony: {
-            symbol: harmony.symbol,
+            symbol: belief?.symbol ?? harmony.symbol,
             start_tick: harmony.start_tick,
             duration_ticks: harmony.duration_ticks,
+          },
+          belief: {
+            symbol: belief?.symbol ?? null,
+            confidence: belief?.confidence ?? 0,
+            held: Boolean(belief?.held),
+            reason_code: belief?.reason_code ?? null,
           },
           degradation: {
             active: Boolean(deg?.active),
             code: deg?.code || null,
             count: deg?.count || 0,
+          },
+          jam_flags: {
+            predict_unavailable: Boolean(get().jamPredictUnavailable),
+            harmony_hold_count: get().jamHarmonyHoldCount || 0,
           },
           latency_ms: latency
             ? {
@@ -10106,9 +10398,14 @@ export const useMusicStore = create((set, get) => ({
 
   /**
    * Explicit Commit of stream and/or accompaniment into one V2 transaction.
+   * When jamMode is set: multi-track role map + optional ensure/harmony spans.
+   * When jamMode is null: single-track co-performance Commit (non-jam opt-in).
    */
   commitLiveCoPerformance: ({
     trackId = null,
+    roleTracks = null,
+    ensureMissingTracks = false,
+    commitHarmonySpans = undefined,
     includeStream = true,
     includeAccompaniment = true,
   } = {}) => {
@@ -10118,6 +10415,91 @@ export const useMusicStore = create((set, get) => ({
       || state.midiDestinationTrackId
       || state.pianoRollTrackId
       || (state.editedMusicJson?.tracks?.[0]?.id ?? null);
+
+    const streamNotes = includeStream && liveMidiStreamSession
+      ? liveMidiStreamSession.getClosedNotes()
+      : [];
+    const accompanimentEvents = includeAccompaniment && liveAccompanimentSchedulerSession
+      ? liveAccompanimentSchedulerSession.getBuffer().getEvents()
+      : [];
+
+    const jamMode = state.jamMode;
+    if (isJamMode(jamMode)) {
+      const controls = state.jamControls || createDefaultJamControls();
+      const jamCtx = liveJamContextSession?.getSnapshot?.() || null;
+      const plannedWindow = jamCtx?.planned_window || [];
+      const harmonyDefault = defaultCommitHarmonySpans(jamMode);
+      const applied = applyAiJamTakeToComposition(state.editedMusicJson, {
+        jamMode,
+        userTrackId: destination,
+        roleTracks: roleTracks || {},
+        streamNotes,
+        accompanimentEvents,
+        ensureMissingTracks: Boolean(ensureMissingTracks),
+        commitHarmonySpans: commitHarmonySpans != null
+          ? Boolean(commitHarmonySpans)
+          : harmonyDefault,
+        plannedWindow,
+        instrumentSet: controls.instrument_set || {},
+        complexity: controls.complexity || 'medium',
+        lockedTrackIds: state.lockedTrackIds,
+      });
+      if (!applied.ok) {
+        jamLogger.warn('jam commit failed', { code: applied.code });
+        set({
+          liveErrorCode: applied.code,
+          liveErrorMessage: applied.message || applied.code,
+        });
+        return { ok: false, code: applied.code };
+      }
+
+      const primary = applied.noteRefs[0] || null;
+      const affectedTracks = new Set(applied.noteRefs.map((ref) => ref.trackId));
+      const selectedTrack = applied.userTrackId || destination || [...affectedTracks][0] || null;
+      const ok = commitCompositionTransaction(set, get, {
+        nextComposition: applied.composition,
+        selectedTrackId: selectedTrack,
+        selectedNoteId: primary?.eventId || null,
+        selectedNoteIds: applied.noteRefs
+          .filter((ref) => ref.trackId === selectedTrack)
+          .map((ref) => ref.eventId),
+        editorSelectionRefs: applied.noteRefs,
+        editorSelectionPrimary: primary,
+        action: 'ai-jam-commit',
+        noteSummary: {
+          noteCount: applied.noteRefs.length,
+          barsAdded: applied.barsAdded,
+          userCount: applied.userCount,
+          roleCounts: applied.roleCounts,
+          harmonySpansCommitted: applied.harmonySpansCommitted,
+        },
+        affectedNoteCount: applied.noteRefs.length,
+        affectedTrackCount: Math.max(1, affectedTracks.size),
+        statePatch: {
+          liveErrorCode: null,
+          liveErrorMessage: '',
+        },
+      });
+      if (!ok) {
+        return { ok: false, code: 'live_commit_failed' };
+      }
+      jamLogger.info('jam commit ok', {
+        userCount: applied.userCount,
+        roleCounts: applied.roleCounts,
+        tracksEnsured: (applied.tracksEnsured || []).length,
+        harmonySpansCommitted: applied.harmonySpansCommitted || 0,
+        trackIdPrefixes: [...affectedTracks].map((id) => String(id).slice(0, 16)),
+      });
+      get().cancelLiveCoPerformance({ reason: 'commit' });
+      return {
+        ok: true,
+        noteCount: applied.noteRefs.length,
+        userCount: applied.userCount,
+        roleCounts: applied.roleCounts,
+      };
+    }
+
+    // Non-jam single-track Commit.
     if (!destination) {
       liveLogger.warn('live commit rejected — no destination', { code: 'midi_no_destination' });
       set({
@@ -10126,13 +10508,6 @@ export const useMusicStore = create((set, get) => ({
       });
       return { ok: false, code: 'midi_no_destination' };
     }
-
-    const streamNotes = includeStream && liveMidiStreamSession
-      ? liveMidiStreamSession.getClosedNotes()
-      : [];
-    const accompanimentEvents = includeAccompaniment && liveAccompanimentSchedulerSession
-      ? liveAccompanimentSchedulerSession.getBuffer().getEvents()
-      : [];
 
     const applied = applyCoPerformanceTakeToComposition(state.editedMusicJson, {
       trackId: destination,
@@ -10178,7 +10553,6 @@ export const useMusicStore = create((set, get) => ({
       noteCount: applied.noteRefs.length,
       trackId: String(destination).slice(0, 24),
     });
-    // Stop session after successful commit (keep phase idle; discard buffers).
     get().cancelLiveCoPerformance({ reason: 'commit' });
     return { ok: true, noteCount: applied.noteRefs.length };
   },

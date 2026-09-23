@@ -18,7 +18,8 @@ const NOTE_TO_PC = Object.freeze({
   B: 11,
 });
 
-const QUALITY_INTERVALS = Object.freeze({
+/** Exported for live performance harmony template scoring (Task 2). */
+export const QUALITY_INTERVALS = Object.freeze({
   maj: [0, 4, 7],
   min: [0, 3, 7],
   dim: [0, 3, 6],

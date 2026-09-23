@@ -12,6 +12,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Piano-Roll Editor**: Multi-note V2 editing on `tracks[].events[]` — box/range selection, clipboard, bulk transpose/velocity/quantize/length/humanize, articulations, dynamics, track hide/lock, edit cursor, bar/section navigation, zoom, play-from-cursor and selection loop; composition-level undo/redo shares `editedMusicJson` with the JSON editor
 - **MIDI Live Input**: Record from a MIDI keyboard or QWERTY test input into a destination track (count-in, metronome, optional quantize, timeline extend); Web MIDI is never required at startup (details: [docs/midi-live-input.md](docs/midi-live-input.md))
 - **Co-performance**: Live Transport-synced MIDI stream + horizon accompaniment with local degradation and optional predict API; explicit Commit only (details: [docs/co-performance.md](docs/co-performance.md))
+- **AI Jam**: User-melody / user-chords co-composition on the co-performance engine — live features + harmony belief, jam controls, multi-role local fill, multi-track Commit (details: [docs/ai-jam.md](docs/ai-jam.md))
 - **Audio transcription (mono)**: Hum/whistle/monophonic instrument → reviewable `transcription.preview.v1` → Apply into V2 with confidence gates and expressive/quantize choice; never persists audio (details: [docs/audio-transcription.md](docs/audio-transcription.md))
 - **Optional neural audio rendering**: Render with AI jobs (generative / neural instrument) from a pinned revision; downloadable WAV; never mutates V2 or replaces FluidSynth Export WAV (details: [docs/neural-audio-rendering.md](docs/neural-audio-rendering.md))
 - **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (sampled/synth voices, velocity/expression, mute/solo/trim/pan/reverb send, pause/resume, seek, play-from-cursor, loop, activity meters). Browser mixer state is ephemeral and never changes export.
@@ -328,6 +329,7 @@ mukit-ai/
 | [Browser playback](docs/browser-playback.md) | Tone.js projection, mixer, samples vs FluidSynth export |
 | [MIDI live input](docs/midi-live-input.md) | Web MIDI / QWERTY performance capture into V2 |
 | [Co-performance](docs/co-performance.md) | Live stream, horizon accompaniment, degradation, predict |
+| [AI Jam](docs/ai-jam.md) | Jam modes, belief/hysteresis, multi-track Commit, fallback |
 | [Audio transcription](docs/audio-transcription.md) | Monophonic mic/file → preview → Apply into V2 |
 | [Neural audio rendering](docs/neural-audio-rendering.md) | Optional generative/neural instrument jobs; fidelity labels; Compose profile |
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |

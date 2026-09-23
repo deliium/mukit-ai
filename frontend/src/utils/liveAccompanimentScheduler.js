@@ -184,6 +184,7 @@ export function createLiveAccompanimentScheduler(options = {}) {
 
   /**
    * Fill uncovered horizon from local pattern engine (degradation-aware).
+   * Kept for non-jam / backward compat co-performance.
    * @param {{
    *   playheadTick: number,
    *   harmonySymbol: string|null,
@@ -244,6 +245,86 @@ export function createLiveAccompanimentScheduler(options = {}) {
     };
   }
 
+  /**
+   * Fill uncovered horizon from multi-role jam engine (belief + controls).
+   * Parallel to maintainHorizonWithPattern for AI Jam sessions.
+   * @param {{
+   *   playheadTick: number,
+   *   belief?: { symbol?: string|null, confidence?: number, held?: boolean }|null,
+   *   jamMode: string,
+   *   controls?: object,
+   *   jamContext?: object|null,
+   *   jamRoleEngine: { generateWindow: Function, getDegradation: Function, clearDegradation?: Function },
+   *   horizon?: { bars?: number, ms?: number },
+   *   scheduleSlackTicks?: number,
+   *   roleMask?: string[]|null,
+   * }} args
+   */
+  function maintainHorizonWithJam({
+    playheadTick,
+    belief = null,
+    jamMode,
+    controls = null,
+    jamContext = null,
+    jamRoleEngine,
+    horizon = {},
+    scheduleSlackTicks = 0,
+    roleMask = null,
+  }) {
+    if (!active || !jamRoleEngine) {
+      return { ok: false, filled: 0 };
+    }
+    const playhead = Math.max(0, Math.round(Number(playheadTick) || 0));
+    const horizonEnd = computeHorizonEndTick(playhead, horizon);
+    const slack = Math.max(0, Math.round(Number(scheduleSlackTicks) || 0));
+    const coverage = buffer.uncoveredHorizon(playhead + slack, horizonEnd);
+    if (!coverage.needsFill) {
+      if (jamRoleEngine.getDegradation?.().active) {
+        jamRoleEngine.clearDegradation?.();
+        log.info('recover-from-degraded', {
+          coveredThroughTick: coverage.coveredThroughTick,
+          jam: true,
+        });
+      }
+      return { ok: true, filled: 0, degraded: false, coverage };
+    }
+
+    const generated = jamRoleEngine.generateWindow({
+      fromTick: coverage.gapStart,
+      toTick: coverage.horizonEnd,
+      belief,
+      jamMode,
+      controls,
+      jamContext,
+      roleMask,
+      degraded: true,
+    });
+    if (!generated.events.length) {
+      return {
+        ok: true,
+        filled: 0,
+        degraded: true,
+        degradation: generated.degradation,
+        roleCounts: generated.roleCounts || {},
+        coverage,
+      };
+    }
+    const ingested = ingestEvents(generated.events, {
+      source: 'local_pattern',
+      session_id: 'local-jam',
+      request_id: `jam-degrade-${coverage.gapStart}`,
+    });
+    return {
+      ok: ingested.ok,
+      filled: ingested.inserted || 0,
+      degraded: true,
+      degradation: generated.degradation,
+      roleCounts: generated.roleCounts || {},
+      coverage,
+      scheduled: ingested.scheduled,
+    };
+  }
+
   return {
     start,
     stop,
@@ -255,6 +336,7 @@ export function createLiveAccompanimentScheduler(options = {}) {
     ingestEvents,
     computeHorizonEndTick,
     maintainHorizonWithPattern,
+    maintainHorizonWithJam,
     getBuffer: () => buffer,
     isActive: () => active,
   };

@@ -60,8 +60,13 @@ Settings: `LIVE_*` / `VITE_LIVE_*` (see `.env.example`).
 - `reference.conditioning.policy.v1` on predict (offline generate/develop/edit only)
 - Inventing `composition.v4` or notes from harmony alone
 
+## AI Jam product layer
+
+Jam modes (`user_melody` / `user_chords`), live features + harmony belief, jam controls, multi-role generators, and multi-track Commit are documented in [AI Jam](ai-jam.md).
+
 ## See also
 
+- [AI Jam](ai-jam.md)
 - [Browser playback](browser-playback.md)
 - [MIDI live input](midi-live-input.md)
 - [Multi-agent (V4)](multi-agent.md)

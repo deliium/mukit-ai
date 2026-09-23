@@ -70,4 +70,27 @@ describe('liveMidiStream', () => {
     assert.equal(result.phase, 'idle');
     assert.equal(MIDI_MESSAGE_KINDS.NOTE_ON, 'note_on');
   });
+
+  it('getRecentEvents filters by fromTick and caps newest-preferred', () => {
+    let tick = 0;
+    const stream = createLiveMidiStream({
+      capacity: 64,
+      getTick: () => tick,
+      sessionId: 'sess-recent',
+    });
+    stream.start();
+    for (let i = 0; i < 10; i += 1) {
+      tick = i * 100;
+      stream.pushMessage([0x90, 60 + (i % 12), 80]);
+      stream.pushMessage([0x80, 60 + (i % 12), 0]);
+    }
+    const fromMid = stream.getRecentEvents({ fromTick: 500, maxEvents: 100 });
+    assert.ok(fromMid.every((e) => e.tick >= 500));
+    assert.ok(fromMid.length < stream.getSnapshot().ringSize);
+
+    const capped = stream.getRecentEvents({ fromTick: 0, maxEvents: 4 });
+    assert.equal(capped.length, 4);
+    assert.ok(capped[0].tick <= capped[capped.length - 1].tick);
+    assert.equal(capped[capped.length - 1].tick, 900);
+  });
 });

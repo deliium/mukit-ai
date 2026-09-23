@@ -252,6 +252,30 @@ export function createLiveMidiStream(options = {}) {
     };
   }
 
+  /**
+   * Bounded ring window for warm-path analysis (never dump full ring into predict).
+   * Returns events with tick >= fromTick, capped to maxEvents (newest preferred).
+   * @param {{ fromTick?: number, maxEvents?: number }} [opts]
+   */
+  function getRecentEvents(opts = {}) {
+    const fromTick = Math.max(0, Math.round(Number(opts.fromTick) || 0));
+    const maxEvents = Math.max(
+      1,
+      Math.min(capacity, Math.round(Number(opts.maxEvents) || capacity)),
+    );
+    const filtered = [];
+    for (let i = 0; i < ring.length; i += 1) {
+      const entry = ring[i];
+      if (entry.tick >= fromTick) {
+        filtered.push(entry);
+      }
+    }
+    if (filtered.length > maxEvents) {
+      return filtered.slice(filtered.length - maxEvents);
+    }
+    return filtered;
+  }
+
   function getClosedNotes() {
     /** Build note spans from ring for optional Commit (Task 9). */
     const open = new Map();
@@ -317,6 +341,7 @@ export function createLiveMidiStream(options = {}) {
     pushMessage,
     setGetTick,
     getSnapshot,
+    getRecentEvents,
     getClosedNotes,
     isActive,
     getPhase,

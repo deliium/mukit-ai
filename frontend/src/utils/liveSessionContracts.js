@@ -221,7 +221,10 @@ export function validateLivePredictFeatures(features, bounds = readLiveHorizonBo
 /**
  * Build a minimal idle live.session.v1 snapshot.
  * @param {string} sessionId
- * @param {Partial<{ horizon: { bars: number, ms: number } }>} [opts]
+ * @param {Partial<{
+ *   horizon: { bars: number, ms: number },
+ *   jam_mode: import('./liveJamContracts.js').JamMode | null,
+ * }>} [opts]
  */
 export function createIdleLiveSession(sessionId, opts = {}) {
   const bounds = readLiveHorizonBounds();
@@ -233,6 +236,9 @@ export function createIdleLiveSession(sessionId, opts = {}) {
     transport: { playing: false, tick: 0, bar: 1, beat: 1 },
     horizon,
     active_harmony: { symbol: null, start_tick: null, duration_ticks: null },
+    belief: { symbol: null, confidence: 0, held: false, reason_code: null },
+    jam_mode: opts.jam_mode ?? null,
+    jam_controls: null,
     latency_ms: {
       midi_input: null,
       analysis: null,
@@ -240,6 +246,10 @@ export function createIdleLiveSession(sessionId, opts = {}) {
       scheduling: null,
     },
     degradation: { active: false, code: null, count: 0 },
+    jam_flags: {
+      predict_unavailable: false,
+      harmony_hold_count: 0,
+    },
   };
 }
 

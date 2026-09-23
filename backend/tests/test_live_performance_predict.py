@@ -93,3 +93,92 @@ def test_predict_http_rejects_composition_field() -> None:
         json=_base_request(composition={"tracks": []}),
     )
     assert response.status_code == 422
+
+
+def test_predict_fake_jam_multi_role_deterministic() -> None:
+    """Jam mode + belief hash yields multi-role events; same seed → same pitches."""
+    from app.services.fake_live_accompaniment import fake_live_accompaniment_chunk
+
+    body = _base_request(
+        jam_mode="user_melody",
+        controls={
+            "complexity": "medium",
+            "density": "medium",
+            "style": "arp",
+            "responsiveness": "medium",
+        },
+        belief={"symbol": "Cmaj7", "confidence": 0.9, "held": False},
+        active_harmony={"symbol": "Cmaj7", "start_tick": 0, "duration_ticks": 1920},
+        role_mask=["bass", "accompaniment", "texture"],
+    )
+    req = LiveAccompanimentPredictRequestV1.model_validate(body)
+    chunk_a = fake_live_accompaniment_chunk(req)
+    chunk_b = fake_live_accompaniment_chunk(req)
+    assert len(chunk_a.events) >= 2
+    roles = {e.track_role for e in chunk_a.events}
+    assert "bass" in roles
+    assert "accompaniment" in roles
+    assert "texture" in roles
+    assert [e.pitch for e in chunk_a.events] == [e.pitch for e in chunk_b.events]
+    assert [e.start_tick for e in chunk_a.events] == [e.start_tick for e in chunk_b.events]
+
+
+def test_predict_fake_jam_mode_changes_hash() -> None:
+    from app.services.fake_live_accompaniment import fake_live_accompaniment_chunk
+
+    base = _base_request(
+        belief={"symbol": "Am", "confidence": 0.8, "held": False},
+        active_harmony={"symbol": "Am"},
+        controls={
+            "complexity": "high",
+            "density": "high",
+            "style": "block",
+            "responsiveness": "high",
+        },
+    )
+    melody = LiveAccompanimentPredictRequestV1.model_validate(
+        {**base, "jam_mode": "user_melody", "role_mask": ["bass", "accompaniment"]}
+    )
+    chords = LiveAccompanimentPredictRequestV1.model_validate(
+        {**base, "jam_mode": "user_chords", "role_mask": ["melody", "bass", "texture"]}
+    )
+    chunk_m = fake_live_accompaniment_chunk(melody)
+    chunk_c = fake_live_accompaniment_chunk(chords)
+    roles_m = {e.track_role for e in chunk_m.events}
+    roles_c = {e.track_role for e in chunk_c.events}
+    assert "bass" in roles_m
+    assert "melody" in roles_c
+    # Different jam_mode → different seed → different event stream shape/pitches
+    assert [e.pitch for e in chunk_m.events] != [e.pitch for e in chunk_c.events] or roles_m != roles_c
+
+
+def test_predict_fake_without_jam_stays_accompaniment() -> None:
+    """Backward compat: no jam_mode → single accompaniment role."""
+    from app.services.fake_live_accompaniment import fake_live_accompaniment_chunk
+
+    req = LiveAccompanimentPredictRequestV1.model_validate(_base_request())
+    chunk = fake_live_accompaniment_chunk(req)
+    assert len(chunk.events) >= 1
+    assert all(e.track_role == "accompaniment" for e in chunk.events)
+
+
+def test_predict_http_jam_mode_ok() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/live/accompaniment/predict",
+        json=_base_request(
+            jam_mode="user_chords",
+            controls={
+                "complexity": "low",
+                "density": "low",
+                "style": "pad",
+                "responsiveness": "low",
+            },
+            belief={"symbol": "G7", "confidence": 0.7, "held": True},
+            role_mask=["melody", "bass", "texture"],
+        ),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    roles = {e["track_role"] for e in data["events"]}
+    assert "melody" in roles or "bass" in roles

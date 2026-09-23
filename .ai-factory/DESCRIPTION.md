@@ -23,6 +23,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - Piano-roll and JSON editors sharing the same `editedMusicJson` Zustand state
 - Browser Web MIDI / QWERTY test performance capture into a destination track (session take → one undoable V2 commit; optional quantize; never required at startup)
 - Co-performance real-time layer: Transport-synced MIDI stream, shared playback engine accompaniment buffer, local degradation, optional `POST /live/accompaniment/predict`, explicit Commit (never per-note persist)
+- AI Jam modes (`user_melody` / `user_chords`) on co-performance: live features + harmony belief, jam controls, multi-role local fill, multi-track Commit (+ optional harmony metadata)
 - Monophonic audio transcription (mic/file → session `transcription.preview.v1` review → Apply into V2); confidence stays off V2 notes; audio never persisted
 - Optional neural audio rendering (job-based generative/neural-instrument egress via `/neural-audio/renders`); never mutates V2; optional MusicGen Compose profile; distinct from FluidSynth Export WAV
 - Notation preview (MusicXML regenerated from V2) and browser playback (Tone.js) from `tracks[].events[]`

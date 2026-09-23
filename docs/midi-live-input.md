@@ -87,5 +87,6 @@ Frontend: `VITE_LOG_LEVEL` gates `midiInput` / `midiCapture` via `appLogger`. Se
 - [Composition Editor](composition-editor.md) — piano-roll edit after capture
 - [Browser Playback](browser-playback.md) — Tone.js audition of committed notes
 - [Co-performance](co-performance.md) — live stream + accompaniment (exclusive with record-take)
+- [AI Jam](ai-jam.md) — jam modes / multi-track Commit on co-performance
 - [MIDI / MusicXML import](import.md) — file ingest (separate path)
 - [Testing](testing.md) — unit / e2e gates

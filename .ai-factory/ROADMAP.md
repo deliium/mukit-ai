@@ -38,6 +38,7 @@
 - [x] **DAW interoperability and V3 end-to-end platform hardening** — SMF Type 1 + MusicXML DAW handoff (section markers, drag/download UX); durable `generation.provenance.v1` on revisions; checkpoint path confinement; `scripts/v3_docker_acceptance.sh` restart + seeded reproduce gate (fake modes)
 - [x] **V4 multi-agent music architecture** — Extensible specialized agents (`ai_agents/`) above V3 runtime; typed artifacts + progressive realize; spine workflow preview; `GET/POST /ai/agents*`; durable `agent_id` provenance; Apply via `multi-agent-apply` CAS only
 - [x] **V4 co-performance real-time engine** — Shared Tone transport, Transport-synced MIDI stream, horizon accompaniment buffer, local degradation, optional `POST /live/accompaniment/predict`, explicit Commit; never per-note persist / never `composition.v4`
+- [x] **V4 AI Jam real-time co-composition** — Jam modes (`user_melody` / `user_chords`), live features + harmony belief/hysteresis, jam controls, multi-role local generators, multi-track Commit (+ optional harmony spans); graceful predict/AbortController fallback; never invents notes from harmony alone
 
 ## Completed
 
@@ -79,3 +80,4 @@
 | DAW interoperability and V3 end-to-end platform hardening | 2026-09-21 |
 | V4 multi-agent music architecture | 2026-09-22 |
 | V4 co-performance real-time engine | 2026-09-23 |
+| V4 AI Jam real-time co-composition | 2026-09-23 |

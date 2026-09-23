@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js. Projects persist in SQLite. V1 remains migration/parser input.
+Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit. Projects persist in SQLite. V1 remains migration/parser input.
 
 ## Tech Stack
 
@@ -53,7 +53,7 @@ mukit-ai/
 │   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement/editor/neural-audio acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel, AudioInputPanel, NeuralAudioRenderPanel, …
+│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, NeuralAudioRenderPanel, …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI/audio sessions)
 │       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture helpers
 ├── scripts/                 # run_tests.sh, v1/v2/v3_docker_acceptance.sh, dataset_build.sh
@@ -76,7 +76,10 @@ mukit-ai/
 |------|---------|
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
 | `frontend/src/components/MidiInputPanel.jsx` | Live MIDI / QWERTY record panel (sticky transport) |
-| `frontend/src/components/CoPerformancePanel.jsx` | Co-performance start/stop/cancel/commit + horizon UI |
+| `frontend/src/components/CoPerformancePanel.jsx` | AI Jam / co-performance start/stop/cancel/commit + mode/controls + role→track Commit UX |
+| `frontend/src/utils/liveJamContracts.js` | Jam modes, role partition, controls clamps, features/belief DTOs |
+| `frontend/src/utils/liveJamEnsureTracks.js` | Pure `ensureJamRoleTracks` for multi-track Commit |
+| `frontend/src/utils/liveTakeApply.js` | Single-track + multi-track AI Jam Commit into V2 |
 | `frontend/src/utils/livePlaybackEngineAccess.js` | Shared PlaybackControls engine handle for live schedule |
 | `frontend/src/utils/liveMidiStream.js` | Transport-synced MIDI stream ring (exclusive with midiPhase capture) |
 | `backend/app/routers/live_performance.py` | `POST /live/accompaniment/predict` (cold-path fake fill) |
@@ -208,6 +211,7 @@ mukit-ai/
 | DAW interoperability | `docs/daw-interoperability.md` | SMF Type 1 / MusicXML handoff, Ableton/Reaper recipes, drag/download, V3 acceptance |
 | MIDI live input | `docs/midi-live-input.md` | Web MIDI / QWERTY performance capture into V2 |
 | Co-performance | `docs/co-performance.md` | Live stream, horizon accompaniment, degradation, predict |
+| AI Jam | `docs/ai-jam.md` | Jam modes, belief/hysteresis, multi-track Commit, fallback |
 | Audio transcription | `docs/audio-transcription.md` | Monophonic mic/file → preview → Apply into V2 |
 | Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument jobs; licenses; Compose profile |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
