@@ -59,6 +59,10 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
 
   let trackNodes = new Map();
   let scheduledEventIds = [];
+  /** Co-performance / live accompaniment owned IDs — never cleared by V2 relocate. */
+  let liveScheduledEventIds = [];
+  /** @type {Array<{ id: number, when: number }>} */
+  let liveScheduledMeta = [];
   let endEventId = null;
   let activeNotes = new Map();
   let currentSchedule = null;
@@ -309,6 +313,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
   /**
    * Clear only engine-owned Transport callbacks — never Tone.Transport.cancel().
    * Does not release or clear activeNotes (caller decides).
+   * Does **not** clear live accompaniment IDs (separate ownership).
    */
   function clearOwnedTransportEvents() {
     const owned = [...scheduledEventIds];
@@ -334,6 +339,82 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     endEventId = null;
     log('debug', 'Cleared owned scheduled events', { clearedCount: beforeCount, sessionId });
     return beforeCount;
+  }
+
+  /**
+   * Clear co-performance live Transport callbacks only.
+   * @param {{ afterSeconds?: number|null }} [opts] — when set, only clear events at/after that time
+   *   (requires matching entries in liveScheduledMeta).
+   */
+  function clearLiveScheduledEvents({ afterSeconds = null } = {}) {
+    const threshold =
+      afterSeconds == null || !Number.isFinite(Number(afterSeconds))
+        ? null
+        : Number(afterSeconds);
+    const kept = [];
+    const toClear = [];
+    for (const entry of liveScheduledMeta) {
+      if (threshold == null || entry.when >= threshold) {
+        toClear.push(entry);
+      } else {
+        kept.push(entry);
+      }
+    }
+    toClear.forEach((entry) => {
+      try {
+        if (typeof Tone.Transport.clear === 'function') {
+          Tone.Transport.clear(entry.id);
+        } else if (typeof Tone.Transport.cancel === 'function') {
+          Tone.Transport.cancel(entry.id);
+        }
+      } catch (error) {
+        log('warn', 'Failed to clear live transport event', {
+          eventId: entry.id,
+          message: error?.message,
+        });
+      }
+    });
+    liveScheduledMeta = kept;
+    liveScheduledEventIds = kept.map((e) => e.id);
+    log('debug', 'Cleared live scheduled events', {
+      clearedCount: toClear.length,
+      remaining: kept.length,
+      afterSeconds: threshold,
+      reason: threshold == null ? 'all' : 'future',
+    });
+    return toClear.length;
+  }
+
+  /**
+   * Schedule an ephemeral live accompaniment callback on the shared Transport.
+   * @param {(time: number) => void} callback
+   * @param {number} whenSeconds
+   * @returns {number|null} Transport event id
+   */
+  function scheduleLiveAt(callback, whenSeconds) {
+    if (disposed || typeof callback !== 'function') {
+      return null;
+    }
+    const when = Math.max(0, Number(whenSeconds) || 0);
+    try {
+      const eventId = Tone.Transport.schedule((time) => {
+        try {
+          callback(time);
+        } catch (error) {
+          log('error', 'Live schedule callback failed', { message: error?.message });
+        }
+      }, when);
+      liveScheduledEventIds.push(eventId);
+      liveScheduledMeta.push({ id: eventId, when });
+      return eventId;
+    } catch (error) {
+      log('error', 'Live schedule failed', { message: error?.message });
+      return null;
+    }
+  }
+
+  function getLiveScheduledEventCount() {
+    return liveScheduledEventIds.length;
   }
 
   function clearScheduledEvents() {
@@ -666,6 +747,8 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     rampMasterGain(0, RELOCATION_FADE_SECONDS);
     releaseActiveNotes(Tone.now?.() ?? 0);
     clearScheduledEvents();
+    // Future live accompaniment only — past live IDs may still be in flight.
+    clearLiveScheduledEvents({ afterSeconds: target });
     if (!isCurrentOperation(opId)) {
       relocating = false;
       log('warn', 'Stale relocate aborted after clear', { opId, sessionId });
@@ -1149,6 +1232,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     rampMasterGain(0, RELOCATION_FADE_SECONDS);
     releaseActiveNotes(Tone.now?.() ?? 0);
     const cleared = clearScheduledEvents();
+    const clearedLive = clearLiveScheduledEvents();
     try {
       Tone.Transport.stop();
     } catch (error) {
@@ -1174,6 +1258,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     log('info', 'Playback stopped', {
       transportState: Tone.Transport.state,
       clearedEvents: cleared,
+      clearedLiveEvents: clearedLive,
       disposedNodes: disposedCount,
       seekToStart,
       loopEnabled: Boolean(currentLoop?.enabled),
@@ -1388,6 +1473,9 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     getPlaybackPosition,
     getTransportState,
     getScheduledEventCount,
+    getLiveScheduledEventCount,
+    scheduleLiveAt,
+    clearLiveScheduledEvents,
     getTrackNodeCount,
     getEndPositionSeconds,
     getTrackEffectiveGain,

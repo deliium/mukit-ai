@@ -47,7 +47,13 @@ import {
   assertMidiCaptureAllowedForLivePhase,
   createLiveMidiStream,
 } from '../utils/liveMidiStream.js';
+import { createLiveAccompanimentScheduler } from '../utils/liveAccompanimentScheduler.js';
+import { createLivePatternEngine } from '../utils/livePatternEngine.js';
+import { createLiveLatencyTracker } from '../utils/liveLatency.js';
+import { activeHarmonyAtTick } from '../utils/liveHarmonyContext.js';
+import { requireLivePlaybackEngine } from '../utils/livePlaybackEngineAccess.js';
 import {
+  LIVE_ENGINE_UNAVAILABLE,
   LIVE_MIDI_PHASE_EXCLUSION,
   createIdleLiveSession,
   readLiveHorizonBounds,
@@ -500,6 +506,12 @@ let midiCountInTimer = null;
 let midiMetronomeSession = null;
 /** @type {ReturnType<typeof createLiveMidiStream> | null} */
 let liveMidiStreamSession = null;
+/** @type {ReturnType<typeof createLiveAccompanimentScheduler> | null} */
+let liveAccompanimentSchedulerSession = null;
+/** @type {ReturnType<typeof createLivePatternEngine> | null} */
+let livePatternEngineSession = null;
+/** @type {ReturnType<typeof createLiveLatencyTracker> | null} */
+let liveLatencyTrackerSession = null;
 
 let playbackTransportSeq = 0;
 function nextPlaybackTransportSeq() {
@@ -9710,9 +9722,9 @@ export const useMusicStore = create((set, get) => ({
 
   /**
    * Start co-performance MIDI stream (Transport-synced). Exclusive with midiPhase capture.
-   * Shared engine attach is Task 4 — v1 allows start without engine for stream capture only.
+   * Requires shared PlaybackControls engine for accompaniment scheduling.
    */
-  startLiveCoPerformance: ({ sessionId = null } = {}) => {
+  startLiveCoPerformance: ({ sessionId = null, requireEngine = true } = {}) => {
     const state = get();
     const midiGuard = assertLiveAllowedForMidiPhase(state.midiPhase);
     if (!midiGuard.ok) {
@@ -9730,6 +9742,17 @@ export const useMusicStore = create((set, get) => ({
     if (state.livePhase === 'running' || state.livePhase === 'degraded') {
       liveLogger.info('live start ignored — already running', { phase: state.livePhase });
       return { ok: false, code: 'live_session_already_active' };
+    }
+
+    const engineGate = requireLivePlaybackEngine();
+    if (requireEngine && !engineGate.ok) {
+      liveLogger.warn('live start rejected — engine unavailable', { code: engineGate.code });
+      set({
+        liveErrorCode: LIVE_ENGINE_UNAVAILABLE,
+        liveErrorMessage: 'Playback engine is not ready for co-performance.',
+        livePhase: 'idle',
+      });
+      return { ok: false, code: LIVE_ENGINE_UNAVAILABLE };
     }
 
     const id = sessionId || `live-${Date.now().toString(36)}`;
@@ -9757,6 +9780,40 @@ export const useMusicStore = create((set, get) => ({
       return started;
     }
 
+    if (engineGate.ok) {
+      if (!liveAccompanimentSchedulerSession) {
+        liveAccompanimentSchedulerSession = createLiveAccompanimentScheduler();
+      }
+      if (!livePatternEngineSession) {
+        livePatternEngineSession = createLivePatternEngine({
+          ticksPerBeat: Number(get().editedMusicJson?.ticks_per_quarter) || 480,
+        });
+      }
+      if (!liveLatencyTrackerSession) {
+        liveLatencyTrackerSession = createLiveLatencyTracker();
+      }
+      liveAccompanimentSchedulerSession.setComposition(get().editedMusicJson);
+      const schedStart = liveAccompanimentSchedulerSession.start();
+      if (!schedStart.ok) {
+        liveMidiStreamSession.cancel({ reason: 'scheduler-start-failed' });
+        set({
+          liveErrorCode: schedStart.code || LIVE_ENGINE_UNAVAILABLE,
+          liveErrorMessage: 'Could not start live accompaniment scheduler.',
+          livePhase: 'idle',
+        });
+        return schedStart;
+      }
+      // Seed local pattern into horizon immediately (hot path; no AI await).
+      const clock = getLiveClock(get().playbackSeconds, get().editedMusicJson);
+      const harmony = activeHarmonyAtTick(get().editedMusicJson, clock.tick);
+      liveAccompanimentSchedulerSession.maintainHorizonWithPattern({
+        playheadTick: clock.tick,
+        harmonySymbol: harmony.symbol,
+        horizon,
+        patternEngine: livePatternEngineSession,
+      });
+    }
+
     const snapshot = createIdleLiveSession(id, { horizon });
     snapshot.phase = 'running';
     set({
@@ -9775,6 +9832,7 @@ export const useMusicStore = create((set, get) => ({
       sessionId: id.slice(0, 12),
       horizonBars: horizon.bars,
       horizonMs: horizon.ms,
+      hasEngine: engineGate.ok,
     });
     return { ok: true, sessionId: id };
   },
@@ -9787,6 +9845,9 @@ export const useMusicStore = create((set, get) => ({
       }
     }
     set({ livePhase: 'stopping' });
+    if (liveAccompanimentSchedulerSession) {
+      liveAccompanimentSchedulerSession.stop({ clearBuffer: false, reason });
+    }
     const result = liveMidiStreamSession
       ? liveMidiStreamSession.stop({ reason })
       : { ok: true, snapshot: null };
@@ -9815,6 +9876,12 @@ export const useMusicStore = create((set, get) => ({
   },
 
   cancelLiveCoPerformance: ({ reason = 'cancel' } = {}) => {
+    if (liveAccompanimentSchedulerSession) {
+      liveAccompanimentSchedulerSession.cancel({ reason });
+      liveAccompanimentSchedulerSession = null;
+    }
+    livePatternEngineSession = null;
+    liveLatencyTrackerSession = null;
     if (liveMidiStreamSession) {
       liveMidiStreamSession.cancel({ reason });
     }
@@ -9828,6 +9895,73 @@ export const useMusicStore = create((set, get) => ({
     });
     liveLogger.info('live co-performance cancelled', { reason });
     return { ok: true, reason };
+  },
+
+  /**
+   * Warm-path horizon maintain (rAF / position poll). Never awaits predict.
+   */
+  pumpLiveAccompaniment: () => {
+    if (get().livePhase !== 'running' && get().livePhase !== 'degraded') {
+      return { ok: false };
+    }
+    if (!liveAccompanimentSchedulerSession || !livePatternEngineSession) {
+      return { ok: false };
+    }
+    const clock = getLiveClock(get().playbackSeconds, get().editedMusicJson);
+    const harmony = activeHarmonyAtTick(get().editedMusicJson, clock.tick);
+    liveLatencyTrackerSession?.markStart('scheduling');
+    const result = liveAccompanimentSchedulerSession.maintainHorizonWithPattern({
+      playheadTick: clock.tick,
+      harmonySymbol: harmony.symbol,
+      horizon: {
+        bars: get().liveHorizonBars,
+        ms: get().liveHorizonMs,
+      },
+      patternEngine: livePatternEngineSession,
+    });
+    liveLatencyTrackerSession?.markEnd('scheduling');
+    const deg = result.degradation || livePatternEngineSession.getDegradation();
+    if (deg?.active && get().livePhase === 'running') {
+      set({ livePhase: 'degraded' });
+      liveMidiStreamSession?.markDegraded?.();
+    } else if (!deg?.active && get().livePhase === 'degraded') {
+      set({ livePhase: 'running' });
+      liveMidiStreamSession?.clearDegraded?.();
+    }
+    const latency = liveLatencyTrackerSession?.snapshot() || null;
+    if (get().liveSessionSnapshot) {
+      set({
+        liveSessionSnapshot: {
+          ...get().liveSessionSnapshot,
+          phase: get().livePhase,
+          transport: {
+            playing: get().playbackStatus === 'playing',
+            tick: clock.tick,
+            bar: clock.bar,
+            beat: clock.beatInBar,
+          },
+          active_harmony: {
+            symbol: harmony.symbol,
+            start_tick: harmony.start_tick,
+            duration_ticks: harmony.duration_ticks,
+          },
+          degradation: {
+            active: Boolean(deg?.active),
+            code: deg?.code || null,
+            count: deg?.count || 0,
+          },
+          latency_ms: latency
+            ? {
+              midi_input: latency.midi_input,
+              analysis: latency.analysis,
+              generation: latency.generation,
+              scheduling: latency.scheduling,
+            }
+            : get().liveSessionSnapshot.latency_ms,
+        },
+      });
+    }
+    return result;
   },
 
   setLiveHorizon: ({ bars = null, ms = null } = {}) => {

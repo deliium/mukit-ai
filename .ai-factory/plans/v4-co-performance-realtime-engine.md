@@ -364,19 +364,19 @@ Out of RT hot path and **out of predict v1 request**. Offline ACP plan (`.ai-fac
 
 ### Phase 2: Shared engine, buffer, degradation, latency
 
-- [ ] **Task 4: Shared PlaybackControls engine access + scheduled accompaniment buffer.**
+- [x] **Task 4: Shared PlaybackControls engine access + scheduled accompaniment buffer.**
   Deliverable: (a) Session-scoped shared engine handle registered from `PlaybackControls.jsx` when `createPlaybackEngine` is created/disposed; (b) `liveAccompanimentScheduler.js` + buffer that schedules/clears **owned live** Transport IDs via that engine — never a second engine; (c) on seek/relocate/pause: clear/rebuild **future** live IDs only; (d) on `invalidateSource` / audible revision / audition switch: **cancel** co-performance; (e) working V2 schedule remains authoritative for score notes. Additive layer must keep transport stable while stream is active.
   Files: `frontend/src/utils/livePlaybackEngineAccess.js`, `frontend/src/utils/liveAccompanimentBuffer.js`, `frontend/src/utils/liveAccompanimentScheduler.js`, `frontend/src/components/PlaybackControls.jsx` (register/clear handle only), minimal hooks in `tonePlaybackEngine.js` only if owned-ID list split is required; tests with `createFakeTone()`.
   LOGGING: INFO schedule fill counts + horizon coverage + engine attach/detach; DEBUG owned live ID clear reasons; ERROR schedule failures without payloads; WARN start without engine (`live_engine_unavailable`).
   Dependencies: Tasks 1, 2, 3.
 
-- [ ] **Task 5: FE chord-tone helper + local pattern engine + degradation strategy.**
+- [x] **Task 5: FE chord-tone helper + local pattern engine + degradation strategy.**
   Deliverable: Thin FE helper mapping common chord symbols → pitch classes (triad/seventh); unparseable → empty set. Deterministic local generator from active harmony + last pattern state; on horizon underrun apply locked degradation ladder; expose `degradation.active` + codes on session snapshot; never stop Transport on AI absence. BE fake predict may use `parse_chord_symbol` independently.
   Files: `frontend/src/utils/liveChordTones.js`, `frontend/src/utils/livePatternEngine.js` (+ tests); wire into buffer maintain loop (rAF or Transport `scheduleOnce` pump — not `setInterval` drift).
   LOGGING: WARN each degradation activation (code + count); DEBUG unparseable chord counts; INFO recover-from-degraded when coverage restored.
   Dependencies: Task 4.
 
-- [ ] **Task 6: Latency instrumentation.**
+- [x] **Task 6: Latency instrumentation.**
   Deliverable: Mark/measure helpers for `midi_input`, `analysis`, `generation`, `scheduling` using `performance.now()` (FE) / `time.perf_counter()` (BE predict); session snapshot aggregates (last + optional ewma); unit tests with injected clocks; DEBUG samples gated by `VITE_LOG_LEVEL`; no per-note INFO spam.
   Files: `frontend/src/utils/liveLatency.js` (+ tests); surface on session DTO; BE predict returns `latency_ms.generation` when used.
   LOGGING: DEBUG mark pairs; INFO periodic summary (interval ≥ 1s) with ms only.

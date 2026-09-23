@@ -16,6 +16,10 @@ import { secondsToPlaybackPosition, ticksToPlaybackSeconds } from '../utils/play
 import { createPlaybackEngine } from '../utils/tonePlaybackEngine.js';
 import { createAppLogger } from '../utils/appLogger.js';
 import {
+  clearLivePlaybackEngine,
+  registerLivePlaybackEngine,
+} from '../utils/livePlaybackEngineAccess.js';
+import {
   PLAYBACK_MIXER_SCOPE_ARRANGEMENT,
   PLAYBACK_MIXER_SCOPE_DEVELOPMENT,
   PLAYBACK_MIXER_SCOPE_PREVIEW,
@@ -125,6 +129,7 @@ const PlaybackControls = () => {
   const syncVersionAuditionTrackControls = useMusicStore(
     (state) => state.syncVersionAuditionTrackControls,
   );
+  const cancelLiveCoPerformance = useMusicStore((state) => state.cancelLiveCoPerformance);
 
   const arrangementCandidateAudition = arrangementAuditionMode === ARRANGEMENT_AUDITION_CANDIDATE;
 
@@ -246,10 +251,12 @@ const PlaybackControls = () => {
   useEffect(() => {
     if (!engineRef.current) {
       engineRef.current = createPlaybackEngine({ Tone, logger });
+      registerLivePlaybackEngine(engineRef.current);
     }
     return () => {
       clearPositionTimer(positionTimerRef);
       if (engineRef.current) {
+        clearLivePlaybackEngine({ reason: 'dispose' });
         engineRef.current.dispose();
         engineRef.current = null;
       }
@@ -288,6 +295,7 @@ const PlaybackControls = () => {
         reason: 'source_or_revision_change',
       });
     }
+    cancelLiveCoPerformance({ reason: 'source_invalidate' });
     stopEverything({
       engineRef,
       legacySynthRef,
@@ -304,6 +312,7 @@ const PlaybackControls = () => {
     playbackMixerScope,
     developmentAuditionActive,
     arrangementCandidateAudition,
+    cancelLiveCoPerformance,
     resetPlaybackActivity,
     setPlaybackPosition,
     setPlaybackStatus,
@@ -950,6 +959,14 @@ function startPositionTimer({
       });
     }
     setPlaybackPosition({ seconds: position.seconds, bar: position.bar });
+    try {
+      const livePhase = useMusicStore.getState().livePhase;
+      if (livePhase === 'running' || livePhase === 'degraded') {
+        useMusicStore.getState().pumpLiveAccompaniment?.();
+      }
+    } catch {
+      // ignore pump errors — never break transport polling
+    }
     const wholeSecond = Math.floor(position.seconds);
     if (wholeSecond !== lastLoggedSecond) {
       lastLoggedSecond = wholeSecond;
