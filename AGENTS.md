@@ -25,7 +25,7 @@ mukit-ai/
 │   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas, revision_loop)
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
-│   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + ai_models + ai_agents HTTP API
+│   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents HTTP API
 │   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
@@ -76,6 +76,10 @@ mukit-ai/
 |------|---------|
 | `backend/app/main.py` | FastAPI app, LLM generate/edit, MusicXML/MIDI/WAV export |
 | `frontend/src/components/MidiInputPanel.jsx` | Live MIDI / QWERTY record panel (sticky transport) |
+| `frontend/src/components/CoPerformancePanel.jsx` | Co-performance start/stop/cancel/commit + horizon UI |
+| `frontend/src/utils/livePlaybackEngineAccess.js` | Shared PlaybackControls engine handle for live schedule |
+| `frontend/src/utils/liveMidiStream.js` | Transport-synced MIDI stream ring (exclusive with midiPhase capture) |
+| `backend/app/routers/live_performance.py` | `POST /live/accompaniment/predict` (cold-path fake fill) |
 | `frontend/src/components/AudioInputPanel.jsx` | Monophonic mic/file transcription review → Apply |
 | `frontend/src/components/NeuralAudioRenderPanel.jsx` | Render with AI jobs / download (egress only) |
 | `frontend/src/utils/midiInputAccess.js` | Lazy Web MIDI access + device registry |
@@ -203,6 +207,7 @@ mukit-ai/
 | Browser playback | `docs/browser-playback.md` | Tone.js instruments/mixer/transport; ephemeral session state |
 | DAW interoperability | `docs/daw-interoperability.md` | SMF Type 1 / MusicXML handoff, Ableton/Reaper recipes, drag/download, V3 acceptance |
 | MIDI live input | `docs/midi-live-input.md` | Web MIDI / QWERTY performance capture into V2 |
+| Co-performance | `docs/co-performance.md` | Live stream, horizon accompaniment, degradation, predict |
 | Audio transcription | `docs/audio-transcription.md` | Monophonic mic/file → preview → Apply into V2 |
 | Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument jobs; licenses; Compose profile |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
