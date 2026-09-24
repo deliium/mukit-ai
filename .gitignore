@@ -58,6 +58,8 @@ models/llm/*
 !models/llm/.gitkeep
 models/neural-audio/*
 !models/neural-audio/.gitkeep
+models/audio-recovery/*
+!models/audio-recovery/.gitkeep
 *.gguf
 *.safetensors
 

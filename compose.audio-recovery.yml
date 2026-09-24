@@ -1,0 +1,45 @@
+# Optional Demucs-shaped audio recovery separation sidecar.
+# Default `docker compose up` does NOT load this file and never pulls this image.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f compose.audio-recovery.yml --profile audio-recovery up --build
+#
+# Host weights: place accepted Demucs / Basic Pitch weights under ./models/audio-recovery/
+# (gitignored). FastAPI talks only via AUDIO_RECOVERY_SIDECAR_BASE_URL — never imports torch.
+#
+# Operators must accept upstream model licenses before downloading weights.
+# See docs/audio-recovery.md (license table). Do not bake weights into
+# the default Mukit image.
+
+services:
+  audio-recovery:
+    # Placeholder image — replace with an operator-built Demucs HTTP sidecar
+    # that exposes GET /health and POST /v1/separate (WAV in → JSON stem map).
+    image: ${AUDIO_RECOVERY_SIDECAR_IMAGE:-ghcr.io/mukit-ai/audio-recovery-demucs:placeholder}
+    profiles: ["audio-recovery"]
+    ports:
+      - "${AUDIO_RECOVERY_HOST_PORT:-8091}:8091"
+    volumes:
+      - ${AUDIO_RECOVERY_MODELS_HOST_PATH:-./models/audio-recovery}:/models:ro
+    environment:
+      AUDIO_RECOVERY_DEVICE: ${AUDIO_RECOVERY_DEVICE:-cpu}
+      AUDIO_RECOVERY_MAX_DURATION_SECONDS: ${AUDIO_RECOVERY_MAX_DURATION_SECONDS:-120}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8091/health || curl -sf http://127.0.0.1:8091/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - audio-recovery
+
+  backend:
+    environment:
+      AUDIO_RECOVERY_SIDECAR_BASE_URL: ${AUDIO_RECOVERY_SIDECAR_BASE_URL:-http://audio-recovery:8091}
+      AUDIO_RECOVERY_ENGINE: ${AUDIO_RECOVERY_ENGINE:-auto}
+      AUDIO_RECOVERY_SEPARATION_ENGINE: ${AUDIO_RECOVERY_SEPARATION_ENGINE:-sidecar:demucs}
+      # Keep fake mode off when using a real sidecar unless CI needs both.
+      AUDIO_RECOVERY_FAKE_MODE: ${AUDIO_RECOVERY_FAKE_MODE:-0}
