@@ -15,7 +15,9 @@ import { createAppLogger } from '../utils/appLogger.js';
 import {
   neuralAudioFidelityDisclaimer,
   isNeuralAudioDownloadReady,
+  isNeuralAudioJobStale,
 } from '../utils/neuralAudioRenderUi.js';
+import { resolveLiveSnapshotFingerprint } from '../utils/compositionSnapshotFingerprint.js';
 
 const log = createAppLogger('neuralAudioRender');
 
@@ -156,6 +158,9 @@ const NeuralAudioRenderPanel = () => {
   const editedMusicJson = useMusicStore((state) => state.editedMusicJson);
   const currentProjectId = useMusicStore((state) => state.currentProjectId);
   const currentRevisionId = useMusicStore((state) => state.currentRevisionId);
+  const workingFingerprint = useMusicStore((state) => state.workingFingerprint);
+  const saveStatus = useMusicStore((state) => state.saveStatus);
+  const roundtripProvenance = useMusicStore((state) => state.roundtripProvenance);
   const setUiError = useMusicStore((state) => state.setUiError);
 
   const [models, setModels] = useState([]);
@@ -168,6 +173,7 @@ const NeuralAudioRenderPanel = () => {
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [liveFingerprint, setLiveFingerprint] = useState(null);
 
   const validation = editedMusicJson ? validateMusicJson(editedMusicJson) : { valid: false };
   const canRender = Boolean(
@@ -179,6 +185,20 @@ const NeuralAudioRenderPanel = () => {
 
   const selectedModel = models.find((m) => m.id === modelId) || null;
   const fidelityClass = selectedModel?.limits?.fidelity_class || 'generative';
+
+  useEffect(() => {
+    let cancelled = false;
+    resolveLiveSnapshotFingerprint({
+      composition: editedMusicJson,
+      workingFingerprint,
+      saveStatus,
+    }).then((fp) => {
+      if (!cancelled) setLiveFingerprint(fp);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [editedMusicJson, workingFingerprint, saveStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -396,6 +416,20 @@ const NeuralAudioRenderPanel = () => {
           <option value="midi_projection">midi_projection (neural instrument)</option>
         </Select>
       </Field>
+      {roundtripProvenance ? (
+        <Banner $tone="info" data-testid="audio-roundtrip-provenance">
+          Provenance:
+          {' '}
+          {[
+            roundtripProvenance.source_audio_asset_id
+              && `src ${String(roundtripProvenance.source_audio_asset_id).slice(0, 8)}`,
+            roundtripProvenance.alignment_asset_id
+              && `align ${String(roundtripProvenance.alignment_asset_id).slice(0, 8)}`,
+            roundtripProvenance.composition_fingerprint
+              && `fp ${String(roundtripProvenance.composition_fingerprint).slice(0, 12)}`,
+          ].filter(Boolean).join(' → ') || 'bound recovery'}
+        </Banner>
+      ) : null}
       <Button
         type="button"
         data-testid="neural-audio-submit"
@@ -408,44 +442,78 @@ const NeuralAudioRenderPanel = () => {
       {errorMessage ? <Status $error>{errorMessage}</Status> : null}
       {jobs.length > 0 ? (
         <JobList data-testid="neural-audio-job-list">
-          {jobs.map((job) => (
-            <JobItem key={job.id} data-testid={`neural-audio-job-${job.id}`} data-status={job.status}>
-              <div>
-                <Badge $status={job.status} data-testid={`neural-audio-job-status-${job.id}`}>
-                  {job.status}
-                </Badge>
-                {' '}
-                {job.fidelity_label || job.fidelity_class}
-              </div>
-              <div>
-                {job.model_id}
-                {job.model_version ? ` @ ${job.model_version}` : ''}
-              </div>
-              <div>
-                revision:
-                {' '}
-                {job.source_revision_id || 'workspace'}
-              </div>
-              <Row>
-                <SecondaryButton
-                  type="button"
-                  disabled={!isNeuralAudioDownloadReady(job)}
-                  data-testid={`neural-audio-download-${job.id}`}
-                  data-ready={isNeuralAudioDownloadReady(job) ? 'true' : 'false'}
-                  onClick={() => handleDownload(job.id)}
-                >
-                  Download
-                </SecondaryButton>
-                <SecondaryButton
-                  type="button"
-                  data-testid={`neural-audio-delete-${job.id}`}
-                  onClick={() => handleDelete(job.id)}
-                >
-                  Delete
-                </SecondaryButton>
-              </Row>
-            </JobItem>
-          ))}
+          {jobs.map((job) => {
+            const stale = isNeuralAudioJobStale(job, liveFingerprint);
+            if (stale) {
+              log.info('stale detect', {
+                job_id_prefix: String(job.id).slice(0, 8),
+                fp_prefix: String(job.source_fingerprint || '').slice(0, 12),
+              });
+            }
+            return (
+              <JobItem key={job.id} data-testid={`neural-audio-job-${job.id}`} data-status={job.status} data-stale={stale ? 'true' : 'false'}>
+                <div>
+                  <Badge $status={job.status} data-testid={`neural-audio-job-status-${job.id}`}>
+                    {job.status}
+                  </Badge>
+                  {' '}
+                  {job.fidelity_label || job.fidelity_class}
+                  {stale ? (
+                    <Badge $status="failed" data-testid={`neural-audio-job-stale-${job.id}`}>
+                      stale
+                    </Badge>
+                  ) : null}
+                </div>
+                {stale ? (
+                  <Banner $tone="warn" data-testid={`neural-audio-stale-banner-${job.id}`}>
+                    Composition moved on since this render. Download still works — Render again for a new job (source audio is never overwritten).
+                    {' '}
+                    <Button
+                      type="button"
+                      data-testid={`neural-audio-render-again-${job.id}`}
+                      disabled={!canRender || busy}
+                      onClick={handleRender}
+                      style={{ marginTop: 6 }}
+                    >
+                      Render again
+                    </Button>
+                  </Banner>
+                ) : null}
+                <div>
+                  {job.model_id}
+                  {job.model_version ? ` @ ${job.model_version}` : ''}
+                </div>
+                <div>
+                  revision:
+                  {' '}
+                  {job.source_revision_id || 'workspace'}
+                </div>
+                <div>
+                  source fp:
+                  {' '}
+                  {String(job.source_fingerprint || '').slice(0, 12) || '—'}
+                </div>
+                <Row>
+                  <SecondaryButton
+                    type="button"
+                    disabled={!isNeuralAudioDownloadReady(job)}
+                    data-testid={`neural-audio-download-${job.id}`}
+                    data-ready={isNeuralAudioDownloadReady(job) ? 'true' : 'false'}
+                    onClick={() => handleDownload(job.id)}
+                  >
+                    Download
+                  </SecondaryButton>
+                  <SecondaryButton
+                    type="button"
+                    data-testid={`neural-audio-delete-${job.id}`}
+                    onClick={() => handleDelete(job.id)}
+                  >
+                    Delete
+                  </SecondaryButton>
+                </Row>
+              </JobItem>
+            );
+          })}
         </JobList>
       ) : null}
     </Panel>
