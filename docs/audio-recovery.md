@@ -129,6 +129,7 @@ See `.env.example` (`AUDIO_RECOVERY_*`). Distinct from mono `AUDIO_*` and neural
 - [ ] Discard without Bind leaves no durable audio
 - [ ] HTMLAudio plays source beside score; Tone Transport ownership unchanged
 - [ ] Project delete removes recovery asset files
+- [ ] Playwright smoke (`e2e/audio-recovery.spec.js` with `AUDIO_RECOVERY_FAKE_MODE=1`) covers upload → review → Apply→Bind → overlay + HTMLAudio
 
 ## See also
 
@@ -136,4 +137,4 @@ See `.env.example` (`AUDIO_RECOVERY_*`). Distinct from mono `AUDIO_*` and neural
 - [neural-audio-rendering.md](./neural-audio-rendering.md) — egress jobs / asset pattern contrast
 - [browser-playback.md](./browser-playback.md) — Tone Transport ownership
 - [import.md](./import.md) — MIDI/MusicXML symbolic ingress
-- [testing.md](./testing.md) — `AUDIO_RECOVERY_FAKE_MODE=1` in CI
+- [testing.md](./testing.md) — `AUDIO_RECOVERY_FAKE_MODE=1` + Playwright `e2e/audio-recovery.spec.js`

@@ -232,7 +232,9 @@ Audio recovery (V4 mixed; set `AUDIO_RECOVERY_FAKE_MODE=1` — never requires De
 # Backend
 cd backend && AUDIO_RECOVERY_FAKE_MODE=1 pytest tests/test_audio_recovery_*.py -q
 # Frontend unit
-node --test frontend/src/utils/audioRecovery.test.js
+node --test frontend/src/utils/audioRecovery.test.js frontend/src/store/musicStore.audioRecovery.test.js
+# Playwright: panel mount + fixture upload → review → Apply→Bind (requires running stack)
+AUDIO_RECOVERY_FAKE_MODE=1 LLM_FAKE_MODE=1 npm run test:e2e -- e2e/audio-recovery.spec.js
 ```
 
 Details and acceptance checklist: [audio-recovery.md](audio-recovery.md).

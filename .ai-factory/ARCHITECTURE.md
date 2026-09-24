@@ -29,6 +29,13 @@ mukit-ai/
 │   │   ├── project_schemas.py      # Project CRUD API models
 │   │   ├── import_schemas.py       # Import response/report/issue DTOs
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
+│   │   ├── audio_transcription_schemas.py  # transcription.preview.v1 (V3 mono)
+│   │   ├── audio_transcription_settings.py # AUDIO_* mono limits
+│   │   ├── audio_format_policy.py  # Shared audio sniff / signature helpers
+│   │   ├── audio_recovery_schemas.py       # audio.recovery.preview/result/bind.v1
+│   │   ├── audio_recovery_settings.py      # AUDIO_RECOVERY_* limits / asset root
+│   │   ├── neural_audio_schemas.py # neural_audio_render.job.v1 (egress)
+│   │   ├── neural_audio_settings.py# NEURAL_AUDIO_* render root / quotas
 │   │   ├── dataset/                # Offline symbolic corpus pipeline (CLI; DATASET_ROOT)
 │   │   ├── embeddings/             # Handcrafted symbolic features (cache/index; no torch)
 │   │   ├── dataset/                # Offline symbolic corpus (DATASET_ROOT only)
@@ -51,6 +58,9 @@ mukit-ai/
 │   │   ├── routers/
 │   │   │   ├── projects.py         # Projects module HTTP routes
 │   │   │   ├── imports.py          # MIDI / MusicXML multipart import
+│   │   │   ├── transcription.py    # POST /transcription/audio (V3 mono)
+│   │   │   ├── audio_recovery.py   # /audio-recovery/jobs (+ bind/assets; ingress)
+│   │   │   ├── neural_audio.py     # /neural-audio/renders (egress only)
 │   │   │   ├── analysis.py         # POST /analysis/composition
 │   │   │   ├── arrangement.py      # GET/POST /composition/arrangement/*
 │   │   │   ├── composition_development.py
@@ -100,6 +110,9 @@ mukit-ai/
 │   │   │   ├── composition_snapshot_encoding.py  # composition.snapshot.v1 zlib encoding
 │   │   │   ├── composition_revision_preserve.py  # Outside-target event fingerprints for revise
 │   │   │   ├── agent_artifact_workspace.py       # Immutable typed artifact INSERT/promote/GC
+│   │   │   ├── audio_recovery_store.py           # Job/asset FS + SQLite meta; project-delete GC
+│   │   │   ├── audio_recovery/                   # Separation, scaffolding, transcribe, pipeline (run_inline)
+│   │   │   ├── neural_audio_render_store.py      # Egress render jobs/assets (pattern twin for recovery)
 │   │   │   └── project_composition.py   # Project ↔ composition mapping
 │   │   ├── fixtures/               # composition.v1 + composition_v2_expressive + arrangement_instruments.v1.json
 │   │   └── db/                     # Shared infrastructure: connection + Alembic
@@ -110,22 +123,26 @@ mukit-ai/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
-│   ├── e2e/                        # Playwright V1/V2/import/analysis/arrangement/editor/midi-live-input acceptance
+│   ├── e2e/                        # Playwright V1/V2/import/analysis/arrangement/editor/midi-live-input/audio-recovery acceptance
 │   └── src/
 │       ├── api/                    # HTTP clients (outbound adapters)
 │       │   ├── musicApi.js
 │       │   └── projectApi.js
 │       ├── store/
-│       │   └── musicStore.js       # Zustand — shared UI/application state (incl. analysis/arrangement/MIDI session)
-│       ├── components/             # Feature UI (projects, import, analysis, arrangement, generate, MultiAgentPanel, piano roll, playback, MidiInputPanel, export)
-│       ├── utils/                  # Client-side composition/playback/analysis/arrangement/revisionLoopModes/midiInput* helpers
+│       │   └── musicStore.js       # Zustand — shared UI/application state (incl. analysis/arrangement/MIDI/audio-recovery session)
+│       ├── components/             # Feature UI (projects, import, analysis, arrangement, generate, MultiAgentPanel, piano roll, playback, MidiInputPanel, AudioInputPanel, AudioRecoveryPanel, NeuralAudioRenderPanel, export)
+│       ├── utils/                  # Client-side composition/playback/analysis/arrangement/revisionLoopModes/midiInput*/audioRecovery* helpers
 │       ├── App.jsx
 │       └── main.jsx
-├── docs/                           # composition.v2/v1, ai-runtime, local-ai, analysis, arrangement, embeddings, composer-profiles, midi-live-input, import, datasets, tokenizer, music-transformer, persistence, testing
+├── docs/                           # composition.v2/v1, ai-runtime, local-ai, analysis, arrangement, embeddings, composer-profiles, midi-live-input, audio-transcription, audio-recovery, neural-audio-rendering, import, datasets, tokenizer, music-transformer, persistence, testing
 ├── models/llm/                     # Optional host GGUF/weights for Compose local-ai profiles (gitignored)
+├── models/neural-audio/            # Optional MusicGen-shaped weights (gitignored; Compose neural-audio)
+├── models/audio-recovery/          # Optional Demucs-shaped separation weights (gitignored; Compose audio-recovery)
 ├── docker-compose.yml              # Default stack: backend + frontend only (no GPU / no local AI pull)
 ├── compose.dev.yml                 # Hot-reload override; optional notes for local-ai compose
 ├── compose.local-ai.yml            # Optional profiles: local-ai (llama.cpp), local-ai-vllm, training stub
+├── compose.neural-audio.yml        # Optional --profile neural-audio (MusicGen sidecar; egress)
+├── compose.audio-recovery.yml      # Optional --profile audio-recovery (Demucs-shaped separation; ingress)
 ├── .env.example
 └── README.md
 ```
@@ -136,6 +153,7 @@ mukit-ai/
 | **Projects** | `routers/projects.py`, `project_schemas.py`, `services/project_*` | `ProjectBrowser`, `projectApi.js`, project slice of `musicStore` |
 | **Import** | `routers/imports.py`, `import_schemas.py`, `import_settings.py`, `composition_*_import.py`, `composition_import.py` | `ImportControls`, `importMidi` / `importMusicXml` in `musicApi.js`, import slice of `musicStore` |
 | **Audio transcription** | `routers/transcription.py`, `audio_transcription_schemas.py`, `audio_transcription_settings.py`, `services/audio_transcription/` | `AudioInputPanel`, `transcribeAudio` in `musicApi.js`, audio session slice of `musicStore`, `audioTranscriptionApply.js` |
+| **Audio recovery (V4 mixed ingress)** | `routers/audio_recovery.py`, `audio_recovery_schemas.py`, `audio_recovery_settings.py`, `services/audio_recovery/` + `audio_recovery_store.py` — optional separation → scaffolding → confidence-gated notes; Apply→Bind durable source + `audio.recovery.result.v1` overlay; never confidence on V2 events; never `DATASET_ROOT`; `run_inline` jobs | `AudioRecoveryPanel`, recovery APIs in `musicApi.js`, `audioRecovery{Apply,EnsureTracks,Gates,Overlay,PhaseGuards}.js`, recovery session slice of `musicStore` — HTMLAudio source audition (not `playbackSource` / Tone) |
 | **Neural audio rendering** | `routers/neural_audio.py`, `neural_audio_schemas.py`, `neural_audio_settings.py`, `services/neural_audio_*`, `ai_runtime` `AUDIO_RENDER` adapters (`fake:neural-audio`, `sidecar:musicgen`) — egress only; never mutates V2 | `NeuralAudioRenderPanel`, neural audio APIs in `musicApi.js`, `neuralAudioRenderUi.js` |
 | **Datasets (offline)** | `app/dataset/` (`cli`, schemas, store, ingest/normalize/segment/dedup/split/stats); `DATASET_ROOT` filesystem only — never `PROJECT_DB_PATH` | CLI / docs only (no SPA) |
 | **Embeddings** | `app/embeddings/` (schemas/features/vector/cache/index); `routers/embeddings.py`; `services/composition_embedding.py` + style conditioning / invalidation; ready `local:symbolic-features-v1` — affinity ≠ quality; never artist≡style; never silent `DATASET_ROOT` ingest | Develop reference picker + similar sections; Motifs related; `compositionEmbeddingReference.js` |
@@ -201,18 +219,18 @@ FastAPI backend
 - **Canonical contract:** `composition.v2` (see `docs/composition-v2.md` and `composition_schemas.py`) is the operational shared language between generate, edit, persist, render, export, and the frontend editors/playback. `composition.v1` remains migration/parser input (`docs/composition-v1.md`). Derived `composition.analysis.v1` is advisory only (`docs/composition-analysis.md`) and must not become a second source of truth.
 - **Projects module:** `project_store` owns SQLite; `project_composition` normalizes stored JSON to the canonical model before API responses.
 - **Composition pipeline:** LLM generate/edit services produce or patch JSON; validator/normalizer/timing services enforce and shape the model; render/export services consume validated compositions only. Analysis may feed a bounded advisory projection into edit/repair prompts without mutating events.
-- **Frontend state:** Zustand `musicStore` holds API status, models, project browser/save status, edited composition, piano-roll and playback transport state, a single derived analysis report, and ephemeral session slices (analysis/arrangement/development/multi-agent revision passes/MIDI live input). Feature components subscribe to slices; they do not own parallel sources of truth for the same composition. MIDI session fields (device ids, active notes, raw takes) must never enter project autosave / revision payloads. Multi-agent `pass_candidates` are session audition sources only — Apply remains explicit.
+- **Frontend state:** Zustand `musicStore` holds API status, models, project browser/save status, edited composition, piano-roll and playback transport state, a single derived analysis report, and ephemeral session slices (analysis/arrangement/development/multi-agent revision passes/MIDI live input/mono transcription/audio recovery). Feature components subscribe to slices; they do not own parallel sources of truth for the same composition. MIDI session fields (device ids, active notes, raw takes) and recovery preview/job temps must never enter project autosave / revision payloads. Multi-agent `pass_candidates` are session audition sources only — Apply remains explicit. Recovery confidence overlays are related assets (or session state), never fields on V2 note events.
 - **Client ↔ server:** `musicApi.js` / `projectApi.js` are the only HTTP clients; components and store actions go through them. Browser Web MIDI / QWERTY performance capture stays frontend-only and commits into validated `composition.v2` via store transactions — it is not the file MIDI import path.
 
 ## Key Principles
 
 1. **Module boundaries by convention:** Treat Projects, Import, Analysis, Composition/LLM, and Rendering/Export as modules even while files live in shared `services/` / `components/` folders. Prefer new files named and clustered by module.
 2. **Thin HTTP, fat services:** Keep `main.py` / routers focused on transport. Put generation, validation, patching, persistence, and export logic in `services/`.
-3. **Canonical composition first:** Any path that mutates or exports music should go through validated `composition.v2` (or explicit legacy/V1 migration), not ad-hoc JSON shapes. Neural audio jobs are egress-only and must never write into compositions or snapshots.
+3. **Canonical composition first:** Any path that mutates or exports music should go through validated `composition.v2` (or explicit legacy/V1 migration), not ad-hoc JSON shapes. Neural audio jobs are egress-only and must never write into compositions or snapshots. Audio recovery Apply writes V2 notes/metadata only (confidence lives on the related overlay asset after Bind); recovery must not invent playable notes from estimated harmony alone.
 4. **Application services orchestrate:** Services coordinate LLM calls, validation, and I/O. Push invariants into schema validation and dedicated composition helpers rather than scattering rules across handlers and React components.
 5. **Frontend purity where it matters:** Keep event math, validation mirrors, and Tone.js engine code in `utils/` with unit tests; keep UI in `components/`.
 6. **Infrastructure stays small and shared:** `db/`, env-based `llm_settings`, Docker, and CORS belong to shared infrastructure — not copied per feature.
-7. **AI provider boundary:** Orchestrators resolve models via `ai_runtime` (capability + operation), not by constructing LangChain clients inline. Remote and optional local chat must use `llm_chat_client` / OpenAI-compatible HTTP only (`LocalLanguageModel` for `runtime=local_openai_compatible`); never import llama.cpp/vLLM/MusicGen weights in FastAPI. FluidSynth WAV export is not an AI runtime. Optional local sidecars live under Compose profiles in `compose.local-ai.yml` / `compose.neural-audio.yml` — default `docker compose up` must not require GPU or multi-GB inference images.
+7. **AI provider boundary:** Orchestrators resolve models via `ai_runtime` (capability + operation), not by constructing LangChain clients inline. Remote and optional local chat must use `llm_chat_client` / OpenAI-compatible HTTP only (`LocalLanguageModel` for `runtime=local_openai_compatible`); never import llama.cpp/vLLM/MusicGen/Demucs weights in FastAPI. FluidSynth WAV export is not an AI runtime. Optional local sidecars live under Compose profiles in `compose.local-ai.yml` / `compose.neural-audio.yml` / `compose.audio-recovery.yml` — default `docker compose up` must not require GPU or multi-GB inference images.
 8. **Multi-agent preview vs Apply:** `ai_agents/revision_loop` is a bounded session controller (modes Fast/Balanced/Thorough, stop reasons, last_valid rollback, optional `pass_candidates` for audition). Critic approve never persists; only `multi-agent-apply` CAS commits. Typed pass records stay non-playable; do not invent `composition.v4`.
 
 ## Code Organization Note

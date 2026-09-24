@@ -211,6 +211,7 @@ const AudioRecoveryPanel = () => {
           $variant="record"
           $active={recoveryPhase === AUDIO_RECOVERY_PHASES.RECORDING}
           disabled={busy && recoveryPhase !== AUDIO_RECOVERY_PHASES.RECORDING}
+          data-testid="audio-recovery-record-toggle"
           onClick={() => {
             if (recoveryPhase === AUDIO_RECOVERY_PHASES.RECORDING) {
               stopRecoveryRecordingAndEnqueue();
@@ -229,6 +230,7 @@ const AudioRecoveryPanel = () => {
         <Button
           type="button"
           disabled={busy}
+          data-testid="audio-recovery-upload-button"
           onClick={() => fileRef.current?.click()}
         >
           Upload WAV
@@ -238,6 +240,7 @@ const AudioRecoveryPanel = () => {
           type="file"
           accept=".wav,.flac,.ogg,.mp3,audio/*"
           hidden
+          data-testid="audio-recovery-file-input"
           onChange={onFileChange}
         />
         <Label>
@@ -246,25 +249,33 @@ const AudioRecoveryPanel = () => {
             checked={recoveryDisableSeparation}
             onChange={(e) => setRecoveryDisableSeparation(e.target.checked)}
             disabled={busy || inReview}
+            data-testid="audio-recovery-skip-separation"
           />
           Skip separation
         </Label>
       </Row>
 
-      <Status>
+      <Status data-testid="audio-recovery-phase-status">
         Phase: {recoveryPhase}
         {recoveryJobStatus ? ` · job ${recoveryJobStatus}` : ''}
         {!currentProjectId ? ' · open a project before Apply→Bind' : ''}
       </Status>
 
       {recoveryErrorMessage ? (
-        <ErrorText>{recoveryErrorMessage}{recoveryErrorCode ? ` (${recoveryErrorCode})` : ''}</ErrorText>
+        <ErrorText data-testid="audio-recovery-error">
+          {recoveryErrorMessage}{recoveryErrorCode ? ` (${recoveryErrorCode})` : ''}
+        </ErrorText>
       ) : null}
-      {recoveryBindWarning ? <WarnText>{recoveryBindWarning}</WarnText> : null}
+      {recoveryBindWarning ? (
+        <WarnText data-testid="audio-recovery-bind-warning">{recoveryBindWarning}</WarnText>
+      ) : null}
 
       {scaffolding ? (
-        <Row>
-          <Badge $low={Number(scaffolding.tempo_confidence) < threshold}>
+        <Row data-testid="audio-recovery-scaffolding">
+          <Badge
+            $low={Number(scaffolding.tempo_confidence) < threshold}
+            data-testid="audio-recovery-tempo-badge"
+          >
             tempo {scaffolding.tempo_bpm} bpm
             {' '}
             ({Math.round(Number(scaffolding.tempo_confidence) * 100)}%)
@@ -277,7 +288,10 @@ const AudioRecoveryPanel = () => {
           <Badge>
             stems {recoveryPreview?.summary?.stem_count ?? recoveryPreview?.stems?.length ?? 0}
           </Badge>
-          <Badge $low={(recoveryPreview?.summary?.low_confidence_count || 0) > 0}>
+          <Badge
+            $low={(recoveryPreview?.summary?.low_confidence_count || 0) > 0}
+            data-testid="audio-recovery-low-conf-badge"
+          >
             low-conf {recoveryPreview?.summary?.low_confidence_count ?? 0}
           </Badge>
         </Row>
@@ -323,6 +337,7 @@ const AudioRecoveryPanel = () => {
               type="checkbox"
               checked={recoveryIncludeLowConfidence}
               onChange={(e) => setRecoveryIncludeLowConfidence(e.target.checked)}
+              data-testid="audio-recovery-include-low-confidence"
             />
             Include low-confidence notes
           </Label>
@@ -330,14 +345,14 @@ const AudioRecoveryPanel = () => {
       ) : null}
 
       {notes.length > 0 ? (
-        <NoteList>
+        <NoteList data-testid="audio-recovery-note-list">
           {notes.map((note) => {
             const id = String(note.provisional_id);
             const conf = Number(note.confidence);
             const low = conf < threshold;
             const { pitch } = midiToPitch(Math.round(Number(note.pitch)));
             return (
-              <NoteItem key={id} $low={low}>
+              <NoteItem key={id} $low={low} data-testid={`audio-recovery-note-${id}`}>
                 <input
                   type="checkbox"
                   checked={selectedSet.has(id)}
@@ -355,7 +370,13 @@ const AudioRecoveryPanel = () => {
       ) : null}
 
       {recoverySourceObjectUrl || recoveryPhase === AUDIO_RECOVERY_PHASES.BOUND ? (
-        <audio ref={audioRef} controls preload="metadata" style={{ width: '100%' }}>
+        <audio
+          ref={audioRef}
+          controls
+          preload="metadata"
+          style={{ width: '100%' }}
+          data-testid="audio-recovery-source-audio"
+        >
           <track kind="captions" />
         </audio>
       ) : null}
@@ -367,12 +388,18 @@ const AudioRecoveryPanel = () => {
               type="button"
               $variant="primary"
               disabled={busy || !currentProjectId}
+              data-testid="audio-recovery-apply-bind"
               onClick={() => applyAudioRecovery()}
             >
               Apply → Bind
             </Button>
           ) : null}
-          <Button type="button" $variant="danger" onClick={() => discardAudioRecovery()}>
+          <Button
+            type="button"
+            $variant="danger"
+            data-testid="audio-recovery-discard"
+            onClick={() => discardAudioRecovery()}
+          >
             Discard
           </Button>
         </Row>
