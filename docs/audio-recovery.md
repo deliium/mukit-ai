@@ -134,6 +134,7 @@ See `.env.example` (`AUDIO_RECOVERY_*`). Distinct from mono `AUDIO_*` and neural
 ## See also
 
 - [audio-transcription.md](./audio-transcription.md) — V3 mono path
+- [audio-symbolic-alignment.md](./audio-symbolic-alignment.md) — ticks↔source seek after Bind
 - [neural-audio-rendering.md](./neural-audio-rendering.md) — egress jobs / asset pattern contrast
 - [browser-playback.md](./browser-playback.md) — Tone Transport ownership
 - [import.md](./import.md) — MIDI/MusicXML symbolic ingress

@@ -15,6 +15,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **AI Jam**: User-melody / user-chords co-composition on the co-performance engine — live features + harmony belief, jam controls, multi-role local fill, multi-track Commit (details: [docs/ai-jam.md](docs/ai-jam.md))
 - **Audio transcription (mono)**: Hum/whistle/monophonic instrument → reviewable `transcription.preview.v1` → Apply into V2 with confidence gates and expressive/quantize choice; never persists audio (details: [docs/audio-transcription.md](docs/audio-transcription.md))
 - **Audio recovery (V4 mixed)**: Short mixed demos → optional stem separation + scaffolding → `audio.recovery.preview.v1` → Apply→Bind durable source audio + confidence overlay; never writes confidence onto V2 notes (details: [docs/audio-recovery.md](docs/audio-recovery.md))
+- **Audio↔symbolic alignment**: After Bind, `audio.alignment.v1` enables bar↔source seek, waveform sync, reopen hydrate, and soft-stale neural renders (details: [docs/audio-symbolic-alignment.md](docs/audio-symbolic-alignment.md))
 - **Optional neural audio rendering**: Render with AI jobs (generative / neural instrument) from a pinned revision; downloadable WAV; never mutates V2 or replaces FluidSynth Export WAV (details: [docs/neural-audio-rendering.md](docs/neural-audio-rendering.md))
 - **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (sampled/synth voices, velocity/expression, mute/solo/trim/pan/reverb send, pause/resume, seek, play-from-cursor, loop, activity meters). Browser mixer state is ephemeral and never changes export.
 - **Composition Analysis**: Deterministic `composition.analysis.v1` sidecar for tonal context, inferred harmony, phrases/density, derived motif families, and stable warnings over current V2 (Analysis tab; optional bounded advisory context for LLM edit/repair — not persisted, not required for import/playback)
@@ -312,6 +313,7 @@ mukit-ai/
 │   ├── import.md
 │   ├── audio-transcription.md
 │   ├── audio-recovery.md
+│   ├── audio-symbolic-alignment.md
 │   ├── neural-audio-rendering.md
 │   ├── composition-v1.md
 │   ├── project-persistence.md
@@ -335,6 +337,7 @@ mukit-ai/
 | [AI Jam](docs/ai-jam.md) | Jam modes, belief/hysteresis, multi-track Commit, fallback |
 | [Audio transcription](docs/audio-transcription.md) | Monophonic mic/file → preview → Apply into V2 |
 | [Audio recovery](docs/audio-recovery.md) | V4 mixed audio → separation/scaffolding → Apply→Bind overlay |
+| [Audio↔symbolic alignment](docs/audio-symbolic-alignment.md) | Bar↔source seek, waveform sync, stale renders, provenance |
 | [Neural audio rendering](docs/neural-audio-rendering.md) | Optional generative/neural instrument jobs; fidelity labels; Compose profile |
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |
 | [Symbolic embeddings](docs/embeddings.md) | Handcrafted musical feature embeddings, similarity, reference conditioning |

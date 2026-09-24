@@ -133,4 +133,5 @@ The smoke skips when `fake:neural-audio` is absent from `GET /ai/models?operatio
 - [AI Runtime](ai-runtime.md) — `audio_render` / `audio_generation`
 - [Browser playback](browser-playback.md) — Tone.js (unchanged)
 - [Audio transcription](audio-transcription.md) — ingress only (distinct from this egress path)
+- [Audio↔symbolic alignment](audio-symbolic-alignment.md) — soft-stale renders after symbolic edits
 - [Optional local AI](local-ai.md) — sidecar pattern reference

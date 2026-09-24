@@ -40,6 +40,7 @@
 - [x] **V4 co-performance real-time engine** — Shared Tone transport, Transport-synced MIDI stream, horizon accompaniment buffer, local degradation, optional `POST /live/accompaniment/predict`, explicit Commit; never per-note persist / never `composition.v4`
 - [x] **V4 AI Jam real-time co-composition** — Jam modes (`user_melody` / `user_chords`), live features + harmony belief/hysteresis, jam controls, multi-role local generators, multi-track Commit (+ optional harmony spans); graceful predict/AbortController fallback; never invents notes from harmony alone
 - [x] **V4 full audio-to-symbolic recovery workflow** — Mixed-audio recovery jobs (`/audio-recovery/*`): optional separation, scaffolding, confidence-gated poly/mono notes, Apply→Bind durable source + overlay; never confidence on V2 events; never DATASET_ROOT
+- [x] **V4 audio-symbolic alignment and round-trip editing** — `audio.alignment.v1` after Bind; bar↔source seek + waveform sync (HTMLAudio, not Tone); bound discovery hydrate; soft-stale neural renders via snapshot fingerprint; `audio.roundtrip.provenance.v1`; never mutates source WAV / never `composition.v4` / never DATASET_ROOT
 
 ## Completed
 
@@ -83,3 +84,4 @@
 | V4 co-performance real-time engine | 2026-09-23 |
 | V4 AI Jam real-time co-composition | 2026-09-23 |
 | V4 full audio-to-symbolic recovery workflow | 2026-09-24 |
+| V4 audio-symbolic alignment and round-trip editing | 2026-09-24 |

@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit. Projects persist in SQLite. V1 remains migration/parser input.
+Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders. Projects persist in SQLite. V1 remains migration/parser input.
 
 ## Tech Stack
 
@@ -41,6 +41,7 @@ mukit-ai/
 │   │   ├── audio_transcription_schemas.py   # transcription.preview.v1 DTOs
 │   │   ├── audio_recovery_settings.py       # AUDIO_RECOVERY_* limits / asset root / engines
 │   │   ├── audio_recovery_schemas.py        # audio.recovery.preview/result/bind.v1 DTOs
+│   │   ├── audio_alignment_schemas.py       # audio.alignment.v1 + roundtrip provenance DTOs
 │   │   ├── neural_audio_settings.py         # NEURAL_AUDIO_* render root / engine / quotas
 │   │   ├── neural_audio_schemas.py          # neural_audio_render.job.v1 DTOs / fidelity / adapters
 │   │   ├── embeddings/      # Handcrafted symbolic feature embeddings (cache/index; no torch; never DATASET_ROOT ingest)
@@ -222,6 +223,7 @@ mukit-ai/
 | AI Jam | `docs/ai-jam.md` | Jam modes, belief/hysteresis, multi-track Commit, fallback |
 | Audio transcription | `docs/audio-transcription.md` | Monophonic mic/file → preview → Apply into V2 |
 | Audio recovery | `docs/audio-recovery.md` | V4 mixed audio → optional stems/scaffolding → Apply→Bind overlay |
+| Audio↔symbolic alignment | `docs/audio-symbolic-alignment.md` | Bind-time map, bar↔source seek, waveform sync, soft-stale neural renders |
 | Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument jobs; licenses; Compose profile |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
