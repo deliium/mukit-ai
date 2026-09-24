@@ -133,7 +133,7 @@ Frontend: `appLogger('neuralAudioRender')` — phase transitions only; DEBUG may
 
 ## UI
 
-**Render with AI** panel beside Export. **Export WAV (deterministic)** remains FluidSynth. Job list supports multiple mix renders, status badges, download when complete. **Stems** section: role checklist, neural or explicit FluidSynth engine, render stem set, per-stem download/rerender, sync-class honesty + soft-stale banners.
+**Render with AI** panel beside Export. **Export WAV (deterministic)** remains FluidSynth. Job list supports multiple mix renders, status badges, download when complete. **Stems** section: role checklist, neural or explicit FluidSynth engine, render stem set, per-stem download/rerender, sync-class honesty + soft-stale banners. **Mix Analysis** subsection (same panel): run DSP measurements + rule observations over completed stem sets; optional advisory AI notes; optional persist; soft-stale banner only — see [mix-analysis.md](mix-analysis.md).
 
 ## Testing
 
@@ -159,6 +159,7 @@ The smoke skips when `fake:neural-audio` is absent from `GET /ai/models?operatio
 
 ## See also
 
+- [Mix analysis](mix-analysis.md) — DSP + observations over completed stem/mix WAVs
 - [AI Runtime](ai-runtime.md) — `audio_render` / `audio_generation`
 - [Browser playback](browser-playback.md) — Tone.js (unchanged)
 - [Audio transcription](audio-transcription.md) — ingress only (distinct from this egress path)

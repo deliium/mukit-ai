@@ -27,7 +27,8 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - Monophonic audio transcription (mic/file → session `transcription.preview.v1` review → Apply into V2); confidence stays off V2 notes; audio never persisted
 - V4 mixed audio recovery (optional separation → scaffolding → confidence-gated notes → Apply→Bind durable source + `audio.recovery.result.v1` overlay); never mutates confidence onto V2 events; never `DATASET_ROOT`
 - Audio↔symbolic alignment after Bind (`audio.alignment.v1`, bar↔source seek, waveform sync, bound discovery hydrate, soft-stale neural renders, round-trip provenance); never mutates source WAV; never `composition.v4`
-- Optional neural audio rendering (job-based generative/neural-instrument egress via `/neural-audio/renders`); never mutates V2; optional MusicGen Compose profile; distinct from FluidSynth Export WAV
+- Optional neural audio rendering (job-based generative/neural-instrument egress via `/neural-audio/renders` + stem sets); never mutates V2; optional MusicGen Compose profile; distinct from FluidSynth Export WAV
+- Mix analysis (`mix.analysis.v1`) — deterministic DSP + rule observations (+ optional advisory AI) over completed neural stem/mix WAVs; never mutates audio or V2; never DATASET_ROOT; distinct from symbolic `composition.analysis.v1` and recovery stems
 - Notation preview (MusicXML regenerated from V2) and browser playback (Tone.js) from `tracks[].events[]`
 - Deterministic export: MusicXML, MIDI (SMF Type 1 DAW handoff with section markers + drag/download UX), and server-side FluidSynth WAV
 - Durable hybrid generation provenance (`generation.provenance.v1`) on AI revisions; V3 Docker acceptance (`scripts/v3_docker_acceptance.sh`) with seeded reproduce under fake modes

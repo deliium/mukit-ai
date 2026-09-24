@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders. Projects persist in SQLite. V1 remains migration/parser input.
+Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders; mix analysis (`mix.analysis.v1`) measures completed neural stem/mix WAVs without mutating audio or V2. Projects persist in SQLite. V1 remains migration/parser input.
 
 ## Tech Stack
 
@@ -25,8 +25,8 @@ mukit-ai/
 │   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas, revision_loop)
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
-│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
+│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
@@ -44,6 +44,8 @@ mukit-ai/
 │   │   ├── audio_alignment_schemas.py       # audio.alignment.v1 + roundtrip provenance DTOs
 │   │   ├── neural_audio_settings.py         # NEURAL_AUDIO_* render root / engine / quotas
 │   │   ├── neural_audio_schemas.py          # neural_audio_render.job.v1 + stem_set/stem.v1 DTOs / fidelity / adapters
+│   │   ├── mix_analysis_settings.py         # MIX_ANALYSIS_* report root / caps / fake mode
+│   │   ├── mix_analysis_schemas.py          # mix.analysis.v1 DTOs / measurement vs observation vs interpretation
 │   │   ├── embeddings/      # Handcrafted symbolic feature embeddings (cache/index; no torch; never DATASET_ROOT ingest)
 │   │   ├── dataset/         # Offline symbolic corpus pipeline (CLI; DATASET_ROOT only)
 │   │   ├── tokenizer/       # Composition V2 ↔ tokens codec (CLI; no PROJECT_DB_PATH)
@@ -56,12 +58,12 @@ mukit-ai/
 │   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement/editor/neural-audio acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, AudioRecoveryPanel, NeuralAudioRenderPanel, …
+│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, AudioRecoveryPanel, NeuralAudioRenderPanel (incl. Mix Analysis), …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI/audio sessions)
-│       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture helpers
+│       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture, mixAnalysisUi helpers
 ├── scripts/                 # run_tests.sh, v1/v2/v3_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
-├── docs/                    # composition.v2/v1, ai-runtime, multi-agent, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, audio-recovery, neural-audio-rendering, analysis, arrangement, import, datasets, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, multi-agent, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, audio-recovery, neural-audio-rendering, mix-analysis, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -148,6 +150,9 @@ mukit-ai/
 | `backend/app/routers/neural_audio.py` | `POST/GET/DELETE /neural-audio/renders` (+ `/audio` download); `POST/GET/DELETE /neural-audio/stem-sets` (+ stem rerender / `/stems/{id}/audio`) |
 | `backend/app/services/neural_audio_render.py` | Mix job orchestration; read-only composition; never mutates V2 |
 | `backend/app/services/neural_audio_stems.py` | Stem-set enqueue/run/selective rerender; never mutates V2 |
+| `backend/app/routers/mix_analysis.py` | `POST /mix-analysis/analyze`, `GET/DELETE /mix-analysis/reports` |
+| `backend/app/services/mix_analysis/` | DSP measurements, observations, optional interpret, active-head pipeline |
+| `backend/app/services/mix_analysis_store.py` | Durable mix.analysis.v1 JSON + SQLite + project-delete GC |
 | `backend/app/services/composition_import.py` | Shared source → V2 canonicalization |
 | `backend/app/services/composition_midi_import.py` | Deterministic MIDI parse |
 | `backend/app/services/composition_musicxml_import.py` | Hardened MusicXML/MXL parse |
@@ -226,6 +231,7 @@ mukit-ai/
 | Audio recovery | `docs/audio-recovery.md` | V4 mixed audio → optional stems/scaffolding → Apply→Bind overlay |
 | Audio↔symbolic alignment | `docs/audio-symbolic-alignment.md` | Bind-time map, bar↔source seek, waveform sync, soft-stale neural renders |
 | Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument mix + stem-set egress; licenses; Compose profile |
+| Mix analysis | `docs/mix-analysis.md` | DSP measurements + observations over neural stem/mix WAVs; soft-stale; never mutates audio/V2 |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
 | Composition Critique | `docs/composition-critique.md` | Evaluation engine, strata, climax AC, `/critique/evaluate` |

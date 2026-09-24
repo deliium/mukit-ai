@@ -37,6 +37,8 @@ mukit-ai/
 │   │   ├── audio_alignment_schemas.py      # audio.alignment.v1 + roundtrip.provenance.v1 + bound discovery
 │   │   ├── neural_audio_schemas.py # neural_audio_render.job.v1 + stem_set/stem.v1 (egress)
 │   │   ├── neural_audio_settings.py# NEURAL_AUDIO_* render root / quotas
+│   │   ├── mix_analysis_schemas.py # mix.analysis.v1 (measurements / observations / interpretations)
+│   │   ├── mix_analysis_settings.py# MIX_ANALYSIS_* report root / caps / fake mode
 │   │   ├── dataset/                # Offline symbolic corpus pipeline (CLI; DATASET_ROOT)
 │   │   ├── embeddings/             # Handcrafted symbolic features (cache/index; no torch)
 │   │   ├── dataset/                # Offline symbolic corpus (DATASET_ROOT only)
@@ -62,6 +64,7 @@ mukit-ai/
 │   │   │   ├── transcription.py    # POST /transcription/audio (V3 mono)
 │   │   │   ├── audio_recovery.py   # /audio-recovery/jobs (+ bind/assets/bound; ingress + alignment)
 │   │   │   ├── neural_audio.py     # /neural-audio/renders + /stem-sets (egress only)
+│   │   │   ├── mix_analysis.py     # /mix-analysis/analyze + reports (read-only DSP)
 │   │   │   ├── analysis.py         # POST /analysis/composition
 │   │   │   ├── arrangement.py      # GET/POST /composition/arrangement/*
 │   │   │   ├── composition_development.py
@@ -119,6 +122,8 @@ mukit-ai/
 │   │   │   ├── neural_audio_stem_store.py        # Stem-set / stem member meta + WAV paths
 │   │   │   ├── neural_audio_stem_partition.py    # Track→role heuristic + composition slice helpers
 │   │   │   ├── neural_audio_stems.py             # Stem-set enqueue/run/rerender (never mutates V2)
+│   │   │   ├── mix_analysis/                    # DSP decode/metrics/observations/interpret/pipeline
+│   │   │   ├── mix_analysis_store.py             # Durable mix.analysis.v1 JSON + project-delete GC
 │   │   │   └── project_composition.py   # Project ↔ composition mapping
 │   │   ├── fixtures/               # composition.v1 + composition_v2_expressive + arrangement_instruments.v1.json
 │   │   └── db/                     # Shared infrastructure: connection + Alembic
@@ -162,6 +167,7 @@ mukit-ai/
 | **Audio recovery (V4 mixed ingress)** | `routers/audio_recovery.py`, `audio_recovery_schemas.py`, `audio_recovery_settings.py`, `services/audio_recovery/` + `audio_recovery_store.py` — optional separation → scaffolding → confidence-gated notes; Apply→Bind durable source + `audio.recovery.result.v1` overlay (+ sibling `alignment_json` via alignment services); never confidence on V2 events; never `DATASET_ROOT`; `run_inline` jobs | `AudioRecoveryPanel`, recovery APIs in `musicApi.js`, `audioRecovery{Apply,EnsureTracks,Gates,Overlay,PhaseGuards}.js`, recovery session slice of `musicStore` — HTMLAudio source audition (not `playbackSource` / Tone) |
 | **Audio↔symbolic alignment** | `audio_alignment_schemas.py` (`audio.alignment.v1`, `audio.roundtrip.provenance.v1`, bound discovery DTOs); `services/audio_alignment.py` + `audio_roundtrip_provenance.py`; Bind writes `kind=alignment_json` + `alignment_asset_id`; `GET /audio-recovery/projects/{id}/bound` hydrate; never nests into `AudioRecoveryResultV1`; never mutates source WAV; never `composition.v4` / `DATASET_ROOT` | `AudioAlignmentWaveform`, `audioAlignment.js` / `audioWaveformPeaks.js` / `compositionSnapshotFingerprint.js`, alignment sync clock + `sourcePlayheadTick` in `musicStore`, piano-roll source playhead (dual clock vs Tone); soft-stale neural UI via snapshot fingerprint |
 | **Neural audio rendering** | `routers/neural_audio.py`, `neural_audio_schemas.py` (mix `job.v1` + `stem_set`/`stem.v1`), `neural_audio_settings.py`, `services/neural_audio_{render,stem_*}.py`, `ai_runtime` `AUDIO_RENDER` adapters (`fake:neural-audio` + `direct_stems`, `sidecar:musicgen`, `local:midi-ddsp`) — egress only; stem sets under `{project}/{set_id}/{stem_id}.wav`; selective rerender via `supersedes_stem_id`; explicit FluidSynth stems only (never silent generative fallback); never mutates V2; pins `composition.snapshot.v1` fingerprint for soft-stale; recovery `stem_bindings` are **not** these WAVs | `NeuralAudioRenderPanel` (mix + Stems), neural APIs in `musicApi.js`, `neuralAudioRenderUi.js` + `neuralAudioStemUi.js` (sync honesty + soft-stale) |
+| **Mix analysis** | `routers/mix_analysis.py`, `mix_analysis_schemas.py` (`mix.analysis.v1`), `mix_analysis_settings.py`, `services/mix_analysis/` + `mix_analysis_store.py` — read-only DSP over completed neural stems; measurements / observations / optional advisory interpretations; no new `AiOperation`; never mutates audio/V2; never `DATASET_ROOT` | Mix Analysis subsection under `NeuralAudioRenderPanel`, `MixAnalysisPanel` / `MixAnalysisCharts`, `mixAnalysisUi.js`, mix APIs in `musicApi.js` |
 | **Datasets (offline)** | `app/dataset/` (`cli`, schemas, store, ingest/normalize/segment/dedup/split/stats); `DATASET_ROOT` filesystem only — never `PROJECT_DB_PATH` | CLI / docs only (no SPA) |
 | **Embeddings** | `app/embeddings/` (schemas/features/vector/cache/index); `routers/embeddings.py`; `services/composition_embedding.py` + style conditioning / invalidation; ready `local:symbolic-features-v1` — affinity ≠ quality; never artist≡style; never silent `DATASET_ROOT` ingest | Develop reference picker + similar sections; Motifs related; `compositionEmbeddingReference.js` |
 | **Composer profiles** | `composer_profile_schemas.py`, `composer_profile_settings.py`, `routers/composer_profiles.py`, `services/composer_profile_{store,derive,resolve,merge}.py` — durable soft prefs in `PROJECT_DB_PATH`; additive generate fragment only; never melodies / `DATASET_ROOT` | `ComposerProfilesPanel`, `composerProfileApi.js`, MusicGenerator profile/strength selectors, `llmGenerateRequest.js` |

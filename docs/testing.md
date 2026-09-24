@@ -252,6 +252,16 @@ NEURAL_AUDIO_FAKE_MODE=1 LLM_FAKE_MODE=1 npm run test:e2e -- e2e/neural-audio-re
 
 Details and license notes: [neural-audio-rendering.md](neural-audio-rendering.md).
 
+Mix analysis over completed neural stems (DSP + observations; set `MIX_ANALYSIS_FAKE_MODE=1`):
+
+```bash
+cd backend && MIX_ANALYSIS_FAKE_MODE=1 NEURAL_AUDIO_FAKE_MODE=1 LLM_FAKE_MODE=1 \
+  ../.venv/bin/python -m pytest tests/test_mix_analysis.py -q
+node --test frontend/src/utils/mixAnalysisUi.test.js
+```
+
+Optional richer DSP extras (not required for CI): `pip install -r backend/requirements-mix-analysis.txt`. Details: [mix-analysis.md](mix-analysis.md).
+
 Analysis panel journey (requires running stack; fake LLM optional for core analysis):
 
 ```bash
