@@ -32,6 +32,8 @@ import {
   deleteAudioRecoveryJob,
   bindAudioRecoveryJob,
   fetchAudioRecoveryAssetBlobUrl,
+  fetchAudioRecoveryAssetJson,
+  fetchBoundAudioRecovery,
 } from '../api/musicApi.js';
 import {
   createLivePredictAbortController,
@@ -59,6 +61,12 @@ import {
   assertMidiCaptureAllowedForRecoveryPhase,
   assertLiveAllowedForRecoveryPhase,
 } from '../utils/audioRecoveryPhaseGuards.js';
+import {
+  alignmentMapOpts,
+  barRangeToAudioWindow,
+  sourceSecondsToTick,
+  tickToSourceSeconds,
+} from '../utils/audioAlignment.js';
 import { probeAudioInputSupport } from '../utils/audioInputSupport.js';
 import { createAudioRecorder } from '../utils/audioRecorder.js';
 import { createMidiAccessSession } from '../utils/midiInputAccess.js';
@@ -434,6 +442,9 @@ const liveLogger = createAppLogger('liveMidi');
 const jamLogger = createAppLogger('liveJam');
 const audioLogger = createAppLogger('audioTranscription');
 const audioRecoveryLogger = createAppLogger('audioRecovery');
+const audioAlignmentLogger = createAppLogger('audioAlignment');
+let sourceSeekRequestSeq = 0;
+let lastSourceSeekDebugAt = 0;
 
 export const AUDIO_PHASES = Object.freeze({
   IDLE: 'idle',
@@ -488,9 +499,17 @@ const initialAudioRecoveryState = {
   recoveryBindWarning: null,
   recoverySourceAudioAssetId: null,
   recoveryResultAssetId: null,
+  recoveryAlignmentAssetId: null,
+  alignmentDocument: null,
+  roundtripProvenance: null,
   recoveryOverlay: null,
   recoverySourceObjectUrl: null,
   recoveryDisableSeparation: false,
+  // Source audition sync clock (HTMLAudio — not a playbackSource).
+  sourceAuditionMode: 'idle', // idle | playing | scrubbing
+  sourcePlayheadTick: null,
+  audioWindowHighlight: null, // { startSeconds, endSeconds, startBar, endBar } | null
+  sourceSeekRequest: null, // { id, seconds, reason } — panel applies to HTMLAudio
 };
 
 /** @type {ReturnType<typeof createAudioRecorder> | null} */
@@ -3854,6 +3873,10 @@ export const useMusicStore = create((set, get) => ({
       tick: next,
       bar: tickToBar(state.editedMusicJson, next),
     });
+    // Source audition seek when alignment is present (not a playbackSource).
+    if (state.alignmentDocument && state.recoveryPhase === AUDIO_RECOVERY_PHASES.BOUND) {
+      get().seekSourceAudioToTick(next, { reason: 'edit-cursor' });
+    }
     return next;
   },
 
@@ -3893,6 +3916,9 @@ export const useMusicStore = create((set, get) => ({
       tick,
       requestId: request.id,
     });
+    if (state.alignmentDocument && state.recoveryPhase === AUDIO_RECOVERY_PHASES.BOUND) {
+      get().seekSourceAudioToBar(Number(bar), { reason: 'gotoBar' });
+    }
     return tick;
   },
 
@@ -4446,6 +4472,10 @@ export const useMusicStore = create((set, get) => ({
       aiEditTrackMode: nextMode,
       aiEditTrackIds: nextTrackIds,
     });
+    if (get().alignmentDocument) {
+      get().setAudioWindowHighlightFromBars(normalized.startBar, normalized.endBar);
+      get().seekSourceAudioToBar(normalized.startBar, { reason: 'ai-bar-selection' });
+    }
     return true;
   },
 
@@ -4457,6 +4487,7 @@ export const useMusicStore = create((set, get) => ({
       aiEditTrackIds: null,
       aiEditTrackMode: 'current',
     });
+    get().clearAudioWindowHighlight();
   },
 
   setAiEditInstruction: (instruction) => {
@@ -11371,6 +11402,145 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
+  setSourceAuditionMode: (mode) => {
+    const next = ['idle', 'playing', 'scrubbing'].includes(mode) ? mode : 'idle';
+    const prev = get().sourceAuditionMode;
+    if (prev === next) return next;
+    set({ sourceAuditionMode: next });
+    audioAlignmentLogger.info('Source audition mode', { from: prev, to: next });
+    return next;
+  },
+
+  /**
+   * HTMLAudio timeupdate → sourcePlayheadTick via alignment sync clock.
+   * Does not touch Tone playbackSource.
+   */
+  onSourceAudioTimeUpdate: (currentTimeSeconds) => {
+    const state = get();
+    if (!state.alignmentDocument || !state.editedMusicJson) {
+      return null;
+    }
+    const timeline = compileTimeline(state.editedMusicJson);
+    if (!timeline) return null;
+    const opts = alignmentMapOpts(state.alignmentDocument);
+    const tick = sourceSecondsToTick(timeline, Number(currentTimeSeconds), opts);
+    if (tick == null) return null;
+    if (tick === state.sourcePlayheadTick) return tick;
+    set({ sourcePlayheadTick: tick });
+    const now = Date.now();
+    if (now - lastSourceSeekDebugAt > 400) {
+      lastSourceSeekDebugAt = now;
+      audioAlignmentLogger.debug('source timeupdate', {
+        tick,
+        seconds: Number(Number(currentTimeSeconds).toFixed(3)),
+      });
+    }
+    return tick;
+  },
+
+  /**
+   * Seek source HTMLAudio to a composition tick (via sourceSeekRequest).
+   */
+  seekSourceAudioToTick: (tick, { reason = 'seek-tick' } = {}) => {
+    const state = get();
+    if (!state.alignmentDocument) {
+      audioAlignmentLogger.warn('seek without alignment', { reason });
+      return null;
+    }
+    if (!state.editedMusicJson) return null;
+    const timeline = compileTimeline(state.editedMusicJson);
+    if (!timeline) return null;
+    const opts = alignmentMapOpts(state.alignmentDocument);
+    const seconds = tickToSourceSeconds(timeline, Number(tick), opts);
+    if (seconds == null) return null;
+    sourceSeekRequestSeq += 1;
+    const request = { id: sourceSeekRequestSeq, seconds, reason, tick: Number(tick) };
+    set({
+      sourceSeekRequest: request,
+      sourcePlayheadTick: Number(tick),
+    });
+    audioAlignmentLogger.info('seek source to tick', {
+      tick: Number(tick),
+      seconds: Number(seconds.toFixed(3)),
+      reason,
+    });
+    return request;
+  },
+
+  seekSourceAudioToBar: (bar, { reason = 'seek-bar' } = {}) => {
+    const state = get();
+    const composition = state.editedMusicJson;
+    if (!composition || !state.alignmentDocument) {
+      audioAlignmentLogger.warn('seek-from-bar without alignment', { bar });
+      return null;
+    }
+    const window = barRangeToAudioWindow(
+      Number(bar),
+      Number(bar),
+      composition,
+      state.alignmentDocument,
+    );
+    if (!window) return null;
+    sourceSeekRequestSeq += 1;
+    const request = {
+      id: sourceSeekRequestSeq,
+      seconds: window.startSeconds,
+      reason,
+      tick: window.startTick,
+      bar: Number(bar),
+    };
+    set({
+      sourceSeekRequest: request,
+      sourcePlayheadTick: window.startTick,
+      audioWindowHighlight: {
+        startSeconds: window.startSeconds,
+        endSeconds: window.endSeconds,
+        startBar: window.startBar,
+        endBar: window.endBar,
+        startTick: window.startTick,
+        endTick: window.endTick,
+      },
+    });
+    audioAlignmentLogger.info('seek-from-bar', {
+      bar: Number(bar),
+      seconds: Number(window.startSeconds.toFixed(3)),
+    });
+    return request;
+  },
+
+  setAudioWindowHighlightFromBars: (startBar, endBar) => {
+    const state = get();
+    if (!state.alignmentDocument || !state.editedMusicJson) {
+      set({ audioWindowHighlight: null });
+      return null;
+    }
+    const window = barRangeToAudioWindow(
+      Number(startBar),
+      Number(endBar),
+      state.editedMusicJson,
+      state.alignmentDocument,
+    );
+    if (!window) {
+      set({ audioWindowHighlight: null });
+      return null;
+    }
+    const highlight = {
+      startSeconds: window.startSeconds,
+      endSeconds: window.endSeconds,
+      startBar: window.startBar,
+      endBar: window.endBar,
+      startTick: window.startTick,
+      endTick: window.endTick,
+    };
+    set({ audioWindowHighlight: highlight });
+    return highlight;
+  },
+
+  clearAudioWindowHighlight: () => {
+    if (get().audioWindowHighlight == null) return;
+    set({ audioWindowHighlight: null });
+  },
+
   applyAudioRecovery: async () => {
     const state = get();
     if (!state.recoveryPreview || state.recoveryPhase !== AUDIO_RECOVERY_PHASES.REVIEW) {
@@ -11425,12 +11595,14 @@ export const useMusicStore = create((set, get) => ({
         project_id: state.currentProjectId,
         preview_fingerprint: state.recoveryPreview.preview_fingerprint,
         event_map: applied.eventMap,
+        composition: applied.composition,
       });
       const overlay = buildOverlayFromEventMap(
         applied.eventMap,
         state.recoveryPreview.notes,
       );
       let sourceUrl = null;
+      let alignmentDocument = null;
       try {
         const fetched = await fetchAudioRecoveryAssetBlobUrl(bindResult.source_audio_asset_id);
         revokeRecoverySourceUrl(get);
@@ -11438,20 +11610,31 @@ export const useMusicStore = create((set, get) => ({
       } catch {
         audioRecoveryLogger.warn('Source audio blob fetch failed after bind');
       }
+      if (bindResult.alignment_asset_id) {
+        try {
+          alignmentDocument = await fetchAudioRecoveryAssetJson(bindResult.alignment_asset_id);
+        } catch {
+          audioRecoveryLogger.warn('Alignment JSON fetch failed after bind');
+        }
+      }
       set({
         recoveryPhase: AUDIO_RECOVERY_PHASES.BOUND,
         recoverySourceAudioAssetId: bindResult.source_audio_asset_id,
         recoveryResultAssetId: bindResult.result_asset_id,
+        recoveryAlignmentAssetId: bindResult.alignment_asset_id || null,
+        alignmentDocument,
         recoveryOverlay: overlay,
         recoverySourceObjectUrl: sourceUrl,
         recoveryBindWarning: null,
         recoveryErrorCode: null,
         recoveryErrorMessage: '',
+        roundtripProvenance: bindResult.roundtrip_provenance || null,
       });
       audioRecoveryLogger.info('Recovery Apply→Bind complete', {
         jobId: state.recoveryJobId,
         sourceAudioAssetId: bindResult.source_audio_asset_id,
         resultAssetId: bindResult.result_asset_id,
+        alignmentAssetId: bindResult.alignment_asset_id || null,
         overlayCount: overlay.length,
       });
       return { ok: true, bindResult, eventMap: applied.eventMap };
@@ -12524,6 +12707,97 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     ...clearedAudioTranscriptionState(),
     ...clearedAudioRecoveryState(get),
   });
+
+  // After clear, reload durable bound source + overlay + alignment when present.
+  if (project?.id) {
+    void hydrateBoundAudioRecovery(set, get, project.id);
+  }
+}
+
+async function hydrateBoundAudioRecovery(set, get, projectId) {
+  try {
+    const discovery = await fetchBoundAudioRecovery(projectId);
+    if (get().currentProjectId !== projectId) {
+      audioRecoveryLogger.info('Bound hydrate aborted — project switched', {
+        projectIdPrefix: String(projectId).slice(0, 8),
+      });
+      return;
+    }
+    if (!discovery?.bound || !discovery.latest) {
+      audioRecoveryLogger.info('Bound hydrate miss — idle', {
+        projectIdPrefix: String(projectId).slice(0, 8),
+      });
+      return;
+    }
+    const latest = discovery.latest;
+    let sourceUrl = null;
+    let overlay = null;
+    let alignmentDocument = null;
+    try {
+      const fetched = await fetchAudioRecoveryAssetBlobUrl(latest.source_audio_asset_id);
+      if (get().currentProjectId !== projectId) return;
+      revokeRecoverySourceUrl(get);
+      sourceUrl = fetched.blobUrl;
+    } catch (error) {
+      audioRecoveryLogger.warn('Bound hydrate source fetch failed', {
+        code: error?.code || 'fetch_failed',
+      });
+    }
+    if (latest.result_asset_id) {
+      try {
+        const resultDoc = await fetchAudioRecoveryAssetJson(latest.result_asset_id);
+        if (get().currentProjectId !== projectId) return;
+        overlay = Array.isArray(resultDoc?.overlay) ? resultDoc.overlay : null;
+      } catch (error) {
+        audioRecoveryLogger.warn('Bound hydrate result fetch failed', {
+          code: error?.code || 'fetch_failed',
+        });
+      }
+    }
+    if (latest.alignment_asset_id) {
+      try {
+        alignmentDocument = await fetchAudioRecoveryAssetJson(latest.alignment_asset_id);
+        if (get().currentProjectId !== projectId) return;
+      } catch (error) {
+        audioRecoveryLogger.warn('Bound hydrate alignment fetch failed', {
+          code: error?.code || 'fetch_failed',
+        });
+      }
+    }
+    if (get().currentProjectId !== projectId) return;
+    set({
+      recoveryPhase: AUDIO_RECOVERY_PHASES.BOUND,
+      recoveryJobId: latest.job_id,
+      recoverySourceAudioAssetId: latest.source_audio_asset_id,
+      recoveryResultAssetId: latest.result_asset_id,
+      recoveryAlignmentAssetId: latest.alignment_asset_id || null,
+      alignmentDocument,
+      recoveryOverlay: overlay,
+      recoverySourceObjectUrl: sourceUrl,
+      roundtripProvenance: {
+        schema_version: 'audio.roundtrip.provenance.v1',
+        source_audio_asset_id: latest.source_audio_asset_id,
+        source_sha256_prefix: latest.source_sha256_prefix || null,
+        result_asset_id: latest.result_asset_id,
+        alignment_asset_id: latest.alignment_asset_id || null,
+        recovery_job_id: latest.job_id,
+        bound_at: latest.bound_at || null,
+      },
+      recoveryErrorCode: null,
+      recoveryErrorMessage: '',
+    });
+    audioRecoveryLogger.info('Bound hydrate hit', {
+      projectIdPrefix: String(projectId).slice(0, 8),
+      jobIdPrefix: String(latest.job_id).slice(0, 8),
+      hasSourceUrl: Boolean(sourceUrl),
+      hasOverlay: Boolean(overlay),
+      hasAlignment: Boolean(alignmentDocument),
+    });
+  } catch (error) {
+    audioRecoveryLogger.warn('Bound hydrate discovery failed', {
+      code: error?.code || 'discovery_failed',
+    });
+  }
 }
 
 function syncGenerationMetaFromPrompt(set, get, { reason = 'prompt-edit' } = {}) {

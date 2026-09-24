@@ -21,6 +21,10 @@ from pydantic import (
     model_validator,
 )
 
+from app.audio_alignment_schemas import AudioRoundtripProvenanceV1
+from app.composition_schemas import CompositionV2
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -416,6 +420,7 @@ class AudioRecoveryJobV1(BaseModel):
     bound: bool = False
     source_audio_asset_id: str | None = None
     result_asset_id: str | None = None
+    alignment_asset_id: str | None = None
     created_at: str
     started_at: str | None = None
     completed_at: str | None = None
@@ -454,6 +459,9 @@ class AudioRecoveryBindRequestV1(BaseModel):
     install_flags: AudioRecoveryBindInstallFlags = Field(
         default_factory=AudioRecoveryBindInstallFlags
     )
+    # Optional applied composition for alignment fingerprint + tempo divergence.
+    # Prefer this over a stale projects.composition_json when Apply just landed.
+    composition: CompositionV2 | None = None
 
     @field_validator("event_map")
     @classmethod
@@ -480,7 +488,10 @@ class AudioRecoveryBindResponseV1(BaseModel):
     project_id: str
     source_audio_asset_id: str
     result_asset_id: str
+    alignment_asset_id: str | None = None
     overlay_entry_count: int = Field(ge=0)
+    # Compact round-trip lineage (ids / fingerprints only; never PCM).
+    roundtrip_provenance: AudioRoundtripProvenanceV1 | None = None
 
 
 class AudioRecoveryAssetMeta(BaseModel):
@@ -491,7 +502,7 @@ class AudioRecoveryAssetMeta(BaseModel):
     id: str
     project_id: str
     job_id: str
-    kind: Literal["source_audio", "result_json"]
+    kind: Literal["source_audio", "result_json", "alignment_json"]
     content_type: str
     byte_size: int = Field(ge=0)
     sha256_prefix: str = Field(min_length=8, max_length=16)

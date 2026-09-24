@@ -13,6 +13,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from app.audio_alignment_schemas import AudioAlignmentBoundDiscoveryV1
 from app.audio_recovery_schemas import (
     AudioRecoveryBindRequestV1,
     AudioRecoveryBindResponseV1,
@@ -22,6 +23,7 @@ from app.audio_recovery_schemas import (
 from app.services.audio_recovery.pipeline import (
     bind_audio_recovery_job,
     delete_audio_recovery_job,
+    discover_bound_recovery_for_project,
     enqueue_audio_recovery_job,
     get_audio_recovery_job,
     resolve_asset_file_path,
@@ -137,10 +139,35 @@ async def bind_job(job_id: str, body: AudioRecoveryBindRequestV1) -> AudioRecove
             "job_id": job_id,
             "source_audio_asset_id": result.source_audio_asset_id,
             "result_asset_id": result.result_asset_id,
+            "alignment_asset_id": result.alignment_asset_id,
             "overlay_entry_count": result.overlay_entry_count,
         },
     )
     return result
+
+
+@router.get(
+    "/projects/{project_id}/bound",
+    response_model=AudioAlignmentBoundDiscoveryV1,
+)
+async def get_project_bound(project_id: str) -> AudioAlignmentBoundDiscoveryV1:
+    logger.info(
+        "GET /audio-recovery/projects/{id}/bound",
+        extra={"project_id_prefix": project_id[:8] if project_id else None},
+    )
+    try:
+        discovery = discover_bound_recovery_for_project(project_id)
+    except AudioRecoveryError as exc:
+        raise _map_error(exc) from exc
+    logger.info(
+        "GET /audio-recovery/projects/{id}/bound done",
+        extra={
+            "project_id_prefix": project_id[:8] if project_id else None,
+            "bound": discovery.bound,
+            "job_count": len(discovery.jobs),
+        },
+    )
+    return discovery
 
 
 @router.get("/assets/{asset_id}")

@@ -171,7 +171,7 @@ def write_durable_asset_bytes(
             "Refusing to write empty durable recovery asset",
             http_status=500,
         )
-    if kind not in {"source_audio", "result_json"}:
+    if kind not in {"source_audio", "result_json", "alignment_json"}:
         raise AudioRecoveryError(
             "audio_recovery_internal_error",
             "Invalid recovery asset kind",
@@ -342,9 +342,11 @@ def assert_asset_quota(
     conn: sqlite3.Connection,
     settings: AudioRecoverySettings,
     project_id: str,
+    *,
+    additional: int = 1,
 ) -> None:
     count = count_project_assets(conn, project_id)
-    if count >= settings.max_assets_per_project:
+    if count + max(1, int(additional)) > settings.max_assets_per_project:
         raise AudioRecoveryError(
             "audio_recovery_quota_exceeded",
             "Per-project audio recovery asset count quota exceeded",
@@ -352,6 +354,7 @@ def assert_asset_quota(
             details={
                 "limit": settings.max_assets_per_project,
                 "current": count,
+                "additional": additional,
             },
         )
     total_bytes = sum_project_asset_bytes(conn, project_id)
@@ -426,6 +429,7 @@ def update_job_status(
     bound: bool | None = None,
     source_audio_asset_id: str | None = None,
     result_asset_id: str | None = None,
+    alignment_asset_id: str | None = None,
     project_id: str | None = None,
 ) -> dict[str, Any]:
     row = get_job_row(conn, job_id)
@@ -453,6 +457,7 @@ def update_job_status(
             bound = COALESCE(?, bound),
             source_audio_asset_id = COALESCE(?, source_audio_asset_id),
             result_asset_id = COALESCE(?, result_asset_id),
+            alignment_asset_id = COALESCE(?, alignment_asset_id),
             project_id = COALESCE(?, project_id)
         WHERE id = ?
         """,
@@ -471,6 +476,7 @@ def update_job_status(
             None if bound is None else (1 if bound else 0),
             source_audio_asset_id,
             result_asset_id,
+            alignment_asset_id,
             project_id,
             job_id,
         ),
@@ -485,6 +491,7 @@ def update_job_status(
             "source_byte_size": source_byte_size,
             "sha256_prefix": source_sha256_prefix,
             "bound": bound,
+            "alignment_asset_id_prefix": (alignment_asset_id or "")[:8] or None,
         },
     )
     return get_job_row(conn, job_id)  # type: ignore[return-value]
@@ -569,6 +576,27 @@ def list_project_jobs(
         SELECT * FROM audio_recovery_jobs
         WHERE project_id = ?
         ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (project_id, limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_bound_project_jobs(
+    conn: sqlite3.Connection,
+    project_id: str,
+    *,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Bound jobs only (durable source + result + optional alignment)."""
+    rows = conn.execute(
+        """
+        SELECT * FROM audio_recovery_jobs
+        WHERE project_id = ? AND bound = 1
+          AND source_audio_asset_id IS NOT NULL
+          AND result_asset_id IS NOT NULL
+        ORDER BY completed_at DESC, created_at DESC
         LIMIT ?
         """,
         (project_id, limit),

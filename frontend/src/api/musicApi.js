@@ -2076,6 +2076,7 @@ export async function deleteAudioRecoveryJob(jobId) {
  *   project_id: string,
  *   preview_fingerprint: string,
  *   event_map: Array<{ provisional_id: string, event_id: string, track_id: string }>,
+ *   composition?: object,
  * }} body
  */
 export async function bindAudioRecoveryJob(jobId, body) {
@@ -2083,6 +2084,7 @@ export async function bindAudioRecoveryJob(jobId, body) {
     jobId,
     projectId: body?.project_id || null,
     eventMapCount: Array.isArray(body?.event_map) ? body.event_map.length : 0,
+    hasComposition: Boolean(body?.composition),
   });
   try {
     const result = await request(
@@ -2094,6 +2096,7 @@ export async function bindAudioRecoveryJob(jobId, body) {
       jobId,
       sourceAudioAssetId: result?.source_audio_asset_id || null,
       resultAssetId: result?.result_asset_id || null,
+      alignmentAssetId: result?.alignment_asset_id || null,
       overlayEntryCount: result?.overlay_entry_count ?? null,
     });
     return result;
@@ -2127,6 +2130,53 @@ export async function fetchAudioRecoveryAssetBlobUrl(assetId) {
     };
   } catch (error) {
     const parsed = parseAudioRecoveryError(error);
+    throw new AudioRecoveryApiError(parsed.message, parsed);
+  }
+}
+
+/**
+ * GET /audio-recovery/assets/{id} as JSON (result / alignment documents).
+ * @param {string} assetId
+ */
+export async function fetchAudioRecoveryAssetJson(assetId) {
+  audioRecoveryLogger.info('Fetch recovery asset JSON', {
+    assetIdPrefix: String(assetId || '').slice(0, 8),
+  });
+  try {
+    const response = await axios.get(
+      `/audio-recovery/assets/${encodeURIComponent(assetId)}`,
+      { responseType: 'json' },
+    );
+    return response.data;
+  } catch (error) {
+    const parsed = parseAudioRecoveryError(error);
+    audioRecoveryLogger.warn('Recovery asset JSON fetch failed', { code: parsed.code });
+    throw new AudioRecoveryApiError(parsed.message, parsed);
+  }
+}
+
+/**
+ * GET /audio-recovery/projects/{id}/bound — reopen discovery for hydrate.
+ * @param {string} projectId
+ */
+export async function fetchBoundAudioRecovery(projectId) {
+  audioRecoveryLogger.info('Fetch bound recovery discovery', {
+    projectIdPrefix: String(projectId || '').slice(0, 8),
+  });
+  try {
+    const result = await request(
+      'get',
+      `/audio-recovery/projects/${encodeURIComponent(projectId)}/bound`,
+    );
+    audioRecoveryLogger.info('Bound recovery discovery', {
+      bound: Boolean(result?.bound),
+      jobCount: Array.isArray(result?.jobs) ? result.jobs.length : 0,
+      hasAlignment: Boolean(result?.latest?.alignment_asset_id),
+    });
+    return result;
+  } catch (error) {
+    const parsed = parseAudioRecoveryError(error);
+    audioRecoveryLogger.warn('Bound recovery discovery failed', { code: parsed.code });
     throw new AudioRecoveryApiError(parsed.message, parsed);
   }
 }

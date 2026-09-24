@@ -22,7 +22,7 @@ def recovery_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("AUDIO_RECOVERY_ASSET_ROOT", str(asset_root))
     monkeypatch.setenv("AUDIO_RECOVERY_FAKE_MODE", "1")
     monkeypatch.setenv("AUDIO_RECOVERY_MAX_JOBS_PER_PROJECT", "2")
-    monkeypatch.setenv("AUDIO_RECOVERY_MAX_ASSETS_PER_PROJECT", "2")
+    monkeypatch.setenv("AUDIO_RECOVERY_MAX_ASSETS_PER_PROJECT", "5")
     monkeypatch.setenv("AUDIO_RECOVERY_MAX_TOTAL_BYTES", "1048576")
     reset_database_initialization_cache()
     run_alembic_upgrade(db_path)
@@ -182,4 +182,51 @@ def test_durable_asset_requires_project_and_project_delete_gc(
     assert not project_dir.exists()
     with get_connection(db_path) as conn:
         assert store.get_job_row(conn, job_id) is None
+        assert store.get_asset_row(conn, written.asset_id) is None
+
+
+def test_alignment_json_kind_and_project_gc(recovery_env: Path) -> None:
+    settings = load_audio_recovery_settings()
+    db_path = recovery_env / "projects.db"
+    project = project_store_mod.create_project(name="Align GC", db_path=db_path)
+    job_id = store.allocate_job_id()
+    payload = b'{"schema_version":"audio.alignment.v1","playable":false}'
+
+    with get_connection(db_path) as conn:
+        store.insert_queued_job(
+            conn,
+            job_id=job_id,
+            project_id=project.id,
+            engine_id="fake:audio-recovery",
+            separation_engine_id=None,
+            fake=True,
+            work_relpath=store.job_work_relpath(job_id),
+        )
+        written = store.write_durable_asset_bytes(
+            settings,
+            project_id=project.id,
+            job_id=job_id,
+            kind="alignment_json",
+            payload=payload,
+            content_type="application/json",
+            ext="alignment.json",
+        )
+        store.insert_asset_row(
+            conn,
+            asset_id=written.asset_id,
+            project_id=project.id,
+            job_id=job_id,
+            kind=written.kind,
+            content_type=written.content_type,
+            byte_size=written.byte_size,
+            sha256_prefix=written.sha256_prefix,
+            relpath=written.relpath,
+        )
+        assert written.kind == "alignment_json"
+        assert written.absolute_path.is_file()
+        project_dir = store.project_asset_dir(settings, project.id)
+
+    project_store_mod.delete_project(project.id, db_path=db_path)
+    assert not project_dir.exists()
+    with get_connection(db_path) as conn:
         assert store.get_asset_row(conn, written.asset_id) is None

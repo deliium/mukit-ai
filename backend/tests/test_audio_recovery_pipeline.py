@@ -157,10 +157,70 @@ def test_bind_persists_assets(recovery_env):
     )
     assert result.source_audio_asset_id
     assert result.result_asset_id
+    assert result.alignment_asset_id
+    assert result.roundtrip_provenance is not None
+    assert result.roundtrip_provenance.alignment_asset_id == result.alignment_asset_id
     asset_root = Path(recovery_env["asset_root"])
     assert any(asset_root.rglob("*.wav"))
-    assert any(asset_root.rglob("*.json"))
-    result_json = next(asset_root.rglob("*.json"))
-    data = json.loads(result_json.read_text())
-    assert data["schema_version"] == "audio.recovery.result.v1"
-    assert "overlay" in data
+    json_files = list(asset_root.rglob("*.json"))
+    assert len(json_files) >= 2  # result_json + alignment.json
+    schemas = {json.loads(p.read_text())["schema_version"] for p in json_files}
+    assert "audio.recovery.result.v1" in schemas
+    assert "audio.alignment.v1" in schemas
+
+    # Idempotent re-bind returns same ids; source WAV bytes unchanged.
+    source_path = next(asset_root.rglob("*.wav"))
+    source_sha = source_path.read_bytes()
+    again = bind_audio_recovery_job(
+        job.id,
+        AudioRecoveryBindRequestV1(
+            project_id=project_id,
+            preview_fingerprint=job.preview.preview_fingerprint,
+            event_map=event_map,
+        ),
+        db_path=recovery_env["db_path"],
+    )
+    assert again.source_audio_asset_id == result.source_audio_asset_id
+    assert again.alignment_asset_id == result.alignment_asset_id
+    assert source_path.read_bytes() == source_sha
+
+
+def test_bound_discovery_after_bind(recovery_env):
+    from app.services.audio_recovery.pipeline import discover_bound_recovery_for_project
+
+    project = project_store_mod.create_project(
+        "Discovery Test",
+        db_path=recovery_env["db_path"],
+    )
+    idle = discover_bound_recovery_for_project(
+        project.id, db_path=recovery_env["db_path"]
+    )
+    assert idle.bound is False
+    assert idle.latest is None
+
+    payload = _tiny_wav_bytes(duration_s=0.6)
+    job = enqueue_audio_recovery_job(
+        payload,
+        display_filename="c.wav",
+        project_id=project.id,
+        run_inline=True,
+        db_path=recovery_env["db_path"],
+    )
+    bind_audio_recovery_job(
+        job.id,
+        AudioRecoveryBindRequestV1(
+            project_id=project.id,
+            preview_fingerprint=job.preview.preview_fingerprint,
+            event_map=[],
+        ),
+        db_path=recovery_env["db_path"],
+    )
+    discovery = discover_bound_recovery_for_project(
+        project.id, db_path=recovery_env["db_path"]
+    )
+    assert discovery.bound is True
+    assert discovery.latest is not None
+    assert discovery.latest.source_audio_asset_id
+    assert discovery.latest.result_asset_id
+    assert discovery.latest.alignment_asset_id
+    assert discovery.latest.job_id == job.id

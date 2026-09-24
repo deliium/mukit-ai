@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -28,11 +29,16 @@ from app.audio_recovery_schemas import (
     AudioRecoveryStemV1,
 )
 from app.audio_recovery_settings import AudioRecoverySettings, load_audio_recovery_settings
+from app.composition_schemas import CompositionV2
 from app.db.connection import get_connection, get_project_db_path
 from app.services import audio_recovery_store as store
+from app.services import project_store as project_store_mod
+from app.services.audio_alignment import build_alignment_from_scaffolding
+from app.services.audio_roundtrip_provenance import build_roundtrip_provenance
 from app.services.audio_recovery.scaffolding import estimate_scaffolding
 from app.services.audio_recovery.separation import run_separation
 from app.services.audio_recovery.transcribe import transcribe_stems_or_combined
+from app.services.composition_snapshot_encoding import composition_snapshot_fingerprint
 
 
 logger = logging.getLogger(__name__)
@@ -72,6 +78,7 @@ def row_to_job_response(row: Mapping[str, Any]) -> AudioRecoveryJobV1:
         bound=bool(row.get("bound")),
         source_audio_asset_id=row.get("source_audio_asset_id"),
         result_asset_id=row.get("result_asset_id"),
+        alignment_asset_id=row.get("alignment_asset_id"),
         created_at=str(row["created_at"]),
         started_at=row.get("started_at"),
         completed_at=row.get("completed_at"),
@@ -412,6 +419,112 @@ def delete_audio_recovery_job(
     logger.info("Audio recovery job deleted", extra={"job_id": job_id})
 
 
+def _composition_from_scaffolding(scaffolding: Mapping[str, Any]) -> CompositionV2:
+    """Minimal V2 when Bind has no applied composition (parametric map only)."""
+    tempo = int(scaffolding.get("tempo_bpm") or 120)
+    meter = str(scaffolding.get("meter") or "4/4")
+    beat_grid = scaffolding.get("beat_grid") or {}
+    tpq = int(beat_grid.get("ticks_per_quarter") or 480)
+    structure = scaffolding.get("structure") or []
+    bar_count = 16
+    if structure:
+        try:
+            end_tick = max(int(s.get("end_tick") or 0) for s in structure)
+            if end_tick > 0:
+                bar_count = max(1, (end_tick + tpq * 4 - 1) // (tpq * 4))
+        except (TypeError, ValueError):
+            bar_count = 16
+    duration_ticks = bar_count * tpq * 4
+    return CompositionV2.model_validate(
+        {
+            "schema_version": "composition.v2",
+            "tempo": tempo,
+            "key": "C major",
+            "time_signature": meter,
+            "ticks_per_quarter": tpq,
+            "bar_count": bar_count,
+            "duration_ticks": duration_ticks,
+            "sections": [
+                {
+                    "type": "verse",
+                    "start_bar": 1,
+                    "bar_count": bar_count,
+                    "start_tick": 0,
+                    "duration_ticks": duration_ticks,
+                }
+            ],
+            "tracks": [
+                {
+                    "id": "recovery-placeholder",
+                    "name": "Recovery",
+                    "instrument": "piano",
+                    "role": "melody",
+                    "midi_program": 0,
+                    "channel": 1,
+                    "events": [],
+                }
+            ],
+            "harmony": [],
+            "tempo_changes": [],
+            "time_signature_changes": [],
+            "key_changes": [],
+            "markers": [],
+        }
+    )
+
+
+def _resolve_bind_composition(
+    body: AudioRecoveryBindRequestV1,
+    scaffolding: Mapping[str, Any],
+    *,
+    db_path: Path | str | None,
+) -> CompositionV2:
+    if body.composition is not None:
+        logger.info(
+            "Bind alignment using request composition",
+            extra={"project_id": body.project_id, "bar_count": body.composition.bar_count},
+        )
+        return body.composition
+    try:
+        record = project_store_mod.get_project(body.project_id, db_path=db_path)
+        if record.has_composition and record.composition_json:
+            composition = CompositionV2.model_validate_json(record.composition_json)
+            logger.info(
+                "Bind alignment using project composition",
+                extra={"project_id": body.project_id},
+            )
+            return composition
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Bind could not load project composition; scaffolding fallback",
+            extra={
+                "project_id": body.project_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+    logger.warning(
+        "Bind alignment using scaffolding-derived placeholder composition",
+        extra={"project_id": body.project_id},
+    )
+    return _composition_from_scaffolding(scaffolding)
+
+
+def _stem_bindings_from_event_map(
+    event_map: list,
+    preview: AudioRecoveryPreviewV1,
+) -> list[dict[str, str]]:
+    note_by_prov = {n.provisional_id: n for n in preview.notes}
+    by_stem: dict[str, str] = {}
+    for entry in event_map:
+        note = note_by_prov.get(entry.provisional_id)
+        if note is None:
+            continue
+        # First track_id wins per stem role (v1).
+        if note.stem not in by_stem:
+            by_stem[note.stem] = entry.track_id
+    return [{"stem": stem, "track_id": track_id} for stem, track_id in by_stem.items()]
+
+
 def bind_audio_recovery_job(
     job_id: str,
     body: AudioRecoveryBindRequestV1,
@@ -419,7 +532,7 @@ def bind_audio_recovery_job(
     db_path: Path | str | None = None,
     settings: AudioRecoverySettings | None = None,
 ) -> AudioRecoveryBindResponseV1:
-    """Persist source audio + result overlay after client V2 Apply."""
+    """Persist source audio + result overlay + alignment after client V2 Apply."""
     if not body.project_id:
         raise AudioRecoveryError(
             "audio_recovery_project_required",
@@ -455,17 +568,35 @@ def bind_audio_recovery_job(
         if row.get("bound"):
             logger.info(
                 "Audio recovery bind idempotent hit",
-                extra={"job_id": job_id, "project_id": body.project_id},
+                extra={
+                    "job_id": job_id,
+                    "project_id": body.project_id,
+                    "alignment_asset_id_prefix": (row.get("alignment_asset_id") or "")[:8]
+                    or None,
+                },
             )
+            provenance = None
+            if row.get("source_audio_asset_id") and row.get("result_asset_id"):
+                provenance = build_roundtrip_provenance(
+                    source_audio_asset_id=str(row["source_audio_asset_id"]),
+                    source_sha256_prefix=row.get("source_sha256_prefix"),
+                    result_asset_id=str(row["result_asset_id"]),
+                    alignment_asset_id=row.get("alignment_asset_id"),
+                    recovery_job_id=job_id,
+                    bound_at=row.get("completed_at"),
+                )
             return AudioRecoveryBindResponseV1(
                 job_id=job_id,
                 project_id=body.project_id,
                 source_audio_asset_id=str(row["source_audio_asset_id"]),
                 result_asset_id=str(row["result_asset_id"]),
+                alignment_asset_id=row.get("alignment_asset_id"),
                 overlay_entry_count=len(body.event_map),
+                roundtrip_provenance=provenance,
             )
 
-        store.assert_asset_quota(conn, resolved, body.project_id)
+        # Reserve slots for source_audio + result_json + alignment_json.
+        store.assert_asset_quota(conn, resolved, body.project_id, additional=3)
 
         preview = AudioRecoveryPreviewV1.model_validate_json(row["preview_json"])
         note_by_prov = {n.provisional_id: n for n in preview.notes}
@@ -546,6 +677,53 @@ def bind_audio_recovery_job(
             sha256_prefix=result_write.sha256_prefix,
             relpath=result_write.relpath,
         )
+
+        scaffolding_dump = preview.scaffolding.model_dump(mode="json")
+        composition = _resolve_bind_composition(
+            body, scaffolding_dump, db_path=path
+        )
+        stem_bindings = _stem_bindings_from_event_map(body.event_map, preview)
+        alignment = build_alignment_from_scaffolding(
+            composition=composition,
+            scaffolding=scaffolding_dump,
+            source_audio_asset_id=source_write.asset_id,
+            result_asset_id=result_write.asset_id,
+            job_id=job_id,
+            project_id=body.project_id,
+            stem_bindings=stem_bindings,
+            composition_fingerprint=composition_snapshot_fingerprint(composition),
+        )
+        alignment_bytes = alignment.model_dump_json().encode("utf-8")
+        alignment_write = store.write_durable_asset_bytes(
+            resolved,
+            project_id=body.project_id,
+            job_id=job_id,
+            kind="alignment_json",
+            payload=alignment_bytes,
+            content_type="application/json",
+            ext="alignment.json",
+        )
+        store.insert_asset_row(
+            conn,
+            asset_id=alignment_write.asset_id,
+            project_id=body.project_id,
+            job_id=job_id,
+            kind=alignment_write.kind,
+            content_type=alignment_write.content_type,
+            byte_size=alignment_write.byte_size,
+            sha256_prefix=alignment_write.sha256_prefix,
+            relpath=alignment_write.relpath,
+        )
+        logger.info(
+            "Bind alignment asset written",
+            extra={
+                "asset_id_prefix": alignment_write.asset_id[:8],
+                "byte_size": alignment_write.byte_size,
+                "quality": round(alignment.quality.overall_confidence, 4),
+                "method": alignment.quality.method,
+            },
+        )
+
         store.update_job_status(
             conn,
             job_id,
@@ -554,9 +732,24 @@ def bind_audio_recovery_job(
             project_id=body.project_id,
             source_audio_asset_id=source_write.asset_id,
             result_asset_id=result_write.asset_id,
+            alignment_asset_id=alignment_write.asset_id,
+        )
+
+        provenance = build_roundtrip_provenance(
+            source_audio_asset_id=source_write.asset_id,
+            source_sha256_prefix=source_write.sha256_prefix,
+            result_asset_id=result_write.asset_id,
+            alignment_asset_id=alignment_write.asset_id,
+            recovery_job_id=job_id,
+            composition_fingerprint=alignment.composition_fingerprint,
+            bound_at=datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z"),
         )
 
     # Ephemeral workdir can be GC'd after successful bind.
+    # Source WAV bytes are already copied to durable asset — never rewrite them.
     store.delete_job_workdir(resolved, job_id)
     logger.info(
         "Audio recovery bind complete",
@@ -565,7 +758,9 @@ def bind_audio_recovery_job(
             "project_id": body.project_id,
             "source_audio_asset_id": source_write.asset_id,
             "result_asset_id": result_write.asset_id,
+            "alignment_asset_id": alignment_write.asset_id,
             "overlay_entry_count": len(overlay),
+            "source_sha256_prefix": source_write.sha256_prefix,
         },
     )
     return AudioRecoveryBindResponseV1(
@@ -573,7 +768,74 @@ def bind_audio_recovery_job(
         project_id=body.project_id,
         source_audio_asset_id=source_write.asset_id,
         result_asset_id=result_write.asset_id,
+        alignment_asset_id=alignment_write.asset_id,
         overlay_entry_count=len(overlay),
+        roundtrip_provenance=provenance,
+    )
+
+
+def discover_bound_recovery_for_project(
+    project_id: str,
+    *,
+    db_path: Path | str | None = None,
+) -> "AudioAlignmentBoundDiscoveryV1":
+    """Project-scoped bound discovery for FE hydrate after reopen."""
+    from app.audio_alignment_schemas import (
+        AudioAlignmentBoundDiscoveryV1,
+        AudioAlignmentBoundJobV1,
+    )
+
+    if not project_id:
+        return AudioAlignmentBoundDiscoveryV1(
+            project_id="",
+            bound=False,
+            latest=None,
+            jobs=[],
+        )
+    path = Path(db_path) if db_path is not None else get_project_db_path()
+    with get_connection(path) as conn:
+        rows = store.list_bound_project_jobs(conn, project_id, limit=32)
+        jobs: list[AudioAlignmentBoundJobV1] = []
+        for row in rows:
+            result_sha = None
+            alignment_sha = None
+            if row.get("result_asset_id"):
+                asset = store.get_asset_row(conn, str(row["result_asset_id"]))
+                if asset:
+                    result_sha = asset.get("sha256_prefix")
+            if row.get("alignment_asset_id"):
+                asset = store.get_asset_row(conn, str(row["alignment_asset_id"]))
+                if asset:
+                    alignment_sha = asset.get("sha256_prefix")
+            jobs.append(
+                AudioAlignmentBoundJobV1(
+                    job_id=str(row["id"]),
+                    source_audio_asset_id=str(row["source_audio_asset_id"]),
+                    result_asset_id=str(row["result_asset_id"]),
+                    alignment_asset_id=row.get("alignment_asset_id"),
+                    source_sha256_prefix=row.get("source_sha256_prefix"),
+                    result_sha256_prefix=result_sha,
+                    alignment_sha256_prefix=alignment_sha,
+                    bound_at=row.get("completed_at") or row.get("created_at"),
+                    preview_fingerprint=row.get("preview_fingerprint"),
+                )
+            )
+    latest = jobs[0] if jobs else None
+    bound = latest is not None
+    logger.info(
+        "Bound recovery discovery",
+        extra={
+            "project_id_prefix": project_id[:8],
+            "bound": bound,
+            "job_count": len(jobs),
+            "alignment_present": bool(latest and latest.alignment_asset_id),
+        },
+    )
+    return AudioAlignmentBoundDiscoveryV1(
+        project_id=project_id,
+        bound=bound,
+        latest=latest,
+        jobs=jobs,
     )
 
 
