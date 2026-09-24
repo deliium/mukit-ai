@@ -109,3 +109,35 @@ export function normalizeMixAnalysisDimensions(selected) {
   }
   return out.length ? out : [...MIX_ANALYSIS_DEFAULT_DIMENSIONS];
 }
+
+/**
+ * Normalize observation loci to 0–1 waveform highlight ranges.
+ * @param {object[]} observations
+ * @param {number} durationSeconds
+ * @returns {{start:number,end:number}[]}
+ */
+export function observationLocusHighlightRanges(observations, durationSeconds) {
+  const dur = Number(durationSeconds);
+  if (!Number.isFinite(dur) || dur <= 0) {
+    return [];
+  }
+  const out = [];
+  for (const obs of Array.isArray(observations) ? observations : []) {
+    const locus = obs?.locus;
+    if (!locus) continue;
+    let start = Number(locus.start_seconds);
+    let end = Number(locus.end_seconds);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      continue;
+    }
+    start = Math.max(0, Math.min(1, start / dur));
+    end = Math.max(0, Math.min(1, end / dur));
+    if (end < start) {
+      const tmp = start;
+      start = end;
+      end = tmp;
+    }
+    out.push({ start, end });
+  }
+  return out;
+}

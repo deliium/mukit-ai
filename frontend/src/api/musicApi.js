@@ -2087,6 +2087,107 @@ export async function deleteNeuralAudioStemSet(stemSetId) {
   }
 }
 
+/** Fetch stem WAV blob without triggering a browser download (waveform opt-in). */
+export async function fetchNeuralAudioStemBlob(stemId) {
+  neuralAudioLogger.info('Fetch neural audio stem blob', { stemId });
+  try {
+    const response = await axios.get(
+      `/neural-audio/stems/${encodeURIComponent(stemId)}/audio`,
+      { responseType: 'blob' },
+    );
+    return response.data;
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
+const mixAnalysisLogger = createAppLogger('musicApi.mixAnalysis');
+
+function parseMixAnalysisError(error) {
+  const status = error?.response?.status ?? null;
+  const detail = error?.response?.data?.detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    return {
+      status,
+      code: typeof detail.code === 'string' ? detail.code : 'mix_analysis_error',
+      message: typeof detail.message === 'string' ? detail.message : 'Mix analysis request failed',
+      details: detail.details && typeof detail.details === 'object' ? detail.details : {},
+    };
+  }
+  if (typeof detail === 'string' && detail.trim()) {
+    return { status, code: 'mix_analysis_error', message: detail, details: {} };
+  }
+  return {
+    status,
+    code: 'mix_analysis_error',
+    message: error?.message || 'Mix analysis request failed',
+    details: {},
+  };
+}
+
+export class MixAnalysisApiError extends Error {
+  constructor(message, { status = null, code = 'mix_analysis_error', details = {} } = {}) {
+    super(message);
+    this.name = 'MixAnalysisApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export async function analyzeMix(payload) {
+  mixAnalysisLogger.info('Analyze mix', {
+    stem_set_id: payload?.stem_set_id,
+    persist: Boolean(payload?.persist),
+    include_ai: Boolean(payload?.include_ai_interpretation),
+  });
+  try {
+    const data = await request('post', '/mix-analysis/analyze', payload);
+    mixAnalysisLogger.info('Analyze mix ok', {
+      report_id: data?.report?.report_id,
+      observation_count: data?.report?.observations?.length,
+    });
+    return data;
+  } catch (error) {
+    const parsed = parseMixAnalysisError(error);
+    mixAnalysisLogger.error('Analyze mix failed', { code: parsed.code, status: parsed.status });
+    throw new MixAnalysisApiError(parsed.message, parsed);
+  }
+}
+
+export async function listMixAnalysisReports(projectId) {
+  mixAnalysisLogger.info('List mix analysis reports', { projectId });
+  try {
+    return await request('get', '/mix-analysis/reports', null, {
+      params: { project_id: projectId },
+    });
+  } catch (error) {
+    const parsed = parseMixAnalysisError(error);
+    throw new MixAnalysisApiError(parsed.message, parsed);
+  }
+}
+
+export async function getMixAnalysisReport(reportId) {
+  mixAnalysisLogger.info('Get mix analysis report', { reportId });
+  try {
+    return await request('get', `/mix-analysis/reports/${encodeURIComponent(reportId)}`);
+  } catch (error) {
+    const parsed = parseMixAnalysisError(error);
+    throw new MixAnalysisApiError(parsed.message, parsed);
+  }
+}
+
+export async function deleteMixAnalysisReport(reportId) {
+  mixAnalysisLogger.info('Delete mix analysis report', { reportId });
+  try {
+    await request('delete', `/mix-analysis/reports/${encodeURIComponent(reportId)}`);
+  } catch (error) {
+    const parsed = parseMixAnalysisError(error);
+    throw new MixAnalysisApiError(parsed.message, parsed);
+  }
+}
+
 const audioRecoveryLogger = createAppLogger('musicApi.audioRecovery');
 
 function parseAudioRecoveryError(error) {

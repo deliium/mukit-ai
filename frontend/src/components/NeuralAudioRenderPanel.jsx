@@ -30,6 +30,7 @@ import {
   neuralAudioStemSyncDisclaimer,
 } from '../utils/neuralAudioStemUi.js';
 import { resolveLiveSnapshotFingerprint } from '../utils/compositionSnapshotFingerprint.js';
+import MixAnalysisPanel from './MixAnalysisPanel.jsx';
 
 const log = createAppLogger('neuralAudioRender');
 const stemLog = createAppLogger('neuralAudioStems');
@@ -795,6 +796,11 @@ const NeuralAudioRenderPanel = () => {
           })}
         </JobList>
       ) : null}
+      <MixAnalysisPanel
+        stemSets={stemSets}
+        liveFingerprint={liveFingerprint}
+        composition={editedMusicJson}
+      />
     </Panel>
   );
 };
