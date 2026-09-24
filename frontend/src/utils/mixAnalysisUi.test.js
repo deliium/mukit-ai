@@ -4,6 +4,7 @@ import {
   MIX_ANALYSIS_HONESTY_COPY,
   MIX_ANALYSIS_SCHEMA_VERSION,
   formatMixAnalysisLocus,
+  isMixAnalysisReportStale,
   normalizeMixAnalysisDimensions,
   observationLocusHighlightRanges,
   partitionMixAnalysisLayers,
@@ -24,6 +25,33 @@ test('partition layers keeps measurements separate from observations and AI', ()
   assert.equal(layers.interpretations.length, 1);
   assert.equal(layers.measurements[0].code, 'peak_dbfs');
   assert.notEqual(layers.observations[0].code, layers.measurements[0].code);
+});
+
+test('soft-stale when stem fingerprint diverges', () => {
+  assert.equal(
+    isMixAnalysisReportStale(
+      { source_stem_set_fingerprint: 'aaa', source_composition_fingerprint: 'c1' },
+      { stemSetFingerprint: 'bbb', compositionFingerprint: 'c1' },
+    ),
+    true,
+  );
+  assert.equal(
+    isMixAnalysisReportStale(
+      { source_stem_set_fingerprint: 'aaa', source_composition_fingerprint: 'c1' },
+      { stemSetFingerprint: 'aaa', compositionFingerprint: 'c1' },
+    ),
+    false,
+  );
+});
+
+test('soft-stale when composition fingerprint diverges', () => {
+  assert.equal(
+    isMixAnalysisReportStale(
+      { source_stem_set_fingerprint: 'aaa', source_composition_fingerprint: 'old' },
+      { stemSetFingerprint: 'aaa', compositionFingerprint: 'new' },
+    ),
+    true,
+  );
 });
 
 test('format locus includes tracks and freq', () => {

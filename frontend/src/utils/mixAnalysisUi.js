@@ -1,6 +1,11 @@
 /**
  * Mix analysis (mix.analysis.v1) UI helpers — separate from symbolic composition.analysis.v1.
+ * Soft-stale compare is banner-only; never auto-reanalyze.
  */
+
+import { createAppLogger } from './appLogger.js';
+
+const log = createAppLogger('mixAnalysis');
 
 export const MIX_ANALYSIS_SCHEMA_VERSION = 'mix.analysis.v1';
 
@@ -37,6 +42,10 @@ export const MIX_ANALYSIS_HONESTY_COPY =
   'Mix analysis measures rendered stem/mix audio. It does not modify stems, the mix, ' +
   'or composition.v2. AI notes are advisory and subjective.';
 
+export const MIX_ANALYSIS_SOFT_STALE_COPY =
+  'This report was computed against an older stem set or composition fingerprint. ' +
+  'Stems are unchanged; re-run analysis to refresh (never automatic).';
+
 /**
  * @param {unknown} report
  * @returns {{ measurements: object[], observations: object[], interpretations: object[] }}
@@ -48,6 +57,47 @@ export function partitionMixAnalysisLayers(report) {
     ? report.interpretations
     : [];
   return { measurements, observations, interpretations };
+}
+
+/**
+ * Soft-stale when report pins diverge from live stem-set / composition fingerprints.
+ * Banner only — never triggers analyze.
+ *
+ * @param {object|null|undefined} report
+ * @param {{ stemSetFingerprint?: string|null, compositionFingerprint?: string|null }} live
+ * @returns {boolean}
+ */
+export function isMixAnalysisReportStale(report, live = {}) {
+  if (!report || typeof report !== 'object') {
+    return false;
+  }
+  const reportStemFp = typeof report.source_stem_set_fingerprint === 'string'
+    ? report.source_stem_set_fingerprint.trim()
+    : '';
+  const liveStemFp = typeof live.stemSetFingerprint === 'string'
+    ? live.stemSetFingerprint.trim()
+    : '';
+  if (reportStemFp && liveStemFp && reportStemFp !== liveStemFp) {
+    log.debug('Mix analysis soft-stale stem fingerprint', {
+      reportPrefix: reportStemFp.slice(0, 12),
+      livePrefix: liveStemFp.slice(0, 12),
+    });
+    return true;
+  }
+  const reportCompFp = typeof report.source_composition_fingerprint === 'string'
+    ? report.source_composition_fingerprint.trim()
+    : '';
+  const liveCompFp = typeof live.compositionFingerprint === 'string'
+    ? live.compositionFingerprint.trim()
+    : '';
+  if (reportCompFp && liveCompFp && reportCompFp !== liveCompFp) {
+    log.debug('Mix analysis soft-stale composition fingerprint', {
+      reportPrefix: reportCompFp.slice(0, 12),
+      livePrefix: liveCompFp.slice(0, 12),
+    });
+    return true;
+  }
+  return false;
 }
 
 /**

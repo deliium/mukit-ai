@@ -1,6 +1,6 @@
 /**
  * Mix Analysis subsection — hosted under NeuralAudioRenderPanel (not a workspace tab).
- * Never mutates stems/V2.
+ * Soft-stale banner only; never auto-reanalyzes; never mutates stems/V2.
  */
 
 import React, { useEffect, useState } from 'react';
@@ -19,7 +19,9 @@ import {
   MIX_ANALYSIS_DEFAULT_DIMENSIONS,
   MIX_ANALYSIS_DIMENSIONS,
   MIX_ANALYSIS_HONESTY_COPY,
+  MIX_ANALYSIS_SOFT_STALE_COPY,
   formatMixAnalysisLocus,
+  isMixAnalysisReportStale,
   normalizeMixAnalysisDimensions,
   observationLocusHighlightRanges,
   partitionMixAnalysisLayers,
@@ -181,6 +183,12 @@ export function MixAnalysisPanel({ stemSets = [], liveFingerprint = null, compos
       cancelled = true;
     };
   }, [currentProjectId, report?.report_id]);
+
+  const selectedSet = completeSets.find((s) => s.id === stemSetId) || null;
+  const stale = isMixAnalysisReportStale(report, {
+    stemSetFingerprint: selectedSet?.source_fingerprint || null,
+    compositionFingerprint: liveFingerprint,
+  });
 
   const layers = partitionMixAnalysisLayers(report);
 
@@ -350,6 +358,11 @@ export function MixAnalysisPanel({ stemSets = [], liveFingerprint = null, compos
       {error ? (
         <Banner $tone="warn" data-testid="mix-analysis-error">
           {error}
+        </Banner>
+      ) : null}
+      {stale ? (
+        <Banner $tone="warn" data-testid="mix-analysis-soft-stale">
+          {MIX_ANALYSIS_SOFT_STALE_COPY}
         </Banner>
       ) : null}
       {report ? (
