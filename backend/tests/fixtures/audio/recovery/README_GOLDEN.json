@@ -1,0 +1,40 @@
+{
+  "schema_version": "audio.recovery.preview.v1",
+  "fixture": "mixed_melody_bass.wav",
+  "sha256_prefix": "b61368c198dd",
+  "expected_fake_separation_engine": "fake:stems",
+  "expected_tempo_bpm": 120,
+  "notes": "Golden runtime values come from fake:stems + fake scaffolding; this file documents digest\u2192fake mapping.",
+  "demucs_to_product_map": {
+    "vocals": [
+      "vocals",
+      "melody"
+    ],
+    "bass": [
+      "bass"
+    ],
+    "drums": [
+      "drums"
+    ],
+    "other": [
+      "harmonic",
+      "other"
+    ]
+  },
+  "fake_stem_digest_table": {
+    "default": [
+      "melody",
+      "bass",
+      "drums",
+      "harmonic"
+    ],
+    "mono": [
+      "melody"
+    ],
+    "vocals_bass": [
+      "vocals",
+      "melody",
+      "bass"
+    ]
+  }
+}

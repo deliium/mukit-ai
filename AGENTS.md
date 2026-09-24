@@ -25,8 +25,8 @@ mukit-ai/
 │   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas, revision_loop)
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
-│   │   ├── routers/         # Projects + imports + transcription + neural_audio + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
+│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
@@ -39,6 +39,8 @@ mukit-ai/
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── audio_transcription_settings.py  # AUDIO_* limits / engine policy
 │   │   ├── audio_transcription_schemas.py   # transcription.preview.v1 DTOs
+│   │   ├── audio_recovery_settings.py       # AUDIO_RECOVERY_* limits / asset root / engines
+│   │   ├── audio_recovery_schemas.py        # audio.recovery.preview/result/bind.v1 DTOs
 │   │   ├── neural_audio_settings.py         # NEURAL_AUDIO_* render root / engine / quotas
 │   │   ├── neural_audio_schemas.py          # neural_audio_render.job.v1 DTOs / fidelity / adapters
 │   │   ├── embeddings/      # Handcrafted symbolic feature embeddings (cache/index; no torch; never DATASET_ROOT ingest)
@@ -53,19 +55,21 @@ mukit-ai/
 │   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement/editor/neural-audio acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, NeuralAudioRenderPanel, …
+│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, AudioRecoveryPanel, NeuralAudioRenderPanel, …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI/audio sessions)
 │       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture helpers
 ├── scripts/                 # run_tests.sh, v1/v2/v3_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
-├── docs/                    # composition.v2/v1, ai-runtime, multi-agent, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, neural-audio-rendering, analysis, arrangement, import, datasets, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, multi-agent, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, audio-recovery, neural-audio-rendering, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
 ├── compose.local-ai.yml   # Optional --profile local-ai / local-ai-vllm / training
 ├── compose.neural-audio.yml # Optional --profile neural-audio (MusicGen sidecar)
+├── compose.audio-recovery.yml # Optional --profile audio-recovery (Demucs-shaped separation)
 ├── models/llm/            # Host GGUF/weights bind-mount (gitignored; .gitkeep only)
 ├── models/neural-audio/   # Host neural audio weights bind-mount (gitignored; .gitkeep only)
+├── models/audio-recovery/ # Host recovery/separation weights bind-mount (gitignored; .gitkeep only)
 ├── .env.example
 └── start-servers.sh
 ```
@@ -84,6 +88,10 @@ mukit-ai/
 | `frontend/src/utils/liveMidiStream.js` | Transport-synced MIDI stream ring (exclusive with midiPhase capture) |
 | `backend/app/routers/live_performance.py` | `POST /live/accompaniment/predict` (cold-path fake fill) |
 | `frontend/src/components/AudioInputPanel.jsx` | Monophonic mic/file transcription review → Apply |
+| `frontend/src/components/AudioRecoveryPanel.jsx` | V4 mixed recovery upload/review → Apply→Bind + HTMLAudio source |
+| `backend/app/routers/audio_recovery.py` | `POST/GET/DELETE /audio-recovery/jobs`, bind, assets |
+| `backend/app/services/audio_recovery/` | Separation, scaffolding, transcription, pipeline |
+| `backend/app/services/audio_recovery_store.py` | Job/asset FS + SQLite metadata; project-delete GC |
 | `frontend/src/components/NeuralAudioRenderPanel.jsx` | Render with AI jobs / download (egress only) |
 | `frontend/src/utils/midiInputAccess.js` | Lazy Web MIDI access + device registry |
 | `frontend/src/utils/midiPerformanceCapture.js` | Session take buffer (raw ticks) |
@@ -213,6 +221,7 @@ mukit-ai/
 | Co-performance | `docs/co-performance.md` | Live stream, horizon accompaniment, degradation, predict |
 | AI Jam | `docs/ai-jam.md` | Jam modes, belief/hysteresis, multi-track Commit, fallback |
 | Audio transcription | `docs/audio-transcription.md` | Monophonic mic/file → preview → Apply into V2 |
+| Audio recovery | `docs/audio-recovery.md` | V4 mixed audio → optional stems/scaffolding → Apply→Bind overlay |
 | Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument jobs; licenses; Compose profile |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |

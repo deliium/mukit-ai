@@ -87,7 +87,7 @@ Preview schema: `transcription.preview.v1` (non-playable, non-persistent).
 
 ## Out of scope (v1)
 
-- Polyphonic / multi-instrument / drum transcription
+- Polyphonic / multi-instrument / drum transcription *(see [audio-recovery.md](./audio-recovery.md) for the V4 mixed-audio recovery path)*
 - Speech-to-text lyrics / Whisper-as-melody
 - Cloud transcription vendors as default
 - Browser WASM basic-pitch as the v1 engine (deferred)
@@ -105,6 +105,7 @@ Preview schema: `transcription.preview.v1` (non-playable, non-persistent).
 
 ## See also
 
+- [Audio recovery (V4 mixed)](audio-recovery.md) — optional stems, scaffolding, Apply→Bind durable assets
 - [MIDI live input](midi-live-input.md) — Web MIDI / QWERTY performance capture
 - [MIDI / MusicXML import](import.md) — symbolic file import (not audio)
 - [Hybrid generation](hybrid-generation.md) — LLM plan + symbolic notes (not transcription)

@@ -226,6 +226,17 @@ npm run test:e2e -- e2e/audio-transcription.spec.js
 
 Details and manual acceptance checklist: [audio-transcription.md](audio-transcription.md).
 
+Audio recovery (V4 mixed; set `AUDIO_RECOVERY_FAKE_MODE=1` — never requires Demucs sidecar):
+
+```bash
+# Backend
+cd backend && AUDIO_RECOVERY_FAKE_MODE=1 pytest tests/test_audio_recovery_*.py -q
+# Frontend unit
+node --test frontend/src/utils/audioRecovery.test.js
+```
+
+Details and acceptance checklist: [audio-recovery.md](audio-recovery.md).
+
 Optional neural audio render (egress only; set `NEURAL_AUDIO_FAKE_MODE=1` — never loads MusicGen weights):
 
 ```bash
