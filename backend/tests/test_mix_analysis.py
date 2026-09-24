@@ -390,13 +390,18 @@ def test_active_head_after_rerender(client: TestClient) -> None:
     assert strings["id"] in superseded or strings["id"] not in analyzed_ids
 
 
-def test_stdlib_metrics_on_synthetic_wav(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _fixture_paths() -> dict[str, Path]:
+    from tests.fixtures.audio.mix_analysis.builders import ensure_all_fixtures
+
+    return ensure_all_fixtures()
+
+
+def test_stdlib_metrics_on_hot_peak_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MIX_ANALYSIS_FAKE_MODE", "0")
     from app.mix_analysis_settings import load_mix_analysis_settings
     from app.services.mix_analysis.metrics import measure_stem_file
 
-    hot = tmp_path / "hot.wav"
-    _write_wav(hot, amplitude=0.999, frames=2205)
+    hot = _fixture_paths()["hot_peak"]
     settings = load_mix_analysis_settings({})
     result = measure_stem_file(
         hot,
@@ -409,6 +414,7 @@ def test_stdlib_metrics_on_synthetic_wav(tmp_path: Path, monkeypatch: pytest.Mon
     assert result.dsp_backend in {"stdlib", "numpy_scipy"}
     peak = next(m for m in result.measurements if m.code == "peak_dbfs")
     assert peak.value is not None
+    assert peak.value >= -1.0
     assert peak.locus.source_track_ids == ["bass-1"]
     kinds = {s.kind for s in result.series}
     assert "peak_envelope" in kinds
@@ -417,12 +423,117 @@ def test_stdlib_metrics_on_synthetic_wav(tmp_path: Path, monkeypatch: pytest.Mon
     band_series = [s for s in result.series if s.kind == "band_energy"]
     assert band_series
     assert any(s.points for s in band_series)
-    # File unchanged
+    obs = build_observations(result.measurements, settings)
+    assert any(o.code in {"peak_hot", "low_headroom"} for o in obs)
     before = hot.read_bytes()
     measure_stem_file(
         hot, settings, stem_id="s-hot", stem_role="bass", dimensions=["peak"]
     )
     assert hot.read_bytes() == before
+
+
+def test_stdlib_clipping_fixture_emits_observation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIX_ANALYSIS_FAKE_MODE", "0")
+    from app.mix_analysis_settings import load_mix_analysis_settings
+    from app.services.mix_analysis.metrics import measure_stem_file
+
+    clipped = _fixture_paths()["clipped"]
+    settings = load_mix_analysis_settings({})
+    before = clipped.read_bytes()
+    result = measure_stem_file(
+        clipped,
+        settings,
+        stem_id="s-clip",
+        stem_role="bass",
+        source_track_ids=["bass-1"],
+        dimensions=["clipping", "peak", "headroom"],
+    )
+    assert clipped.read_bytes() == before
+    clip_ratio = next(m for m in result.measurements if m.code == "clip_ratio")
+    assert clip_ratio.value is not None
+    assert clip_ratio.value >= settings.clip_ratio
+    obs = build_observations(result.measurements, settings)
+    assert any(o.code == "clipping_detected" for o in obs)
+    assert any(o.locus.source_track_ids == ["bass-1"] for o in obs)
+
+
+def test_stdlib_stereo_imbalance_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIX_ANALYSIS_FAKE_MODE", "0")
+    from app.mix_analysis_settings import load_mix_analysis_settings
+    from app.services.mix_analysis.metrics import measure_stem_file
+
+    stereo = _fixture_paths()["stereo_imbalance"]
+    settings = load_mix_analysis_settings({})
+    before = stereo.read_bytes()
+    result = measure_stem_file(
+        stereo,
+        settings,
+        stem_id="s-stereo",
+        stem_role="piano",
+        source_track_ids=["piano-1"],
+        dimensions=["stereo_balance", "peak"],
+    )
+    assert stereo.read_bytes() == before
+    balance = next(m for m in result.measurements if m.code == "stereo_lr_rms_balance_db")
+    assert balance.value is not None
+    assert abs(balance.value) >= settings.stereo_imbalance_db
+    obs = build_observations(result.measurements, settings)
+    assert any(o.code == "stereo_imbalance" for o in obs)
+
+
+def test_stdlib_masking_proxy_two_stem_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIX_ANALYSIS_FAKE_MODE", "0")
+    from app.mix_analysis_settings import load_mix_analysis_settings
+    from app.services.mix_analysis.metrics import measure_stem_file, measure_stem_pair_masking
+
+    paths = _fixture_paths()
+    bass_path = paths["masking_bass"]
+    strings_path = paths["masking_strings"]
+    settings = load_mix_analysis_settings({})
+    before_bass = bass_path.read_bytes()
+    before_strings = strings_path.read_bytes()
+    dims = ["spectral_balance", "masking_proxy", "lf_buildup"]
+    bass = measure_stem_file(
+        bass_path,
+        settings,
+        stem_id="s-bass",
+        stem_role="bass",
+        source_track_ids=["bass-1"],
+        dimensions=dims,
+    )
+    strings = measure_stem_file(
+        strings_path,
+        settings,
+        stem_id="s-strings",
+        stem_role="strings",
+        source_track_ids=["cello-1"],
+        dimensions=dims,
+    )
+    assert bass_path.read_bytes() == before_bass
+    assert strings_path.read_bytes() == before_strings
+    masking = measure_stem_pair_masking(
+        bass,
+        strings,
+        stem_id_a="s-bass",
+        stem_id_b="s-strings",
+        role_a="bass",
+        role_b="strings",
+        tracks_a=["bass-1"],
+        tracks_b=["cello-1"],
+    )
+    assert masking.code == "masking_proxy"
+    assert masking.value is not None
+    assert masking.value >= settings.masking_proxy
+    assert set(masking.locus.stem_roles) == {"bass", "strings"}
+    assert "bass-1" in masking.locus.source_track_ids
+    assert "cello-1" in masking.locus.source_track_ids
+    assert masking.locus.freq_hz_low is not None
+    assert masking.locus.freq_hz_high is not None
+    obs = build_observations([*bass.measurements, *strings.measurements, masking], settings)
+    assert any(o.code == "spectral_masking_proxy" for o in obs)
+    mask_obs = next(o for o in obs if o.code == "spectral_masking_proxy")
+    assert mask_obs.reason
+    assert "masking_proxy" in (mask_obs.evidence.measurement_codes if mask_obs.evidence else [])
 
 
 @pytest.mark.skipif(

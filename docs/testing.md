@@ -260,6 +260,10 @@ cd backend && MIX_ANALYSIS_FAKE_MODE=1 NEURAL_AUDIO_FAKE_MODE=1 LLM_FAKE_MODE=1 
 node --test frontend/src/utils/mixAnalysisUi.test.js
 ```
 
+Synthetic DSP WAVs (hot peak, clipped, stereo imbalance, masking pair) live under
+`backend/tests/fixtures/audio/mix_analysis/` (rebuild:
+`python -m tests.fixtures.audio.mix_analysis.builders`).
+
 Optional richer DSP extras (not required for CI): `pip install -r backend/requirements-mix-analysis.txt`. Details: [mix-analysis.md](mix-analysis.md).
 
 Analysis panel journey (requires running stack; fake LLM optional for core analysis):
