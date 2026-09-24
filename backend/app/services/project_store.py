@@ -610,6 +610,18 @@ def delete_project(project_id: str, *, db_path: Path | str | None = None) -> Non
                     "error_type": type(recovery_cleanup_exc).__name__,
                 },
             )
+        try:
+            from app.services.mix_analysis_store import cleanup_project_mix_analysis
+
+            cleanup_project_mix_analysis(project_id)
+        except Exception as mix_cleanup_exc:  # noqa: BLE001
+            logger.warning(
+                "Mix analysis cleanup after project delete failed",
+                extra={
+                    "project_id": project_id,
+                    "error_type": type(mix_cleanup_exc).__name__,
+                },
+            )
         logger.info("Project deleted", extra={"project_id": project_id})
     except Exception as exc:
         logger.error(

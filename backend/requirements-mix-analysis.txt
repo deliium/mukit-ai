@@ -1,0 +1,10 @@
+# Optional richer mix-analysis DSP (LUFS-approx / STFT helpers).
+# Core app runs without these; set MIX_ANALYSIS_FAKE_MODE=1 for CI.
+#
+#   pip install -r requirements-mix-analysis.txt
+#
+# No torch. Never required in the default Compose image.
+
+numpy>=1.26,<3
+soundfile>=0.12,<1
+scipy>=1.11,<2
