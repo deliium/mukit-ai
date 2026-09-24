@@ -1960,6 +1960,177 @@ export async function deleteNeuralAudioRender(renderId) {
   }
 }
 
+const audioRecoveryLogger = createAppLogger('musicApi.audioRecovery');
+
+function parseAudioRecoveryError(error) {
+  const status = error?.response?.status ?? null;
+  const detail = error?.response?.data?.detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    return {
+      status,
+      code: typeof detail.code === 'string' ? detail.code : 'audio_recovery_error',
+      message: typeof detail.message === 'string' ? detail.message : 'Audio recovery request failed',
+      details: detail.details && typeof detail.details === 'object' ? detail.details : {},
+    };
+  }
+  if (typeof detail === 'string' && detail.trim()) {
+    return { status, code: 'audio_recovery_error', message: detail, details: {} };
+  }
+  return {
+    status,
+    code: 'audio_recovery_error',
+    message: error?.message || 'Audio recovery request failed',
+    details: {},
+  };
+}
+
+export class AudioRecoveryApiError extends Error {
+  constructor(message, { status = null, code = 'audio_recovery_error', details = {} } = {}) {
+    super(message);
+    this.name = 'AudioRecoveryApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+/**
+ * POST /audio-recovery/jobs — multipart upload; often returns complete when run_inline.
+ * @param {Blob|File} file
+ * @param {{ projectId?: string|null, disableSeparation?: boolean }} [options]
+ */
+export async function enqueueAudioRecoveryJob(file, options = {}) {
+  const byteCount = typeof file?.size === 'number' ? file.size : null;
+  audioRecoveryLogger.info('Enqueue audio recovery job', {
+    byteCount,
+    hasProjectId: Boolean(options.projectId),
+    disableSeparation: Boolean(options.disableSeparation),
+  });
+  const formData = new FormData();
+  formData.append('file', file, file?.name || 'demo.wav');
+  if (options.projectId) {
+    formData.append('project_id', String(options.projectId));
+  }
+  if (options.disableSeparation) {
+    formData.append('disable_separation', 'true');
+  }
+  try {
+    const response = await axios.post('/audio-recovery/jobs', formData, {
+      headers: { 'Content-Type': undefined },
+      transformRequest: [
+        (data, headers) => {
+          if (typeof FormData !== 'undefined' && data instanceof FormData) {
+            if (headers && typeof headers.set === 'function') {
+              headers.set('Content-Type', false);
+            } else if (headers) {
+              delete headers['Content-Type'];
+              delete headers['content-type'];
+            }
+          }
+          return data;
+        },
+      ],
+    });
+    const job = response.data || {};
+    audioRecoveryLogger.info('Audio recovery enqueue response', {
+      jobId: job?.id || null,
+      status: job?.status || null,
+      noteCount: job?.preview?.summary?.note_count ?? null,
+      stemCount: job?.preview?.summary?.stem_count ?? null,
+    });
+    return job;
+  } catch (error) {
+    const parsed = parseAudioRecoveryError(error);
+    audioRecoveryLogger.error('Audio recovery enqueue failed', {
+      status: parsed.status,
+      code: parsed.code,
+    });
+    throw new AudioRecoveryApiError(parsed.message, parsed);
+  }
+}
+
+export async function getAudioRecoveryJob(jobId) {
+  audioRecoveryLogger.info('Get audio recovery job', { jobId });
+  try {
+    return await request('get', `/audio-recovery/jobs/${encodeURIComponent(jobId)}`);
+  } catch (error) {
+    const parsed = parseAudioRecoveryError(error);
+    throw new AudioRecoveryApiError(parsed.message, parsed);
+  }
+}
+
+export async function deleteAudioRecoveryJob(jobId) {
+  audioRecoveryLogger.info('Delete audio recovery job', { jobId });
+  try {
+    await request('delete', `/audio-recovery/jobs/${encodeURIComponent(jobId)}`);
+  } catch (error) {
+    const parsed = parseAudioRecoveryError(error);
+    throw new AudioRecoveryApiError(parsed.message, parsed);
+  }
+}
+
+/**
+ * POST /audio-recovery/jobs/{id}/bind — durable assets after client V2 Apply.
+ * @param {string} jobId
+ * @param {{
+ *   project_id: string,
+ *   preview_fingerprint: string,
+ *   event_map: Array<{ provisional_id: string, event_id: string, track_id: string }>,
+ * }} body
+ */
+export async function bindAudioRecoveryJob(jobId, body) {
+  audioRecoveryLogger.info('Bind audio recovery job', {
+    jobId,
+    projectId: body?.project_id || null,
+    eventMapCount: Array.isArray(body?.event_map) ? body.event_map.length : 0,
+  });
+  try {
+    const result = await request(
+      'post',
+      `/audio-recovery/jobs/${encodeURIComponent(jobId)}/bind`,
+      body,
+    );
+    audioRecoveryLogger.info('Audio recovery bind response', {
+      jobId,
+      sourceAudioAssetId: result?.source_audio_asset_id || null,
+      resultAssetId: result?.result_asset_id || null,
+      overlayEntryCount: result?.overlay_entry_count ?? null,
+    });
+    return result;
+  } catch (error) {
+    const parsed = parseAudioRecoveryError(error);
+    audioRecoveryLogger.warn('Audio recovery bind failed', {
+      status: parsed.status,
+      code: parsed.code,
+    });
+    throw new AudioRecoveryApiError(parsed.message, parsed);
+  }
+}
+
+/**
+ * GET /audio-recovery/assets/{id} — blob URL for HTMLAudioElement (caller revokes).
+ * @param {string} assetId
+ * @returns {Promise<{ blobUrl: string, contentType: string|null, byteSize: number|null }>}
+ */
+export async function fetchAudioRecoveryAssetBlobUrl(assetId) {
+  audioRecoveryLogger.info('Fetch recovery asset blob', { assetId });
+  try {
+    const response = await axios.get(
+      `/audio-recovery/assets/${encodeURIComponent(assetId)}`,
+      { responseType: 'blob' },
+    );
+    const blobUrl = URL.createObjectURL(response.data);
+    return {
+      blobUrl,
+      contentType: response.headers?.['content-type'] || null,
+      byteSize: response.data?.size ?? null,
+    };
+  } catch (error) {
+    const parsed = parseAudioRecoveryError(error);
+    throw new AudioRecoveryApiError(parsed.message, parsed);
+  }
+}
+
 /**
  * GET /ai/agents — V4 multi-agent discovery (never exposes secrets).
  */

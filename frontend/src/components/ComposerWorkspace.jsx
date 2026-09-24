@@ -5,6 +5,7 @@ import PlaybackControls from './PlaybackControls.jsx';
 import MidiInputPanel from './MidiInputPanel.jsx';
 import CoPerformancePanel from './CoPerformancePanel.jsx';
 import AudioInputPanel from './AudioInputPanel.jsx';
+import AudioRecoveryPanel from './AudioRecoveryPanel.jsx';
 import PromptJsonEditor from './PromptJsonEditor.jsx';
 import ExportControls from './ExportControls.jsx';
 import NeuralAudioRenderPanel from './NeuralAudioRenderPanel.jsx';
@@ -191,6 +192,7 @@ const ComposerWorkspace = () => {
         <MidiInputPanel />
         <CoPerformancePanel />
         <AudioInputPanel />
+        <AudioRecoveryPanel />
       </StickyTransport>
 
       <TabRow

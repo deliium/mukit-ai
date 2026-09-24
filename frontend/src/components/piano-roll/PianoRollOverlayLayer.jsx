@@ -3,6 +3,10 @@ import styled from 'styled-components';
 import { useMusicStore } from '../../store/musicStore.js';
 import { secondsToPlaybackPosition } from '../../utils/playbackPosition.js';
 import { createAppLogger } from '../../utils/appLogger.js';
+import {
+  buildRecoveryBoundConfidenceGeoms,
+  buildRecoveryProvisionalGeoms,
+} from '../../utils/audioRecoveryOverlay.js';
 
 const logger = createAppLogger('pianoRoll.overlay');
 const CURSOR_LOG_THROTTLE_MS = 1000;
@@ -111,10 +115,31 @@ const ProvisionalNote = styled.div`
   opacity: 0.85;
   background: ${(props) => (
     props.$low
-      ? 'repeating-linear-gradient(45deg, #fbbf24, #fbbf24 4px, #f59e0b 4px, #f59e0b 8px)'
-      : 'rgba(245, 158, 11, 0.55)'
+      ? `repeating-linear-gradient(45deg, ${props.$fill}, ${props.$fill} 4px, rgba(0,0,0,0.12) 4px, rgba(0,0,0,0.12) 8px)`
+      : props.$fill
   )};
   border: 1px solid ${(props) => (props.$low ? '#b45309' : '#d97706')};
+`;
+
+const BoundConfidenceNote = styled.div`
+  position: absolute;
+  left: ${(props) => props.$left}px;
+  top: ${(props) => props.$top}px;
+  width: ${(props) => Math.max(3, props.$width)}px;
+  height: ${(props) => Math.max(4, props.$height)}px;
+  border-radius: 3px;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 3;
+  background: transparent;
+  border: 2px ${(props) => (props.$userEdited ? 'solid' : 'dashed')} ${(props) => (
+    props.$low ? '#b45309' : props.$userEdited ? '#6366f1' : '#d97706'
+  )};
+  box-shadow: ${(props) => (
+    props.$low
+      ? 'inset 0 0 0 1px rgba(245, 158, 11, 0.35)'
+      : 'none'
+  )};
 `;
 
 /**
@@ -146,6 +171,11 @@ function PianoRollOverlayLayer({
   const audioPreview = useMusicStore((state) => state.audioPreview);
   const audioConfidenceThreshold = useMusicStore((state) => state.audioConfidenceThreshold);
   const audioSelectedProvisionalIds = useMusicStore((state) => state.audioSelectedProvisionalIds);
+  const recoveryPhase = useMusicStore((state) => state.recoveryPhase);
+  const recoveryPreview = useMusicStore((state) => state.recoveryPreview);
+  const recoverySelectedProvisionalIds = useMusicStore((state) => state.recoverySelectedProvisionalIds);
+  const recoveryConfidenceThreshold = useMusicStore((state) => state.recoveryConfidenceThreshold);
+  const recoveryOverlay = useMusicStore((state) => state.recoveryOverlay);
   const lastCursorLogRef = useRef(0);
 
   const cursorTick = useMemo(() => {
@@ -184,6 +214,13 @@ function PianoRollOverlayLayer({
     return Math.max(0, tick) * pixelsPerTick;
   }, [editCursorTick, pixelsPerTick]);
 
+  const layout = useMemo(() => ({
+    pixelsPerTick,
+    pitchMidiMax,
+    pitchMidiMin,
+    rowHeight,
+  }), [pixelsPerTick, pitchMidiMax, pitchMidiMin, rowHeight]);
+
   const provisionalNotes = useMemo(() => {
     if (audioPhase !== 'review' || !audioPreview || !Array.isArray(audioPreview.notes)) {
       return [];
@@ -215,6 +252,7 @@ function PianoRollOverlayLayer({
           top: (pitchMidiMax - midi) * height,
           height: height - 2,
           low: Number(note.confidence) < threshold,
+          fill: 'rgba(245, 158, 11, 0.55)',
         };
       })
       .filter(Boolean);
@@ -228,6 +266,36 @@ function PianoRollOverlayLayer({
     pitchMidiMin,
     rowHeight,
   ]);
+
+  const recoveryProvisionalNotes = useMemo(() => {
+    if (recoveryPhase !== 'review' || !recoveryPreview || !Array.isArray(recoveryPreview.notes)) {
+      return [];
+    }
+    return buildRecoveryProvisionalGeoms(
+      recoveryPreview.notes,
+      recoverySelectedProvisionalIds,
+      {
+        ...layout,
+        threshold: Number(recoveryConfidenceThreshold) || 0.5,
+      },
+    );
+  }, [
+    recoveryPhase,
+    recoveryPreview,
+    recoverySelectedProvisionalIds,
+    recoveryConfidenceThreshold,
+    layout,
+  ]);
+
+  const recoveryBoundNotes = useMemo(() => {
+    if (!Array.isArray(recoveryOverlay) || !recoveryOverlay.length) {
+      return [];
+    }
+    return buildRecoveryBoundConfidenceGeoms(composition, recoveryOverlay, {
+      ...layout,
+      threshold: Number(recoveryConfidenceThreshold) || 0.5,
+    });
+  }, [composition, recoveryOverlay, recoveryConfidenceThreshold, layout]);
 
   useEffect(() => {
     if (cursorTick === null || !Number.isFinite(pixelsPerTick)) {
@@ -285,7 +353,7 @@ function PianoRollOverlayLayer({
       ) : null}
       {provisionalNotes.map((note) => (
         <ProvisionalNote
-          key={note.id}
+          key={`audio:${note.id}`}
           data-testid="piano-roll-audio-provisional-note"
           data-low-confidence={note.low ? 'true' : 'false'}
           $left={note.left}
@@ -293,6 +361,37 @@ function PianoRollOverlayLayer({
           $width={note.width}
           $height={note.height}
           $low={note.low}
+          $fill={note.fill}
+        />
+      ))}
+      {recoveryProvisionalNotes.map((note) => (
+        <ProvisionalNote
+          key={`recovery:${note.id}`}
+          data-testid="piano-roll-recovery-provisional-note"
+          data-stem={note.stem || ''}
+          data-low-confidence={note.low ? 'true' : 'false'}
+          $left={note.left}
+          $top={note.top}
+          $width={note.width}
+          $height={note.height}
+          $low={note.low}
+          $fill={note.fill}
+        />
+      ))}
+      {recoveryBoundNotes.map((note) => (
+        <BoundConfidenceNote
+          key={`bound:${note.id}`}
+          data-testid="piano-roll-recovery-bound-note"
+          data-event-id={note.id}
+          data-stem={note.stem || ''}
+          data-status={note.status}
+          data-low-confidence={note.low ? 'true' : 'false'}
+          $left={note.left}
+          $top={note.top}
+          $width={note.width}
+          $height={note.height}
+          $low={note.low}
+          $userEdited={note.status === 'user_edited'}
         />
       ))}
       {dragPreview && (

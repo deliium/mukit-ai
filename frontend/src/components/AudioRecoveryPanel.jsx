@@ -1,0 +1,384 @@
+/**
+ * V4 mixed audio recovery panel — sibling to AudioInputPanel (mono).
+ * Source audition: HTMLAudioElement only (not playbackSource / Tone Transport).
+ */
+
+import React, { useEffect, useMemo, useRef } from 'react';
+import styled from 'styled-components';
+import { AUDIO_RECOVERY_PHASES, useMusicStore } from '../store/musicStore.js';
+import { isAcceptedAudioFilename } from '../utils/audioInputSupport.js';
+import { midiToPitch } from '../utils/pianoRollEvents.js';
+import { createAppLogger } from '../utils/appLogger.js';
+
+const log = createAppLogger('audioRecoveryUi');
+
+const Panel = styled.div`
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+`;
+
+const Title = styled.h4`
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #334155;
+`;
+
+const Hint = styled.p`
+  margin: 0;
+  font-size: 0.8rem;
+  color: #64748b;
+`;
+
+const Row = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+`;
+
+const Button = styled.button`
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid ${(props) => (props.$active ? '#0f766e' : '#cbd5e1')};
+  background: ${(props) => {
+    if (props.$variant === 'record') return props.$active ? '#99f6e4' : '#ccfbf1';
+    if (props.$variant === 'primary') return '#ccfbf1';
+    if (props.$variant === 'danger') return '#fee2e2';
+    return '#fff';
+  }};
+  color: ${(props) => (props.$variant === 'record' ? '#134e4a' : '#1e293b')};
+  font-weight: 600;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+`;
+
+const Label = styled.label`
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #475569;
+`;
+
+const Status = styled.div`
+  font-size: 0.85rem;
+  color: #475569;
+`;
+
+const ErrorText = styled.div`
+  font-size: 0.85rem;
+  color: #991b1b;
+`;
+
+const WarnText = styled.div`
+  font-size: 0.85rem;
+  color: #92400e;
+`;
+
+const Badge = styled.span`
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  background: ${(props) => (props.$low ? '#fef3c7' : '#ecfdf5')};
+  color: ${(props) => (props.$low ? '#92400e' : '#065f46')};
+`;
+
+const NoteList = styled.ul`
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+`;
+
+const NoteItem = styled.li`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 0.8rem;
+  border-bottom: 1px solid #f1f5f9;
+  background: ${(props) => (props.$low
+    ? 'repeating-linear-gradient(45deg, #fffbeb, #fffbeb 6px, #fef3c7 6px, #fef3c7 12px)'
+    : '#fff')};
+  color: ${(props) => (props.$low ? '#92400e' : '#334155')};
+
+  &:last-child {
+    border-bottom: none;
+  }
+`;
+
+const AudioRecoveryPanel = () => {
+  const fileRef = useRef(null);
+  const audioRef = useRef(null);
+
+  const recoveryPhase = useMusicStore((s) => s.recoveryPhase);
+  const recoveryPreview = useMusicStore((s) => s.recoveryPreview);
+  const recoverySelectedProvisionalIds = useMusicStore((s) => s.recoverySelectedProvisionalIds);
+  const recoveryIncludeLowConfidence = useMusicStore((s) => s.recoveryIncludeLowConfidence);
+  const recoveryDisableSeparation = useMusicStore((s) => s.recoveryDisableSeparation);
+  const recoveryConfidenceThreshold = useMusicStore((s) => s.recoveryConfidenceThreshold);
+  const recoveryErrorCode = useMusicStore((s) => s.recoveryErrorCode);
+  const recoveryErrorMessage = useMusicStore((s) => s.recoveryErrorMessage);
+  const recoveryBindWarning = useMusicStore((s) => s.recoveryBindWarning);
+  const recoverySourceObjectUrl = useMusicStore((s) => s.recoverySourceObjectUrl);
+  const recoveryJobStatus = useMusicStore((s) => s.recoveryJobStatus);
+  const currentProjectId = useMusicStore((s) => s.currentProjectId);
+
+  const startRecoveryRecording = useMusicStore((s) => s.startRecoveryRecording);
+  const stopRecoveryRecordingAndEnqueue = useMusicStore((s) => s.stopRecoveryRecordingAndEnqueue);
+  const cancelRecoveryRecording = useMusicStore((s) => s.cancelRecoveryRecording);
+  const enqueueRecoveryFile = useMusicStore((s) => s.enqueueRecoveryFile);
+  const applyAudioRecovery = useMusicStore((s) => s.applyAudioRecovery);
+  const discardAudioRecovery = useMusicStore((s) => s.discardAudioRecovery);
+  const setRecoveryIncludeLowConfidence = useMusicStore((s) => s.setRecoveryIncludeLowConfidence);
+  const setRecoveryDisableSeparation = useMusicStore((s) => s.setRecoveryDisableSeparation);
+  const setRecoverySelectedProvisionalIds = useMusicStore((s) => s.setRecoverySelectedProvisionalIds);
+  const setRecoveryInstallFlags = useMusicStore((s) => s.setRecoveryInstallFlags);
+  const recoveryInstallFlags = useMusicStore((s) => s.recoveryInstallFlags);
+
+  const selectedSet = useMemo(
+    () => new Set((recoverySelectedProvisionalIds || []).map(String)),
+    [recoverySelectedProvisionalIds],
+  );
+
+  const notes = Array.isArray(recoveryPreview?.notes) ? recoveryPreview.notes : [];
+  const scaffolding = recoveryPreview?.scaffolding || null;
+  const threshold = recoveryConfidenceThreshold
+    || Number(recoveryPreview?.summary?.include_threshold)
+    || 0.5;
+
+  useEffect(() => {
+    if (audioRef.current && recoverySourceObjectUrl) {
+      audioRef.current.src = recoverySourceObjectUrl;
+    }
+  }, [recoverySourceObjectUrl]);
+
+  const busy = recoveryPhase === AUDIO_RECOVERY_PHASES.UPLOADING
+    || recoveryPhase === AUDIO_RECOVERY_PHASES.RUNNING
+    || recoveryPhase === AUDIO_RECOVERY_PHASES.APPLYING
+    || recoveryPhase === AUDIO_RECOVERY_PHASES.BINDING
+    || recoveryPhase === AUDIO_RECOVERY_PHASES.REQUESTING_MIC;
+
+  const inReview = recoveryPhase === AUDIO_RECOVERY_PHASES.REVIEW
+    || recoveryPhase === AUDIO_RECOVERY_PHASES.BOUND;
+
+  const onFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!isAcceptedAudioFilename(file.name)) {
+      log.warn('Rejected recovery filename', { name: file.name });
+      return;
+    }
+    log.info('Recovery file selected', { basename: file.name, bytes: file.size });
+    await enqueueRecoveryFile(file);
+  };
+
+  const toggleNote = (provisionalId) => {
+    const id = String(provisionalId);
+    const next = new Set(selectedSet);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setRecoverySelectedProvisionalIds(Array.from(next));
+  };
+
+  return (
+    <Panel data-testid="audio-recovery-panel">
+      <Title>Audio recovery (mixed)</Title>
+      <Hint>
+        Import a short demo → optional stem separation → estimated tempo/structure/harmony
+        and confidence-gated notes. Confidence stays off the score. Source plays in an
+        HTML audio element (composition audition stays on PlaybackControls).
+      </Hint>
+
+      <Row>
+        <Button
+          type="button"
+          $variant="record"
+          $active={recoveryPhase === AUDIO_RECOVERY_PHASES.RECORDING}
+          disabled={busy && recoveryPhase !== AUDIO_RECOVERY_PHASES.RECORDING}
+          onClick={() => {
+            if (recoveryPhase === AUDIO_RECOVERY_PHASES.RECORDING) {
+              stopRecoveryRecordingAndEnqueue();
+            } else {
+              startRecoveryRecording();
+            }
+          }}
+        >
+          {recoveryPhase === AUDIO_RECOVERY_PHASES.RECORDING ? 'Stop & recover' : 'Record'}
+        </Button>
+        {recoveryPhase === AUDIO_RECOVERY_PHASES.RECORDING ? (
+          <Button type="button" $variant="danger" onClick={() => cancelRecoveryRecording()}>
+            Cancel
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          disabled={busy}
+          onClick={() => fileRef.current?.click()}
+        >
+          Upload WAV
+        </Button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".wav,.flac,.ogg,.mp3,audio/*"
+          hidden
+          onChange={onFileChange}
+        />
+        <Label>
+          <input
+            type="checkbox"
+            checked={recoveryDisableSeparation}
+            onChange={(e) => setRecoveryDisableSeparation(e.target.checked)}
+            disabled={busy || inReview}
+          />
+          Skip separation
+        </Label>
+      </Row>
+
+      <Status>
+        Phase: {recoveryPhase}
+        {recoveryJobStatus ? ` · job ${recoveryJobStatus}` : ''}
+        {!currentProjectId ? ' · open a project before Apply→Bind' : ''}
+      </Status>
+
+      {recoveryErrorMessage ? (
+        <ErrorText>{recoveryErrorMessage}{recoveryErrorCode ? ` (${recoveryErrorCode})` : ''}</ErrorText>
+      ) : null}
+      {recoveryBindWarning ? <WarnText>{recoveryBindWarning}</WarnText> : null}
+
+      {scaffolding ? (
+        <Row>
+          <Badge $low={Number(scaffolding.tempo_confidence) < threshold}>
+            tempo {scaffolding.tempo_bpm} bpm
+            {' '}
+            ({Math.round(Number(scaffolding.tempo_confidence) * 100)}%)
+          </Badge>
+          {scaffolding.key ? (
+            <Badge $low={Number(scaffolding.key.confidence) < threshold}>
+              key {scaffolding.key.tonic} {scaffolding.key.mode}
+            </Badge>
+          ) : null}
+          <Badge>
+            stems {recoveryPreview?.summary?.stem_count ?? recoveryPreview?.stems?.length ?? 0}
+          </Badge>
+          <Badge $low={(recoveryPreview?.summary?.low_confidence_count || 0) > 0}>
+            low-conf {recoveryPreview?.summary?.low_confidence_count ?? 0}
+          </Badge>
+        </Row>
+      ) : null}
+
+      {inReview && scaffolding ? (
+        <Row>
+          <Label>
+            <input
+              type="checkbox"
+              checked={Boolean(recoveryInstallFlags?.installTempo)}
+              onChange={(e) => setRecoveryInstallFlags({
+                ...(recoveryInstallFlags || {}),
+                installTempo: e.target.checked,
+              })}
+            />
+            Install tempo
+          </Label>
+          <Label>
+            <input
+              type="checkbox"
+              checked={Boolean(recoveryInstallFlags?.installSections)}
+              onChange={(e) => setRecoveryInstallFlags({
+                ...(recoveryInstallFlags || {}),
+                installSections: e.target.checked,
+              })}
+            />
+            Install sections
+          </Label>
+          <Label>
+            <input
+              type="checkbox"
+              checked={Boolean(recoveryInstallFlags?.installHarmony)}
+              onChange={(e) => setRecoveryInstallFlags({
+                ...(recoveryInstallFlags || {}),
+                installHarmony: e.target.checked,
+              })}
+            />
+            Install harmony (metadata)
+          </Label>
+          <Label>
+            <input
+              type="checkbox"
+              checked={recoveryIncludeLowConfidence}
+              onChange={(e) => setRecoveryIncludeLowConfidence(e.target.checked)}
+            />
+            Include low-confidence notes
+          </Label>
+        </Row>
+      ) : null}
+
+      {notes.length > 0 ? (
+        <NoteList>
+          {notes.map((note) => {
+            const id = String(note.provisional_id);
+            const conf = Number(note.confidence);
+            const low = conf < threshold;
+            const { pitch } = midiToPitch(Math.round(Number(note.pitch)));
+            return (
+              <NoteItem key={id} $low={low}>
+                <input
+                  type="checkbox"
+                  checked={selectedSet.has(id)}
+                  onChange={() => toggleNote(id)}
+                  disabled={recoveryPhase === AUDIO_RECOVERY_PHASES.BOUND}
+                />
+                <span>{note.stem || '?'}</span>
+                <span>{pitch || note.pitch}</span>
+                <span>@{note.start_tick}</span>
+                <Badge $low={low}>{Math.round(conf * 100)}%</Badge>
+              </NoteItem>
+            );
+          })}
+        </NoteList>
+      ) : null}
+
+      {recoverySourceObjectUrl || recoveryPhase === AUDIO_RECOVERY_PHASES.BOUND ? (
+        <audio ref={audioRef} controls preload="metadata" style={{ width: '100%' }}>
+          <track kind="captions" />
+        </audio>
+      ) : null}
+
+      {inReview ? (
+        <Row>
+          {recoveryPhase !== AUDIO_RECOVERY_PHASES.BOUND ? (
+            <Button
+              type="button"
+              $variant="primary"
+              disabled={busy || !currentProjectId}
+              onClick={() => applyAudioRecovery()}
+            >
+              Apply → Bind
+            </Button>
+          ) : null}
+          <Button type="button" $variant="danger" onClick={() => discardAudioRecovery()}>
+            Discard
+          </Button>
+        </Row>
+      ) : null}
+    </Panel>
+  );
+};
+
+export default AudioRecoveryPanel;

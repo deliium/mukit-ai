@@ -26,6 +26,12 @@ import {
   searchSimilarEmbeddings,
   TranscriptionApiError,
   transcribeAudio,
+  AudioRecoveryApiError,
+  enqueueAudioRecoveryJob,
+  getAudioRecoveryJob,
+  deleteAudioRecoveryJob,
+  bindAudioRecoveryJob,
+  fetchAudioRecoveryAssetBlobUrl,
 } from '../api/musicApi.js';
 import {
   createLivePredictAbortController,
@@ -37,6 +43,22 @@ import {
   defaultSelectedProvisionalIds,
   DEFAULT_AUDIO_CONFIDENCE_THRESHOLD,
 } from '../utils/audioTranscriptionApply.js';
+import { applyAudioRecoveryToComposition } from '../utils/audioRecoveryApply.js';
+import {
+  DEFAULT_RECOVERY_CONFIDENCE_THRESHOLD,
+  defaultSelectedRecoveryProvisionalIds,
+  defaultScaffoldingInstallFlags,
+} from '../utils/audioRecoveryGates.js';
+import {
+  buildOverlayFromEventMap,
+  syncOverlayAfterCompositionEdit,
+} from '../utils/audioRecoveryOverlay.js';
+import {
+  assertRecoveryAllowedForOtherPhases,
+  assertMonoAudioAllowedForRecoveryPhase,
+  assertMidiCaptureAllowedForRecoveryPhase,
+  assertLiveAllowedForRecoveryPhase,
+} from '../utils/audioRecoveryPhaseGuards.js';
 import { probeAudioInputSupport } from '../utils/audioInputSupport.js';
 import { createAudioRecorder } from '../utils/audioRecorder.js';
 import { createMidiAccessSession } from '../utils/midiInputAccess.js';
@@ -411,6 +433,7 @@ const midiLogger = createAppLogger('midiInput');
 const liveLogger = createAppLogger('liveMidi');
 const jamLogger = createAppLogger('liveJam');
 const audioLogger = createAppLogger('audioTranscription');
+const audioRecoveryLogger = createAppLogger('audioRecovery');
 
 export const AUDIO_PHASES = Object.freeze({
   IDLE: 'idle',
@@ -420,6 +443,19 @@ export const AUDIO_PHASES = Object.freeze({
   TRANSCRIBING: 'transcribing',
   REVIEW: 'review',
   APPLYING: 'applying',
+  ERROR: 'error',
+});
+
+export const AUDIO_RECOVERY_PHASES = Object.freeze({
+  IDLE: 'idle',
+  REQUESTING_MIC: 'requesting_mic',
+  RECORDING: 'recording',
+  UPLOADING: 'uploading',
+  RUNNING: 'running',
+  REVIEW: 'review',
+  APPLYING: 'applying',
+  BINDING: 'binding',
+  BOUND: 'bound',
   ERROR: 'error',
 });
 
@@ -436,11 +472,52 @@ const initialAudioTranscriptionState = {
   audioConfidenceThreshold: DEFAULT_AUDIO_CONFIDENCE_THRESHOLD,
 };
 
+const initialAudioRecoveryState = {
+  recoveryPhase: AUDIO_RECOVERY_PHASES.IDLE,
+  recoveryJobId: null,
+  recoveryJobStatus: null,
+  recoveryPreview: null,
+  recoverySelectedProvisionalIds: [],
+  recoveryIncludeLowConfidence: false,
+  recoveryStemRoleMap: {},
+  recoveryStemSolo: null,
+  recoveryInstallFlags: null,
+  recoveryConfidenceThreshold: DEFAULT_RECOVERY_CONFIDENCE_THRESHOLD,
+  recoveryErrorCode: null,
+  recoveryErrorMessage: '',
+  recoveryBindWarning: null,
+  recoverySourceAudioAssetId: null,
+  recoveryResultAssetId: null,
+  recoveryOverlay: null,
+  recoverySourceObjectUrl: null,
+  recoveryDisableSeparation: false,
+};
+
 /** @type {ReturnType<typeof createAudioRecorder> | null} */
 let audioRecorderSession = null;
+/** @type {ReturnType<typeof createAudioRecorder> | null} */
+let recoveryRecorderSession = null;
 
 function clearedAudioTranscriptionState() {
   return { ...initialAudioTranscriptionState };
+}
+
+function clearedAudioRecoveryState(get) {
+  if (get) {
+    revokeRecoverySourceUrl(get);
+  }
+  return { ...initialAudioRecoveryState, recoverySourceObjectUrl: null };
+}
+
+function revokeRecoverySourceUrl(get) {
+  const url = get?.()?.recoverySourceObjectUrl;
+  if (url && typeof URL !== 'undefined') {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+  }
 }
 
 function transitionAudioPhase(set, get, nextPhase, reason) {
@@ -454,6 +531,20 @@ function transitionAudioPhase(set, get, nextPhase, reason) {
     reason,
   });
   set({ audioPhase: nextPhase });
+  return true;
+}
+
+function transitionRecoveryPhase(set, get, nextPhase, reason) {
+  const current = get().recoveryPhase;
+  if (current === nextPhase) {
+    return true;
+  }
+  audioRecoveryLogger.info('Audio recovery phase transition', {
+    from: current,
+    to: nextPhase,
+    reason,
+  });
+  set({ recoveryPhase: nextPhase });
   return true;
 }
 
@@ -1420,6 +1511,7 @@ export const useMusicStore = create((set, get) => ({
   ...initialMidiInputState,
   ...initialLivePerformanceState,
   ...initialAudioTranscriptionState,
+  ...initialAudioRecoveryState,
 
   setApiStatus: (apiStatus) => {
     console.debug('[musicStore] API status changed', { apiStatus });
@@ -2054,6 +2146,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedArrangementPreviewState(),
       ...initialHarmonyUiState,
       ...clearedAudioTranscriptionState(),
+      ...clearedAudioRecoveryState(get),
     };
 
     // No open project: local-only replace (no durable history claim).
@@ -2125,6 +2218,7 @@ export const useMusicStore = create((set, get) => ({
         aiEditRequestCapture: null,
         ...clearedVersionHistoryState(),
         ...clearedAudioTranscriptionState(),
+        ...clearedAudioRecoveryState(get),
       });
       return true;
     } catch (error) {
@@ -4182,6 +4276,13 @@ export const useMusicStore = create((set, get) => ({
       historyDepth: nextUndo.length,
       revisionPrefix: revision.slice(0, 48),
     });
+    const overlayRestore = Object.prototype.hasOwnProperty.call(previous, 'recoveryOverlay')
+      ? {
+        recoveryOverlay: Array.isArray(previous.recoveryOverlay)
+          ? previous.recoveryOverlay.map((entry) => ({ ...entry }))
+          : null,
+      }
+      : {};
     set({
       editedMusicJson: previous.editedMusicJson,
       compositionRevision: revision,
@@ -4216,6 +4317,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedReharmonizePreviewState({ preserveControls: true }),
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
       ...clearedArrangementPreviewState({ preserveControls: true }),
+      ...overlayRestore,
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'undo' });
@@ -4257,6 +4359,13 @@ export const useMusicStore = create((set, get) => ({
       historyDepth: nextUndo.length,
       revisionPrefix: revision.slice(0, 48),
     });
+    const overlayRestore = Object.prototype.hasOwnProperty.call(next, 'recoveryOverlay')
+      ? {
+        recoveryOverlay: Array.isArray(next.recoveryOverlay)
+          ? next.recoveryOverlay.map((entry) => ({ ...entry }))
+          : null,
+      }
+      : {};
     set({
       editedMusicJson: next.editedMusicJson,
       compositionRevision: revision,
@@ -4291,6 +4400,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedReharmonizePreviewState({ preserveControls: true }),
       ...clearedDevelopmentPreviewState({ preserveControls: true }),
       ...clearedArrangementPreviewState({ preserveControls: true }),
+      ...overlayRestore,
     });
     markProjectDirty(set, get);
     scheduleAnalysisRequest(get, { reason: 'redo' });
@@ -5453,6 +5563,7 @@ export const useMusicStore = create((set, get) => ({
           ...clearedArrangementPreviewState(),
           ...initialHarmonyUiState,
           ...clearedAudioTranscriptionState(),
+          ...clearedAudioRecoveryState(get),
         });
       }
       await get().loadProjectList();
@@ -9865,6 +9976,18 @@ export const useMusicStore = create((set, get) => ({
 
   armMidiRecording: () => {
     const state = get();
+    const recoveryGuard = assertMidiCaptureAllowedForRecoveryPhase(state.recoveryPhase);
+    if (!recoveryGuard.ok) {
+      midiLogger.warn('MIDI arm rejected — recovery phase exclusion', {
+        code: recoveryGuard.code,
+        recoveryPhase: state.recoveryPhase,
+      });
+      set({
+        midiErrorCode: recoveryGuard.code,
+        midiErrorMessage: 'Finish or discard audio recovery before arming MIDI record.',
+      });
+      return false;
+    }
     const liveGuard = assertMidiCaptureAllowedForLivePhase(state.livePhase);
     if (!liveGuard.ok) {
       midiLogger.warn('MIDI arm rejected — live session exclusion', {
@@ -9936,6 +10059,19 @@ export const useMusicStore = create((set, get) => ({
    */
   startLiveCoPerformance: ({ sessionId = null, requireEngine = true } = {}) => {
     const state = get();
+    const recoveryGuard = assertLiveAllowedForRecoveryPhase(state.recoveryPhase);
+    if (!recoveryGuard.ok) {
+      liveLogger.info('live start rejected — recoveryPhase exclusion', {
+        code: recoveryGuard.code,
+        recoveryPhase: state.recoveryPhase,
+      });
+      set({
+        liveErrorCode: recoveryGuard.code,
+        liveErrorMessage: 'Finish or discard audio recovery before starting co-performance.',
+        livePhase: 'idle',
+      });
+      return { ok: false, code: recoveryGuard.code };
+    }
     const midiGuard = assertLiveAllowedForMidiPhase(state.midiPhase);
     if (!midiGuard.ok) {
       liveLogger.info('live start rejected — midiPhase exclusion', {
@@ -10865,6 +11001,14 @@ export const useMusicStore = create((set, get) => ({
 
   startAudioRecording: async () => {
     const state = get();
+    const recoveryGuard = assertMonoAudioAllowedForRecoveryPhase(state.recoveryPhase);
+    if (!recoveryGuard.ok) {
+      audioLogger.info('Audio record rejected — recovery phase exclusion', {
+        recoveryPhase: state.recoveryPhase,
+        reason: recoveryGuard.reason,
+      });
+      return { ok: false, code: recoveryGuard.code, reason: recoveryGuard.reason };
+    }
     if (state.audioPhase === AUDIO_PHASES.RECORDING) {
       return { ok: false, code: 'already_recording' };
     }
@@ -11060,6 +11204,287 @@ export const useMusicStore = create((set, get) => ({
     }
     audioLogger.info('Audio transcription discarded');
     set({ ...clearedAudioTranscriptionState() });
+    return { ok: true };
+  },
+
+  setRecoveryDisableSeparation: (disabled) => {
+    set({ recoveryDisableSeparation: Boolean(disabled) });
+  },
+
+  setRecoveryIncludeLowConfidence: (enabled) => {
+    set({ recoveryIncludeLowConfidence: Boolean(enabled) });
+  },
+
+  setRecoverySelectedProvisionalIds: (ids) => {
+    set({ recoverySelectedProvisionalIds: Array.isArray(ids) ? ids.map(String) : [] });
+  },
+
+  setRecoveryStemRoleMap: (map) => {
+    set({
+      recoveryStemRoleMap: map && typeof map === 'object' && !Array.isArray(map) ? { ...map } : {},
+    });
+  },
+
+  setRecoveryStemSolo: (stem) => {
+    set({ recoveryStemSolo: stem == null ? null : String(stem) });
+  },
+
+  setRecoveryInstallFlags: (flags) => {
+    set({
+      recoveryInstallFlags: flags && typeof flags === 'object' ? { ...flags } : null,
+    });
+  },
+
+  startRecoveryRecording: async () => {
+    const state = get();
+    const guard = assertRecoveryAllowedForOtherPhases(
+      state.midiPhase,
+      state.livePhase,
+      state.audioPhase,
+    );
+    if (!guard.ok) {
+      audioRecoveryLogger.info('Recovery record rejected — phase exclusion', {
+        reason: guard.reason,
+      });
+      return { ok: false, code: guard.code, reason: guard.reason };
+    }
+    transitionRecoveryPhase(set, get, AUDIO_RECOVERY_PHASES.REQUESTING_MIC, 'record-start');
+    set({ recoveryErrorCode: null, recoveryErrorMessage: '', recoveryBindWarning: null });
+    if (!recoveryRecorderSession) {
+      recoveryRecorderSession = createAudioRecorder();
+    }
+    const result = await recoveryRecorderSession.start();
+    if (!result.ok) {
+      set({
+        recoveryPhase: AUDIO_RECOVERY_PHASES.ERROR,
+        recoveryErrorCode: result.code,
+        recoveryErrorMessage: result.code === 'permission_denied'
+          ? 'Microphone permission denied.'
+          : 'Microphone recording is unavailable.',
+      });
+      return result;
+    }
+    transitionRecoveryPhase(set, get, AUDIO_RECOVERY_PHASES.RECORDING, 'recording');
+    return { ok: true };
+  },
+
+  stopRecoveryRecordingAndEnqueue: async () => {
+    if (!recoveryRecorderSession || !recoveryRecorderSession.isRecording()) {
+      return { ok: false, code: 'not_recording' };
+    }
+    const stopped = await recoveryRecorderSession.stop();
+    if (!stopped.ok) {
+      set({
+        recoveryPhase: AUDIO_RECOVERY_PHASES.ERROR,
+        recoveryErrorCode: stopped.code,
+        recoveryErrorMessage: 'Failed to encode recording.',
+      });
+      return stopped;
+    }
+    return get().enqueueRecoveryBlob(stopped.blob);
+  },
+
+  cancelRecoveryRecording: () => {
+    if (recoveryRecorderSession) {
+      recoveryRecorderSession.cancel();
+    }
+    transitionRecoveryPhase(set, get, AUDIO_RECOVERY_PHASES.IDLE, 'cancel-record');
+    return { ok: true };
+  },
+
+  enqueueRecoveryFile: async (file) => {
+    if (!file) {
+      return { ok: false, code: 'audio_empty_upload' };
+    }
+    return get().enqueueRecoveryBlob(file);
+  },
+
+  enqueueRecoveryBlob: async (blob) => {
+    const state = get();
+    const guard = assertRecoveryAllowedForOtherPhases(
+      state.midiPhase,
+      state.livePhase,
+      state.audioPhase,
+    );
+    if (!guard.ok) {
+      audioRecoveryLogger.info('Recovery upload rejected — phase exclusion', {
+        reason: guard.reason,
+      });
+      return { ok: false, code: guard.code, reason: guard.reason };
+    }
+    transitionRecoveryPhase(set, get, AUDIO_RECOVERY_PHASES.UPLOADING, 'upload');
+    set({ recoveryErrorCode: null, recoveryErrorMessage: '', recoveryBindWarning: null });
+    try {
+      transitionRecoveryPhase(set, get, AUDIO_RECOVERY_PHASES.RUNNING, 'job');
+      const job = await enqueueAudioRecoveryJob(blob, {
+        projectId: state.currentProjectId,
+        disableSeparation: state.recoveryDisableSeparation,
+      });
+      let finalJob = job;
+      if (job?.status === 'queued' || job?.status === 'running') {
+        finalJob = await getAudioRecoveryJob(job.id);
+      }
+      if (finalJob?.status === 'failed') {
+        set({
+          recoveryPhase: AUDIO_RECOVERY_PHASES.ERROR,
+          recoveryJobId: finalJob.id,
+          recoveryJobStatus: finalJob.status,
+          recoveryErrorCode: finalJob.error_code || 'audio_recovery_job_failed',
+          recoveryErrorMessage: finalJob.error_message || 'Recovery job failed.',
+        });
+        return { ok: false, code: finalJob.error_code || 'audio_recovery_job_failed' };
+      }
+      const preview = finalJob?.preview || null;
+      const threshold = Number(preview?.summary?.include_threshold)
+        || state.recoveryConfidenceThreshold
+        || DEFAULT_RECOVERY_CONFIDENCE_THRESHOLD;
+      const selected = defaultSelectedRecoveryProvisionalIds(preview, threshold);
+      const installFlags = defaultScaffoldingInstallFlags(preview?.scaffolding, threshold);
+      set({
+        recoveryPhase: AUDIO_RECOVERY_PHASES.REVIEW,
+        recoveryJobId: finalJob?.id || null,
+        recoveryJobStatus: finalJob?.status || null,
+        recoveryPreview: preview,
+        recoverySelectedProvisionalIds: selected,
+        recoveryInstallFlags: installFlags,
+        recoveryConfidenceThreshold: threshold,
+        recoveryErrorCode: null,
+        recoveryErrorMessage: '',
+      });
+      audioRecoveryLogger.info('Recovery job ready for review', {
+        jobId: finalJob?.id,
+        noteCount: preview?.summary?.note_count ?? null,
+        stemCount: preview?.summary?.stem_count ?? null,
+      });
+      return { ok: true, job: finalJob };
+    } catch (error) {
+      const code = error instanceof AudioRecoveryApiError
+        ? error.code
+        : 'audio_recovery_error';
+      audioRecoveryLogger.warn('Recovery enqueue failed', { code });
+      set({
+        recoveryPhase: AUDIO_RECOVERY_PHASES.ERROR,
+        recoveryErrorCode: code,
+        recoveryErrorMessage: error?.message || 'Audio recovery failed.',
+      });
+      return { ok: false, code };
+    }
+  },
+
+  applyAudioRecovery: async () => {
+    const state = get();
+    if (!state.recoveryPreview || state.recoveryPhase !== AUDIO_RECOVERY_PHASES.REVIEW) {
+      return { ok: false, code: 'audio_recovery_not_in_review' };
+    }
+    if (!state.currentProjectId) {
+      audioRecoveryLogger.warn('Apply requires open project for Bind', {
+        code: 'audio_recovery_project_required',
+      });
+      set({
+        recoveryErrorCode: 'audio_recovery_project_required',
+        recoveryErrorMessage: 'Open or create a project before Apply → Bind.',
+      });
+      return { ok: false, code: 'audio_recovery_project_required' };
+    }
+    transitionRecoveryPhase(set, get, AUDIO_RECOVERY_PHASES.APPLYING, 'apply');
+    const applied = applyAudioRecoveryToComposition(state.editedMusicJson, {
+      preview: state.recoveryPreview,
+      stemRoleMap: state.recoveryStemRoleMap,
+      includeLowConfidence: state.recoveryIncludeLowConfidence,
+      selectedIds: state.recoverySelectedProvisionalIds,
+      threshold: state.recoveryConfidenceThreshold,
+      installFlags: state.recoveryInstallFlags || undefined,
+    });
+    if (!applied.ok) {
+      set({
+        recoveryPhase: AUDIO_RECOVERY_PHASES.REVIEW,
+        recoveryErrorCode: applied.code,
+        recoveryErrorMessage: applied.message || applied.code,
+      });
+      return applied;
+    }
+    const ok = commitCompositionTransaction(set, get, {
+      nextComposition: applied.composition,
+      action: 'audio-recovery-apply',
+      noteSummary: {
+        noteCount: applied.eventMap.length,
+        excludedLow: applied.excludedLow,
+        stems: applied.stemsApplied,
+      },
+      affectedNoteCount: applied.eventMap.length,
+      affectedTrackCount: new Set(applied.eventMap.map((e) => e.track_id)).size,
+    });
+    if (!ok) {
+      set({ recoveryPhase: AUDIO_RECOVERY_PHASES.REVIEW });
+      return { ok: false, code: 'audio_recovery_commit_failed' };
+    }
+
+    transitionRecoveryPhase(set, get, AUDIO_RECOVERY_PHASES.BINDING, 'bind');
+    try {
+      const bindResult = await bindAudioRecoveryJob(state.recoveryJobId, {
+        project_id: state.currentProjectId,
+        preview_fingerprint: state.recoveryPreview.preview_fingerprint,
+        event_map: applied.eventMap,
+      });
+      const overlay = buildOverlayFromEventMap(
+        applied.eventMap,
+        state.recoveryPreview.notes,
+      );
+      let sourceUrl = null;
+      try {
+        const fetched = await fetchAudioRecoveryAssetBlobUrl(bindResult.source_audio_asset_id);
+        revokeRecoverySourceUrl(get);
+        sourceUrl = fetched.blobUrl;
+      } catch {
+        audioRecoveryLogger.warn('Source audio blob fetch failed after bind');
+      }
+      set({
+        recoveryPhase: AUDIO_RECOVERY_PHASES.BOUND,
+        recoverySourceAudioAssetId: bindResult.source_audio_asset_id,
+        recoveryResultAssetId: bindResult.result_asset_id,
+        recoveryOverlay: overlay,
+        recoverySourceObjectUrl: sourceUrl,
+        recoveryBindWarning: null,
+        recoveryErrorCode: null,
+        recoveryErrorMessage: '',
+      });
+      audioRecoveryLogger.info('Recovery Apply→Bind complete', {
+        jobId: state.recoveryJobId,
+        sourceAudioAssetId: bindResult.source_audio_asset_id,
+        resultAssetId: bindResult.result_asset_id,
+        overlayCount: overlay.length,
+      });
+      return { ok: true, bindResult, eventMap: applied.eventMap };
+    } catch (error) {
+      const code = error instanceof AudioRecoveryApiError
+        ? error.code
+        : 'audio_recovery_bind_failed';
+      audioRecoveryLogger.warn('Bind failed after Apply — V2 notes kept', { code });
+      set({
+        recoveryPhase: AUDIO_RECOVERY_PHASES.REVIEW,
+        recoveryBindWarning: 'Confidence overlay not saved',
+        recoveryErrorCode: code,
+        recoveryErrorMessage: error?.message || 'Bind failed; notes were applied without overlay.',
+      });
+      return { ok: true, bindFailed: true, code, eventMap: applied.eventMap };
+    }
+  },
+
+  discardAudioRecovery: async () => {
+    if (recoveryRecorderSession) {
+      recoveryRecorderSession.cancel();
+    }
+    const jobId = get().recoveryJobId;
+    const bound = get().recoveryPhase === AUDIO_RECOVERY_PHASES.BOUND;
+    if (jobId && !bound) {
+      try {
+        await deleteAudioRecoveryJob(jobId);
+      } catch {
+        audioRecoveryLogger.warn('Recovery job delete failed on discard', { jobId });
+      }
+    }
+    audioRecoveryLogger.info('Audio recovery discarded', { jobId, bound });
+    set({ ...clearedAudioRecoveryState(get) });
     return { ok: true };
   },
 
@@ -11479,7 +11904,44 @@ function snapshotCompositionEditState(state) {
     harmonySelectionEndBar: state.harmonySelectionEndBar,
     harmonySelectedSpanStartTick: state.harmonySelectedSpanStartTick,
     trackControls: state.trackControls ? { ...state.trackControls } : {},
+    // Bind overlay rides undo/redo so prune / user_edited stay honest with V2 notes.
+    recoveryOverlay: Array.isArray(state.recoveryOverlay)
+      ? state.recoveryOverlay.map((entry) => ({ ...entry }))
+      : null,
   };
+}
+
+/**
+ * Sync durable recovery confidence overlay after a composition mutation.
+ * Skipped when statePatch already supplies overlay (Bind) or Apply has not bound yet.
+ *
+ * @returns {{ recoveryOverlay?: object[] }}
+ */
+function recoveryOverlayPatchAfterEdit(state, nextComposition, action, statePatch) {
+  if (Object.prototype.hasOwnProperty.call(statePatch, 'recoveryOverlay')) {
+    return {};
+  }
+  if (action === 'audio-recovery-apply') {
+    return {};
+  }
+  if (!Array.isArray(state.recoveryOverlay) || !state.recoveryOverlay.length) {
+    return {};
+  }
+  const synced = syncOverlayAfterCompositionEdit(
+    state.recoveryOverlay,
+    state.editedMusicJson,
+    nextComposition,
+  );
+  if (!synced.prunedCount && !synced.markedCount) {
+    return {};
+  }
+  audioRecoveryLogger.info('Recovery overlay lifecycle after edit', {
+    action: action || 'commit',
+    prunedCount: synced.prunedCount,
+    markedCount: synced.markedCount,
+    remaining: synced.overlay.length,
+  });
+  return { recoveryOverlay: synced.overlay };
 }
 
 function currentEditorRefs(state) {
@@ -11829,6 +12291,13 @@ function commitCompositionTransaction(set, get, {
     });
   }
 
+  const overlayLifecycle = recoveryOverlayPatchAfterEdit(
+    state,
+    nextComposition,
+    action,
+    statePatch,
+  );
+
   set({
     editedMusicJson: nextComposition,
     compositionRevision: revision,
@@ -11854,6 +12323,7 @@ function commitCompositionTransaction(set, get, {
     ...(keepReharmonizePreview ? {} : clearedDevelopmentPreviewState({ preserveControls: true })),
     ...(keepReharmonizePreview ? {} : clearedArrangementPreviewState({ preserveControls: true })),
     ...statePatch,
+    ...overlayLifecycle,
     hiddenTrackIds: nextHidden,
     lockedTrackIds: nextLocked,
     playbackLoop: nextPlaybackLoop,
@@ -12051,6 +12521,8 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
       ...clearedDevelopmentPreviewState(),
       ...clearedArrangementPreviewState(),
     ...initialHarmonyUiState,
+    ...clearedAudioTranscriptionState(),
+    ...clearedAudioRecoveryState(get),
   });
 }
 
