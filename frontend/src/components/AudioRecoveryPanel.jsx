@@ -9,6 +9,7 @@ import { AUDIO_RECOVERY_PHASES, useMusicStore } from '../store/musicStore.js';
 import { isAcceptedAudioFilename } from '../utils/audioInputSupport.js';
 import { midiToPitch } from '../utils/pianoRollEvents.js';
 import { createAppLogger } from '../utils/appLogger.js';
+import AudioAlignmentWaveform from './AudioAlignmentWaveform.jsx';
 
 const log = createAppLogger('audioRecoveryUi');
 
@@ -32,6 +33,11 @@ const Hint = styled.p`
   margin: 0;
   font-size: 0.8rem;
   color: #64748b;
+`;
+
+const Meta = styled.div`
+  font-size: 0.8rem;
+  color: #475569;
 `;
 
 const Row = styled.div`
@@ -137,6 +143,11 @@ const AudioRecoveryPanel = () => {
   const recoverySourceObjectUrl = useMusicStore((s) => s.recoverySourceObjectUrl);
   const recoveryJobStatus = useMusicStore((s) => s.recoveryJobStatus);
   const currentProjectId = useMusicStore((s) => s.currentProjectId);
+  const alignmentDocument = useMusicStore((s) => s.alignmentDocument);
+  const sourceSeekRequest = useMusicStore((s) => s.sourceSeekRequest);
+  const audioWindowHighlight = useMusicStore((s) => s.audioWindowHighlight);
+  const onSourceAudioTimeUpdate = useMusicStore((s) => s.onSourceAudioTimeUpdate);
+  const setSourceAuditionMode = useMusicStore((s) => s.setSourceAuditionMode);
 
   const startRecoveryRecording = useMusicStore((s) => s.startRecoveryRecording);
   const stopRecoveryRecordingAndEnqueue = useMusicStore((s) => s.stopRecoveryRecordingAndEnqueue);
@@ -166,6 +177,24 @@ const AudioRecoveryPanel = () => {
       audioRef.current.src = recoverySourceObjectUrl;
     }
   }, [recoverySourceObjectUrl]);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el || !sourceSeekRequest) return;
+    const seconds = Number(sourceSeekRequest.seconds);
+    if (!Number.isFinite(seconds)) return;
+    try {
+      el.currentTime = Math.max(0, seconds);
+      log.debug('Applied source seek', {
+        seconds: Number(seconds.toFixed(3)),
+        reason: sourceSeekRequest.reason,
+      });
+    } catch {
+      log.warn('Source seek failed', { reason: sourceSeekRequest.reason });
+    }
+  }, [sourceSeekRequest]);
+
+  const quality = alignmentDocument?.quality || null;
 
   const busy = recoveryPhase === AUDIO_RECOVERY_PHASES.UPLOADING
     || recoveryPhase === AUDIO_RECOVERY_PHASES.RUNNING
@@ -370,15 +399,47 @@ const AudioRecoveryPanel = () => {
       ) : null}
 
       {recoverySourceObjectUrl || recoveryPhase === AUDIO_RECOVERY_PHASES.BOUND ? (
-        <audio
-          ref={audioRef}
-          controls
-          preload="metadata"
-          style={{ width: '100%' }}
-          data-testid="audio-recovery-source-audio"
-        >
-          <track kind="captions" />
-        </audio>
+        <>
+          {quality ? (
+            <Meta data-testid="audio-alignment-quality">
+              Alignment: {Math.round((quality.overall_confidence || 0) * 100)}%
+              {' · '}
+              {quality.method || 'timeline_parametric'}
+              {Array.isArray(quality.issues) && quality.issues.length
+                ? ` · ${quality.issues.join(', ')}`
+                : ''}
+            </Meta>
+          ) : null}
+          <AudioAlignmentWaveform />
+          <audio
+            ref={audioRef}
+            controls
+            preload="metadata"
+            style={{ width: '100%' }}
+            data-testid="audio-recovery-source-audio"
+            onTimeUpdate={(event) => {
+              onSourceAudioTimeUpdate(event.currentTarget.currentTime);
+            }}
+            onPlay={() => setSourceAuditionMode('playing')}
+            onPause={() => setSourceAuditionMode('idle')}
+            onSeeking={() => setSourceAuditionMode('scrubbing')}
+            onSeeked={() => {
+              const el = audioRef.current;
+              if (el && !el.paused) setSourceAuditionMode('playing');
+              else setSourceAuditionMode('idle');
+            }}
+          >
+            <track kind="captions" />
+          </audio>
+          {audioWindowHighlight ? (
+            <Meta data-testid="audio-alignment-window">
+              Window bars {audioWindowHighlight.startBar}–{audioWindowHighlight.endBar}
+              {': '}
+              {Number(audioWindowHighlight.startSeconds).toFixed(2)}s–
+              {Number(audioWindowHighlight.endSeconds).toFixed(2)}s
+            </Meta>
+          ) : null}
+        </>
       ) : null}
 
       {inReview ? (

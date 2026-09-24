@@ -42,6 +42,10 @@ export default [
         process: 'readonly',
         requestAnimationFrame: 'readonly',
         cancelAnimationFrame: 'readonly',
+        fetch: 'readonly',
+        AudioContext: 'readonly',
+        Uint8Array: 'readonly',
+        ArrayBuffer: 'readonly',
       },
     },
     plugins: {

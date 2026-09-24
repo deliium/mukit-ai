@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import styled from 'styled-components';
-import { useMusicStore } from '../../store/musicStore.js';
+import { AUDIO_RECOVERY_PHASES, useMusicStore } from '../../store/musicStore.js';
 import { secondsToPlaybackPosition } from '../../utils/playbackPosition.js';
 import { createAppLogger } from '../../utils/appLogger.js';
 import {
@@ -20,6 +20,19 @@ const PlaybackCursor = styled.div`
   background: #ef4444;
   pointer-events: none;
   z-index: 5;
+`;
+
+/** Source-audition playhead (HTMLAudio sync) — distinct from Tone PlaybackCursor. */
+const SourcePlayhead = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: ${(props) => props.$left}px;
+  width: 2px;
+  background: #b45309;
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 4;
 `;
 
 const EditCursor = styled.div`
@@ -176,6 +189,9 @@ function PianoRollOverlayLayer({
   const recoverySelectedProvisionalIds = useMusicStore((state) => state.recoverySelectedProvisionalIds);
   const recoveryConfidenceThreshold = useMusicStore((state) => state.recoveryConfidenceThreshold);
   const recoveryOverlay = useMusicStore((state) => state.recoveryOverlay);
+  const sourcePlayheadTick = useMusicStore((state) => state.sourcePlayheadTick);
+  const sourceAuditionMode = useMusicStore((state) => state.sourceAuditionMode);
+  const alignmentDocument = useMusicStore((state) => state.alignmentDocument);
   const lastCursorLogRef = useRef(0);
 
   const cursorTick = useMemo(() => {
@@ -213,6 +229,26 @@ function PianoRollOverlayLayer({
     }
     return Math.max(0, tick) * pixelsPerTick;
   }, [editCursorTick, pixelsPerTick]);
+
+  const sourcePlayheadLeft = useMemo(() => {
+    if (!alignmentDocument || sourcePlayheadTick == null) {
+      return null;
+    }
+    if (sourceAuditionMode === 'idle' && recoveryPhase !== AUDIO_RECOVERY_PHASES.BOUND) {
+      return null;
+    }
+    const tick = Number(sourcePlayheadTick);
+    if (!Number.isFinite(tick) || !Number.isFinite(pixelsPerTick) || pixelsPerTick <= 0) {
+      return null;
+    }
+    return Math.max(0, tick) * pixelsPerTick;
+  }, [
+    alignmentDocument,
+    sourcePlayheadTick,
+    sourceAuditionMode,
+    recoveryPhase,
+    pixelsPerTick,
+  ]);
 
   const layout = useMemo(() => ({
     pixelsPerTick,
@@ -417,6 +453,12 @@ function PianoRollOverlayLayer({
         <EditCursor
           data-testid="piano-roll-edit-cursor"
           $left={editCursorLeft}
+        />
+      )}
+      {sourcePlayheadLeft != null && (
+        <SourcePlayhead
+          data-testid="piano-roll-source-playhead"
+          $left={sourcePlayheadLeft}
         />
       )}
       {cursorTick !== null && (
