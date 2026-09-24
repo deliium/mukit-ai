@@ -35,7 +35,7 @@ mukit-ai/
 │   │   ├── audio_recovery_schemas.py       # audio.recovery.preview/result/bind.v1
 │   │   ├── audio_recovery_settings.py      # AUDIO_RECOVERY_* limits / asset root
 │   │   ├── audio_alignment_schemas.py      # audio.alignment.v1 + roundtrip.provenance.v1 + bound discovery
-│   │   ├── neural_audio_schemas.py # neural_audio_render.job.v1 (egress)
+│   │   ├── neural_audio_schemas.py # neural_audio_render.job.v1 + stem_set/stem.v1 (egress)
 │   │   ├── neural_audio_settings.py# NEURAL_AUDIO_* render root / quotas
 │   │   ├── dataset/                # Offline symbolic corpus pipeline (CLI; DATASET_ROOT)
 │   │   ├── embeddings/             # Handcrafted symbolic features (cache/index; no torch)
@@ -61,7 +61,7 @@ mukit-ai/
 │   │   │   ├── imports.py          # MIDI / MusicXML multipart import
 │   │   │   ├── transcription.py    # POST /transcription/audio (V3 mono)
 │   │   │   ├── audio_recovery.py   # /audio-recovery/jobs (+ bind/assets/bound; ingress + alignment)
-│   │   │   ├── neural_audio.py     # /neural-audio/renders (egress only)
+│   │   │   ├── neural_audio.py     # /neural-audio/renders + /stem-sets (egress only)
 │   │   │   ├── analysis.py         # POST /analysis/composition
 │   │   │   ├── arrangement.py      # GET/POST /composition/arrangement/*
 │   │   │   ├── composition_development.py
@@ -115,7 +115,10 @@ mukit-ai/
 │   │   │   ├── audio_recovery/                   # Separation, scaffolding, transcribe, pipeline (run_inline Bind→alignment)
 │   │   │   ├── audio_alignment.py                # Parametric ticks↔source_seconds map + quality
 │   │   │   ├── audio_roundtrip_provenance.py     # audio.roundtrip.provenance.v1 fragment builder
-│   │   │   ├── neural_audio_render_store.py      # Egress render jobs/assets (pattern twin for recovery)
+│   │   │   ├── neural_audio_render_store.py      # Mix egress jobs/assets under NEURAL_AUDIO_RENDER_ROOT
+│   │   │   ├── neural_audio_stem_store.py        # Stem-set / stem member meta + WAV paths
+│   │   │   ├── neural_audio_stem_partition.py    # Track→role heuristic + composition slice helpers
+│   │   │   ├── neural_audio_stems.py             # Stem-set enqueue/run/rerender (never mutates V2)
 │   │   │   └── project_composition.py   # Project ↔ composition mapping
 │   │   ├── fixtures/               # composition.v1 + composition_v2_expressive + arrangement_instruments.v1.json
 │   │   └── db/                     # Shared infrastructure: connection + Alembic
@@ -158,7 +161,7 @@ mukit-ai/
 | **Audio transcription** | `routers/transcription.py`, `audio_transcription_schemas.py`, `audio_transcription_settings.py`, `services/audio_transcription/` | `AudioInputPanel`, `transcribeAudio` in `musicApi.js`, audio session slice of `musicStore`, `audioTranscriptionApply.js` |
 | **Audio recovery (V4 mixed ingress)** | `routers/audio_recovery.py`, `audio_recovery_schemas.py`, `audio_recovery_settings.py`, `services/audio_recovery/` + `audio_recovery_store.py` — optional separation → scaffolding → confidence-gated notes; Apply→Bind durable source + `audio.recovery.result.v1` overlay (+ sibling `alignment_json` via alignment services); never confidence on V2 events; never `DATASET_ROOT`; `run_inline` jobs | `AudioRecoveryPanel`, recovery APIs in `musicApi.js`, `audioRecovery{Apply,EnsureTracks,Gates,Overlay,PhaseGuards}.js`, recovery session slice of `musicStore` — HTMLAudio source audition (not `playbackSource` / Tone) |
 | **Audio↔symbolic alignment** | `audio_alignment_schemas.py` (`audio.alignment.v1`, `audio.roundtrip.provenance.v1`, bound discovery DTOs); `services/audio_alignment.py` + `audio_roundtrip_provenance.py`; Bind writes `kind=alignment_json` + `alignment_asset_id`; `GET /audio-recovery/projects/{id}/bound` hydrate; never nests into `AudioRecoveryResultV1`; never mutates source WAV; never `composition.v4` / `DATASET_ROOT` | `AudioAlignmentWaveform`, `audioAlignment.js` / `audioWaveformPeaks.js` / `compositionSnapshotFingerprint.js`, alignment sync clock + `sourcePlayheadTick` in `musicStore`, piano-roll source playhead (dual clock vs Tone); soft-stale neural UI via snapshot fingerprint |
-| **Neural audio rendering** | `routers/neural_audio.py`, `neural_audio_schemas.py`, `neural_audio_settings.py`, `services/neural_audio_*`, `ai_runtime` `AUDIO_RENDER` adapters (`fake:neural-audio`, `sidecar:musicgen`) — egress only; never mutates V2; jobs pin `composition.snapshot.v1` `source_fingerprint` for soft-stale compare | `NeuralAudioRenderPanel`, neural audio APIs in `musicApi.js`, `neuralAudioRenderUi.js` (+ stale banner / Render again) |
+| **Neural audio rendering** | `routers/neural_audio.py`, `neural_audio_schemas.py` (mix `job.v1` + `stem_set`/`stem.v1`), `neural_audio_settings.py`, `services/neural_audio_{render,stem_*}.py`, `ai_runtime` `AUDIO_RENDER` adapters (`fake:neural-audio` + `direct_stems`, `sidecar:musicgen`, `local:midi-ddsp`) — egress only; stem sets under `{project}/{set_id}/{stem_id}.wav`; selective rerender via `supersedes_stem_id`; explicit FluidSynth stems only (never silent generative fallback); never mutates V2; pins `composition.snapshot.v1` fingerprint for soft-stale; recovery `stem_bindings` are **not** these WAVs | `NeuralAudioRenderPanel` (mix + Stems), neural APIs in `musicApi.js`, `neuralAudioRenderUi.js` + `neuralAudioStemUi.js` (sync honesty + soft-stale) |
 | **Datasets (offline)** | `app/dataset/` (`cli`, schemas, store, ingest/normalize/segment/dedup/split/stats); `DATASET_ROOT` filesystem only — never `PROJECT_DB_PATH` | CLI / docs only (no SPA) |
 | **Embeddings** | `app/embeddings/` (schemas/features/vector/cache/index); `routers/embeddings.py`; `services/composition_embedding.py` + style conditioning / invalidation; ready `local:symbolic-features-v1` — affinity ≠ quality; never artist≡style; never silent `DATASET_ROOT` ingest | Develop reference picker + similar sections; Motifs related; `compositionEmbeddingReference.js` |
 | **Composer profiles** | `composer_profile_schemas.py`, `composer_profile_settings.py`, `routers/composer_profiles.py`, `services/composer_profile_{store,derive,resolve,merge}.py` — durable soft prefs in `PROJECT_DB_PATH`; additive generate fragment only; never melodies / `DATASET_ROOT` | `ComposerProfilesPanel`, `composerProfileApi.js`, MusicGenerator profile/strength selectors, `llmGenerateRequest.js` |
@@ -230,7 +233,7 @@ FastAPI backend
 
 1. **Module boundaries by convention:** Treat Projects, Import, Analysis, Composition/LLM, and Rendering/Export as modules even while files live in shared `services/` / `components/` folders. Prefer new files named and clustered by module.
 2. **Thin HTTP, fat services:** Keep `main.py` / routers focused on transport. Put generation, validation, patching, persistence, and export logic in `services/`.
-3. **Canonical composition first:** Any path that mutates or exports music should go through validated `composition.v2` (or explicit legacy/V1 migration), not ad-hoc JSON shapes. Neural audio jobs are egress-only and must never write into compositions or snapshots. Audio recovery Apply writes V2 notes/metadata only (confidence lives on the related overlay asset after Bind); recovery must not invent playable notes from estimated harmony alone. Alignment (`audio.alignment.v1`) is a non-playable Bind sibling (`kind=alignment_json`) — never on note events, never `composition.v4`.
+3. **Canonical composition first:** Any path that mutates or exports music should go through validated `composition.v2` (or explicit legacy/V1 migration), not ad-hoc JSON shapes. Neural audio mix jobs and stem sets are egress-only and must never write into compositions or snapshots. Audio recovery Apply writes V2 notes/metadata only (confidence lives on the related overlay asset after Bind); recovery must not invent playable notes from estimated harmony alone. Alignment (`audio.alignment.v1`) is a non-playable Bind sibling (`kind=alignment_json`) — never on note events, never `composition.v4`.
 4. **Application services orchestrate:** Services coordinate LLM calls, validation, and I/O. Push invariants into schema validation and dedicated composition helpers rather than scattering rules across handlers and React components.
 5. **Frontend purity where it matters:** Keep event math, validation mirrors, and Tone.js engine code in `utils/` with unit tests; keep UI in `components/`. Mirror alignment map math and `composition.snapshot.v1` fingerprints in FE utils for seek/stale checks.
 6. **Infrastructure stays small and shared:** `db/`, env-based `llm_settings`, Docker, and CORS belong to shared infrastructure — not copied per feature.
@@ -303,4 +306,6 @@ from ..services.project_store import get_project
 - ❌ Cross-importing unrelated feature internals (e.g. WAV renderer importing project router helpers) instead of shared schemas/services
 - ❌ Anemic “pass-through” services that only forward kwargs with no validation or boundary — either add real orchestration or call the lower layer from the owning module consistently
 - ❌ Putting alignment / confidence / stem asset ids on `CompositionV2NoteEvent`, inventing `composition.v4`, or driving source WAV from Tone `playbackSource`
+- ❌ Confusing recovery/Demucs `stem_bindings` (role→`track_id`) with durable neural stem-set WAVs under `/neural-audio/stem-sets`
+- ❌ Silently swapping generative stem failure to FluidSynth, or labeling per-stem `render` as `direct_stems`
 - ❌ Rewriting bound `source_audio` assets when enqueueing neural renders or marking jobs soft-stale

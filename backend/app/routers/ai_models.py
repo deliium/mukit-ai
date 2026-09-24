@@ -21,6 +21,13 @@ router = APIRouter(prefix="/ai", tags=["ai-runtime"])
 
 
 def _to_catalog_item(descriptor, *, default_model_id: str | None) -> AiModelCatalogItem:
+    limits = dict(descriptor.limits or {})
+    stem_caps_raw = limits.get("stem_capabilities") or []
+    stem_capabilities = (
+        [str(item) for item in stem_caps_raw]
+        if isinstance(stem_caps_raw, (list, tuple))
+        else []
+    )
     return AiModelCatalogItem(
         id=descriptor.id,
         display_name=descriptor.display_name,
@@ -33,8 +40,9 @@ def _to_catalog_item(descriptor, *, default_model_id: str | None) -> AiModelCata
         status=descriptor.status,
         credentials_present=bool(descriptor.health.credentials_present),
         is_default=descriptor.id == default_model_id,
-        limits=dict(descriptor.limits or {}),
+        limits=limits,
         health_detail=descriptor.health.detail,
+        stem_capabilities=stem_capabilities,
     )
 
 

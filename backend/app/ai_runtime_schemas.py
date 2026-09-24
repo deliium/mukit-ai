@@ -21,6 +21,7 @@ class AiModelCatalogItem(BaseModel):
     is_default: bool = False
     limits: dict[str, Any] = Field(default_factory=dict)
     health_detail: str | None = Field(default=None, max_length=64)
+    stem_capabilities: list[str] = Field(default_factory=list, max_length=16)
 
 
 class AiModelsResponse(BaseModel):

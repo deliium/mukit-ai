@@ -250,6 +250,11 @@ def sidecar_musicgen_descriptor(
                 "preferred_adapter": "melody_conditioning",
                 "note_perfect": False,
                 "max_concurrency": settings.max_concurrency,
+                "stem_capabilities": [
+                    "per_track",
+                    "grouped_tracks",
+                    "section_symbolic_filter",
+                ],
             },
             provider_model="musicgen",
         )
@@ -274,6 +279,11 @@ def sidecar_musicgen_descriptor(
                 "fidelity_class": "generative",
                 "preferred_adapter": "melody_conditioning",
                 "note_perfect": False,
+                "stem_capabilities": [
+                    "per_track",
+                    "grouped_tracks",
+                    "section_symbolic_filter",
+                ],
             },
             provider_model="musicgen",
         )

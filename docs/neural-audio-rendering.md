@@ -55,6 +55,34 @@ Statuses: `queued` → `running` → (`complete` | `failed`). Error codes includ
 
 Jobs store `model_id`, `model_version`, `adapter_kind`, `fidelity_class`, instructions, optional genre/mood, `source_revision_id`, `source_fingerprint`, audio relpath / sha256 prefix. Responses always include `mutates_composition: false`.
 
+## Stem sets (multi-stem egress)
+
+Independently manageable stems reuse the same neural job architecture. Mix jobs (`/neural-audio/renders`) remain unchanged.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/neural-audio/stem-sets` | Enqueue stem set (heuristic or explicit role→tracks) |
+| `GET` | `/neural-audio/stem-sets/{id}` | Set + members (no PCM) |
+| `GET` | `/neural-audio/stem-sets?project_id=` | List |
+| `POST` | `/neural-audio/stem-sets/{id}/stems/{stem_id}/rerender` | Selective stem rerender (`supersedes_stem_id`) |
+| `GET` | `/neural-audio/stems/{id}/audio` | Download when complete |
+| `DELETE` | `/neural-audio/stem-sets/{id}` | Delete set + member files |
+
+Stem roles: `piano` \| `bass` \| `strings` \| `drums` \| `vocals` \| `other`.
+
+**Capabilities** (advertised on `GET /ai/models?operation=audio_render` as `stem_capabilities`):
+
+| Capability | Meaning |
+|------------|---------|
+| `direct_stems` | Engine returns multi-stem map in **one** call (fake CI only in v1); siblings vary by `stem_role` — not identical WAVs stamped `direct_stems` from per-stem `render` |
+| `per_track` / `grouped_tracks` | Slice composition tracks then render |
+| `section_symbolic_filter` | Optional bar-range **symbolic** filter before render — not audio punch-in |
+| `fluidsynth_deterministic` | Explicit `engine=fluidsynth` only — never silent generative fallback |
+
+**Sync honesty:** each stem records `sync_class` (`deterministic_midi` \| `timeline_aligned` \| `generative_independent`). Generative stems are **not** sample-locked to siblings — do not claim sample-accurate unchanged audio.
+
+Every stem pins `source_fingerprint`, `source_track_ids`, `model_id` / `model_version`, render parameters, and timeline anchors. Rendering never mutates `composition.v2`.
+
 ## Configuration
 
 | Env | Default | Notes |
@@ -89,8 +117,9 @@ Default `docker compose up` does not pull the neural image. Place operator-accep
 | Stable Audio Open 1.0 | tools vary | Stability AI Community License (non-commercial / revenue caps) | **Not baked**; docs-only optional pin |
 | MIDI-DDSP | Apache-2.0 (code) | Check Magenta weight redistribution | **Not baked**; optional extras |
 | `fake:neural-audio` | Mukit | N/A (synthetic short WAV) | Always available when fake mode on |
+| Stem sets | Same engines as above | Same licenses per chosen engine / FluidSynth | Stem paths inherit the selected engine license; FluidSynth stems are explicit only |
 
-Do **not** claim Stable Audio Open is freely redistributable in product images. Do not auto-download weights on `docker compose up`. Same install policy as [local-ai.md](local-ai.md) / [music-transformer.md](music-transformer.md). DAW handoff remains SMF/MusicXML — see [daw-interoperability.md](daw-interoperability.md).
+Do **not** claim Stable Audio Open is freely redistributable in product images. Do not auto-download weights on `docker compose up`. Same install policy as [local-ai.md](local-ai.md) / [music-transformer.md](music-transformer.md). DAW handoff remains SMF/MusicXML — see [daw-interoperability.md](daw-interoperability.md). Stem downloads are still egress WAVs, not a second score.
 
 ## Logging
 
@@ -104,7 +133,7 @@ Frontend: `appLogger('neuralAudioRender')` — phase transitions only; DEBUG may
 
 ## UI
 
-**Render with AI** panel beside Export. **Export WAV (deterministic)** remains FluidSynth. Job list supports multiple renders, status badges, download when complete.
+**Render with AI** panel beside Export. **Export WAV (deterministic)** remains FluidSynth. Job list supports multiple mix renders, status badges, download when complete. **Stems** section: role checklist, neural or explicit FluidSynth engine, render stem set, per-stem download/rerender, sync-class honesty + soft-stale banners.
 
 ## Testing
 
@@ -114,10 +143,10 @@ Backend fake + mocked sidecar (no heavy weights):
 cd backend && NEURAL_AUDIO_FAKE_MODE=1 pytest tests/test_neural_audio_*.py -q
 ```
 
-Frontend unit (disclaimers / download gate):
+Frontend unit (disclaimers / download gate / stem sync):
 
 ```bash
-node --test frontend/src/utils/neuralAudioRenderUi.test.js
+node --test frontend/src/utils/neuralAudioRenderUi.test.js frontend/src/utils/neuralAudioStemUi.test.js
 ```
 
 Optional Playwright smoke (running stack with `LLM_FAKE_MODE=1` **and** `NEURAL_AUDIO_FAKE_MODE=1`):

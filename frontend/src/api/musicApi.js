@@ -1960,6 +1960,133 @@ export async function deleteNeuralAudioRender(renderId) {
   }
 }
 
+/**
+ * Enqueue a stem set. Never mutates composition on the server.
+ */
+export async function enqueueNeuralAudioStemSet(payload) {
+  const body = {
+    instructions: typeof payload?.instructions === 'string' ? payload.instructions : '',
+    genre: payload?.genre || null,
+    mood: payload?.mood || null,
+    model_id: payload?.model_id || null,
+    adapter_kind: payload?.adapter_kind || null,
+    tempo_bpm: payload?.tempo_bpm ?? null,
+    seed: payload?.seed ?? null,
+    engine: payload?.engine || 'neural',
+    stem_roles: Array.isArray(payload?.stem_roles) ? payload.stem_roles : null,
+    stems: Array.isArray(payload?.stems) ? payload.stems : null,
+    bar_range: payload?.bar_range || null,
+  };
+  if (payload?.project_id && payload?.source_revision_id) {
+    body.project_id = payload.project_id;
+    body.source_revision_id = payload.source_revision_id;
+  }
+  if (payload?.composition) {
+    validateCanonicalForApi(payload.composition, { action: 'neural-audio-stem-set' });
+    body.composition = payload.composition;
+  }
+  neuralAudioLogger.info('Enqueue neural audio stem set', {
+    hasProjectId: Boolean(body.project_id),
+    hasRevision: Boolean(body.source_revision_id),
+    hasComposition: Boolean(body.composition),
+    modelId: body.model_id,
+    engine: body.engine,
+    stemRoleCount: Array.isArray(body.stem_roles) ? body.stem_roles.length : null,
+  });
+  try {
+    return await request('post', '/neural-audio/stem-sets', body);
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
+export async function listNeuralAudioStemSets(projectId) {
+  neuralAudioLogger.info('List neural audio stem sets', { projectId });
+  try {
+    return await request('get', '/neural-audio/stem-sets', null, {
+      params: { project_id: projectId },
+    });
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
+export async function getNeuralAudioStemSet(stemSetId) {
+  try {
+    return await request('get', `/neural-audio/stem-sets/${encodeURIComponent(stemSetId)}`);
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
+export async function rerenderNeuralAudioStem(stemSetId, stemId, payload = {}) {
+  const body = {
+    instructions: typeof payload?.instructions === 'string' ? payload.instructions : '',
+    genre: payload?.genre || null,
+    mood: payload?.mood || null,
+    model_id: payload?.model_id || null,
+    adapter_kind: payload?.adapter_kind || null,
+    tempo_bpm: payload?.tempo_bpm ?? null,
+    seed: payload?.seed ?? null,
+    engine: payload?.engine || null,
+    bar_range: payload?.bar_range || null,
+  };
+  if (payload?.project_id && payload?.source_revision_id) {
+    body.project_id = payload.project_id;
+    body.source_revision_id = payload.source_revision_id;
+  }
+  if (payload?.composition) {
+    validateCanonicalForApi(payload.composition, { action: 'neural-audio-stem-rerender' });
+    body.composition = payload.composition;
+  }
+  neuralAudioLogger.info('Rerender neural audio stem', {
+    stemSetId,
+    stemId,
+    hasComposition: Boolean(body.composition),
+  });
+  try {
+    return await request(
+      'post',
+      `/neural-audio/stem-sets/${encodeURIComponent(stemSetId)}/stems/${encodeURIComponent(stemId)}/rerender`,
+      body,
+    );
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
+export async function downloadNeuralAudioStem(stemId) {
+  neuralAudioLogger.info('Download neural audio stem', { stemId });
+  try {
+    const response = await axios.get(
+      `/neural-audio/stems/${encodeURIComponent(stemId)}/audio`,
+      { responseType: 'blob' },
+    );
+    const filename =
+      filenameFromContentDisposition(response.headers?.['content-disposition'])
+      || `stem-${stemId}.wav`;
+    downloadBlob(response.data, filename);
+    return { filename, byteSize: response.data?.size ?? null };
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
+export async function deleteNeuralAudioStemSet(stemSetId) {
+  neuralAudioLogger.info('Delete neural audio stem set', { stemSetId });
+  try {
+    await request('delete', `/neural-audio/stem-sets/${encodeURIComponent(stemSetId)}`);
+  } catch (error) {
+    const parsed = parseNeuralAudioError(error);
+    throw new NeuralAudioApiError(parsed.message, parsed);
+  }
+}
+
 const audioRecoveryLogger = createAppLogger('musicApi.audioRecovery');
 
 function parseAudioRecoveryError(error) {

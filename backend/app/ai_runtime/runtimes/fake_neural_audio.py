@@ -67,12 +67,16 @@ class FakeNeuralAudioGenerationModel:
         """Return ``{audio_bytes, content_type, model_version, fidelity_class}``."""
         fingerprint = ""
         seed = 0
+        stem_role = ""
         if isinstance(composition_or_spec, dict):
             fingerprint = str(composition_or_spec.get("source_fingerprint") or "")
             seed_raw = composition_or_spec.get("seed")
             if isinstance(seed_raw, int):
                 seed = seed_raw
-        wav_bytes = build_fake_neural_wav(fingerprint=fingerprint, seed=seed)
+            stem_role = str(composition_or_spec.get("stem_role") or "")
+        wav_bytes = build_fake_neural_wav(
+            fingerprint=fingerprint, seed=seed, stem_role=stem_role
+        )
         logger.info(
             "Fake neural audio render complete",
             extra={
@@ -81,6 +85,7 @@ class FakeNeuralAudioGenerationModel:
                 "sha256_prefix": hashlib.sha256(wav_bytes).hexdigest()[:16],
                 "fingerprint_prefix": fingerprint[:12] if fingerprint else None,
                 "seed": seed,
+                "stem_role": stem_role or None,
             },
         )
         return {
@@ -91,10 +96,69 @@ class FakeNeuralAudioGenerationModel:
             "ext": "wav",
         }
 
+    async def render_stems(self, composition_or_spec: Any) -> dict[str, Any]:
+        """One-shot multi-stem map for ``direct_stems`` (role → distinct WAV)."""
+        fingerprint = ""
+        seed = 0
+        roles: list[str] = []
+        if isinstance(composition_or_spec, dict):
+            fingerprint = str(composition_or_spec.get("source_fingerprint") or "")
+            seed_raw = composition_or_spec.get("seed")
+            if isinstance(seed_raw, int):
+                seed = seed_raw
+            raw_roles = composition_or_spec.get("stem_roles") or []
+            if isinstance(raw_roles, (list, tuple)):
+                roles = [str(r) for r in raw_roles if str(r).strip()]
+        if not roles:
+            raise ValueError("render_stems requires non-empty stem_roles")
+        stems: dict[str, dict[str, Any]] = {}
+        prefixes: list[str] = []
+        for role in roles:
+            wav_bytes = build_fake_neural_wav(
+                fingerprint=fingerprint, seed=seed, stem_role=role
+            )
+            prefix = hashlib.sha256(wav_bytes).hexdigest()[:16]
+            prefixes.append(prefix)
+            stems[role] = {
+                "audio_bytes": wav_bytes,
+                "content_type": "audio/wav",
+                "ext": "wav",
+                "sha256_prefix": prefix,
+                "byte_size": len(wav_bytes),
+            }
+        logger.info(
+            "Fake neural direct_stems complete",
+            extra={
+                "model_id": self.model_id,
+                "capability_used": "direct_stems",
+                "stem_role_count": len(roles),
+                "stem_roles": roles,
+                "sha256_prefixes": prefixes,
+                "fingerprint_prefix": fingerprint[:12] if fingerprint else None,
+                "seed": seed,
+            },
+        )
+        return {
+            "stems": stems,
+            "model_version": self.model_version,
+            "fidelity_class": self.fidelity_class,
+            "content_type": "audio/wav",
+            "ext": "wav",
+        }
 
-def build_fake_neural_wav(*, fingerprint: str = "", seed: int = 0) -> bytes:
-    """Build a short mono PCM WAV whose bytes are deterministic for (fp, seed)."""
-    material = f"{fingerprint}|{seed}|fake:neural-audio".encode("utf-8")
+
+def build_fake_neural_wav(
+    *,
+    fingerprint: str = "",
+    seed: int = 0,
+    stem_role: str = "",
+) -> bytes:
+    """Build a short mono PCM WAV deterministic for (fp, seed[, stem_role])."""
+    if stem_role:
+        material = f"{fingerprint}|{seed}|{stem_role}|fake:neural-audio".encode("utf-8")
+    else:
+        # Preserve mix-job hash stability when no stem role is in play.
+        material = f"{fingerprint}|{seed}|fake:neural-audio".encode("utf-8")
     digest = hashlib.sha256(material).digest()
     # Map digest bytes to a stable pitch class (MIDI 60–71) and amplitude.
     midi = 60 + (digest[0] % 12)
@@ -119,10 +183,15 @@ def build_fake_neural_wav(*, fingerprint: str = "", seed: int = 0) -> bytes:
     return buffer.getvalue()
 
 
-def fake_neural_audio_sha256_prefix(*, fingerprint: str = "", seed: int = 0) -> str:
-    return hashlib.sha256(build_fake_neural_wav(fingerprint=fingerprint, seed=seed)).hexdigest()[
-        :16
-    ]
+def fake_neural_audio_sha256_prefix(
+    *,
+    fingerprint: str = "",
+    seed: int = 0,
+    stem_role: str = "",
+) -> str:
+    return hashlib.sha256(
+        build_fake_neural_wav(fingerprint=fingerprint, seed=seed, stem_role=stem_role)
+    ).hexdigest()[:16]
 
 
 def default_fake_neural_audio_descriptor() -> ModelDescriptor:
@@ -146,6 +215,12 @@ def default_fake_neural_audio_descriptor() -> ModelDescriptor:
             "preferred_adapter": "text_prompt",
             "max_audio_seconds": _DURATION_SECONDS,
             "note_perfect": False,
+            "stem_capabilities": [
+                "direct_stems",
+                "per_track",
+                "grouped_tracks",
+                "section_symbolic_filter",
+            ],
         },
         provider_model="neural-audio",
     )

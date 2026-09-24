@@ -26,7 +26,7 @@ mukit-ai/
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
 │   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
+│   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
@@ -43,7 +43,7 @@ mukit-ai/
 │   │   ├── audio_recovery_schemas.py        # audio.recovery.preview/result/bind.v1 DTOs
 │   │   ├── audio_alignment_schemas.py       # audio.alignment.v1 + roundtrip provenance DTOs
 │   │   ├── neural_audio_settings.py         # NEURAL_AUDIO_* render root / engine / quotas
-│   │   ├── neural_audio_schemas.py          # neural_audio_render.job.v1 DTOs / fidelity / adapters
+│   │   ├── neural_audio_schemas.py          # neural_audio_render.job.v1 + stem_set/stem.v1 DTOs / fidelity / adapters
 │   │   ├── embeddings/      # Handcrafted symbolic feature embeddings (cache/index; no torch; never DATASET_ROOT ingest)
 │   │   ├── dataset/         # Offline symbolic corpus pipeline (CLI; DATASET_ROOT only)
 │   │   ├── tokenizer/       # Composition V2 ↔ tokens codec (CLI; no PROJECT_DB_PATH)
@@ -145,8 +145,9 @@ mukit-ai/
 | `backend/app/services/composition_theme.py` | Structured theme plan + generation recurrence |
 | `backend/app/routers/imports.py` | `POST /imports/midi` and `/imports/musicxml` |
 | `backend/app/routers/transcription.py` | `POST /transcription/audio` → `transcription.preview.v1` only |
-| `backend/app/routers/neural_audio.py` | `POST/GET/DELETE /neural-audio/renders` (+ `/audio` download) |
-| `backend/app/services/neural_audio_render.py` | Job orchestration; read-only composition; never mutates V2 |
+| `backend/app/routers/neural_audio.py` | `POST/GET/DELETE /neural-audio/renders` (+ `/audio` download); `POST/GET/DELETE /neural-audio/stem-sets` (+ stem rerender / `/stems/{id}/audio`) |
+| `backend/app/services/neural_audio_render.py` | Mix job orchestration; read-only composition; never mutates V2 |
+| `backend/app/services/neural_audio_stems.py` | Stem-set enqueue/run/selective rerender; never mutates V2 |
 | `backend/app/services/composition_import.py` | Shared source → V2 canonicalization |
 | `backend/app/services/composition_midi_import.py` | Deterministic MIDI parse |
 | `backend/app/services/composition_musicxml_import.py` | Hardened MusicXML/MXL parse |
@@ -224,7 +225,7 @@ mukit-ai/
 | Audio transcription | `docs/audio-transcription.md` | Monophonic mic/file → preview → Apply into V2 |
 | Audio recovery | `docs/audio-recovery.md` | V4 mixed audio → optional stems/scaffolding → Apply→Bind overlay |
 | Audio↔symbolic alignment | `docs/audio-symbolic-alignment.md` | Bind-time map, bar↔source seek, waveform sync, soft-stale neural renders |
-| Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument jobs; licenses; Compose profile |
+| Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument mix + stem-set egress; licenses; Compose profile |
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
 | Composition Critique | `docs/composition-critique.md` | Evaluation engine, strata, climax AC, `/critique/evaluate` |

@@ -90,6 +90,11 @@ def local_midi_ddsp_descriptor(
             "fidelity_class": "neural_instrument",
             "preferred_adapter": "midi_projection",
             "note_perfect": False,
+            "stem_capabilities": [
+                "per_track",
+                "grouped_tracks",
+                "section_symbolic_filter",
+            ],
         },
         provider_model="midi-ddsp",
     )

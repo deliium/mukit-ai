@@ -2,12 +2,18 @@ import React, { useEffect, useState } from 'react';
 import styled from 'styled-components';
 import {
   deleteNeuralAudioRender,
+  deleteNeuralAudioStemSet,
   downloadNeuralAudioRender,
+  downloadNeuralAudioStem,
   enqueueNeuralAudioRender,
+  enqueueNeuralAudioStemSet,
   fetchAiModels,
   getNeuralAudioRender,
   listNeuralAudioRenders,
+  listNeuralAudioStemSets,
+  getNeuralAudioStemSet,
   NeuralAudioApiError,
+  rerenderNeuralAudioStem,
 } from '../api/musicApi.js';
 import { useMusicStore } from '../store/musicStore.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
@@ -17,9 +23,16 @@ import {
   isNeuralAudioDownloadReady,
   isNeuralAudioJobStale,
 } from '../utils/neuralAudioRenderUi.js';
+import {
+  NEURAL_AUDIO_STEM_ROLES,
+  isNeuralAudioStemSetStale,
+  latestStemsByRole,
+  neuralAudioStemSyncDisclaimer,
+} from '../utils/neuralAudioStemUi.js';
 import { resolveLiveSnapshotFingerprint } from '../utils/compositionSnapshotFingerprint.js';
 
 const log = createAppLogger('neuralAudioRender');
+const stemLog = createAppLogger('neuralAudioStems');
 
 const Panel = styled.section`
   margin-top: 12px;
@@ -170,6 +183,11 @@ const NeuralAudioRenderPanel = () => {
   const [mood, setMood] = useState('');
   const [adapterKind, setAdapterKind] = useState('');
   const [jobs, setJobs] = useState([]);
+  const [stemSets, setStemSets] = useState([]);
+  const [selectedStemRoles, setSelectedStemRoles] = useState(() => (
+    NEURAL_AUDIO_STEM_ROLES.filter((role) => role !== 'vocals' && role !== 'other')
+  ));
+  const [stemEngine, setStemEngine] = useState('neural');
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -234,6 +252,7 @@ const NeuralAudioRenderPanel = () => {
   useEffect(() => {
     if (!currentProjectId) {
       setJobs([]);
+      setStemSets([]);
       return undefined;
     }
     let cancelled = false;
@@ -244,6 +263,14 @@ const NeuralAudioRenderPanel = () => {
       })
       .catch(() => {
         if (!cancelled) setJobs([]);
+      });
+    listNeuralAudioStemSets(currentProjectId)
+      .then((response) => {
+        if (cancelled) return;
+        setStemSets(Array.isArray(response?.items) ? response.items : []);
+      })
+      .catch(() => {
+        if (!cancelled) setStemSets([]);
       });
     return () => {
       cancelled = true;
@@ -271,6 +298,33 @@ const NeuralAudioRenderPanel = () => {
     }, 2000);
     return () => clearInterval(timer);
   }, [jobs]);
+
+  useEffect(() => {
+    const pendingSets = stemSets.filter((set) => {
+      if (set.status === 'queued' || set.status === 'running') return true;
+      return (set.stems || []).some(
+        (stem) => stem.status === 'queued' || stem.status === 'running',
+      );
+    });
+    if (pendingSets.length === 0) return undefined;
+    const timer = setInterval(() => {
+      pendingSets.forEach((stemSet) => {
+        getNeuralAudioStemSet(stemSet.id)
+          .then((fresh) => {
+            setStemSets((prev) => {
+              const next = prev.map((item) => (item.id === fresh.id ? fresh : item));
+              return next;
+            });
+            stemLog.debug('Stem set poll', {
+              stemSetId: fresh.id,
+              status: fresh.status,
+            });
+          })
+          .catch(() => {});
+      });
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [stemSets]);
 
   const handleRender = async () => {
     if (!canRender) {
@@ -346,6 +400,120 @@ const NeuralAudioRenderPanel = () => {
       setErrorMessage(error?.message || 'Delete failed');
     }
   };
+
+  const toggleStemRole = (role) => {
+    setSelectedStemRoles((prev) => (
+      prev.includes(role) ? prev.filter((item) => item !== role) : [...prev, role]
+    ));
+  };
+
+  const handleRenderStems = async () => {
+    if (!canRender) {
+      setErrorMessage(validation.message || 'Canonical composition required');
+      return;
+    }
+    if (selectedStemRoles.length === 0) {
+      setErrorMessage('Select at least one stem role');
+      return;
+    }
+    setBusy(true);
+    setErrorMessage('');
+    setStatusMessage('Submitting stem set…');
+    stemLog.info('Render stems clicked', {
+      modelId: modelId || null,
+      engine: stemEngine,
+      roles: selectedStemRoles,
+      fidelityClass,
+    });
+    try {
+      const payload = {
+        composition: editedMusicJson,
+        instructions,
+        genre: genre || null,
+        mood: mood || null,
+        model_id: stemEngine === 'neural' ? (modelId || null) : null,
+        adapter_kind: adapterKind || null,
+        engine: stemEngine,
+        stem_roles: selectedStemRoles,
+      };
+      if (currentProjectId && currentRevisionId) {
+        payload.project_id = currentProjectId;
+        payload.source_revision_id = currentRevisionId;
+      }
+      const stemSet = await enqueueNeuralAudioStemSet(payload);
+      setStemSets((prev) => [stemSet, ...prev.filter((item) => item.id !== stemSet.id)]);
+      setStatusMessage(
+        `Stem set ${stemSet.status}: ${stemSet.stems?.length || 0} stems (${stemSet.engine})`,
+      );
+      stemLog.info('Stem set accepted', {
+        stemSetId: stemSet.id,
+        status: stemSet.status,
+        stemCount: stemSet.stems?.length || 0,
+        engine: stemSet.engine,
+      });
+    } catch (error) {
+      const message =
+        error instanceof NeuralAudioApiError
+          ? error.message
+          : error?.message || 'Stem render failed';
+      setErrorMessage(message);
+      setUiError?.(message);
+      setStatusMessage('');
+      stemLog.error('Stem set enqueue failed', {
+        code: error?.code || null,
+        status: error?.status || null,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRerenderStem = async (stemSetId, stemId) => {
+    if (!canRender) return;
+    setBusy(true);
+    setErrorMessage('');
+    stemLog.info('Rerender stem clicked', { stemSetId, stemId });
+    try {
+      const payload = {
+        composition: editedMusicJson,
+        instructions,
+        model_id: stemEngine === 'neural' ? (modelId || null) : null,
+        engine: stemEngine,
+      };
+      if (currentProjectId && currentRevisionId) {
+        payload.project_id = currentProjectId;
+        payload.source_revision_id = currentRevisionId;
+      }
+      const updated = await rerenderNeuralAudioStem(stemSetId, stemId, payload);
+      setStemSets((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setStatusMessage('Stem rerender complete');
+    } catch (error) {
+      setErrorMessage(error?.message || 'Stem rerender failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDownloadStem = async (stemId) => {
+    try {
+      await downloadNeuralAudioStem(stemId);
+      stemLog.info('Stem download started', { stemId });
+    } catch (error) {
+      setErrorMessage(error?.message || 'Stem download failed');
+    }
+  };
+
+  const handleDeleteStemSet = async (stemSetId) => {
+    try {
+      await deleteNeuralAudioStemSet(stemSetId);
+      setStemSets((prev) => prev.filter((item) => item.id !== stemSetId));
+      stemLog.info('Stem set deleted', { stemSetId });
+    } catch (error) {
+      setErrorMessage(error?.message || 'Stem set delete failed');
+    }
+  };
+
+  const stemCapabilities = selectedModel?.stem_capabilities || selectedModel?.limits?.stem_capabilities || [];
 
   return (
     <Panel data-testid="neural-audio-render-panel">
@@ -511,6 +679,117 @@ const NeuralAudioRenderPanel = () => {
                     Delete
                   </SecondaryButton>
                 </Row>
+              </JobItem>
+            );
+          })}
+        </JobList>
+      ) : null}
+
+      <Title style={{ marginTop: 16 }}>Stems</Title>
+      <Banner $tone="info" data-testid="neural-audio-stems-disclaimer">
+        Render separate piano/bass/strings (etc.) stems without changing the symbolic score.
+        Generative stems are not sample-locked to siblings.
+        {stemCapabilities.length
+          ? ` Model capabilities: ${stemCapabilities.join(', ')}.`
+          : ''}
+      </Banner>
+      <Field>
+        Stem engine
+        <Select
+          data-testid="neural-audio-stem-engine"
+          value={stemEngine}
+          onChange={(event) => setStemEngine(event.target.value)}
+          disabled={busy}
+        >
+          <option value="neural">Neural (capability-aware)</option>
+          <option value="fluidsynth">FluidSynth (deterministic, explicit)</option>
+        </Select>
+      </Field>
+      <Row data-testid="neural-audio-stem-roles">
+        {NEURAL_AUDIO_STEM_ROLES.map((role) => (
+          <label key={role} style={{ fontSize: '0.8rem', marginRight: 8 }}>
+            <input
+              type="checkbox"
+              checked={selectedStemRoles.includes(role)}
+              onChange={() => toggleStemRole(role)}
+              disabled={busy}
+            />
+            {' '}
+            {role}
+          </label>
+        ))}
+      </Row>
+      <Button
+        type="button"
+        data-testid="neural-audio-stems-submit"
+        disabled={!canRender || selectedStemRoles.length === 0}
+        onClick={handleRenderStems}
+      >
+        {busy ? 'Rendering stems…' : 'Render stems'}
+      </Button>
+      {stemSets.length > 0 ? (
+        <JobList data-testid="neural-audio-stem-set-list">
+          {stemSets.map((stemSet) => {
+            const stale = isNeuralAudioStemSetStale(stemSet, liveFingerprint);
+            const latest = latestStemsByRole(stemSet);
+            return (
+              <JobItem
+                key={stemSet.id}
+                data-testid={`neural-audio-stem-set-${stemSet.id}`}
+                data-stale={stale ? 'true' : 'false'}
+              >
+                <div>
+                  <Badge $status={stemSet.status}>{stemSet.status}</Badge>
+                  {' '}
+                  {stemSet.engine}
+                  {' '}
+                  (
+                  {stemSet.stems?.length || 0}
+                  {' '}
+                  members)
+                  {stale ? <Badge $status="failed">stale</Badge> : null}
+                </div>
+                {stale ? (
+                  <Banner $tone="warn">
+                    Composition moved on since this stem set. Prior stems remain downloadable.
+                  </Banner>
+                ) : null}
+                <div>
+                  sync:
+                  {' '}
+                  {neuralAudioStemSyncDisclaimer(
+                    [...latest.values()][0]?.sync_class || 'generative_independent',
+                  )}
+                </div>
+                {[...latest.entries()].map(([role, stem]) => (
+                  <Row key={stem.id} style={{ alignItems: 'center' }}>
+                    <span style={{ minWidth: 72 }}>{role}</span>
+                    <Badge $status={stem.status}>{stem.status}</Badge>
+                    <SecondaryButton
+                      type="button"
+                      disabled={stem.status !== 'complete'}
+                      data-testid={`neural-audio-stem-download-${stem.id}`}
+                      onClick={() => handleDownloadStem(stem.id)}
+                    >
+                      Download
+                    </SecondaryButton>
+                    <SecondaryButton
+                      type="button"
+                      disabled={!canRender || busy}
+                      data-testid={`neural-audio-stem-rerender-${stem.id}`}
+                      onClick={() => handleRerenderStem(stemSet.id, stem.id)}
+                    >
+                      Rerender
+                    </SecondaryButton>
+                  </Row>
+                ))}
+                <SecondaryButton
+                  type="button"
+                  data-testid={`neural-audio-stem-set-delete-${stemSet.id}`}
+                  onClick={() => handleDeleteStemSet(stemSet.id)}
+                >
+                  Delete set
+                </SecondaryButton>
               </JobItem>
             );
           })}
