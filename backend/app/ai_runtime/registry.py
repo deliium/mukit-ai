@@ -43,6 +43,8 @@ def reload_registry(
         global _registry, _default_model_id
         _registry = dict(models)
         _default_model_id = default_id
+        if descriptors is None:
+            _attach_plugin_descriptors()
         logger.info(
             "AI model registry reloaded",
             extra={
@@ -167,11 +169,38 @@ def model_id_for_provider_model(provider: str, model: str) -> str:
 
 def clear_registry_for_tests() -> None:
     """Test helper: empty the process registry without bootstrapping."""
+    global _registry, _default_model_id, _last_plugin_descriptor_count
     with _lock:
-        global _registry, _default_model_id
         _registry = {}
         _default_model_id = None
+        _last_plugin_descriptor_count = None
         logger.debug("AI model registry cleared for tests")
+
+
+_last_plugin_descriptor_count: int | None = None
+
+
+def _attach_plugin_descriptors() -> None:
+    """Reattach already-loaded plugin descriptors. Does not call plugin ``register()``."""
+    global _last_plugin_descriptor_count
+    try:
+        from app.plugin_host.bridge import plugin_model_descriptors
+
+        descriptors = plugin_model_descriptors()
+    except Exception as exc:
+        logger.warning(
+            "Plugin descriptor bridge failed; built-in registry left in place",
+            extra={"error_type": type(exc).__name__},
+        )
+        return
+    for descriptor in descriptors:
+        register_model(descriptor, overwrite=False)
+    count = len(descriptors)
+    if _last_plugin_descriptor_count == count:
+        logger.debug("plugins attached", extra={"model_descriptor_count": count, "unchanged": True})
+    else:
+        logger.info("plugins attached", extra={"model_descriptor_count": count})
+    _last_plugin_descriptor_count = count
 
 
 def _counts_by_capability(models: dict[str, ModelDescriptor]) -> dict[str, int]:
