@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState, lazy, Suspense } from 'react';
 import styled from 'styled-components';
 import NotationViewer from './NotationViewer.jsx';
 import PlaybackControls from './PlaybackControls.jsx';
@@ -20,6 +20,8 @@ import MultiAgentPanel from './MultiAgentPanel.jsx';
 import ProjectVersionsPanel from './ProjectVersionsPanel.jsx';
 import ComposerProfilesPanel from './ComposerProfilesPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
+
+const PluginsPanel = lazy(() => import('./PluginsPanel.jsx'));
 
 const Workspace = styled.div`
   display: flex;
@@ -100,6 +102,7 @@ const TABS = [
   { id: 'motifs', label: 'Motifs' },
   { id: 'harmony', label: 'Harmony' },
   { id: 'profiles', label: 'Profiles' },
+  { id: 'plugins', label: 'Plugins' },
   { id: 'advanced', label: 'Advanced JSON' },
   { id: 'analysis', label: 'Analysis' },
 ];
@@ -255,6 +258,11 @@ const ComposerWorkspace = () => {
             ) : null}
             {tab.id === 'harmony' && selected ? <HarmonyTimelinePanel /> : null}
             {tab.id === 'profiles' && selected ? <ComposerProfilesPanel /> : null}
+            {tab.id === 'plugins' && selected ? (
+              <Suspense fallback={<p>Loading plugins…</p>}>
+                <PluginsPanel />
+              </Suspense>
+            ) : null}
           </Panel>
         );
       })}

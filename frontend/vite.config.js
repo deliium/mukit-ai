@@ -26,6 +26,10 @@ export default defineConfig({
       '/ai': {
         ...LONG_LLM_PROXY,
       },
+      '/plugins': {
+        target: 'http://localhost:8888',
+        changeOrigin: true,
+      },
       '/neural-audio': {
         ...LONG_LLM_PROXY,
       },
