@@ -1,0 +1,22 @@
+{
+  "schema_version": "plugin.manifest.v1",
+  "id": "deterministic_analyzer",
+  "name": "Deterministic analyzer",
+  "version": "1.0.0",
+  "api_compatibility": "1.0.0",
+  "category": "analyzer",
+  "capabilities": ["analyzer"],
+  "dependencies": [],
+  "entry": "plugin:register",
+  "configuration_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "min_notes": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": "plugin.manifest.v1",
+  "id": "sample_symbolic_generator",
+  "name": "Sample symbolic generator",
+  "version": "1.0.0",
+  "api_compatibility": "1.0.0",
+  "category": "symbolic_composer",
+  "capabilities": ["symbolic_composer"],
+  "dependencies": [],
+  "entry": "plugin:register"
+}

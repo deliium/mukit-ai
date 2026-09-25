@@ -25,6 +25,7 @@ from .routers.harmony import router as harmony_router
 from .routers.composition_development import router as composition_development_router
 from .routers.arrangement import router as arrangement_router
 from .routers.ai_models import router as ai_models_router
+from .routers.plugins import router as plugins_router
 from .routers.ai_agents import router as ai_agents_router
 from .routers.embeddings import router as embeddings_router
 from .routers.composer_profiles import router as composer_profiles_router
@@ -143,6 +144,7 @@ app.include_router(harmony_router)
 app.include_router(composition_development_router)
 app.include_router(arrangement_router)
 app.include_router(ai_models_router)
+app.include_router(plugins_router)
 app.include_router(ai_agents_router)
 app.include_router(embeddings_router)
 app.include_router(composer_profiles_router)
