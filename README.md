@@ -332,6 +332,7 @@ mukit-ai/
 | Guide | Description |
 |-------|-------------|
 | [AI Runtime](docs/ai-runtime.md) | Capability registry, routing, `/ai/models`, provenance |
+| [Plugin SDK](docs/plugin-sdk.md) | In-process plugins on `PLUGIN_PATHS`; symbolic composers on `/ai/models` |
 | [Multi-agent (V4)](docs/multi-agent.md) | Specialized agents above runtime; workflow preview; Apply CAS |
 | [Optional local AI](docs/local-ai.md) | AMD/ROCm Compose profiles, llama.cpp/vLLM sidecars, troubleshooting |
 | [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
