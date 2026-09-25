@@ -102,9 +102,9 @@ subsection that never fails overall readiness when local AI is off or down.
 
 ### Plugins (`runtime=plugin`)
 
-Directories on `PLUGIN_PATHS` can register a model without editing `bootstrap.py`.
-`reload_plugins()` imports plugin code. `GET /ai/models` calls `reload_registry()`,
-which only reattaches descriptors already loaded. Model ids look like
+Directories on `PLUGIN_PATHS` are discovered only. An explicit install and enable can register a model without editing `bootstrap.py`.
+`reload_plugins()` parses manifests and does not import plugin code. `GET /ai/models` calls `reload_registry()`,
+which only reattaches descriptors for plugins whose lifecycle is `enabled`. Model ids look like
 `plugin:sample_symbolic_generator`. Plugin rows are excluded from the implicit
 `generate_composer` default. See [Plugin and extension SDK](plugin-sdk.md).
 

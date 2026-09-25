@@ -24,7 +24,7 @@ mukit-ai/
 │   │   ├── ai_runtime/      # Capability registry, operation routing, typed model adapters
 │   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas, revision_loop)
 │   │   ├── plugin_sdk/      # Public plugin import surface (manifest, protocols, context)
-│   │   ├── plugin_host/     # PLUGIN_PATHS loader, import guard, catalog, host dispatch
+│   │   ├── plugin_host/     # PLUGIN_PATHS discovery, import guard, catalog, host dispatch
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
 │   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents + plugins HTTP API
@@ -175,10 +175,13 @@ mukit-ai/
 | `backend/app/ai_runtime/local_health.py` | Bounded local sidecar health probe |
 | `backend/app/ai_runtime/runtimes/local_language.py` | `LocalLanguageModel` (OpenAI-compatible HTTP only) |
 | `backend/app/plugin_sdk/` | Public plugin SDK (`plugin.manifest.v1`, protocols, redacting logger) |
-| `backend/app/plugin_host/` | Load, guard, catalog, and invoke plugins; does not persist projects |
-| `backend/app/routers/plugins.py` | `GET /plugins`, `GET /plugins/{id}`, `POST /plugins/reload` |
-| `backend/examples/plugins/` | `deterministic_analyzer` and `sample_symbolic_generator` (not on the default path) |
-| `docs/plugin-sdk.md` | Plugin manifest, protocols, env, and install steps |
+| `backend/app/plugin_host/` | Discover manifests, guard imports, catalog, and invoke enabled plugins. Does not read SQLite |
+| `backend/app/services/plugin_lifecycle.py` | Install, enable, disable, config, and startup reconcile. Only writer of desired state |
+| `backend/app/services/plugin_installation_store.py` | SQLite `plugin_installations` in `PROJECT_DB_PATH` |
+| `backend/app/routers/plugins.py` | `GET /plugins`, install/enable/disable/config, `POST /plugins/reload` |
+| `frontend/src/components/PluginsPanel.jsx` | Plugins tab: lifecycle, health, resources, and schema-shaped config |
+| `backend/examples/plugins/` | `deterministic_analyzer` and `sample_symbolic_generator` (discovered only when on `PLUGIN_PATHS`; not enabled until install) |
+| `docs/plugin-sdk.md` | Plugin lifecycle, resources, isolation refusal, protocols, env, and routes |
 | `backend/app/routers/ai_models.py` | `GET /ai/models` (+ `/{id}`) discovery |
 | `backend/app/routers/ai_agents.py` | `GET /ai/agents`, `POST /ai/agents/{id}/run`, workflow preview (optional `persist_workspace_artifacts`) |
 | `backend/app/services/agent_artifact_workspace.py` | Immutable typed artifact INSERT/promote/GC; never imported by `ai_agents/` |
