@@ -437,7 +437,7 @@ def test_midi_projection_skips_motif_omission_without_motifs():
     assert "motif_metadata_omitted" not in result.report.compact_codes()
 
 
-def test_arranged_candidate_midi_preserves_explicit_programs():
+def test_arranged_candidate_midi_preserves_explicit_programs(monkeypatch):
     """MIDI export uses track midi_program, not role-inferred remapping."""
     import asyncio
 
@@ -473,9 +473,7 @@ def test_arranged_candidate_midi_preserves_explicit_programs():
             "selection": LLMModelSelection(provider="fake", model="fake-deterministic"),
         }
     )
-    import os
-
-    os.environ["LLM_FAKE_MODE"] = "1"
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
     response = asyncio.run(run_composition_arrangement_preview(request, settings=settings))
     candidate = response.candidates[0].composition
     result = render_midi_with_report(candidate)

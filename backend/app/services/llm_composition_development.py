@@ -302,6 +302,11 @@ async def run_composition_development_preview(
             **context_payload,
             "style_conditioning": style_conditioning_fragment,
         }
+        if request.style_reference is not None:
+            resolved_reference = resolve_style_reference(request.style_reference)
+            style_conditioning = resolved_reference.conditioning
+            reference_provenance = resolved_reference.provenance
+            reference_embedding = resolved_reference.embedding
         logger.info(
             "Composition development reference feature conditioning attached",
             extra={

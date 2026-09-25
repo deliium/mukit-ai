@@ -719,6 +719,9 @@ def select_llm_provider(
             raise NoLLMProviderConfiguredError("No LLM providers are configured") from exc
         raise NoLLMProviderConfiguredError(str(exc)) from exc
     except (ModelNotFoundError, CapabilityMismatchError) as exc:
+        if not settings.providers:
+            logger.warning("LLM generation requested without configured providers")
+            raise NoLLMProviderConfiguredError("No LLM providers are configured") from exc
         logger.warning(
             "Unsupported LLM provider/model requested",
             extra={"provider": provider, "model": model, "model_id": model_id, "error_code": exc.code},

@@ -68,7 +68,9 @@ def test_real_harmony_wraps_reharmonization():
         )
     )
     assert result.working_draft_update is not None
-    assert result.artifacts[0].content_type == "reharmonize.candidate"
+    content_types = [artifact.content_type for artifact in result.artifacts]
+    assert "agent.harmony_plan.v1" in content_types
+    assert "reharmonize.candidate" in content_types
     assert result.provenance_stage.get("agent_id") == "harmony"
     src_mel = next(t for t in composition.tracks if t.id == "melody").events
     out_mel = next(t for t in result.working_draft_update.tracks if t.id == "melody").events
@@ -131,7 +133,9 @@ def test_real_arrangement_retain_path():
             )
         )
     )
-    assert result.artifacts[0].content_type == "arrangement.candidate"
+    content_types = [artifact.content_type for artifact in result.artifacts]
+    assert "agent.arrangement_plan.v1" in content_types
+    assert "arrangement.candidate" in content_types
     assert result.working_draft_update is not None
     assert result.working_draft_update.schema_version == "composition.v2"
 

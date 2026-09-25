@@ -67,7 +67,7 @@ def test_alembic_baseline_creates_history_schema(project_db):
             row["name"] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
         }
 
-    assert "20260914_0001" in alembic_revisions
+    assert alembic_revisions == {"20260925_0009"}
     assert "composition_snapshots" in tables
     assert "project_revisions" in tables
     assert "project_branches" in tables
@@ -106,7 +106,7 @@ def test_alembic_upgrade_idempotent_on_second_init(tmp_path, monkeypatch, caplog
             ).fetchall()
         }
 
-    assert revisions == ["20260914_0001"]
+    assert revisions == ["20260925_0009"]
     assert "projects" in tables
     assert "project_branches" in tables
     assert "projects_active_branch_update_check" in triggers
