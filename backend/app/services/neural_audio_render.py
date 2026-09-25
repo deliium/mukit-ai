@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -31,6 +32,19 @@ from app.neural_audio_schemas import (
     NeuralAudioJobResponse,
 )
 from app.neural_audio_settings import NeuralAudioSettings, load_neural_audio_settings
+from app.operation_budget_settings import (
+    BUDGET_RENDER_ATTEMPT,
+    BUDGET_RUNTIME,
+    load_operation_budget_settings,
+)
+from app.operation_trace import (
+    MutableSpan,
+    OperationRunIdError,
+    adopt_operation_run_id,
+    is_run_cancelled,
+    record_finished_span,
+    render_attempt_decision,
+)
 from app.services.composition_snapshot_encoding import composition_snapshot_fingerprint
 from app.services.neural_audio_adapters import (
     artifact_to_engine_spec,
@@ -43,6 +57,7 @@ from app.services.neural_audio_render_store import (
     delete_job,
     delete_project_render_files,
     get_job_row,
+    increment_attempt_count,
     insert_queued_job,
     list_job_rows,
     load_settings_and_root,
@@ -54,6 +69,64 @@ from app.services.project_history_store import get_snapshot_composition
 
 
 logger = logging.getLogger(__name__)
+
+
+def canonical_operation_run_id(raw: str | None) -> str | None:
+    """Adopt a client run id, or return null when the field was omitted."""
+
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return adopt_operation_run_id(raw)
+    except OperationRunIdError as exc:
+        raise NeuralAudioError(
+            "operation_run_id_invalid",
+            "operation_run_id must be a UUID",
+            http_status=422,
+        ) from exc
+
+
+def emit_render_span(
+    *,
+    job_id: str,
+    operation_run_id: str | None,
+    model_id: str | None,
+    status: str,
+    failure_code: str | None,
+    attempt_count: int,
+    started_at: float,
+    byte_size: int | None = None,
+    instructions_len: int | None = None,
+    error_type: str | None = None,
+) -> None:
+    """Log one render span. Workers do not inherit the request ContextVar."""
+
+    span = MutableSpan(
+        run_id=operation_run_id or str(uuid.uuid4()),
+        span_id=str(uuid.uuid4()),
+        parent_span_id=None,
+        kind="render",
+        started_at=started_at,
+        status=status,
+        model_id=model_id,
+        failure_code=failure_code,
+        retry_count=max(0, int(attempt_count) - 1),
+        byte_size=byte_size,
+        instructions_len=instructions_len,
+        error_type=error_type,
+    )
+    record_finished_span(span)
+    logger.info(
+        "Neural render attempt",
+        extra={
+            "render_id": job_id,
+            "operation_run_id_prefix": (operation_run_id or "")[:12],
+            "attempt_count": attempt_count,
+            "status": status,
+            "byte_size": byte_size,
+            "failure_code": failure_code,
+        },
+    )
 
 
 def enqueue_neural_audio_render(
@@ -95,6 +168,7 @@ def enqueue_neural_audio_render(
         artifact.tempo_bpm = request.tempo_bpm
 
     render_id = allocate_render_id()
+    operation_run_id = canonical_operation_run_id(request.operation_run_id)
     with get_connection(path) as conn:
         assert_enqueue_quota(conn, settings, project_id)
         row = insert_queued_job(
@@ -114,6 +188,7 @@ def enqueue_neural_audio_render(
             tempo_bpm=artifact.tempo_bpm,
             seed=request.seed,
             adapter_warnings=artifact.warnings,
+            operation_run_id=operation_run_id,
         )
 
     logger.info(
@@ -154,7 +229,20 @@ def run_neural_audio_job(
     path = Path(db_path) if db_path is not None else get_project_db_path()
     started = time.perf_counter()
     with get_connection(path) as conn:
-        update_job_status(conn, render_id, status="running")
+        existing = get_job_row(conn, render_id)
+    if existing is None:
+        raise NeuralAudioError(
+            "render_not_found",
+            "Neural audio render not found",
+            http_status=404,
+            details={"render_id": render_id},
+        )
+    operation_run_id = existing.get("operation_run_id")
+    if not isinstance(operation_run_id, str) or not operation_run_id.strip():
+        operation_run_id = None
+    model_id = str(existing.get("model_id") or "") or None
+    instructions_len = len(str(existing.get("instructions") or ""))
+    max_attempts = load_operation_budget_settings().neural_audio_max_attempts
 
     # Re-assert composition fingerprint before/after — never write composition.
     before_fp = composition_snapshot_fingerprint(CompositionV2.model_validate(composition))
@@ -170,35 +258,154 @@ def run_neural_audio_job(
             message="Source composition fingerprint mismatch",
         )
 
-    try:
-        engine_input = {
-            **artifact_spec,
-            "source_fingerprint": expected_fingerprint,
-            "max_audio_seconds": settings.max_audio_seconds,
-        }
-        result = _invoke_model_sync(model, engine_input)
-    except ModelUnavailableError as exc:
-        logger.error(
-            "Neural audio engine unavailable during job",
-            extra={"render_id": render_id, "error_type": type(exc).__name__},
-        )
-        return _fail_job(
-            path,
-            render_id,
-            code="neural_audio_engine_unavailable",
-            message="Neural audio engine unavailable",
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "Neural audio job failed",
-            extra={"render_id": render_id, "error_type": type(exc).__name__},
-        )
-        return _fail_job(
-            path,
-            render_id,
-            code="neural_audio_internal_error",
-            message="Neural audio render failed",
-        )
+    result: dict[str, Any] | None = None
+    while True:
+        with get_connection(path) as conn:
+            current = get_job_row(conn, render_id)
+        attempt_count = int((current or {}).get("attempt_count") or 0)
+        decision = render_attempt_decision(operation_run_id, attempt_count, max_attempts)
+        attempt_started = time.perf_counter()
+        if decision != "go":
+            if decision == "cancelled":
+                code, status = "operation_cancelled", "cancelled"
+            elif decision == "runtime":
+                code, status = BUDGET_RUNTIME, "budget_exceeded"
+            else:
+                code, status = BUDGET_RENDER_ATTEMPT, "budget_exceeded"
+            if decision == "budget":
+                logger.warning(
+                    "Neural render attempt budget exhausted",
+                    extra={
+                        "render_id": render_id,
+                        "budget_code": BUDGET_RENDER_ATTEMPT,
+                        "attempt_count": attempt_count,
+                    },
+                )
+            emit_render_span(
+                job_id=render_id,
+                operation_run_id=operation_run_id,
+                model_id=model_id,
+                status=status,
+                failure_code=code,
+                attempt_count=attempt_count,
+                started_at=attempt_started,
+                instructions_len=instructions_len,
+            )
+            if decision == "cancelled":
+                message = "Neural render cancelled"
+            elif decision == "runtime":
+                message = "Neural render runtime budget exhausted"
+            else:
+                message = "Neural render attempt budget exhausted"
+            return _fail_job(
+                path,
+                render_id,
+                code=code,
+                message=message,
+            )
+
+        with get_connection(path) as conn:
+            attempt_count = increment_attempt_count(conn, render_id)
+            update_job_status(conn, render_id, status="running")
+        try:
+            engine_input = {
+                **artifact_spec,
+                "source_fingerprint": expected_fingerprint,
+                "max_audio_seconds": settings.max_audio_seconds,
+            }
+            result = _invoke_model_sync(model, engine_input)
+        except ModelUnavailableError as exc:
+            logger.error(
+                "Neural audio engine unavailable during job",
+                extra={"render_id": render_id, "error_type": type(exc).__name__},
+            )
+            if _render_attempt_failed(
+                path,
+                render_id,
+                operation_run_id=operation_run_id,
+                model_id=model_id,
+                attempt_count=attempt_count,
+                max_attempts=max_attempts,
+                started_at=attempt_started,
+                instructions_len=instructions_len,
+                error_type=type(exc).__name__,
+                engine_code="neural_audio_engine_unavailable",
+                engine_message="Neural audio engine unavailable",
+            ):
+                return _fail_job(
+                    path,
+                    render_id,
+                    code=BUDGET_RENDER_ATTEMPT,
+                    message="Neural render attempt budget exhausted",
+                )
+            continue
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Neural audio job failed",
+                extra={"render_id": render_id, "error_type": type(exc).__name__},
+            )
+            if _render_attempt_failed(
+                path,
+                render_id,
+                operation_run_id=operation_run_id,
+                model_id=model_id,
+                attempt_count=attempt_count,
+                max_attempts=max_attempts,
+                started_at=attempt_started,
+                instructions_len=instructions_len,
+                error_type=type(exc).__name__,
+                engine_code="neural_audio_internal_error",
+                engine_message="Neural audio render failed",
+            ):
+                return _fail_job(
+                    path,
+                    render_id,
+                    code=BUDGET_RENDER_ATTEMPT,
+                    message="Neural render attempt budget exhausted",
+                )
+            continue
+
+        if operation_run_id and is_run_cancelled(operation_run_id):
+            emit_render_span(
+                job_id=render_id,
+                operation_run_id=operation_run_id,
+                model_id=model_id,
+                status="cancelled",
+                failure_code="operation_cancelled",
+                attempt_count=attempt_count,
+                started_at=attempt_started,
+                instructions_len=instructions_len,
+            )
+            return _fail_job(
+                path,
+                render_id,
+                code="operation_cancelled",
+                message="Neural render cancelled",
+            )
+        audio_bytes = result.get("audio_bytes") if isinstance(result, dict) else None
+        if not isinstance(audio_bytes, (bytes, bytearray)) or not audio_bytes:
+            if _render_attempt_failed(
+                path,
+                render_id,
+                operation_run_id=operation_run_id,
+                model_id=model_id,
+                attempt_count=attempt_count,
+                max_attempts=max_attempts,
+                started_at=attempt_started,
+                instructions_len=instructions_len,
+                error_type="EmptyAudio",
+                engine_code="neural_audio_internal_error",
+                engine_message="Engine returned empty audio",
+            ):
+                return _fail_job(
+                    path,
+                    render_id,
+                    code=BUDGET_RENDER_ATTEMPT,
+                    message="Neural render attempt budget exhausted",
+                )
+            result = None
+            continue
+        break
 
     after_fp = composition_snapshot_fingerprint(CompositionV2.model_validate(composition))
     if after_fp != before_fp:
@@ -213,13 +420,24 @@ def run_neural_audio_job(
             message="Composition changed during render (aborted)",
         )
 
-    audio_bytes = result.get("audio_bytes") if isinstance(result, dict) else None
-    if not isinstance(audio_bytes, (bytes, bytearray)) or not audio_bytes:
+    assert result is not None
+    audio_bytes = result.get("audio_bytes")
+    if operation_run_id and is_run_cancelled(operation_run_id):
+        emit_render_span(
+            job_id=render_id,
+            operation_run_id=operation_run_id,
+            model_id=model_id,
+            status="cancelled",
+            failure_code="operation_cancelled",
+            attempt_count=attempt_count,
+            started_at=attempt_started,
+            instructions_len=instructions_len,
+        )
         return _fail_job(
             path,
             render_id,
-            code="neural_audio_internal_error",
-            message="Engine returned empty audio",
+            code="operation_cancelled",
+            message="Neural render cancelled",
         )
 
     with get_connection(path) as conn:
@@ -234,6 +452,24 @@ def run_neural_audio_job(
         ext=str(result.get("ext") or "wav"),
     )
     duration_ms = int((time.perf_counter() - started) * 1000)
+    if operation_run_id and is_run_cancelled(operation_run_id):
+        emit_render_span(
+            job_id=render_id,
+            operation_run_id=operation_run_id,
+            model_id=model_id,
+            status="cancelled",
+            failure_code="operation_cancelled",
+            attempt_count=attempt_count,
+            started_at=attempt_started,
+            instructions_len=instructions_len,
+            byte_size=write_result.byte_size,
+        )
+        return _fail_job(
+            path,
+            render_id,
+            code="operation_cancelled",
+            message="Neural render cancelled",
+        )
     with get_connection(path) as conn:
         updated = update_job_status(
             conn,
@@ -244,12 +480,35 @@ def run_neural_audio_job(
             byte_size=write_result.byte_size,
             sha256_prefix=write_result.sha256_prefix,
         )
+        if str(updated.get("error_code") or "") == "operation_cancelled":
+            emit_render_span(
+                job_id=render_id,
+                operation_run_id=operation_run_id,
+                model_id=model_id,
+                status="cancelled",
+                failure_code="operation_cancelled",
+                attempt_count=int(updated.get("attempt_count") or attempt_count),
+                started_at=attempt_started,
+                instructions_len=instructions_len,
+            )
+            return row_to_response(updated)
         if result.get("model_version"):
             conn.execute(
                 "UPDATE neural_audio_renders SET model_version = ? WHERE id = ?",
                 (str(result["model_version"]), render_id),
             )
             updated = get_job_row(conn, render_id)
+    emit_render_span(
+        job_id=render_id,
+        operation_run_id=operation_run_id,
+        model_id=model_id,
+        status="ok",
+        failure_code=None,
+        attempt_count=attempt_count,
+        started_at=attempt_started,
+        byte_size=write_result.byte_size,
+        instructions_len=instructions_len,
+    )
     logger.info(
         "Neural audio job complete",
         extra={
@@ -262,9 +521,53 @@ def run_neural_audio_job(
             "audio_bytes": write_result.byte_size,
             "sha256_prefix": write_result.sha256_prefix,
             "source_revision_id": updated.get("source_revision_id") if updated else None,
+            "operation_run_id_prefix": (operation_run_id or "")[:12],
+            "attempt_count": attempt_count,
         },
     )
     return row_to_response(updated)  # type: ignore[arg-type]
+
+
+def _render_attempt_failed(
+    path: Path,
+    render_id: str,
+    *,
+    operation_run_id: str | None,
+    model_id: str | None,
+    attempt_count: int,
+    max_attempts: int,
+    started_at: float,
+    instructions_len: int | None,
+    error_type: str,
+    engine_code: str,
+    engine_message: str,
+) -> bool:
+    """Log the failed attempt. Return True when the attempt cap is exhausted."""
+
+    exhausted = attempt_count >= max_attempts
+    code = BUDGET_RENDER_ATTEMPT if exhausted else engine_code
+    status = "budget_exceeded" if exhausted else "failed"
+    if exhausted:
+        logger.warning(
+            "Neural render attempt budget exhausted",
+            extra={
+                "render_id": render_id,
+                "budget_code": BUDGET_RENDER_ATTEMPT,
+                "attempt_count": attempt_count,
+            },
+        )
+    emit_render_span(
+        job_id=render_id,
+        operation_run_id=operation_run_id,
+        model_id=model_id,
+        status=status,
+        failure_code=code,
+        attempt_count=attempt_count,
+        started_at=started_at,
+        instructions_len=instructions_len,
+        error_type=error_type,
+    )
+    return exhausted
 
 
 def get_neural_audio_job(

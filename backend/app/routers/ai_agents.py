@@ -5,6 +5,7 @@ Never writes projects. Agents return typed artifacts only; Apply is client-side 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Annotated, Any, Literal
@@ -41,6 +42,17 @@ from app.services.composition_edit_fingerprint import (
     composition_edit_fingerprint,
     edit_fingerprint_log_prefix,
 )
+from app.operation_trace import (
+    OperationRunIdError,
+    adopt_operation_run_id,
+    build_summary,
+    is_run_cancelled,
+    mark_run_cancelled,
+    note_failure,
+    note_run_outcome,
+    operation_span,
+)
+from app.operation_trace_schemas import OperationSummaryV1
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +73,7 @@ class AgentRunHttpRequest(BaseModel):
     composition: CompositionV2
     agent_model_overrides: dict[str, str] = Field(default_factory=dict)
     selection: dict[str, Any] = Field(default_factory=dict)
+    operation_run_id: str | None = Field(default=None, max_length=64)
 
 
 class AgentWorkflowPreviewRequest(BaseModel):
@@ -80,6 +93,7 @@ class AgentWorkflowPreviewRequest(BaseModel):
     persist_workspace_artifacts: bool = False
     # Test / advanced: critic parameters (e.g. revise_on_technical).
     critic_parameters: dict[str, Any] = Field(default_factory=dict)
+    operation_run_id: str | None = Field(default=None, max_length=64)
 
 
 class AgentWorkflowPreviewResponse(BaseModel):
@@ -109,11 +123,57 @@ class AgentWorkflowPreviewResponse(BaseModel):
     # Session-only playable snapshots per pass for FE audition/compare (not durable).
     pass_candidates: list[RevisionPassCandidateV1] = Field(default_factory=list)
     usage: dict[str, Any] | None = None
+    operation_summary: OperationSummaryV1 | None = None
 
 
 def _raise_agent_http(exc: AgentError) -> None:
     status, detail = map_agent_error_to_http(exc)
     raise HTTPException(status_code=status, detail=detail) from exc
+
+
+def _adopt_run_id(raw: str | None) -> str:
+    try:
+        return adopt_operation_run_id(raw)
+    except OperationRunIdError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "operation_run_id_invalid",
+                "message": "operation_run_id must be a UUID string",
+            },
+        ) from exc
+
+
+async def _watch_disconnect(request: Request, run_id: str) -> None:
+    """Poll disconnect until the route cancels this task.
+
+    ``is_disconnected`` reads the ASGI receive channel. Only this watcher calls
+    it, so the between-agent probe can read the cancel event without a second
+    receive.
+    """
+    logger.debug("Disconnect watcher started", extra={"run_id": run_id})
+    try:
+        while True:
+            try:
+                disconnected = await asyncio.wait_for(request.is_disconnected(), timeout=0.05)
+            except TimeoutError:
+                disconnected = False
+            if disconnected:
+                logger.info("Client disconnected; cancelling run", extra={"run_id": run_id})
+                mark_run_cancelled(run_id)
+                return
+            await asyncio.sleep(0.05)
+    except asyncio.CancelledError:
+        logger.debug("Disconnect watcher stopped", extra={"run_id": run_id})
+        raise
+
+
+async def _stop_watcher(watcher: asyncio.Task[None]) -> None:
+    watcher.cancel()
+    try:
+        await asyncio.wait_for(watcher, timeout=0.2)
+    except (asyncio.CancelledError, TimeoutError):
+        logger.debug("Disconnect watcher joined", extra={"timed_out": watcher.done() is False})
 
 
 def _context_from_composition(composition: CompositionV2) -> AgentWorkflowContext:
@@ -154,28 +214,59 @@ async def get_ai_agent(agent_id: str) -> AgentDescriptor:
 
 
 @router.post("/agents/{agent_id}/run", response_model=AgentRunResult)
-async def run_ai_agent(agent_id: str, body: AgentRunHttpRequest) -> AgentRunResult:
+async def run_ai_agent(
+    agent_id: str,
+    body: AgentRunHttpRequest,
+    request: Request,
+) -> AgentRunResult:
     decoded = unquote(agent_id)
+    run_id = _adopt_run_id(body.operation_run_id)
     started = time.perf_counter()
     logger.info(
         "AI agent run requested",
-        extra={"agent_id": decoded, "operation": body.operation.value},
+        extra={"agent_id": decoded, "operation": body.operation.value, "run_id": run_id},
     )
     ensure_registry()
-    try:
-        agent = get_agent(decoded)
-        context = _context_from_composition(body.composition)
-        request = AgentRunRequest(
-            agent_id=decoded,
-            operation=body.operation,
-            context=context,
-            agent_model_overrides=body.agent_model_overrides,
-            selection=body.selection,
-        )
-        result = await agent.run(request)
-    except AgentError as exc:
-        _raise_agent_http(exc)
-        raise  # pragma: no cover
+    async with operation_span("run", run_id=run_id) as span:
+        watcher = asyncio.create_task(_watch_disconnect(request, run_id))
+        try:
+            async with operation_span("agent", agent_id=decoded):
+                try:
+                    agent = get_agent(decoded)
+                    context = _context_from_composition(body.composition)
+                    agent_request = AgentRunRequest(
+                        agent_id=decoded,
+                        operation=body.operation,
+                        context=context,
+                        agent_model_overrides=body.agent_model_overrides,
+                        selection=body.selection,
+                    )
+                    result = await agent.run(agent_request)
+                except KeyboardInterrupt:
+                    raise
+                except SystemExit:
+                    note_failure("operation_model_crashed", error_type="SystemExit")
+                    logger.error(
+                        "Agent run crashed",
+                        extra={
+                            "failure_code": "operation_model_crashed",
+                            "error_type": "SystemExit",
+                            "run_id": run_id,
+                            "model_id": None,
+                        },
+                    )
+                    note_run_outcome(status="failed", stop_reason="operation_model_crashed")
+                    result = AgentRunResult(
+                        agent_id=decoded,
+                        operation=body.operation,
+                        warning_codes=["operation_model_crashed"],
+                    )
+                except AgentError as exc:
+                    _raise_agent_http(exc)
+                    raise  # pragma: no cover
+        finally:
+            await _stop_watcher(watcher)
+    summary = build_summary(span)
     duration_ms = int((time.perf_counter() - started) * 1000)
     logger.info(
         "AI agent run completed",
@@ -184,13 +275,15 @@ async def run_ai_agent(agent_id: str, body: AgentRunHttpRequest) -> AgentRunResu
             "operation": body.operation.value,
             "duration_ms": duration_ms,
             "artifact_count": len(result.artifacts),
+            "run_id": run_id,
+            "status": summary.status,
         },
     )
     logger.debug(
         "AI agent run artifact kinds",
         extra={"kinds": [a.kind.value for a in result.artifacts]},
     )
-    return result
+    return result.model_copy(update={"operation_summary": summary})
 
 
 @router.post("/agents/workflows/preview", response_model=AgentWorkflowPreviewResponse)
@@ -198,6 +291,7 @@ async def preview_agent_workflow(
     body: AgentWorkflowPreviewRequest,
     request: Request,
 ) -> AgentWorkflowPreviewResponse:
+    run_id = _adopt_run_id(body.operation_run_id)
     logger.info(
         "AI agent workflow preview requested",
         extra={
@@ -205,6 +299,7 @@ async def preview_agent_workflow(
             "max_revisions": body.max_revisions,
             "revision_mode": body.revision_mode.value,
             "brief_len": len(body.brief or ""),
+            "run_id": run_id,
         },
     )
     if body.workflow_id not in {AGENT_SPINE_WORKFLOW_ID, "multi_agent_v4"}:
@@ -220,21 +315,32 @@ async def preview_agent_workflow(
             max_prompt_tokens=body.max_prompt_tokens,
         )
 
-    try:
-        result = await run_spine_workflow(
-            body.composition,
-            max_revisions=body.max_revisions,
-            revision_mode=body.revision_mode.value,
-            budgets=budgets,
-            cancel_check=request.is_disconnected,
-            agent_model_overrides=body.agent_model_overrides,
-            selection=body.selection,
-            workflow_id=AGENT_SPINE_WORKFLOW_ID,
-            critic_parameters=body.critic_parameters or None,
-        )
-    except AgentError as exc:
-        _raise_agent_http(exc)
-        raise  # pragma: no cover
+    async def _cancel_check() -> bool:
+        if is_run_cancelled(run_id):
+            logger.info("Workflow preview cancel probe", extra={"run_id": run_id})
+            return True
+        return False
+
+    async with operation_span("run", run_id=run_id) as span:
+        watcher = asyncio.create_task(_watch_disconnect(request, run_id))
+        try:
+            result = await run_spine_workflow(
+                body.composition,
+                max_revisions=body.max_revisions,
+                revision_mode=body.revision_mode.value,
+                budgets=budgets,
+                cancel_check=_cancel_check,
+                agent_model_overrides=body.agent_model_overrides,
+                selection=body.selection,
+                workflow_id=AGENT_SPINE_WORKFLOW_ID,
+                critic_parameters=body.critic_parameters or None,
+            )
+        except AgentError as exc:
+            _raise_agent_http(exc)
+            raise  # pragma: no cover
+        finally:
+            await _stop_watcher(watcher)
+    operation_summary = build_summary(span)
 
     critique_payload = None
     if result.context.critique is not None:
@@ -312,6 +418,7 @@ async def preview_agent_workflow(
             "pass_count": len(history_payload),
             "pass_candidate_count": len(pass_candidate_payload),
             "persist_workspace": bool(body.persist_workspace_artifacts and body.project_id),
+            "run_id": run_id,
         },
     )
     # Avoid logging full history / candidate payloads at INFO.
@@ -346,4 +453,5 @@ async def preview_agent_workflow(
         revision_history=history_payload,
         pass_candidates=pass_candidate_payload,
         usage=usage_payload,
+        operation_summary=operation_summary,
     )

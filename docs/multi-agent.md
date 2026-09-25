@@ -134,8 +134,9 @@ and never auto-committed.
 **Preserve:** when `affected_ranges` / `affected_tracks` are set, events outside targets must
 fingerprint-stable; violation fails the pass and restores `last_valid`.
 
-**Cancellation:** cooperative between agents/passes (`Request.is_disconnected` / FE AbortController).
-Never leaves an invalid working draft.
+**Cancellation:** cooperative between agents/passes. The route watches disconnect and sets the run cancel event (`docs/observability.md`). Model calls stop before the next provider request and between stream chunks. `KeyboardInterrupt` still propagates. Never leaves an invalid working draft.
+
+**Operation summary:** preview and single-agent responses include `operation_summary` (`operation.summary.v1`): `run_id`, status, duration, model-call count, revision count, failure count, and `budget_code` when a ceiling stops the run. The Agents panel shows that line. Spans are logs, not a SQLite trace table. See [observability.md](observability.md).
 
 **Usage:** optional `prompt_tokens` / `completion_tokens` / `latency_ms_total` with
 `usage_status: available|partial|unavailable` — never invents currency.

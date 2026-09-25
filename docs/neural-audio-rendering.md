@@ -51,7 +51,9 @@ Engines that cannot consume MIDI must use `melody_conditioning` or `text_prompt`
 | `GET` | `/neural-audio/renders?project_id=` | List multiple renders |
 | `DELETE` | `/neural-audio/renders/{id}` | Delete metadata + file |
 
-Statuses: `queued` → `running` → (`complete` | `failed`). Error codes include `neural_audio_engine_unavailable` (503), `neural_audio_quota_exceeded`, `source_revision_not_found`, `render_not_ready`.
+Statuses: `queued` → `running` → (`complete` | `failed`). Error codes include `neural_audio_engine_unavailable` (503), `neural_audio_quota_exceeded`, `source_revision_not_found`, `render_not_ready`, `operation_cancelled`, and `operation_render_attempt_budget`.
+
+Optional `operation_run_id` on create-render and create-stem-set correlates the job with an in-flight autonomous run (`docs/observability.md`). Omitted ids stay null. `attempt_count` counts engine attempts, including the first, up to `NEURAL_AUDIO_MAX_ATTEMPTS` (default 2, range 1–5). The next attempt after the cap is not started. A cancelled run fails queued work with `operation_cancelled` without calling the engine. A result that returns after cancel is discarded and does not mark the job complete. The MusicGen sidecar process is not killed. Jobs with a null or different `operation_run_id` are unchanged aside from the attempt cap.
 
 Jobs store `model_id`, `model_version`, `adapter_kind`, `fidelity_class`, instructions, optional genre/mood, `source_revision_id`, `source_fingerprint`, audio relpath / sha256 prefix. Responses always include `mutates_composition: false`.
 
@@ -94,6 +96,7 @@ Every stem pins `source_fingerprint`, `source_track_ids`, `model_id` / `model_ve
 | `NEURAL_AUDIO_MAX_CONCURRENCY` | `1` | Single-worker assumption |
 | `NEURAL_AUDIO_MAX_RENDERS_PER_PROJECT` | `20` | Soft quota |
 | `NEURAL_AUDIO_MAX_PROMPT_CHARS` | `2000` | Bounded instructions |
+| `NEURAL_AUDIO_MAX_ATTEMPTS` | `2` | Attempts per render or stem-set job, including the first (1–5) |
 | `AI_OP_AUDIO_RENDER` | unset | Pin model id (e.g. `fake:neural-audio`) |
 
 Core `requirements.txt` is unchanged — no MusicGen/MIDI-DDSP weights in the FastAPI process by default. **Never** silently fall back to FluidSynth.
@@ -125,7 +128,7 @@ Do **not** claim Stable Audio Open is freely redistributable in product images. 
 
 Logger: `app.services.neural_audio_render` (+ store / adapters / runtimes).
 
-**INFO:** render_id, model_id, adapter_kind, fidelity_class, status, duration_ms, audio_bytes, sha256_prefix, source_revision_id.
+**INFO:** render_id, model_id, adapter_kind, fidelity_class, status, duration_ms, audio_bytes, sha256_prefix, source_revision_id, `operation_run_id` prefix (12), `attempt_count`. A closed render span uses the same INFO `operation_trace` line as other spans (`docs/observability.md`).
 
 **Never at INFO:** full prompts, composition JSON, PCM bytes, API keys.
 

@@ -16,6 +16,7 @@ from typing import Any, Mapping, Awaitable
 from app.ai_agents.errors import WorkflowReviseExhaustedError
 from app.ai_agents.registry import ensure_registry, get_agent
 from app.ai_agents.revision_loop_schemas import (
+    REVISION_API_ABSOLUTE_MAX_PASSES,
     RevisionLoopBudgets,
     RevisionLoopUsage,
     RevisionLoopUsageDelta,
@@ -51,6 +52,23 @@ from app.ai_agents.spine import (
 )
 from app.ai_agents.workflow import WorkflowPreviewResult, build_initial_context
 from app.composition_schemas import CompositionV2
+from app.operation_budget_settings import (
+    BUDGET_REVISION,
+    BUDGET_RUNTIME,
+    BUDGET_TOKEN,
+    load_operation_budget_settings,
+    tighter_wall_ms,
+)
+from app.operation_trace import (
+    OperationBudgetExceeded,
+    OperationCancelled,
+    current_budget_code,
+    current_run_id,
+    note_failure,
+    note_run_outcome,
+    note_run_wall_limit,
+    operation_span,
+)
 from app.revision_loop_settings import (
     cost_class_rank,
     default_prompt_token_cap_for_mode,
@@ -149,24 +167,54 @@ def _accumulate_usage(
     )
 
 
+class _AgentStop(Exception):
+    """Control-flow stop from an agent span. Not a process-ending error."""
+
+    def __init__(
+        self,
+        reason: RevisionStopReason,
+        *,
+        budget_code: str | None = None,
+    ) -> None:
+        super().__init__(reason.value)
+        self.reason = reason
+        self.budget_code = budget_code
+
+
 def _budget_exhausted(
     *,
     started: float,
     usage: RevisionLoopUsage,
     budgets: RevisionLoopBudgets | None,
-) -> bool:
-    if budgets is None:
-        return False
+) -> str | None:
+    """Return an ``operation_*`` code, ``revision_loop`` when that budget binds, or None."""
+    op = load_operation_budget_settings()
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    if budgets.max_wall_ms is not None and elapsed_ms >= budgets.max_wall_ms:
-        return True
+    request_wall = budgets.max_wall_ms if budgets is not None else None
+    wall_limit = op.max_runtime_ms if request_wall is None else min(request_wall, op.max_runtime_ms)
+    if elapsed_ms >= wall_limit:
+        if request_wall is None or op.max_runtime_ms <= request_wall:
+            return BUDGET_RUNTIME
+        return "revision_loop"
+    request_tokens = budgets.max_prompt_tokens if budgets is not None else None
+    reported = usage.prompt_tokens
+    token_limits: list[tuple[str, int]] = []
+    if request_tokens is not None and reported is not None:
+        token_limits.append(("revision_loop", request_tokens))
     if (
-        budgets.max_prompt_tokens is not None
-        and usage.prompt_tokens is not None
-        and usage.prompt_tokens >= budgets.max_prompt_tokens
+        op.max_prompt_tokens is not None
+        and usage.usage_status != UsageStatus.UNAVAILABLE
+        and reported is not None
     ):
-        return True
-    return False
+        token_limits.append((BUDGET_TOKEN, op.max_prompt_tokens))
+    if token_limits and reported is not None:
+        code, limit = min(token_limits, key=lambda item: item[1])
+        if reported >= limit:
+            return code
+    traced = current_budget_code()
+    if traced:
+        return traced
+    return None
 
 
 def _snapshot_candidate(composition: CompositionV2) -> CompositionV2:
@@ -228,7 +276,49 @@ async def _run_agent_node(
         selection=dict(selection or {}),
         parameters=dict(parameters or {}),
     )
-    result = await agent.run(request)
+    logger.debug(
+        "Agent span start",
+        extra={
+            "agent_id": agent_id,
+            "span_id_prefix": (current_run_id() or "")[:12],
+            "run_id": current_run_id(),
+        },
+    )
+    stop: _AgentStop | None = None
+    async with operation_span("agent", agent_id=agent_id) as agent_span:
+        try:
+            result = await agent.run(request)
+        except KeyboardInterrupt:
+            raise
+        except SystemExit:
+            note_failure("operation_model_crashed", error_type="SystemExit")
+            logger.error(
+                "Agent run crashed",
+                extra={
+                    "failure_code": "operation_model_crashed",
+                    "error_type": "SystemExit",
+                    "run_id": current_run_id(),
+                    "model_id": None,
+                },
+            )
+            stop = _AgentStop(RevisionStopReason.VALIDATION_FAILED_KEPT_LAST_VALID)
+            result = None
+        except OperationCancelled:
+            agent_span.status = "cancelled"
+            agent_span.failure_code = "operation_cancelled"
+            stop = _AgentStop(RevisionStopReason.CANCELLED)
+            result = None
+        except OperationBudgetExceeded as exc:
+            agent_span.status = "budget_exceeded"
+            agent_span.failure_code = exc.budget_code
+            note_run_outcome(budget_code=exc.budget_code)
+            stop = _AgentStop(
+                RevisionStopReason.RESOURCE_BUDGET_EXHAUSTED,
+                budget_code=exc.budget_code,
+            )
+            result = None
+    if stop is not None or result is None:
+        raise stop or _AgentStop(RevisionStopReason.VALIDATION_FAILED_KEPT_LAST_VALID)
     next_ctx = context
     for slot_name, artifact in result.updated_context_slots.items():
         next_ctx = next_ctx.with_slot(slot_name, artifact)
@@ -263,11 +353,22 @@ async def run_revision_loop(
     Default ``revision_mode=off`` / ``max_passes=0`` preserves legacy spine behavior.
     """
     started = time.perf_counter()
-    run_id = str(uuid.uuid4())
+    traced_run = current_run_id()
+    run_id = traced_run or str(uuid.uuid4())
     settings = load_revision_loop_settings(dict(env) if env is not None else None)
+    op_settings = load_operation_budget_settings(dict(env) if env is not None else None)
     mode, max_passes = resolve_max_passes(
-        revision_mode=revision_mode, max_revisions=max_revisions
+        revision_mode=revision_mode,
+        max_revisions=max_revisions,
+        revision_ceiling=op_settings.max_revisions,
     )
+    _mode_uncapped, passes_without_ceiling = resolve_max_passes(
+        revision_mode=revision_mode,
+        max_revisions=max_revisions,
+        revision_ceiling=REVISION_API_ABSOLUTE_MAX_PASSES,
+    )
+    ceiling_binding = max_passes < passes_without_ceiling
+    budget_code: str | None = None
 
     resolved_budgets = budgets
     if resolved_budgets is None and mode != RevisionMode.OFF:
@@ -275,6 +376,8 @@ async def run_revision_loop(
             max_wall_ms=default_wall_ms_for_mode(mode.value, settings),
             max_prompt_tokens=default_prompt_token_cap_for_mode(mode.value, settings),
         )
+    request_wall = resolved_budgets.max_wall_ms if resolved_budgets is not None else None
+    note_run_wall_limit(tighter_wall_ms(request_wall, op_settings))
 
     ensure_registry(env)
     context = build_initial_context(source, workflow_id=workflow_id)
@@ -312,8 +415,20 @@ async def run_revision_loop(
         },
     )
 
-    def _budget_hit() -> bool:
-        return _budget_exhausted(started=started, usage=usage, budgets=resolved_budgets)
+    def _budget_hit() -> str | None:
+        code = _budget_exhausted(started=started, usage=usage, budgets=resolved_budgets)
+        nonlocal budget_code
+        if code and code.startswith("operation_"):
+            budget_code = code
+            note_run_outcome(budget_code=code, status="budget_exceeded")
+        return code
+
+    def _apply_agent_stop(exc: _AgentStop) -> None:
+        nonlocal budget_code, stop_reason
+        stop_reason = exc.reason
+        if exc.budget_code and exc.budget_code.startswith("operation_"):
+            budget_code = exc.budget_code
+            note_run_outcome(budget_code=exc.budget_code, status="budget_exceeded")
 
     # --- Pass 0: full spine -------------------------------------------------
     for agent_id in SPINE_AGENT_IDS:
@@ -326,13 +441,40 @@ async def run_revision_loop(
             context = context.with_working_draft(last_valid)
             break
         params = critic_params if agent_id == "critic" else None
-        context, stage, codes = await _run_agent_node(
-            agent_id,
-            context,
-            agent_model_overrides=agent_model_overrides,
-            selection=selection,
-            parameters=params,
-        )
+        try:
+            context, stage, codes = await _run_agent_node(
+                agent_id,
+                context,
+                agent_model_overrides=agent_model_overrides,
+                selection=selection,
+                parameters=params,
+            )
+        except _AgentStop as exc:
+            _apply_agent_stop(exc)
+            context = context.with_working_draft(last_valid)
+            logger.info(
+                "Revision spine stopped",
+                extra={
+                    "agent_id": agent_id,
+                    "stop_reason": exc.reason.value,
+                    "run_id": run_id,
+                    "budget_code": exc.budget_code,
+                },
+            )
+            break
+        except Exception as exc:  # noqa: BLE001 — last-valid; span already recorded the failure
+            logger.warning(
+                "Revision spine agent failed",
+                extra={
+                    "agent_id": agent_id,
+                    "error_type": type(exc).__name__,
+                    "run_id": run_id,
+                    "failure_code": "agent_run_failed",
+                },
+            )
+            stop_reason = RevisionStopReason.VALIDATION_FAILED_KEPT_LAST_VALID
+            context = context.with_working_draft(last_valid)
+            break
         stages.append(stage)
         warnings.extend(codes)
         agent_sequence.append(agent_id)
@@ -485,6 +627,21 @@ async def run_revision_loop(
                     agent_model_overrides=agent_model_overrides,
                     selection=selection,
                 )
+            except _AgentStop as exc:
+                _apply_agent_stop(exc)
+                context = context.with_working_draft(last_valid)
+                pass_failed = True
+                logger.info(
+                    "Revision pass stopped",
+                    extra={
+                        "agent_id": agent_id,
+                        "pass_index": pass_index,
+                        "stop_reason": exc.reason.value,
+                        "run_id": run_id,
+                        "budget_code": exc.budget_code,
+                    },
+                )
+                break
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Revision agent failed",
@@ -593,13 +750,48 @@ async def run_revision_loop(
             stop_reason = RevisionStopReason.CANCELLED
             context = context.with_working_draft(last_valid)
             break
-        context, stage, codes = await _run_agent_node(
-            "critic",
-            context,
-            agent_model_overrides=agent_model_overrides,
-            selection=selection,
-            parameters=critic_params,
-        )
+        if _budget_hit():
+            logger.warning(
+                "[FIX] Re-critique skipped after operation budget",
+                extra={
+                    "budget_code": budget_code,
+                    "run_id": run_id,
+                    "pass_index": pass_index,
+                },
+            )
+            stop_reason = RevisionStopReason.RESOURCE_BUDGET_EXHAUSTED
+            context = context.with_working_draft(last_valid)
+            score = prior_score or critique_score_digest_from_payload(
+                _critique_payload(context), settings=settings
+            )
+            revision_history.append(
+                _pass_record(
+                    pass_index=pass_index,
+                    context=context,
+                    candidate_fp=last_valid_fp,
+                    revision_plan=plan_payload,
+                    composition_patch=patch_payload,
+                    validation=validation,
+                    usage_delta=pass_usage,
+                    score_digest=score,
+                    target_agent_ids=target_agents,
+                    stop_eligible=[stop_reason.value],
+                )
+            )
+            _append_pass_candidate(pass_index, last_valid_fp, last_valid)
+            break
+        try:
+            context, stage, codes = await _run_agent_node(
+                "critic",
+                context,
+                agent_model_overrides=agent_model_overrides,
+                selection=selection,
+                parameters=critic_params,
+            )
+        except _AgentStop as exc:
+            _apply_agent_stop(exc)
+            context = context.with_working_draft(last_valid)
+            break
         stages.append(stage)
         warnings.extend(codes)
         agent_sequence.append("critic")
@@ -688,6 +880,29 @@ async def run_revision_loop(
     )
     duration_ms = int((time.perf_counter() - started) * 1000)
     final_stop = stop_reason or RevisionStopReason.CRITIC_APPROVE
+    if ceiling_binding and final_stop == RevisionStopReason.MAX_PASSES_REACHED:
+        final_stop = RevisionStopReason.RESOURCE_BUDGET_EXHAUSTED
+        budget_code = BUDGET_REVISION
+        logger.info(
+            "Revision ceiling stopped the loop",
+            extra={
+                "run_id": run_id,
+                "budget_code": budget_code,
+                "max_passes": max_passes,
+                "stop_reason": final_stop.value,
+            },
+        )
+    outcome_status = None
+    if final_stop == RevisionStopReason.CANCELLED:
+        outcome_status = "cancelled"
+    elif budget_code:
+        outcome_status = "budget_exceeded"
+    note_run_outcome(
+        revision_count=context.revise_count,
+        stop_reason=final_stop.value,
+        budget_code=budget_code,
+        status=outcome_status,
+    )
     logger.info(
         "Revision loop end",
         extra={
@@ -696,6 +911,7 @@ async def run_revision_loop(
             "revision_mode": mode.value,
             "pass_index": revision_history[-1].pass_index if revision_history else 0,
             "stop_reason": final_stop.value,
+            "budget_code": budget_code,
             "max_passes": max_passes,
             "revise_count": context.revise_count,
             "duration_ms": duration_ms,
@@ -736,4 +952,5 @@ async def run_revision_loop(
         usage=usage,
         revision_mode=mode,
         max_passes=max_passes,
+        budget_code=budget_code,
     )

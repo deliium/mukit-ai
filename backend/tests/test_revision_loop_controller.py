@@ -148,6 +148,58 @@ def test_budget_exhausted():
     assert result.last_valid_fingerprint is not None
 
 
+def test_runtime_budget_skips_re_critique(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ai_agents.fake_agents import FakeCriticAgent, FakeHarmonyAgent
+    from app.ai_agents.revision_plan_builder import build_revision_plan_from_findings
+    from app.operation_budget_settings import BUDGET_RUNTIME
+
+    calls = {"critic": 0, "armed": False}
+    original_critic = FakeCriticAgent._run_impl
+    original_harmony = FakeHarmonyAgent._run_impl
+
+    async def critic(self, request):  # noqa: ANN001
+        calls["critic"] += 1
+        return await original_critic(self, request)
+
+    async def harmony(self, request):  # noqa: ANN001
+        result = await original_harmony(self, request)
+        if request.context.revise_count > 0:
+            calls["armed"] = True
+        return result
+
+    def one_target(*args, **kwargs):  # noqa: ANN002, ANN003
+        model = build_revision_plan_from_findings(*args, **kwargs)
+        return model.model_copy(update={"target_agent_ids": ["harmony"]})
+
+    def budget(*, started, usage, budgets):  # noqa: ANN001
+        if calls["armed"]:
+            return BUDGET_RUNTIME
+        return None
+
+    monkeypatch.setattr(FakeCriticAgent, "_run_impl", critic)
+    monkeypatch.setattr(FakeHarmonyAgent, "_run_impl", harmony)
+    monkeypatch.setattr(
+        "app.ai_agents.revision_loop.build_revision_plan_from_findings",
+        one_target,
+    )
+    monkeypatch.setattr("app.ai_agents.revision_loop._budget_exhausted", budget)
+
+    result = asyncio.run(
+        run_revision_loop(
+            _source(),
+            revision_mode=RevisionMode.FAST,
+            critic_parameters={
+                "fake_revise_passes": 1,
+                "fake_revise_hard_finding": True,
+            },
+            raise_on_revise_exhausted=False,
+        )
+    )
+    assert calls["critic"] == 1
+    assert result.stop_reason == RevisionStopReason.RESOURCE_BUDGET_EXHAUSTED
+    assert result.budget_code == BUDGET_RUNTIME
+
+
 def test_usage_available_in_fake_mode():
     result = asyncio.run(
         run_revision_loop(_source(), revision_mode=RevisionMode.OFF)

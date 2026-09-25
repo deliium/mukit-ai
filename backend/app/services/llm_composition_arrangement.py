@@ -189,6 +189,39 @@ def _build_arrangement_prompt(
     )
 
 
+def _note_structured_usage(result: Any) -> None:
+    """Record token counts when LangChain attached them. Missing usage stays unavailable."""
+    from app.operation_trace import note_usage
+
+    meta = getattr(result, "usage_metadata", None)
+    if meta is None and isinstance(result, dict):
+        raw = result.get("raw")
+        if raw is not None:
+            meta = getattr(raw, "usage_metadata", None)
+        if meta is None:
+            meta = result.get("usage_metadata")
+    if meta is None:
+        logger.debug("Structured draft usage unavailable", extra={"usage_status": "unavailable"})
+        return
+    if not isinstance(meta, dict):
+        meta = {
+            "input_tokens": getattr(meta, "input_tokens", None),
+            "output_tokens": getattr(meta, "output_tokens", None),
+            "prompt_tokens": getattr(meta, "prompt_tokens", None),
+            "completion_tokens": getattr(meta, "completion_tokens", None),
+        }
+    prompt = meta.get("input_tokens", meta.get("prompt_tokens"))
+    completion = meta.get("output_tokens", meta.get("completion_tokens"))
+    if not isinstance(prompt, int) and not isinstance(completion, int):
+        logger.debug("Structured draft usage unavailable", extra={"usage_status": "unavailable"})
+        return
+    note_usage(
+        prompt_tokens=prompt if isinstance(prompt, int) else None,
+        completion_tokens=completion if isinstance(completion, int) else None,
+        usage_status="available",
+    )
+
+
 async def _invoke_structured_draft(
     *,
     provider: LLMProviderSettings,
@@ -220,9 +253,68 @@ async def _invoke_structured_draft(
             "prompt_bytes": len(prompt.encode("utf-8")),
         },
     )
+    from app.operation_trace import (
+        OperationBudgetExceeded,
+        OperationCancelled,
+        current_run_id,
+        note_failure,
+        note_usage,
+        operation_span,
+        raise_if_model_call_blocked,
+    )
+
+    if current_run_id() is not None:
+        try:
+            raise_if_model_call_blocked()
+        except OperationCancelled:
+            logger.info(
+                "Model call cancelled",
+                extra={"run_id": current_run_id(), "model_call_id": None},
+            )
+            raise
+        except OperationBudgetExceeded:
+            raise
+
+    async def _call() -> Any:
+        if current_run_id() is not None:
+            from app.operation_trace import is_run_cancelled
+
+            if is_run_cancelled():
+                raise OperationCancelled()
+        try:
+            return await structured.ainvoke(prompt)
+        except SystemExit:
+            note_failure("operation_model_crashed", error_type="SystemExit")
+            logger.error(
+                "Model call crashed",
+                extra={
+                    "failure_code": "operation_model_crashed",
+                    "error_type": "SystemExit",
+                    "run_id": current_run_id(),
+                    "model_id": provider.model,
+                },
+            )
+            raise LLMGenerationError("operation_model_crashed") from None
+
     try:
-        result = await structured.ainvoke(prompt)
+        if current_run_id() is None:
+            result = await _call()
+        else:
+            async with operation_span("model", model_id=provider.model[:64], runtime=None) as span:
+                try:
+                    result = await _call()
+                except OperationCancelled:
+                    span.status = "cancelled"
+                    span.failure_code = "operation_cancelled"
+                    logger.info(
+                        "Model call cancelled",
+                        extra={"run_id": span.run_id, "model_call_id": span.span_id},
+                    )
+                    raise
+                _note_structured_usage(result)
     except Exception as exc:  # noqa: BLE001
+        if type(exc).__name__ in {"OperationCancelled", "OperationBudgetExceeded"}:
+            raise
         logger.error(
             "[FIX] LLM provider call failed during composition arrangement",
             extra={
@@ -232,6 +324,8 @@ async def _invoke_structured_draft(
                 "error_type": type(exc).__name__,
             },
         )
+        if isinstance(exc, (LLMGenerationError, InvalidLLMOutputError, OperationCancelled, OperationBudgetExceeded)):
+            raise
         raise LLMGenerationError(
             f"LLM provider request failed during composition arrangement: {type(exc).__name__}"
         ) from exc

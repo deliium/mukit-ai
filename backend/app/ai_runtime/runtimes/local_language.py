@@ -109,7 +109,13 @@ class LocalLanguageModel:
         )
         try:
             client = self._ensure_client()
-            result = await ainvoke_chat_text(client, prompt, purpose=call_purpose)
+            result = await ainvoke_chat_text(
+                client,
+                prompt,
+                purpose=call_purpose,
+                model_id=self.model_id,
+                runtime=LOCAL_RUNTIME,
+            )
         except Exception as exc:
             error_type = type(exc).__name__
             detail_code = _classify_local_transport_error(exc)

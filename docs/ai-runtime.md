@@ -10,6 +10,13 @@ runtime.
 `AI_AGENT_<ID>_MODEL`, exchange typed artifacts, and never replace the model
 registry. See [Multi-agent architecture](./multi-agent.md).
 
+**Operation spans:** chat and local HTTP completions that run inside an
+autonomous run open a model span (`model_id`, `runtime`, reported token
+counts, `usage_status`). `SystemExit` from that invoke or from an agent `run`
+is stored as `failure_code=operation_model_crashed` and does not exit the API
+process. `KeyboardInterrupt` still propagates. See
+[observability.md](observability.md).
+
 ## Capabilities
 
 Each registered model has:

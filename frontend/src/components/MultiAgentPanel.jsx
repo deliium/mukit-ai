@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
 import { isCanonicalComposition } from '../utils/musicJsonValidation.js';
 import { critiqueSummaryFromArtifact } from '../utils/compositionCritique.js';
 import { createAppLogger } from '../utils/appLogger.js';
 import { normalizeRevisionMode } from '../utils/revisionLoopModes.js';
+import { operationSummaryText } from '../utils/operationSummaryText.js';
 
 const logger = createAppLogger('MultiAgentPanel');
 
@@ -123,6 +124,7 @@ const MultiAgentPanel = () => {
   const revisionHistory = useMusicStore((s) => s.multiAgentRevisionHistory);
   const passCandidates = useMusicStore((s) => s.multiAgentPassCandidates);
   const stopReason = useMusicStore((s) => s.multiAgentStopReason);
+  const operationSummary = useMusicStore((s) => s.multiAgentOperationSummary);
   const loopStatus = useMusicStore((s) => s.multiAgentRevisionLoopStatus);
   const comparePassIndex = useMusicStore((s) => s.multiAgentComparePassIndex);
   const auditionActive = useMusicStore((s) => s.multiAgentAuditionActive);
@@ -148,6 +150,17 @@ const MultiAgentPanel = () => {
   const selectedPass = Array.isArray(revisionHistory)
     ? revisionHistory.find((p) => p.pass_index === comparePassIndex) || revisionHistory[0]
     : null;
+  const summaryText = operationSummaryText(operationSummary);
+  useEffect(() => {
+    if (!summaryText) return;
+    const runId = String(operationSummary?.run_id || '');
+    console.debug('[MultiAgentPanel] operation summary', {
+      run_id_prefix: runId.slice(0, 12),
+      status: operationSummary?.status || null,
+      model_call_count: operationSummary?.model_call_count ?? null,
+      revision_count: operationSummary?.revision_count ?? null,
+    });
+  }, [summaryText, operationSummary]);
 
   return (
     <Panel data-testid="multi-agent-panel">
@@ -239,6 +252,9 @@ const MultiAgentPanel = () => {
           Stop reason: {stopReason}
           {loopStatus === 'cancelled' ? ' (cancelled)' : ''}
         </Hint>
+      ) : null}
+      {summaryText ? (
+        <Hint data-testid="multi-agent-operation-summary">{summaryText}</Hint>
       ) : null}
       {critiqueSummary ? (
         <Hint data-testid="multi-agent-critique-summary">

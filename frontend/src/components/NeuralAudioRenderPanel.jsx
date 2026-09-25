@@ -23,6 +23,12 @@ import {
   isNeuralAudioDownloadReady,
   isNeuralAudioJobStale,
 } from '../utils/neuralAudioRenderUi.js';
+
+function activeOperationRunId() {
+  const state = useMusicStore.getState();
+  if (!state.multiAgentAbortController || !state.multiAgentOperationRunId) return null;
+  return state.multiAgentOperationRunId;
+}
 import {
   NEURAL_AUDIO_STEM_ROLES,
   isNeuralAudioStemSetStale,
@@ -362,6 +368,8 @@ const NeuralAudioRenderPanel = () => {
         payload.project_id = currentProjectId;
         payload.source_revision_id = currentRevisionId;
       }
+      const operationRunId = activeOperationRunId();
+      if (operationRunId) payload.operation_run_id = operationRunId;
       const job = await enqueueNeuralAudioRender(payload);
       setJobs((prev) => [job, ...prev.filter((item) => item.id !== job.id)]);
       setStatusMessage(`Job ${job.status}: ${job.fidelity_label || job.fidelity_class}`);
@@ -446,6 +454,8 @@ const NeuralAudioRenderPanel = () => {
         payload.project_id = currentProjectId;
         payload.source_revision_id = currentRevisionId;
       }
+      const operationRunId = activeOperationRunId();
+      if (operationRunId) payload.operation_run_id = operationRunId;
       const stemSet = await enqueueNeuralAudioStemSet(payload);
       setStemSets((prev) => [stemSet, ...prev.filter((item) => item.id !== stemSet.id)]);
       setStatusMessage(

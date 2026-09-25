@@ -96,7 +96,13 @@ class OpenAICompatibleChatLanguageModel:
         )
         try:
             client = self._ensure_client()
-            result = await ainvoke_chat_text(client, prompt, purpose=call_purpose)
+            result = await ainvoke_chat_text(
+                client,
+                prompt,
+                purpose=call_purpose,
+                model_id=self.model_id,
+                runtime=self.descriptor.runtime,
+            )
         except Exception as exc:
             logger.warning(
                 "LanguageModel transport failure",

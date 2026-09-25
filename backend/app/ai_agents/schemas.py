@@ -22,6 +22,7 @@ from pydantic import (
 
 from app.ai_runtime.capabilities import ModelCapability
 from app.composition_schemas import CompositionV2
+from app.operation_trace_schemas import OperationSummaryV1
 from app.critique_schemas import (
     CRITIQUE_ENGINE_VERSION,
     CRITIQUE_FINDING_MAX,
@@ -572,6 +573,8 @@ class AgentRunResult(BaseModel):
     warning_codes: list[str] = Field(default_factory=list, max_length=ARTIFACT_WARNING_MAX)
     recommendation: CritiqueRecommendation | None = None
     mutates_composition: Literal[False] = False
+    # Set by the single-agent HTTP route. Spine-internal results leave this null.
+    operation_summary: OperationSummaryV1 | None = None
 
     @model_validator(mode="after")
     def _force_non_mutating(self) -> Self:

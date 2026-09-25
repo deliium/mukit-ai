@@ -218,6 +218,7 @@ def insert_queued_stem_set(
     duration_ticks: int,
     tempo_bpm: float | None,
     sample_rate: int,
+    operation_run_id: str | None = None,
 ) -> dict[str, Any]:
     created_at = _utc_now_iso()
     conn.execute(
@@ -225,8 +226,8 @@ def insert_queued_stem_set(
         INSERT INTO neural_audio_stem_sets (
             id, project_id, source_revision_id, source_fingerprint, status,
             model_id, engine, origin_tick, duration_ticks, tempo_bpm, sample_rate,
-            created_at
-        ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
+            created_at, operation_run_id
+        ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             stem_set_id,
@@ -240,6 +241,7 @@ def insert_queued_stem_set(
             tempo_bpm,
             sample_rate,
             created_at,
+            operation_run_id,
         ),
     )
     logger.info(
@@ -365,6 +367,12 @@ def update_stem_set_status(
             details={"stem_set_id": stem_set_id},
         )
     now = _utc_now_iso()
+    if status == "complete" and str(row.get("error_code") or "") == "operation_cancelled":
+        logger.info(
+            "Discarding late stem-set completion after cancel",
+            extra={"stem_set_id": stem_set_id},
+        )
+        return row
     started = now if status == "running" and not row.get("started_at") else None
     completed = (
         now if status in {"complete", "failed"} and not row.get("completed_at") else None
@@ -390,6 +398,34 @@ def update_stem_set_status(
         },
     )
     return get_stem_set_row(conn, stem_set_id)  # type: ignore[return-value]
+
+
+def increment_stem_set_attempt(conn: sqlite3.Connection, stem_set_id: str) -> int:
+    row = get_stem_set_row(conn, stem_set_id)
+    if row is None:
+        raise NeuralAudioError(
+            "stem_set_not_found",
+            "Neural audio stem set not found",
+            http_status=404,
+            details={"stem_set_id": stem_set_id},
+        )
+    conn.execute(
+        "UPDATE neural_audio_stem_sets SET attempt_count = attempt_count + 1 WHERE id = ?",
+        (stem_set_id,),
+    )
+    updated = get_stem_set_row(conn, stem_set_id)
+    return int((updated or row).get("attempt_count") or 0)
+
+
+def requeue_failed_stems(conn: sqlite3.Connection, stem_set_id: str) -> None:
+    conn.execute(
+        """
+        UPDATE neural_audio_stems
+        SET status = 'queued'
+        WHERE stem_set_id = ? AND status = 'failed'
+        """,
+        (stem_set_id,),
+    )
 
 
 def update_stem_status(
@@ -642,6 +678,8 @@ def stem_set_row_to_response(
         created_at=str(set_row["created_at"]),
         started_at=set_row.get("started_at"),
         completed_at=set_row.get("completed_at"),
+        operation_run_id=set_row.get("operation_run_id"),
+        attempt_count=int(set_row.get("attempt_count") or 0),
         mutates_composition=False,
     )
 

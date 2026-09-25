@@ -248,12 +248,50 @@ def resolve_max_passes(
     *,
     revision_mode: RevisionMode | str | None = None,
     max_revisions: int | None = None,
+    revision_ceiling: int | None = None,
 ) -> tuple[RevisionMode, int]:
     """Resolve mode + effective max_passes with product clamps.
 
     When ``revision_mode`` is set (including ``off``), mode caps apply.
     Raw ``max_revisions`` alone (mode omitted / None) remains the escape hatch ≤ 8.
+    ``revision_ceiling`` clamps downward. When omitted, ``OPERATION_MAX_REVISIONS``
+    is loaded. The request cannot raise that ceiling.
     """
+    mode, passes = _resolve_max_passes_uncapped(
+        revision_mode=revision_mode,
+        max_revisions=max_revisions,
+    )
+    ceiling = _operation_revision_ceiling(revision_ceiling)
+    effective = min(passes, ceiling)
+    if effective != passes:
+        logger.debug(
+            "Revision max_passes clamped by operation ceiling",
+            extra={"max_passes": effective, "uncapped": passes},
+        )
+    return mode, effective
+
+
+def _operation_revision_ceiling(revision_ceiling: int | None) -> int:
+    if revision_ceiling is None:
+        from app.operation_budget_settings import load_operation_budget_settings
+
+        revision_ceiling = load_operation_budget_settings().max_revisions
+    try:
+        parsed = int(revision_ceiling)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Operation revision ceiling invalid",
+            extra={"env_key": "OPERATION_MAX_REVISIONS", "error_type": "ValueError"},
+        )
+        return REVISION_API_ABSOLUTE_MAX_PASSES
+    return max(0, min(parsed, REVISION_API_ABSOLUTE_MAX_PASSES))
+
+
+def _resolve_max_passes_uncapped(
+    *,
+    revision_mode: RevisionMode | str | None = None,
+    max_revisions: int | None = None,
+) -> tuple[RevisionMode, int]:
     if revision_mode is None:
         mode = RevisionMode.OFF
         if max_revisions is None:

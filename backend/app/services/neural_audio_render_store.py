@@ -234,6 +234,7 @@ def insert_queued_job(
     tempo_bpm: float | None,
     seed: int | None,
     adapter_warnings: Sequence[str] | None = None,
+    operation_run_id: str | None = None,
 ) -> dict[str, Any]:
     created_at = _utc_now_iso()
     warnings_json = json.dumps(list(adapter_warnings or []), separators=(",", ":"))
@@ -243,8 +244,8 @@ def insert_queued_job(
             id, project_id, source_revision_id, source_fingerprint, status,
             model_id, model_version, adapter_kind, fidelity_class, instructions,
             genre, mood, instrumentation_summary, tempo_bpm, seed,
-            adapter_warnings_json, created_at
-        ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            adapter_warnings_json, created_at, operation_run_id
+        ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             render_id,
@@ -263,6 +264,7 @@ def insert_queued_job(
             seed,
             warnings_json,
             created_at,
+            operation_run_id,
         ),
     )
     logger.info(
@@ -304,6 +306,12 @@ def update_job_status(
             details={"render_id": render_id},
         )
     now = _utc_now_iso()
+    if status == "complete" and str(row.get("error_code") or "") == "operation_cancelled":
+        logger.info(
+            "Discarding late neural render completion after cancel",
+            extra={"render_id": render_id},
+        )
+        return row
     conn.execute(
         """
         UPDATE neural_audio_renders SET
@@ -433,8 +441,27 @@ def row_to_response(row: Mapping[str, Any]) -> NeuralAudioJobResponse:
         started_at=row.get("started_at"),
         completed_at=row.get("completed_at"),
         adapter_warnings=[str(item) for item in warnings],
+        operation_run_id=row.get("operation_run_id"),
+        attempt_count=int(row.get("attempt_count") or 0),
         mutates_composition=False,
     )
+
+
+def increment_attempt_count(conn: sqlite3.Connection, render_id: str) -> int:
+    row = get_job_row(conn, render_id)
+    if row is None:
+        raise NeuralAudioError(
+            "render_not_found",
+            "Neural audio render not found",
+            http_status=404,
+            details={"render_id": render_id},
+        )
+    conn.execute(
+        "UPDATE neural_audio_renders SET attempt_count = attempt_count + 1 WHERE id = ?",
+        (render_id,),
+    )
+    updated = get_job_row(conn, render_id)
+    return int((updated or row).get("attempt_count") or 0)
 
 
 def open_store_connection(db_path: Path | str | None = None) -> sqlite3.Connection:

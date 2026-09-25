@@ -1876,6 +1876,9 @@ export async function enqueueNeuralAudioRender(payload) {
     instrumentation_summary: payload?.instrumentation_summary || null,
     seed: payload?.seed ?? null,
   };
+  if (typeof payload?.operation_run_id === 'string' && payload.operation_run_id) {
+    body.operation_run_id = payload.operation_run_id;
+  }
   if (payload?.project_id && payload?.source_revision_id) {
     body.project_id = payload.project_id;
     body.source_revision_id = payload.source_revision_id;
@@ -1977,6 +1980,9 @@ export async function enqueueNeuralAudioStemSet(payload) {
     stems: Array.isArray(payload?.stems) ? payload.stems : null,
     bar_range: payload?.bar_range || null,
   };
+  if (typeof payload?.operation_run_id === 'string' && payload.operation_run_id) {
+    body.operation_run_id = payload.operation_run_id;
+  }
   if (payload?.project_id && payload?.source_revision_id) {
     body.project_id = payload.project_id;
     body.source_revision_id = payload.source_revision_id;
@@ -2549,6 +2555,7 @@ export async function previewMultiAgentWorkflow(payload, { signal } = {}) {
       revision_mode: revisionMode,
       max_wall_ms: payload.max_wall_ms ?? null,
       max_prompt_tokens: payload.max_prompt_tokens ?? null,
+      operation_run_id: payload.operation_run_id || null,
       agent_model_overrides: payload.agent_model_overrides || {},
       selection: payload.selection || {},
       critic_parameters: payload.critic_parameters || {},

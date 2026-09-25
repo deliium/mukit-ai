@@ -33,6 +33,7 @@ Full-stack LLM music composer that generates and edits canonical playable `compo
 - Deterministic export: MusicXML, MIDI (SMF Type 1 DAW handoff with section markers + drag/download UX), and server-side FluidSynth WAV
 - Durable hybrid generation provenance (`generation.provenance.v1`) on AI revisions; V3 Docker acceptance (`scripts/v3_docker_acceptance.sh`) with seeded reproduce under fake modes
 - V4 multi-agent music architecture: specialized in-process agents above `ai_runtime` (`GET /ai/agents`, workflow preview spine, typed artifacts, progressive realize); Apply only via `multi-agent-apply` CAS — never invents `composition.v4`
+- Autonomous runs emit a redacted `operation.summary.v1` and honor env ceilings for model calls, wall time, revisions, and neural render attempts (`docs/observability.md`)
 - In-process plugin SDK (`app.plugin_sdk` + `PLUGIN_PATHS`): directories are discovered only; install and enable load empty-resource plugins as `runtime=plugin` on `GET /ai/models`; durable desired state in `plugin_installations`; declared high-risk resources are refused; Plugins panel; no marketplace; plugins must not write `DATASET_ROOT` or persist `composition.v4`
 
 ## Tech Stack

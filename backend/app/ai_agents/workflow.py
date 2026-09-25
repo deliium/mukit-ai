@@ -20,6 +20,7 @@ from app.ai_agents.schemas import (
     CritiqueRecommendation,
 )
 from app.composition_schemas import CompositionV2
+from app.operation_trace import current_run_id
 from app.services.composition_edit_fingerprint import composition_edit_fingerprint
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ class WorkflowPreviewResult:
     usage: Any | None = None
     revision_mode: Any | None = None
     max_passes: int = 0
+    budget_code: str | None = None
 
 
 def build_initial_context(
@@ -105,6 +107,7 @@ async def run_spine_workflow(
         extra={
             "workflow_id": workflow_id,
             "max_revisions": max_revisions,
+            "run_id": current_run_id(),
             "revision_mode": (
                 mode.value if isinstance(mode, RevisionMode) else mode
             ),

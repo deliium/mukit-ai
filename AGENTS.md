@@ -132,6 +132,9 @@ mukit-ai/
 | `backend/app/ai_agents/revision_stop_policy.py` | Pure multi-condition stop evaluation |
 | `backend/app/ai_agents/revision_plan_builder.py` | Findings → targeted `agent.revision_plan.v1` |
 | `backend/app/revision_loop_settings.py` | `REVISION_LOOP_*` thresholds / budgets |
+| `backend/app/operation_trace.py` | ContextVar operation spans, redacted span logs, run cancel set |
+| `backend/app/operation_trace_schemas.py` | `operation.span.v1` and `operation.summary.v1` |
+| `backend/app/operation_budget_settings.py` | `OPERATION_*` and `NEURAL_AUDIO_MAX_ATTEMPTS` ceilings |
 | `backend/app/services/composition_revision_preserve.py` | Preserve-outside-targets event fingerprint helper |
 | `backend/app/routers/critique.py` | `POST /critique/evaluate` (session-only) |
 | `backend/app/motif_schemas.py` | Motif apply request/response DTOs |
@@ -237,6 +240,7 @@ mukit-ai/
 | AI Runtime | `docs/ai-runtime.md` | Capability registry, operation routing, `/ai/models`, fallback, provenance |
 | Plugin SDK | `docs/plugin-sdk.md` | In-process plugins via `PLUGIN_PATHS`; `runtime=plugin` on `/ai/models`; no marketplace |
 | Multi-agent (V4) | `docs/multi-agent.md` | Specialized agents above runtime; workflow preview; Apply CAS |
+| Operation traces | `docs/observability.md` | Run ids, redacted spans, budgets, cancel, crash containment |
 | Optional local AI | `docs/local-ai.md` | AMD/ROCm Compose profiles, llama.cpp/vLLM, memory-safe defaults, troubleshooting |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
 | Composition Editor | `docs/composition-editor.md` | Piano-roll selection, clipboard, transforms, cursor/loop |

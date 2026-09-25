@@ -84,6 +84,7 @@ NeuralAudioErrorCode = Literal[
     "stem_not_found",
     "section_render_unsupported",
     "stem_partition_empty",
+    "operation_run_id_invalid",
 ]
 
 NEURAL_AUDIO_STEM_SET_SCHEMA_VERSION: Literal["neural_audio_stem_set.v1"] = (
@@ -159,6 +160,7 @@ class NeuralAudioEnqueueRequest(BaseModel):
     tempo_bpm: float | None = Field(default=None, ge=20.0, le=400.0)
     instrumentation_summary: str | None = Field(default=None, max_length=2000)
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    operation_run_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("instructions", "genre", "mood", "instrumentation_summary", mode="before")
     @classmethod
@@ -218,6 +220,8 @@ class NeuralAudioJobResponse(BaseModel):
     started_at: str | None = None
     completed_at: str | None = None
     adapter_warnings: list[str] = Field(default_factory=list)
+    operation_run_id: str | None = None
+    attempt_count: int = Field(default=0, ge=0)
     # Explicit contract reminder for API consumers / UI.
     mutates_composition: Literal[False] = False
 
@@ -299,6 +303,7 @@ class NeuralAudioStemEnqueueRequest(BaseModel):
     tempo_bpm: float | None = Field(default=None, ge=20.0, le=400.0)
     instrumentation_summary: str | None = Field(default=None, max_length=2000)
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    operation_run_id: str | None = Field(default=None, max_length=64)
     engine: NeuralAudioStemEngine = "neural"
     stems: list[NeuralAudioStemPartitionSpec] | None = None
     bar_range: NeuralAudioBarRange | None = None
@@ -424,6 +429,8 @@ class NeuralAudioStemSetResponse(BaseModel):
     created_at: str
     started_at: str | None = None
     completed_at: str | None = None
+    operation_run_id: str | None = None
+    attempt_count: int = Field(default=0, ge=0)
     mutates_composition: Literal[False] = False
 
 

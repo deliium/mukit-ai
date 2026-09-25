@@ -35,6 +35,7 @@ import {
   fetchAudioRecoveryAssetJson,
   fetchBoundAudioRecovery,
 } from '../api/musicApi.js';
+import { mintOperationRunId } from '../utils/operationSummaryText.js';
 import {
   createLivePredictAbortController,
   predictLiveAccompaniment,
@@ -1517,6 +1518,8 @@ export const useMusicStore = create((set, get) => ({
   multiAgentRevisionHistory: [],
   multiAgentPassCandidates: [],
   multiAgentStopReason: null,
+  multiAgentOperationSummary: null,
+  multiAgentOperationRunId: null,
   multiAgentRevisionLoopStatus: 'idle',
   multiAgentComparePassIndex: null,
   multiAgentAuditionActive: false,
@@ -11731,6 +11734,7 @@ export const useMusicStore = create((set, get) => ({
       multiAgentRevisionLoopStatus: 'cancelled',
       multiAgentStatus: state.multiAgentCandidate ? 'success' : 'idle',
       multiAgentAbortController: null,
+      multiAgentOperationRunId: null,
     });
   },
 
@@ -11749,6 +11753,7 @@ export const useMusicStore = create((set, get) => ({
     }
     const abortController =
       typeof globalThis.AbortController !== 'undefined' ? new globalThis.AbortController() : null;
+    const operationRunId = mintOperationRunId();
     const requestId = (state.multiAgentRequestId || 0) + 1;
     const revisionMode = state.multiAgentRevisionMode || 'off';
     set({
@@ -11760,6 +11765,8 @@ export const useMusicStore = create((set, get) => ({
       multiAgentRevisionHistory: [],
       multiAgentPassCandidates: [],
       multiAgentStopReason: null,
+      multiAgentOperationSummary: null,
+      multiAgentOperationRunId: operationRunId,
       multiAgentComparePassIndex: null,
       multiAgentAuditionActive: false,
     });
@@ -11770,6 +11777,7 @@ export const useMusicStore = create((set, get) => ({
           workflow_id: 'agent_spine_v1',
           max_revisions: 0,
           revision_mode: revisionMode,
+          operation_run_id: operationRunId,
         },
         abortController ? { signal: abortController.signal } : {},
       );
@@ -11824,6 +11832,8 @@ export const useMusicStore = create((set, get) => ({
           : [],
         multiAgentPassCandidates: passCandidates,
         multiAgentStopReason: response.stop_reason || null,
+        multiAgentOperationSummary: response.operation_summary || null,
+        multiAgentOperationRunId: null,
         multiAgentRevisionLoopStatus: 'idle',
         multiAgentAbortController: null,
         multiAgentComparePassIndex: 0,
@@ -11849,6 +11859,8 @@ export const useMusicStore = create((set, get) => ({
         multiAgentCandidate: aborted ? get().multiAgentCandidate : null,
         multiAgentRevisionLoopStatus: aborted ? 'cancelled' : 'idle',
         multiAgentAbortController: null,
+        multiAgentOperationRunId: null,
+        multiAgentOperationSummary: aborted ? null : get().multiAgentOperationSummary,
         multiAgentStopReason: aborted ? 'cancelled' : null,
       });
       return null;
@@ -11909,6 +11921,8 @@ export const useMusicStore = create((set, get) => ({
       multiAgentRevisionHistory: [],
       multiAgentPassCandidates: [],
       multiAgentStopReason: null,
+      multiAgentOperationSummary: null,
+      multiAgentOperationRunId: null,
       multiAgentComparePassIndex: null,
       multiAgentAuditionActive: false,
     };
@@ -12013,6 +12027,8 @@ export const useMusicStore = create((set, get) => ({
       multiAgentRevisionHistory: [],
       multiAgentPassCandidates: [],
       multiAgentStopReason: null,
+      multiAgentOperationSummary: null,
+      multiAgentOperationRunId: null,
       multiAgentRevisionLoopStatus: 'idle',
       multiAgentComparePassIndex: null,
       multiAgentAuditionActive: false,

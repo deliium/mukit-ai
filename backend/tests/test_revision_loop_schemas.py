@@ -35,35 +35,55 @@ def test_mode_max_passes_mapping(mode, expected):
 
 
 def test_resolve_max_passes_product_clamp():
-    mode, passes = resolve_max_passes(revision_mode="thorough", max_revisions=8)
+    mode, passes = resolve_max_passes(
+        revision_mode="thorough", max_revisions=8, revision_ceiling=8
+    )
     assert mode == RevisionMode.THOROUGH
     assert passes == 3
 
 
 def test_resolve_max_passes_named_mode_ignores_zero_max_revisions():
     """API default max_revisions=0 must not zero out Fast/Balanced/Thorough."""
-    mode, passes = resolve_max_passes(revision_mode="fast", max_revisions=0)
+    mode, passes = resolve_max_passes(
+        revision_mode="fast", max_revisions=0, revision_ceiling=8
+    )
     assert mode == RevisionMode.FAST
     assert passes == 1
-    mode, passes = resolve_max_passes(revision_mode=RevisionMode.BALANCED, max_revisions=0)
+    mode, passes = resolve_max_passes(
+        revision_mode=RevisionMode.BALANCED, max_revisions=0, revision_ceiling=8
+    )
     assert mode == RevisionMode.BALANCED
     assert passes == 2
 
 
 def test_resolve_max_passes_named_mode_positive_clamp():
-    mode, passes = resolve_max_passes(revision_mode="thorough", max_revisions=1)
+    mode, passes = resolve_max_passes(
+        revision_mode="thorough", max_revisions=1, revision_ceiling=8
+    )
     assert mode == RevisionMode.THOROUGH
     assert passes == 1
 
 
 def test_resolve_max_passes_off_escape_hatch():
-    mode, passes = resolve_max_passes(revision_mode="off", max_revisions=5)
+    mode, passes = resolve_max_passes(
+        revision_mode="off", max_revisions=5, revision_ceiling=8
+    )
     assert mode == RevisionMode.OFF
     assert passes == 5
 
 
+def test_resolve_max_passes_operation_ceiling_clamps_thorough():
+    mode, passes = resolve_max_passes(
+        revision_mode="thorough", max_revisions=0, revision_ceiling=1
+    )
+    assert mode == RevisionMode.THOROUGH
+    assert passes == 1
+
+
 def test_resolve_max_passes_raw_none_mode():
-    mode, passes = resolve_max_passes(revision_mode=None, max_revisions=4)
+    mode, passes = resolve_max_passes(
+        revision_mode=None, max_revisions=4, revision_ceiling=8
+    )
     assert mode == RevisionMode.OFF
     assert passes == 4
 

@@ -26,6 +26,12 @@ from app.neural_audio_schemas import (
     NeuralAudioStemSetResponse,
 )
 from app.neural_audio_settings import NeuralAudioSettings, load_neural_audio_settings
+from app.operation_budget_settings import (
+    BUDGET_RENDER_ATTEMPT,
+    BUDGET_RUNTIME,
+    load_operation_budget_settings,
+)
+from app.operation_trace import is_run_cancelled, render_attempt_decision
 from app.services.composition_snapshot_encoding import composition_snapshot_fingerprint
 from app.services.neural_audio_adapters import (
     artifact_to_engine_spec,
@@ -37,6 +43,8 @@ from app.services.neural_audio_render import (
     _invoke_model_sync,
     _resolve_audio_model,
     _resolve_source,
+    canonical_operation_run_id,
+    emit_render_span,
 )
 from app.services.neural_audio_stem_partition import (
     composition_duration_ticks,
@@ -54,11 +62,13 @@ from app.services.neural_audio_stem_store import (
     delete_stem_set,
     get_stem_row,
     get_stem_set_row,
+    increment_stem_set_attempt,
     insert_queued_stem,
     insert_queued_stem_set,
     list_stem_rows_for_set,
     list_stem_set_rows,
     open_stem_store_settings,
+    requeue_failed_stems,
     stem_row_to_response,
     stem_set_row_to_response,
     update_stem_set_status,
@@ -199,6 +209,7 @@ def enqueue_stem_set(
     duration_ticks = composition_duration_ticks(composition)
     sample_rate = _DEFAULT_SAMPLE_RATE
     stem_set_id = allocate_stem_set_id()
+    operation_run_id = canonical_operation_run_id(request.operation_run_id)
 
     with get_connection(path) as conn:
         assert_stem_enqueue_quota(
@@ -216,6 +227,7 @@ def enqueue_stem_set(
             duration_ticks=duration_ticks,
             tempo_bpm=tempo,
             sample_rate=sample_rate,
+            operation_run_id=operation_run_id,
         )
         for item in planned:
             sync_class = _sync_class_for(
@@ -302,74 +314,176 @@ def run_stem_set(
         return get_stem_set(stem_set_id, db_path=path)
 
     with get_connection(path) as conn:
-        update_stem_set_status(conn, stem_set_id, status="running")
-        stem_rows = list_stem_rows_for_set(conn, stem_set_id)
+        set_row = get_stem_set_row(conn, stem_set_id)
+    operation_run_id = (set_row or {}).get("operation_run_id")
+    if not isinstance(operation_run_id, str) or not operation_run_id.strip():
+        operation_run_id = None
+    model_id = str((set_row or {}).get("model_id") or "") or None
+    max_attempts = load_operation_budget_settings().neural_audio_max_attempts
 
-    any_failed = False
-    direct_rows = [
-        row
-        for row in stem_rows
-        if str(row.get("capability_used") or "") == "direct_stems"
-        and str(row.get("status") or "") in {"queued", "running"}
-    ]
-    direct_ids = {str(row["id"]) for row in direct_rows}
-    other_rows = [
-        row
-        for row in stem_rows
-        if str(row["id"]) not in direct_ids
-        and str(row.get("status") or "") in {"queued", "running"}
-    ]
-
-    if direct_rows:
-        ok = _run_direct_stems_batch(
-            direct_rows,
-            model=model,
-            settings=settings,
-            db_path=path,
-            expected_fingerprint=expected_fingerprint,
-        )
-        if not ok:
-            any_failed = True
-
-    for row in other_rows:
-        ok = _run_one_stem(
-            row,
-            composition=composition,
-            model=model,
-            settings=settings,
-            db_path=path,
-            expected_fingerprint=expected_fingerprint,
-            env=env,
-        )
-        if not ok:
-            any_failed = True
-
-    after_fp = composition_snapshot_fingerprint(CompositionV2.model_validate(composition))
-    if after_fp != before_fp:
-        logger.error(
-            "Composition mutated during stem set job (unexpected)",
-            extra={"stem_set_id": stem_set_id},
-        )
-        _fail_stem_set(
-            path,
-            stem_set_id,
-            code="neural_audio_internal_error",
-            message="Composition changed during stem render (aborted)",
-        )
-        return get_stem_set(stem_set_id, db_path=path)
-
-    with get_connection(path) as conn:
-        if any_failed:
-            update_stem_set_status(
-                conn,
-                stem_set_id,
-                status="failed",
-                error_code="neural_audio_internal_error",
-                error_message="One or more stems failed",
+    while True:
+        with get_connection(path) as conn:
+            set_row = get_stem_set_row(conn, stem_set_id)
+        attempt_count = int((set_row or {}).get("attempt_count") or 0)
+        decision = render_attempt_decision(operation_run_id, attempt_count, max_attempts)
+        attempt_started = time.perf_counter()
+        if decision != "go":
+            if decision == "cancelled":
+                code = "operation_cancelled"
+            elif decision == "runtime":
+                code = BUDGET_RUNTIME
+            else:
+                code = BUDGET_RENDER_ATTEMPT
+            if decision == "budget":
+                logger.warning(
+                    "Stem set attempt budget exhausted",
+                    extra={
+                        "stem_set_id": stem_set_id,
+                        "budget_code": BUDGET_RENDER_ATTEMPT,
+                        "attempt_count": attempt_count,
+                    },
+                )
+            emit_render_span(
+                job_id=stem_set_id,
+                operation_run_id=operation_run_id,
+                model_id=model_id,
+                status="cancelled" if decision == "cancelled" else "budget_exceeded",
+                failure_code=code,
+                attempt_count=attempt_count,
+                started_at=attempt_started,
             )
-        else:
-            update_stem_set_status(conn, stem_set_id, status="complete")
-    return get_stem_set(stem_set_id, db_path=path)
+            if decision == "cancelled":
+                message = "Stem set cancelled"
+            elif decision == "runtime":
+                message = "Stem set runtime budget exhausted"
+            else:
+                message = "Stem set attempt budget exhausted"
+            _fail_stem_set(
+                path,
+                stem_set_id,
+                code=code,
+                message=message,
+            )
+            return get_stem_set(stem_set_id, db_path=path)
+
+        with get_connection(path) as conn:
+            attempt_count = increment_stem_set_attempt(conn, stem_set_id)
+            update_stem_set_status(conn, stem_set_id, status="running")
+            stem_rows = list_stem_rows_for_set(conn, stem_set_id)
+
+        any_failed = False
+        direct_rows = [
+            row
+            for row in stem_rows
+            if str(row.get("capability_used") or "") == "direct_stems"
+            and str(row.get("status") or "") in {"queued", "running"}
+        ]
+        direct_ids = {str(row["id"]) for row in direct_rows}
+        other_rows = [
+            row
+            for row in stem_rows
+            if str(row["id"]) not in direct_ids
+            and str(row.get("status") or "") in {"queued", "running"}
+        ]
+
+        if direct_rows:
+            ok = _run_direct_stems_batch(
+                direct_rows,
+                model=model,
+                settings=settings,
+                db_path=path,
+                expected_fingerprint=expected_fingerprint,
+            )
+            if not ok:
+                any_failed = True
+
+        for row in other_rows:
+            ok = _run_one_stem(
+                row,
+                composition=composition,
+                model=model,
+                settings=settings,
+                db_path=path,
+                expected_fingerprint=expected_fingerprint,
+                env=env,
+            )
+            if not ok:
+                any_failed = True
+
+        after_fp = composition_snapshot_fingerprint(CompositionV2.model_validate(composition))
+        if after_fp != before_fp:
+            logger.error(
+                "Composition mutated during stem set job (unexpected)",
+                extra={"stem_set_id": stem_set_id},
+            )
+            _fail_stem_set(
+                path,
+                stem_set_id,
+                code="neural_audio_internal_error",
+                message="Composition changed during stem render (aborted)",
+            )
+            return get_stem_set(stem_set_id, db_path=path)
+
+        if operation_run_id and is_run_cancelled(operation_run_id):
+            emit_render_span(
+                job_id=stem_set_id,
+                operation_run_id=operation_run_id,
+                model_id=model_id,
+                status="cancelled",
+                failure_code="operation_cancelled",
+                attempt_count=attempt_count,
+                started_at=attempt_started,
+            )
+            _fail_stem_set(
+                path,
+                stem_set_id,
+                code="operation_cancelled",
+                message="Stem set cancelled",
+            )
+            return get_stem_set(stem_set_id, db_path=path)
+
+        if not any_failed:
+            with get_connection(path) as conn:
+                update_stem_set_status(conn, stem_set_id, status="complete")
+            emit_render_span(
+                job_id=stem_set_id,
+                operation_run_id=operation_run_id,
+                model_id=model_id,
+                status="ok",
+                failure_code=None,
+                attempt_count=attempt_count,
+                started_at=attempt_started,
+            )
+            return get_stem_set(stem_set_id, db_path=path)
+
+        exhausted = attempt_count >= max_attempts
+        emit_render_span(
+            job_id=stem_set_id,
+            operation_run_id=operation_run_id,
+            model_id=model_id,
+            status="budget_exceeded" if exhausted else "failed",
+            failure_code=BUDGET_RENDER_ATTEMPT if exhausted else "neural_audio_internal_error",
+            attempt_count=attempt_count,
+            started_at=attempt_started,
+        )
+        if exhausted:
+            logger.warning(
+                "Stem set attempt budget exhausted",
+                extra={
+                    "stem_set_id": stem_set_id,
+                    "budget_code": BUDGET_RENDER_ATTEMPT,
+                    "attempt_count": attempt_count,
+                },
+            )
+            _fail_stem_set(
+                path,
+                stem_set_id,
+                code=BUDGET_RENDER_ATTEMPT,
+                message="Stem set attempt budget exhausted",
+            )
+            return get_stem_set(stem_set_id, db_path=path)
+        with get_connection(path) as conn:
+            requeue_failed_stems(conn, stem_set_id)
 
 
 def rerender_stem(
@@ -400,6 +514,11 @@ def rerender_stem(
             http_status=404,
             details={"stem_id": stem_id, "stem_set_id": stem_set_id},
         )
+    blocked = _stem_set_attempt_blocked(path, set_row, stem_set_id)
+    if blocked is not None:
+        return blocked
+    with get_connection(path) as conn:
+        increment_stem_set_attempt(conn, stem_set_id)
 
     from app.neural_audio_schemas import NeuralAudioEnqueueRequest
 
@@ -1004,6 +1123,61 @@ def _sync_class_for(*, engine: str, fidelity_class: str, capability: str) -> str
     if fidelity_class == "neural_instrument":
         return "timeline_aligned"
     return "generative_independent"
+
+
+def _stem_set_attempt_blocked(
+    path: Path,
+    set_row: Mapping[str, Any],
+    stem_set_id: str,
+) -> NeuralAudioStemSetResponse | None:
+    operation_run_id = set_row.get("operation_run_id")
+    if not isinstance(operation_run_id, str) or not operation_run_id.strip():
+        operation_run_id = None
+    attempt_count = int(set_row.get("attempt_count") or 0)
+    decision = render_attempt_decision(
+        operation_run_id,
+        attempt_count,
+        load_operation_budget_settings().neural_audio_max_attempts,
+    )
+    if decision == "go":
+        return None
+    if decision == "cancelled":
+        code = "operation_cancelled"
+    elif decision == "runtime":
+        code = BUDGET_RUNTIME
+    else:
+        code = BUDGET_RENDER_ATTEMPT
+    if decision == "budget":
+        logger.warning(
+            "Stem set attempt budget exhausted",
+            extra={
+                "stem_set_id": stem_set_id,
+                "budget_code": BUDGET_RENDER_ATTEMPT,
+                "attempt_count": attempt_count,
+            },
+        )
+    emit_render_span(
+        job_id=stem_set_id,
+        operation_run_id=operation_run_id,
+        model_id=str(set_row.get("model_id") or "") or None,
+        status="cancelled" if decision == "cancelled" else "budget_exceeded",
+        failure_code=code,
+        attempt_count=attempt_count,
+        started_at=time.perf_counter(),
+    )
+    if decision == "cancelled":
+        message = "Stem set cancelled"
+    elif decision == "runtime":
+        message = "Stem set runtime budget exhausted"
+    else:
+        message = "Stem set attempt budget exhausted"
+    _fail_stem_set(
+        path,
+        stem_set_id,
+        code=code,
+        message=message,
+    )
+    return get_stem_set(stem_set_id, db_path=path)
 
 
 def _fail_stem_set(
