@@ -23,9 +23,11 @@ mukit-ai/
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
 │   │   ├── ai_runtime/      # Capability registry, operation routing, typed model adapters
 │   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas, revision_loop)
+│   │   ├── plugin_sdk/      # Public plugin import surface (manifest, protocols, context)
+│   │   ├── plugin_host/     # PLUGIN_PATHS loader, import guard, catalog, host dispatch
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
-│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents HTTP API
+│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents + plugins HTTP API
 │   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
@@ -55,6 +57,7 @@ mukit-ai/
 │   │   ├── fixtures/        # Canonical composition JSON (V1 + V2 expressive) + arrangement_instruments.v1.json
 │   │   ├── db/              # SQLite connection + Alembic (alembic/versions baseline)
 │   │   └── schemas.py       # LLM models + composition re-exports
+│   ├── examples/plugins/    # Shipped plugins; loaded only when their directory is on PLUGIN_PATHS
 │   └── tests/
 ├── frontend/                # React + Vite SPA
 │   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement/editor/neural-audio acceptance journeys
@@ -65,7 +68,7 @@ mukit-ai/
 │       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture, mixAnalysisUi, mixPlanUi helpers
 ├── scripts/                 # run_tests.sh, v1/v2/v3_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
-├── docs/                    # composition.v2/v1, ai-runtime, multi-agent, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, audio-recovery, neural-audio-rendering, mix-analysis, analysis, arrangement, import, datasets, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, plugin-sdk, multi-agent, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, audio-recovery, neural-audio-rendering, mix-analysis, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -171,6 +174,11 @@ mukit-ai/
 | `backend/app/local_llm_settings.py` | Optional `LOCAL_*` sidecar settings (memory-safe defaults) |
 | `backend/app/ai_runtime/local_health.py` | Bounded local sidecar health probe |
 | `backend/app/ai_runtime/runtimes/local_language.py` | `LocalLanguageModel` (OpenAI-compatible HTTP only) |
+| `backend/app/plugin_sdk/` | Public plugin SDK (`plugin.manifest.v1`, protocols, redacting logger) |
+| `backend/app/plugin_host/` | Load, guard, catalog, and invoke plugins; does not persist projects |
+| `backend/app/routers/plugins.py` | `GET /plugins`, `GET /plugins/{id}`, `POST /plugins/reload` |
+| `backend/examples/plugins/` | `deterministic_analyzer` and `sample_symbolic_generator` (not on the default path) |
+| `docs/plugin-sdk.md` | Plugin manifest, protocols, env, and install steps |
 | `backend/app/routers/ai_models.py` | `GET /ai/models` (+ `/{id}`) discovery |
 | `backend/app/routers/ai_agents.py` | `GET /ai/agents`, `POST /ai/agents/{id}/run`, workflow preview (optional `persist_workspace_artifacts`) |
 | `backend/app/services/agent_artifact_workspace.py` | Immutable typed artifact INSERT/promote/GC; never imported by `ai_agents/` |
@@ -224,6 +232,7 @@ mukit-ai/
 |----------|------|-------------|
 | README | `README.md` | Install, features, env vars, run instructions |
 | AI Runtime | `docs/ai-runtime.md` | Capability registry, operation routing, `/ai/models`, fallback, provenance |
+| Plugin SDK | `docs/plugin-sdk.md` | In-process plugins via `PLUGIN_PATHS`; `runtime=plugin` on `/ai/models`; no marketplace |
 | Multi-agent (V4) | `docs/multi-agent.md` | Specialized agents above runtime; workflow preview; Apply CAS |
 | Optional local AI | `docs/local-ai.md` | AMD/ROCm Compose profiles, llama.cpp/vLLM, memory-safe defaults, troubleshooting |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |

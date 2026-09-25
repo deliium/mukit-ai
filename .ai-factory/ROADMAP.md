@@ -44,6 +44,7 @@
 - [x] **Stem-aware neural audio rendering** — Stem sets under `/neural-audio/stem-sets` (piano/bass/strings/…); capability adapters; selective stem rerender; explicit FluidSynth stems; sync honesty; never mutates V2 / never silent generative→FluidSynth / never DATASET_ROOT
 - [x] **V4 AI-assisted mix analysis** — Deterministic DSP + rule observations (+ optional advisory AI) over completed neural stem/mix WAVs as `mix.analysis.v1`; never mutates audio/V2; never DATASET_ROOT; never conflates with symbolic analysis or recovery stems
 - [x] **V4 AI-assisted mixing and mastering** — Inspectable `mix.plan.v1` preview/apply/reject/undo over completed neural stems; new mix revisions; master targets are goals (`guarantee: false`); never rewrites source stems; never `composition.v4` / `DATASET_ROOT`
+- [x] **V4 plugin and extension SDK** — In-process `plugin.manifest.v1` packages on `PLUGIN_PATHS`; `runtime=plugin` symbolic composers on `GET /ai/models` and the generate-composer seam; other categories on `GET /plugins`; no marketplace and no `composition.v4` / `DATASET_ROOT` writes
 
 ## Completed
 
@@ -91,3 +92,4 @@
 | Stem-aware neural audio rendering | 2026-09-24 |
 | V4 AI-assisted mix analysis | 2026-09-24 |
 | V4 AI-assisted mixing and mastering | 2026-09-25 |
+| V4 plugin and extension SDK | 2026-09-25 |

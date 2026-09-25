@@ -52,6 +52,8 @@ mukit-ai/
 │   │   │   ├── local_health.py     # Bounded local sidecar probe (no weight download)
 │   │   │   └── runtimes/           # openai_compatible_chat, fake, stub, local_openai_compatible
 │   │   ├── ai_agents/              # V4 multi-agent layer above ai_runtime (typed artifacts; no DB writes)
+│   │   ├── plugin_sdk/             # Public plugin import surface (manifest, protocols)
+│   │   ├── plugin_host/            # PLUGIN_PATHS loader, import guard, catalog, dispatch
 │   │   │   ├── registry.py         # AgentRegistry + bootstrap
 │   │   │   ├── workflow.py         # Spine + delegates revision modes to revision_loop
 │   │   │   ├── revision_loop.py    # Bounded critique → revise → re-critique (session preview only)
@@ -186,6 +188,7 @@ mukit-ai/
 | **Composition / LLM** | `main.py` LLM routes, `schemas.py`, `llm_*`, `composition_*` (plan/validate/normalize/patch); bounded analysis advisory via `build_llm_analysis_context` | `MusicGenerator`, `PromptJsonEditor`, `AiRegionEditPanel`, `musicApi.js` |
 | **AI runtime** | `ai_runtime/` (capability registry, operation routing, typed protocols/adapters including `local_openai_compatible`); `local_llm_settings.py` + `local_health.py` for optional OpenAI-compatible sidecars; discovery via `/ai/models` (compat `/llm/models`); FluidSynth stays outside; app never loads GGUF/safetensors | `musicApi.js` model catalog clients; global selector remains `/llm/models` (includes ready `local:*` when enabled) |
 | **AI agents (V4)** | `ai_agents/` (registry, spine `workflow`, `revision_loop` controller, typed artifact schemas, progressive realize); `revision_loop_settings.py`; `routers/ai_agents.py` preview/run; Critic uses Evaluation Engine read-only. Session `revision_history` + sibling `pass_candidates` (audition) — never auto-Apply / never embed playable scores in pass records. `ai_agents/` must not import workspace or SQLite; promote stays in `agent_artifact_workspace` on Apply CAS | `MultiAgentPanel`, `previewMultiAgentWorkflow` in `musicApi.js`, `revisionLoopModes.js`, multi-agent + audition slice of `musicStore` / `playbackSource` |
+| **Plugin host** | `plugin_sdk/` (the only `app.*` import plugins may use), `plugin_host/` (directory discovery, import allowlist, catalog, category dispatch), `routers/plugins.py`. Model plugins use runtime id `plugin` and id `plugin:{manifest_id}`. Non-model plugins stay on `GET /plugins` and are not inserted into the analysis stages or `KNOWN_AGENT_IDS`. Empty `PLUGIN_PATHS` loads nothing. Plugins must not write `DATASET_ROOT` or persist `composition.v4` | No plugin manager UI; `runtime=plugin` rows appear on the existing `/ai/models` catalog |
 | **Critique** | `routers/critique.py`, `critique_schemas.py`, `critique_settings.py`, `services/composition_critique.py` — session evaluate only; does not mutate V2 | Critique UI; cross-links to multi-agent revision loops |
 | **Rendering / Export** | `music_json_renderer`, `composition_midi`, `composition_wav` | `NotationViewer`, `ExportControls`, playback components + `utils/playback*` / `tonePlaybackEngine` |
 | **MIDI live input (browser)** | None (no backend MIDI stream / WebSocket bridge) | `MidiInputPanel`, session slice in `musicStore`, `utils/midiInput*` / `midiPerformanceCapture` / `midiTakeApply` / `midiMetronome` / `computerKeyboardMidi` — Web MIDI or QWERTY → one V2 take commit; never required at startup; not file import |
@@ -227,6 +230,7 @@ FastAPI backend
 - ✅ Cross-module use goes through service functions or shared schemas (`composition.v2` operational, `composition.v1` migration input), not private helpers inside another module’s files when avoidable
 - ❌ Services must not import FastAPI routers or request objects
 - ❌ `ai_agents/` must not import `agent_artifact_workspace`, `db/`, or project stores
+- ❌ Plugins may import `app.plugin_sdk` only. They must not import `plugin_host`, `ai_runtime`, `ai_agents`, `services`, `db`, or routers
 - ❌ `db/` / store implementations must not import route handlers
 - ❌ Frontend `utils/` must not import React components or the Zustand store (keep pure functions testable)
 - ❌ Do not skip the service layer from routers to raw SQL / LLM clients for new features

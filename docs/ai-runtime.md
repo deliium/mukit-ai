@@ -100,6 +100,14 @@ Transport reuses the shared ChatOpenAI factory against `LOCAL_LLM_BASE_URL`
 [Optional local AI (AMD/ROCm)](./local-ai.md). `/ready` exposes a soft `local_ai`
 subsection that never fails overall readiness when local AI is off or down.
 
+### Plugins (`runtime=plugin`)
+
+Directories on `PLUGIN_PATHS` can register a model without editing `bootstrap.py`.
+`reload_plugins()` imports plugin code. `GET /ai/models` calls `reload_registry()`,
+which only reattaches descriptors already loaded. Model ids look like
+`plugin:sample_symbolic_generator`. Plugin rows are excluded from the implicit
+`generate_composer` default. See [Plugin and extension SDK](plugin-sdk.md).
+
 ## Provenance
 
 Additive fields on `AiProvenance` / `ProjectGenerationMeta` and revision
