@@ -26,7 +26,7 @@ from .fake_symbolic_composer import (
 
 logger = logging.getLogger(__name__)
 
-SymbolicBackend = Literal["fake", "music_transformer"]
+SymbolicBackend = Literal["fake", "music_transformer", "plugin"]
 
 SYMBOLIC_COMPOSER_MODEL_ID_MT = "local:music-transformer"
 SYMBOLIC_GENERATE_FAILED = "symbolic_generate_failed"
@@ -175,10 +175,22 @@ def generate_symbolic_composition(
     prefer_fake: bool | None = None,
     env: Mapping[str, str] | None = None,
     resample_attempt: int = 0,
+    model_id: str | None = None,
 ) -> SymbolicGenerateResult:
-    """Generate Composition V2 notes via fake or Music Transformer backend."""
+    """Generate Composition V2 notes via fake, Music Transformer, or a plugin composer."""
     effective_seed = None if seed is None else int(seed) + int(resample_attempt)
     conditioning = plan_to_tokenizer_conditioning(plan, genre=genre, mood=mood)
+    if model_id:
+        plugin_result = _generate_via_plugin(
+            plan,
+            model_id=model_id,
+            seed=effective_seed,
+            conditioning=conditioning,
+            genre=genre,
+            mood=mood,
+        )
+        if plugin_result is not None:
+            return plugin_result
     backend = resolve_symbolic_backend(prefer_fake=prefer_fake, env=env)
 
     logger.info(
@@ -220,6 +232,71 @@ def generate_symbolic_composition(
         seed=effective_seed,
         prefix_composition=prefix_composition,
         env=env,
+    )
+
+
+def _generate_via_plugin(
+    plan: CompositionPlan,
+    *,
+    model_id: str,
+    seed: int | None,
+    conditioning: TokenizerConditioningV1,
+    genre: str | None,
+    mood: str | None,
+) -> SymbolicGenerateResult | None:
+    """Run a plugin composer when ``model_id`` is an active symbolic plugin.
+
+    Non-plugin ids return None so the caller can keep fake / Music Transformer.
+    This path does not call ``resolve_symbolic_backend``.
+    """
+    from app.ai_runtime.capabilities import ModelCapability
+    from app.ai_runtime.errors import ModelNotFoundError
+    from app.ai_runtime.registry import get_model
+    from app.plugin_host.invoke import PluginHost
+    from app.plugin_sdk.errors import PluginError
+
+    try:
+        descriptor = get_model(model_id)
+    except ModelNotFoundError as exc:
+        logger.info("symbolic plugin compose", extra={"model_id": model_id, "valid": False})
+        raise SymbolicCompositionGenerateError("plugin_not_found", code="plugin_not_found") from exc
+    if descriptor.runtime != "plugin" or descriptor.primary_capability != ModelCapability.SYMBOLIC_COMPOSER:
+        logger.debug(
+            "symbolic model id is not a plugin composer",
+            extra={"model_id": model_id, "runtime": descriptor.runtime},
+        )
+        return None
+    request = {
+        "bar_count": plan.form.bar_count,
+        "key": plan.form.key,
+        "genre": genre,
+        "mood": mood,
+    }
+    host = PluginHost()
+    try:
+        raw = host.compose(descriptor.id, request)
+        music = host.validated_composition(descriptor.id, raw)
+    except PluginError as exc:
+        logger.info("symbolic plugin compose", extra={"model_id": descriptor.id, "valid": False})
+        raise SymbolicCompositionGenerateError(exc.code, code=exc.code) from exc
+    note_count = sum(len(track.events) for track in music.tracks)
+    logger.info("symbolic plugin compose", extra={"model_id": descriptor.id, "valid": True})
+    logger.debug(
+        "symbolic plugin compose note count",
+        extra={"model_id": descriptor.id, "note_count": note_count},
+    )
+    return SymbolicGenerateResult(
+        composition=music,
+        report={
+            "model_id": descriptor.id,
+            "backend": "plugin",
+            "fallback_applied": False,
+            "note_count": note_count,
+        },
+        model_id=descriptor.id,
+        backend="plugin",
+        seed=seed,
+        conditioning=conditioning,
     )
 
 

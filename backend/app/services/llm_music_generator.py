@@ -1144,6 +1144,23 @@ def _symbolic_condition(state: _GenerationState) -> _GenerationState:
     return {**state, "current_stage": stage}
 
 
+def _plugin_composer_model_id(stored_id: str | None) -> str | None:
+    """Pass a stored composer id through only when its runtime is ``plugin``."""
+    if not stored_id:
+        return None
+    from app.ai_runtime.errors import ModelNotFoundError
+    from app.ai_runtime.registry import get_model
+
+    try:
+        descriptor = get_model(stored_id)
+    except ModelNotFoundError:
+        logger.debug("stored composer model id is not registered", extra={"model_id": stored_id})
+        return None
+    if descriptor.runtime != "plugin":
+        return None
+    return stored_id
+
+
 def _symbolic_generate(state: _GenerationState) -> _GenerationState:
     from .symbolic_composition_generate import (
         SymbolicCompositionGenerateError,
@@ -1158,6 +1175,7 @@ def _symbolic_generate(state: _GenerationState) -> _GenerationState:
             code="plan_invalid",
         )
     attempt = int(state.get("symbolic_resample_count", 0))
+    plugin_model_id = _plugin_composer_model_id(state.get("composer_model_id"))
     logger.info(
         "Composer stage started",
         extra={
@@ -1165,6 +1183,7 @@ def _symbolic_generate(state: _GenerationState) -> _GenerationState:
             "pipeline_id": state.get("pipeline_id"),
             "seed": state.get("seed"),
             "repair_lane": "tokens" if attempt else None,
+            "plugin_model_id": plugin_model_id,
         },
     )
     try:
@@ -1176,6 +1195,7 @@ def _symbolic_generate(state: _GenerationState) -> _GenerationState:
             mood=state["constraints"].mood,
             prefer_fake=None,
             resample_attempt=attempt,
+            model_id=plugin_model_id,
         )
     except SymbolicCompositionGenerateError as exc:
         logger.error(

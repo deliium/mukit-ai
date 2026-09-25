@@ -420,11 +420,15 @@ def default_operation_routes(env: Mapping[str, str] | None = None) -> dict[str, 
 
     # Implicit default for generate_composer: first ready symbolic_composer model.
     if not routes.get("generate_composer"):
-        ready_composers = list_models(
-            operation=AiOperation.GENERATE_COMPOSER,
-            status="ready",
-            env=source,
-        )
+        ready_composers = [
+            model
+            for model in list_models(
+                operation=AiOperation.GENERATE_COMPOSER,
+                status="ready",
+                env=source,
+            )
+            if model.runtime != "plugin"
+        ]
         if ready_composers:
             routes["generate_composer"] = ready_composers[0].id
             logger.debug(

@@ -31,6 +31,7 @@ ModelRuntimeId = Literal[
     "fake_neural_audio",
     "sidecar_musicgen",
     "local_midi_ddsp",
+    "plugin",
 ]
 
 
