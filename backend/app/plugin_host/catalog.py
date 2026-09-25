@@ -37,6 +37,12 @@ class PluginRecord:
     entry_attr: str | None = None
     instance: Any = None
     module_name: str | None = None
+    resources: tuple[str, ...] = ()
+    installed_version: str | None = None
+    config_present: bool = False
+    health_status: str = "unknown"
+    health_code: str | None = None
+    invocation_failure_count: int = 0
 
 
 _records: list[PluginRecord] = []
@@ -51,7 +57,7 @@ def replace_catalog(records: list[PluginRecord]) -> None:
             "plugin catalog replaced",
             extra={
                 "plugin_count": len(_records),
-                "active_count": sum(1 for item in _records if item.status == "active"),
+                "enabled_count": sum(1 for item in _records if item.status == "enabled"),
             },
         )
 

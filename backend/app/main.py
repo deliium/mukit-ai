@@ -101,12 +101,15 @@ async def lifespan(_app: FastAPI):
     if not provider_names:
         logger.warning("No LLM providers configured; generate/edit routes will return 503")
     try:
-        from .plugin_host.bridge import reload_plugins
+        from .services.plugin_lifecycle import reconcile_on_startup
 
-        loaded = reload_plugins()
+        loaded = reconcile_on_startup()
         logger.info(
-            "Application startup plugins loaded",
-            extra={"plugin_count": len(loaded), "active_count": sum(1 for item in loaded if item.status == "active")},
+            "Application startup plugins reconciled",
+            extra={
+                "plugin_count": len(loaded),
+                "enabled_count": sum(1 for item in loaded if item.status == "enabled"),
+            },
         )
     except Exception as exc:
         logger.warning(

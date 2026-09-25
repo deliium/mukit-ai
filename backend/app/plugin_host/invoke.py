@@ -31,7 +31,9 @@ class PluginHost:
         plugin_id = _manifest_id_from_model(model_id)
         record = _require_category(plugin_id, "symbolic_composer")
         raw = _invoke(record, lambda: record.instance.compose(_context(record), request))
-        return _validated_mapping(raw)
+        payload = _validated_mapping(raw)
+        _note_invoke_success(record)
+        return payload
 
     def complete_text(self, model_id: str, prompt: str) -> str:
         plugin_id = _manifest_id_from_model(model_id)
@@ -40,6 +42,7 @@ class PluginHost:
         if not isinstance(raw, str):
             _warn(record.id, OUTPUT_INVALID)
             raise PluginError(OUTPUT_INVALID, OUTPUT_INVALID)
+        _note_invoke_success(record)
         logger.info("plugin call", extra={"category": "language_model", "plugin_id": record.id, "success": True})
         return raw
 
@@ -51,6 +54,7 @@ class PluginHost:
         if _contains_absolute_path(payload):
             _warn(record.id, OUTPUT_INVALID)
             raise PluginError(OUTPUT_INVALID, OUTPUT_INVALID)
+        _note_invoke_success(record)
         logger.info("plugin call", extra={"category": "transcription_model", "plugin_id": record.id, "success": True})
         return payload
 
@@ -62,6 +66,7 @@ class PluginHost:
         if _contains_absolute_path(payload):
             _warn(record.id, OUTPUT_INVALID)
             raise PluginError(OUTPUT_INVALID, OUTPUT_INVALID)
+        _note_invoke_success(record)
         logger.info("plugin call", extra={"category": "neural_renderer", "plugin_id": record.id, "success": True})
         return payload
 
@@ -73,6 +78,7 @@ class PluginHost:
             _warn(record.id, OUTPUT_INVALID)
             raise PluginError(OUTPUT_INVALID, OUTPUT_INVALID)
         data = _validated_mapping(raw)
+        _note_invoke_success(record)
         logger.info("plugin call", extra={"category": "analyzer", "plugin_id": record.id, "success": True})
         return {"schema_version": ANALYSIS_FRAGMENT_SCHEMA, "data": data}
 
@@ -83,6 +89,7 @@ class PluginHost:
         if payload.get("mutates_composition") is not False:
             _warn(record.id, OUTPUT_INVALID)
             raise PluginError(OUTPUT_INVALID, OUTPUT_INVALID)
+        _note_invoke_success(record)
         logger.info("plugin call", extra={"category": "music_agent", "plugin_id": record.id, "success": True})
         return payload
 
@@ -106,6 +113,7 @@ class PluginHost:
         if size > settings.max_export_bytes:
             _warn(record.id, OUTPUT_INVALID)
             raise PluginError(OUTPUT_INVALID, OUTPUT_INVALID)
+        _note_invoke_success(record)
         logger.info("plugin call", extra={"category": "export_format", "plugin_id": record.id, "success": True})
         return bytes(payload), media_type
 
@@ -117,6 +125,7 @@ class PluginHost:
             _warn(record.id, OUTPUT_INVALID)
             raise PluginError(OUTPUT_INVALID, OUTPUT_INVALID)
         payload = _validated_mapping(raw)
+        _note_invoke_success(record)
         logger.info("plugin call", extra={"category": "postprocess", "plugin_id": record.id, "success": True})
         return payload
 
@@ -158,8 +167,8 @@ def _context(record: PluginRecord) -> PluginContext:
 
 def _invoke(record: PluginRecord, fn: Any) -> Any:
     module_name = record.module_name
-    if record.status != "active" or record.instance is None or not module_name:
-        code = record.code or "plugin_not_found"
+    if record.status != "enabled" or record.instance is None or not module_name:
+        code = "plugin_not_enabled"
         raise PluginError(code, code)
     try:
         with plugin_import_guard(module_name) as guard:
@@ -172,20 +181,22 @@ def _invoke(record: PluginRecord, fn: Any) -> Any:
         raise PluginError("plugin_forbidden_import", "plugin_forbidden_import") from exc
     except PluginError:
         raise
+    except SystemExit as exc:
+        _note_invoke_failure(record, exc)
+        raise PluginError(OUTPUT_INVALID, OUTPUT_INVALID) from exc
     except Exception as exc:
-        logger.warning(
-            "plugin call failed",
-            extra={"plugin_id": record.id, "code": OUTPUT_INVALID, "error_type": type(exc).__name__},
-        )
+        _note_invoke_failure(record, exc)
         raise PluginError(OUTPUT_INVALID, OUTPUT_INVALID) from exc
 
 
 def _reject_forbidden(record: PluginRecord) -> None:
     if record.module_name:
         drop_private_module(record.module_name)
-    record.status = "rejected"
+    record.status = "failed"
     record.code = "plugin_forbidden_import"
     record.message = "plugin_forbidden_import"
+    record.health_status = "unhealthy"
+    record.health_code = "plugin_forbidden_import"
     record.instance = None
     record.module_name = None
     update_record(record)
@@ -194,9 +205,12 @@ def _reject_forbidden(record: PluginRecord) -> None:
 
 def _require_category(plugin_id: str, category: str) -> PluginRecord:
     record = get_record(plugin_id)
-    if record is None or record.status != "active" or record.category != category:
+    if record is None or record.category != category:
         logger.warning("plugin call rejected", extra={"plugin_id": plugin_id, "code": "plugin_not_found"})
         raise PluginError("plugin_not_found", "plugin_not_found")
+    if record.status != "enabled":
+        logger.warning("plugin call rejected", extra={"plugin_id": plugin_id, "code": "plugin_not_enabled"})
+        raise PluginError("plugin_not_enabled", "plugin_not_enabled")
     return record
 
 
@@ -230,6 +244,31 @@ def _contains_absolute_path(value: Any) -> bool:
     return False
 
 
+def _note_invoke_failure(record: PluginRecord, exc: BaseException) -> None:
+    record.invocation_failure_count += 1
+    record.health_status = "unhealthy"
+    record.health_code = OUTPUT_INVALID
+    update_record(record)
+    logger.warning(
+        "plugin crashed",
+        extra={"plugin_id": record.id, "error_type": type(exc).__name__, "code": OUTPUT_INVALID},
+    )
+    logger.debug(
+        "plugin crashed stack",
+        extra={"plugin_id": record.id, "code": OUTPUT_INVALID},
+        exc_info=True,
+    )
+
+
+def _note_invoke_success(record: PluginRecord) -> None:
+    record.invocation_failure_count = 0
+    record.health_status = "healthy"
+    record.health_code = None
+    update_record(record)
+
+
 def _warn(plugin_id: str | None, code: str) -> None:
+    logger.warning("plugin postcondition failed", extra={"plugin_id": plugin_id, "code": code})
+    logger.info("plugin call", extra={"plugin_id": plugin_id, "success": False, "code": code})
     logger.warning("plugin postcondition failed", extra={"plugin_id": plugin_id, "code": code})
     logger.info("plugin call", extra={"plugin_id": plugin_id, "success": False, "code": code})

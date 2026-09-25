@@ -9,6 +9,7 @@ from .manifest import (
     PluginCategory,
     PluginDependencyV1,
     PluginManifestV1,
+    PluginResource,
     parse_manifest,
 )
 from .protocols import (
@@ -37,6 +38,7 @@ __all__ = [
     "PluginDependencyV1",
     "PluginError",
     "PluginManifestV1",
+    "PluginResource",
     "PostprocessPlugin",
     "SymbolicComposerPlugin",
     "TranscriptionModelPlugin",

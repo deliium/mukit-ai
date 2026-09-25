@@ -18,6 +18,22 @@ PLUGIN_MANIFEST_SCHEMA = "plugin.manifest.v1"
 MANIFEST_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 PLUGIN_SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 ENTRY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*:[A-Za-z_][A-Za-z0-9_]*$")
+_SECRET_PROPERTY = re.compile(r"(?i)(secret|password|token|api_key|apikey|authorization)")
+# Names the persistence guard rejects. Kept here so the SDK does not import services.
+_FORBIDDEN_CONFIG_NAMES = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "openai_api_key",
+        "deepseek_api_key",
+        "authorization",
+        "access_token",
+        "secret",
+        "password",
+        "bearer",
+        "token",
+    }
+)
 
 PluginCategory = Literal[
     "language_model",
@@ -46,6 +62,26 @@ CATEGORY_CAPABILITIES: dict[str, frozenset[str]] = {
     "export_format": frozenset({"export_format"}),
     "postprocess": frozenset({"postprocess"}),
 }
+
+PluginResource = Literal[
+    "filesystem_model_dir",
+    "network",
+    "gpu",
+    "project_read",
+    "project_write",
+    "audio_processing",
+]
+
+PLUGIN_RESOURCES = frozenset(
+    {
+        "filesystem_model_dir",
+        "network",
+        "gpu",
+        "project_read",
+        "project_write",
+        "audio_processing",
+    }
+)
 
 CATEGORY_METHOD: dict[str, str] = {
     "language_model": "complete_text",
@@ -97,6 +133,7 @@ class PluginManifestV1(BaseModel):
     category: PluginCategory
     capabilities: list[str] = Field(min_length=1)
     dependencies: list[PluginDependencyV1] = Field(default_factory=list)
+    resources: list[PluginResource] = Field(default_factory=list)
     configuration_schema: dict[str, Any] | None = None
     entry: str = "plugin:register"
 
@@ -143,6 +180,13 @@ class PluginManifestV1(BaseModel):
             shape_error = schema_shape_error(self.configuration_schema)
             if shape_error is not None:
                 raise ValueError(shape_error)
+            secret_name = _secret_property_name(self.configuration_schema)
+            if secret_name is not None:
+                logger.warning(
+                    "plugin manifest secret-shaped property rejected",
+                    extra={"code": "plugin_manifest_invalid", "plugin_id": self.id},
+                )
+                raise ValueError("configuration_schema property name is secret-shaped")
         return self
 
 
@@ -160,6 +204,8 @@ def parse_manifest(data: Any, *, source_name: str | None = None) -> PluginManife
     basename = Path(source_name).name if source_name else None
     plugin_id = peek_manifest_id(data)
     logger.debug("plugin manifest parse start", extra={"manifest_basename": basename, "plugin_id": plugin_id})
+    if isinstance(data, dict):
+        _warn_unknown_resources(data.get("resources"), plugin_id)
     try:
         manifest = PluginManifestV1.model_validate(data)
     except Exception as exc:
@@ -170,6 +216,32 @@ def parse_manifest(data: Any, *, source_name: str | None = None) -> PluginManife
         raise PluginError("plugin_manifest_invalid", "plugin_manifest_invalid") from exc
     logger.debug(
         "plugin manifest parse end",
-        extra={"plugin_id": manifest.id, "category": manifest.category, "version": manifest.version},
+        extra={
+            "plugin_id": manifest.id,
+            "category": manifest.category,
+            "version": manifest.version,
+            "resource_count": len(manifest.resources),
+        },
     )
     return manifest
+
+
+def _warn_unknown_resources(resources: Any, plugin_id: str | None) -> None:
+    if not isinstance(resources, list):
+        return
+    if any(item not in PLUGIN_RESOURCES for item in resources):
+        logger.warning(
+            "plugin manifest resource rejected",
+            extra={"code": "plugin_manifest_invalid", "plugin_id": plugin_id, "resource_count": len(resources)},
+        )
+
+
+def _secret_property_name(schema: dict[str, Any]) -> str | None:
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    for name in properties:
+        normalized = str(name).strip().lower().replace("-", "_")
+        if _SECRET_PROPERTY.search(str(name)) or normalized in _FORBIDDEN_CONFIG_NAMES or normalized.endswith("_api_key"):
+            return str(name)
+    return None
