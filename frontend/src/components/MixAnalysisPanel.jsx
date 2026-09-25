@@ -139,9 +139,15 @@ const Meta = styled.div`
  *   stemSets: object[],
  *   liveFingerprint: string|null,
  *   composition: object|null,
+ *   onSessionReport: ((reportId: string|null) => void)|null,
  * }} props
  */
-export function MixAnalysisPanel({ stemSets = [], liveFingerprint = null, composition = null }) {
+export function MixAnalysisPanel({
+  stemSets = [],
+  liveFingerprint = null,
+  composition = null,
+  onSessionReport = null,
+}) {
   const currentProjectId = useMusicStore((s) => s.currentProjectId);
   const [stemSetId, setStemSetId] = useState('');
   const [dimensions, setDimensions] = useState(() => [...MIX_ANALYSIS_DEFAULT_DIMENSIONS]);
@@ -183,6 +189,14 @@ export function MixAnalysisPanel({ stemSets = [], liveFingerprint = null, compos
       cancelled = true;
     };
   }, [currentProjectId, report?.report_id]);
+
+  useEffect(() => {
+    if (typeof onSessionReport !== 'function') {
+      return undefined;
+    }
+    onSessionReport(report?.report_id || null);
+    return undefined;
+  }, [onSessionReport, report?.report_id]);
 
   const selectedSet = completeSets.find((s) => s.id === stemSetId) || null;
   const stale = isMixAnalysisReportStale(report, {

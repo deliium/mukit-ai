@@ -18,6 +18,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Audio↔symbolic alignment**: After Bind, `audio.alignment.v1` enables bar↔source seek, waveform sync, reopen hydrate, and soft-stale neural renders (details: [docs/audio-symbolic-alignment.md](docs/audio-symbolic-alignment.md))
 - **Optional neural audio rendering**: Render with AI jobs (generative / neural instrument) from a pinned revision; downloadable WAV; never mutates V2 or replaces FluidSynth Export WAV (details: [docs/neural-audio-rendering.md](docs/neural-audio-rendering.md))
 - **Mix analysis**: Deterministic DSP measurements + rule observations (+ optional advisory AI) over completed neural stem/mix WAVs as `mix.analysis.v1`; never mutates audio or V2 (details: [docs/mix-analysis.md](docs/mix-analysis.md))
+- **Mix assist**: Preview and apply inspectable mix plans (gain, pan, EQ, and related ops) as a new mix revision; source stems stay unchanged; master targets are goals, not guarantees (details: [docs/ai-assisted-mixing.md](docs/ai-assisted-mixing.md))
 - **Notation And Playback**: Render backend MusicXML with OpenSheetMusicDisplay and play exact multi-track canonical note events with Tone.js (sampled/synth voices, velocity/expression, mute/solo/trim/pan/reverb send, pause/resume, seek, play-from-cursor, loop, activity meters). Browser mixer state is ephemeral and never changes export.
 - **Composition Analysis**: Deterministic `composition.analysis.v1` sidecar for tonal context, inferred harmony, phrases/density, derived motif families, and stable warnings over current V2 (Analysis tab; optional bounded advisory context for LLM edit/repair — not persisted, not required for import/playback)
 - **Motif Authoring**: Mark a 1–2 bar pitched selection as a named motif, inspect usages, and apply mechanical or creative transforms via `POST /motifs/apply`; creative AI results stage as candidates until Apply; mechanical transforms remain direct undoable edits (Motifs tab)
@@ -85,6 +86,7 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Audio recovery limits: `AUDIO_RECOVERY_*` in `.env.example` (distinct from mono). Details: [docs/audio-recovery.md](docs/audio-recovery.md).
 - Neural audio render: `NEURAL_AUDIO_*` + optional `compose.neural-audio.yml --profile neural-audio`. Details: [docs/neural-audio-rendering.md](docs/neural-audio-rendering.md).
 - Mix analysis: `MIX_ANALYSIS_*` (read-only DSP over stem/mix WAVs). Details: [docs/mix-analysis.md](docs/mix-analysis.md).
+- Mix plans: `MIX_PLAN_*` (new mix revisions; never overwrite stems). Details: [docs/ai-assisted-mixing.md](docs/ai-assisted-mixing.md).
 - Acceptance commands: see `docs/testing.md` (`./scripts/run_tests.sh`, pytest, Playwright, Docker persistence scripts).
 
 ## Installation (host-local optional)
@@ -343,6 +345,7 @@ mukit-ai/
 | [Audio↔symbolic alignment](docs/audio-symbolic-alignment.md) | Bar↔source seek, waveform sync, stale renders, provenance |
 | [Neural audio rendering](docs/neural-audio-rendering.md) | Optional generative/neural instrument jobs; fidelity labels; Compose profile |
 | [Mix analysis](docs/mix-analysis.md) | DSP measurements + observations over neural stem/mix WAVs; soft-stale banners |
+| [AI-assisted mixing](docs/ai-assisted-mixing.md) | Preview, compare, and apply non-destructive mix revisions |
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |
 | [Symbolic embeddings](docs/embeddings.md) | Handcrafted musical feature embeddings, similarity, reference conditioning |
 | [Composer profiles](docs/composer-profiles.md) | Durable preference profiles, soft generate conditioning, derive/promote |

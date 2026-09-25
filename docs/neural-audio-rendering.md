@@ -160,6 +160,7 @@ The smoke skips when `fake:neural-audio` is absent from `GET /ai/models?operatio
 ## See also
 
 - [Mix analysis](mix-analysis.md) — DSP + observations over completed stem/mix WAVs
+- [AI-assisted mixing](ai-assisted-mixing.md) — non-destructive mix revisions over those stems
 - [AI Runtime](ai-runtime.md) — `audio_render` / `audio_generation`
 - [Browser playback](browser-playback.md) — Tone.js (unchanged)
 - [Audio transcription](audio-transcription.md) — ingress only (distinct from this egress path)

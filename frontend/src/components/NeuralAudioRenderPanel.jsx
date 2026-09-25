@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import styled from 'styled-components';
 import {
   deleteNeuralAudioRender,
@@ -31,6 +31,7 @@ import {
 } from '../utils/neuralAudioStemUi.js';
 import { resolveLiveSnapshotFingerprint } from '../utils/compositionSnapshotFingerprint.js';
 import MixAnalysisPanel from './MixAnalysisPanel.jsx';
+import MixAssistPanel from './MixAssistPanel.jsx';
 
 const log = createAppLogger('neuralAudioRender');
 const stemLog = createAppLogger('neuralAudioStems');
@@ -185,6 +186,10 @@ const NeuralAudioRenderPanel = () => {
   const [adapterKind, setAdapterKind] = useState('');
   const [jobs, setJobs] = useState([]);
   const [stemSets, setStemSets] = useState([]);
+  const [sessionReportId, setSessionReportId] = useState(null);
+  const onSessionReport = useCallback((reportId) => {
+    setSessionReportId(reportId || null);
+  }, []);
   const [selectedStemRoles, setSelectedStemRoles] = useState(() => (
     NEURAL_AUDIO_STEM_ROLES.filter((role) => role !== 'vocals' && role !== 'other')
   ));
@@ -800,6 +805,12 @@ const NeuralAudioRenderPanel = () => {
         stemSets={stemSets}
         liveFingerprint={liveFingerprint}
         composition={editedMusicJson}
+        onSessionReport={onSessionReport}
+      />
+      <MixAssistPanel
+        stemSets={stemSets}
+        liveFingerprint={liveFingerprint}
+        sessionReportId={sessionReportId}
       />
     </Panel>
   );

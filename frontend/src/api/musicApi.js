@@ -2188,6 +2188,108 @@ export async function deleteMixAnalysisReport(reportId) {
   }
 }
 
+const mixPlanLogger = createAppLogger('musicApi.mixPlan');
+
+function parseMixPlanError(error) {
+  const status = error?.response?.status ?? null;
+  const detail = error?.response?.data?.detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    return {
+      status,
+      code: typeof detail.code === 'string' ? detail.code : 'mix_plan_error',
+      message: typeof detail.message === 'string' ? detail.message : 'Mix plan request failed',
+      details: detail.details && typeof detail.details === 'object' ? detail.details : {},
+    };
+  }
+  return {
+    status,
+    code: 'mix_plan_error',
+    message: error?.message || 'Mix plan request failed',
+    details: {},
+  };
+}
+
+export class MixPlanApiError extends Error {
+  constructor(message, { status = null, code = 'mix_plan_error', details = {} } = {}) {
+    super(message);
+    this.name = 'MixPlanApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export async function previewMixPlan(payload) {
+  mixPlanLogger.info('Preview mix plan', {
+    stem_set_id: payload?.stem_set_id,
+    master_target: payload?.master_target,
+    char_count: payload?.phrase ? String(payload.phrase).length : 0,
+  });
+  try {
+    return await request('post', '/mix-plan/preview', payload);
+  } catch (error) {
+    const parsed = parseMixPlanError(error);
+    mixPlanLogger.error('Preview mix plan failed', { code: parsed.code, status: parsed.status });
+    throw new MixPlanApiError(parsed.message, parsed);
+  }
+}
+
+export async function applyMixPlan(payload) {
+  mixPlanLogger.info('Apply mix plan', { preview_id: payload?.preview_id });
+  try {
+    return await request('post', '/mix-plan/apply', payload);
+  } catch (error) {
+    const parsed = parseMixPlanError(error);
+    throw new MixPlanApiError(parsed.message, parsed);
+  }
+}
+
+export async function rejectMixPlanPreview(previewId) {
+  mixPlanLogger.info('Reject mix plan preview', { previewId });
+  try {
+    return await request('delete', `/mix-plan/previews/${encodeURIComponent(previewId)}`);
+  } catch (error) {
+    const parsed = parseMixPlanError(error);
+    throw new MixPlanApiError(parsed.message, parsed);
+  }
+}
+
+export async function undoMixPlanRevision(revisionId) {
+  mixPlanLogger.info('Undo mix plan revision', { revisionId });
+  try {
+    return await request('post', `/mix-plan/revisions/${encodeURIComponent(revisionId)}/undo`);
+  } catch (error) {
+    const parsed = parseMixPlanError(error);
+    throw new MixPlanApiError(parsed.message, parsed);
+  }
+}
+
+export async function listMixPlanRevisions(projectId, stemSetId) {
+  mixPlanLogger.info('List mix plan revisions', { projectId, stemSetId });
+  try {
+    return await request('get', '/mix-plan/revisions', null, {
+      params: { project_id: projectId, stem_set_id: stemSetId || undefined },
+    });
+  } catch (error) {
+    const parsed = parseMixPlanError(error);
+    throw new MixPlanApiError(parsed.message, parsed);
+  }
+}
+
+export async function fetchMixPlanPreviewAudio(previewId, which) {
+  mixPlanLogger.debug('Fetch mix plan preview audio', { previewId, which });
+  try {
+    const response = await axios.get(
+      `/mix-plan/previews/${encodeURIComponent(previewId)}/audio`,
+      { params: { which }, responseType: 'blob' },
+    );
+    return response.data;
+  } catch (error) {
+    const parsed = parseMixPlanError(error);
+    throw new MixPlanApiError(parsed.message, parsed);
+  }
+}
+
 const audioRecoveryLogger = createAppLogger('musicApi.audioRecovery');
 
 function parseAudioRecoveryError(error) {

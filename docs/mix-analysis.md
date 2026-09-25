@@ -110,6 +110,7 @@ node --test frontend/src/utils/mixAnalysisUi.test.js
 
 ## See also
 
+- [ai-assisted-mixing.md](ai-assisted-mixing.md) — preview and apply parameter changes as a new mix revision; analysis stays read-only
 - [neural-audio-rendering.md](neural-audio-rendering.md) — stem/mix egress inputs
 - [composition-analysis.md](composition-analysis.md) — symbolic analysis (separate domain)
 - [composition-critique.md](composition-critique.md) — finding-shape reference (not HTTP-coupled)
