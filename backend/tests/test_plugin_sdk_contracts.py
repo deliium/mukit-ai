@@ -15,12 +15,14 @@ from app.ai_runtime.capabilities import ModelCapability
 from app.ai_runtime.routing import default_operation_routes
 from app.ai_runtime.types import ModelDescriptor, ModelHealth
 from app.composition_plan_schemas import parse_composition_plan
+from app.db.connection import ensure_database
 from app.main import app
 from app.plugin_host.bridge import plugin_model_descriptors, reload_plugins
 from app.plugin_host.catalog import clear_plugins_for_tests, get_record, list_records
 from app.plugin_host.invoke import PluginHost
 from app.plugin_sdk import PluginError, parse_manifest
 from app.plugin_sdk.errors import PluginError as SdkPluginError
+from app.services.plugin_lifecycle import PluginLifecycleError, enable_plugin, install_plugin
 from app.services.symbolic_composition_generate import (
     SymbolicCompositionGenerateError,
     generate_symbolic_composition,
@@ -33,9 +35,11 @@ SAMPLE_MODEL_ID = "plugin:sample_symbolic_generator"
 
 
 @pytest.fixture(autouse=True)
-def _isolate_plugins(monkeypatch):
+def _isolate_plugins(monkeypatch, tmp_path):
+    monkeypatch.setenv("PROJECT_DB_PATH", str(tmp_path / "projects.db"))
     monkeypatch.delenv("PLUGIN_PATHS", raising=False)
     monkeypatch.delenv("AI_OP_GENERATE_COMPOSER", raising=False)
+    ensure_database()
     registry_mod.clear_registry_for_tests()
     clear_plugins_for_tests()
     yield
@@ -97,6 +101,11 @@ def _write_plugin(
 def _load(monkeypatch, path: Path):
     monkeypatch.setenv("PLUGIN_PATHS", str(path))
     return reload_plugins()
+
+
+def _install_and_enable(plugin_id: str):
+    install_plugin(plugin_id)
+    return enable_plugin(plugin_id)
 
 
 def test_manifest_accept_and_reject():
@@ -165,9 +174,13 @@ def test_config_required_missing_and_valid_value(monkeypatch, tmp_path):
         ),
     )
     _load(monkeypatch, tmp_path / "needs_config")
-    rejected = get_record("needs_config")
-    assert rejected is not None
-    assert rejected.code == "plugin_config_invalid"
+    discovered = get_record("needs_config")
+    assert discovered is not None
+    assert discovered.status == "discovered"
+    assert discovered.code is None
+    installed = _install_and_enable("needs_config")
+    assert installed.status == "failed"
+    assert installed.code == "plugin_config_invalid"
 
     clear_plugins_for_tests()
     _write_plugin(
@@ -186,6 +199,7 @@ def test_config_required_missing_and_valid_value(monkeypatch, tmp_path):
         ),
     )
     _load(monkeypatch, tmp_path / "ok_config")
+    _install_and_enable("ok_config")
     fragment = PluginHost().analyze("ok_config", {"tracks": []})
     assert fragment["schema_version"] == "plugin.analysis.fragment.v1"
     assert fragment["data"]["min_notes"] == 4
@@ -196,7 +210,7 @@ def test_secret_config_absent_from_logs(monkeypatch, tmp_path, caplog):
     schema = {
         "type": "object",
         "additionalProperties": False,
-        "properties": {"api_key": {"type": "string"}},
+        "properties": {"label": {"type": "string"}},
     }
     _write_plugin(
         tmp_path / "secretive",
@@ -204,18 +218,19 @@ def test_secret_config_absent_from_logs(monkeypatch, tmp_path, caplog):
         category="analyzer",
         capabilities=["analyzer"],
         configuration_schema=schema,
-        config={"api_key": secret},
+        config={"label": secret},
         body=(
             "class Analyzer:\n"
             "    def analyze(self, ctx, composition):\n"
             "        return {'note_count': 0}\n"
             "def register(ctx):\n"
-            "    ctx.logger.warning('config loaded', extra={'api_key': ctx.config.get('api_key')})\n"
+            "    ctx.logger.warning('config loaded', extra={'api_key': ctx.config.get('label')})\n"
             "    return Analyzer()\n"
         ),
     )
     caplog.set_level(logging.DEBUG)
     _load(monkeypatch, tmp_path / "secretive")
+    _install_and_enable("secretive")
     blob = caplog.text + "".join(str(getattr(record, "api_key", "")) for record in caplog.records)
     assert secret not in blob
     assert any(getattr(record, "api_key", None) == "[redacted]" for record in caplog.records)
@@ -231,9 +246,11 @@ def test_forbidden_import_is_rejected(monkeypatch, tmp_path, caplog):
     )
     caplog.set_level(logging.WARNING)
     _load(monkeypatch, tmp_path / "leaky")
+    enabled = _install_and_enable("leaky")
     record = get_record("leaky")
     assert record is not None
-    assert record.status == "rejected"
+    assert enabled.status == "failed"
+    assert record.status == "failed"
     assert record.code == "plugin_forbidden_import"
     assert record.instance is None
     assert "plugin_forbidden_import" in caplog.text
@@ -292,14 +309,32 @@ def test_duplicate_missing_version_and_cycle(monkeypatch, tmp_path):
         body=shared,
     )
     _load(monkeypatch, parent)
-    assert get_record("shared_id").status == "active"
+    assert get_record("shared_id").status == "discovered"
     duplicates = [record for record in list_records() if record.code == "plugin_duplicate_id"]
     assert len(duplicates) == 1
-    assert get_record("needs_missing").code == "plugin_dependency_missing"
-    assert get_record("needs_version").code == "plugin_dependency_missing"
-    assert get_record("helper_plugin").status == "active"
-    assert get_record("cycle_left").code == "plugin_dependency_cycle"
-    assert get_record("cycle_right").code == "plugin_dependency_cycle"
+    assert get_record("needs_missing").status == "discovered"
+    assert get_record("needs_version").status == "discovered"
+    assert get_record("helper_plugin").status == "discovered"
+    assert get_record("cycle_left").status == "discovered"
+    assert get_record("cycle_right").status == "discovered"
+    assert _install_and_enable("shared_id").status == "enabled"
+    assert get_record("shared_id").status == "enabled"
+    install_plugin("needs_missing")
+    with pytest.raises(PluginLifecycleError) as missing_dep:
+        enable_plugin("needs_missing")
+    assert missing_dep.value.code == "plugin_dependency_missing"
+    assert get_record("needs_missing").status == "installed"
+    assert _install_and_enable("helper_plugin").status == "enabled"
+    install_plugin("needs_version")
+    with pytest.raises(PluginLifecycleError) as version_dep:
+        enable_plugin("needs_version")
+    assert version_dep.value.code == "plugin_dependency_missing"
+    install_plugin("cycle_left")
+    with pytest.raises(PluginLifecycleError) as cycle:
+        enable_plugin("cycle_left")
+    assert cycle.value.code == "plugin_dependency_cycle"
+    assert get_record("cycle_left").status == "installed"
+    assert get_record("cycle_right").status == "discovered"
 
 
 def test_symlink_escape_is_not_loaded(monkeypatch, tmp_path):
@@ -316,7 +351,7 @@ def test_symlink_escape_is_not_loaded(monkeypatch, tmp_path):
     (parent / "link").symlink_to(outside, target_is_directory=True)
     _load(monkeypatch, parent)
     assert get_record("escaped_plugin") is None
-    assert all(record.status != "active" for record in list_records())
+    assert all(record.status != "enabled" for record in list_records())
 
 
 def test_empty_plugin_paths_leaves_symbolic_backend(monkeypatch):
@@ -330,6 +365,7 @@ def test_empty_plugin_paths_leaves_symbolic_backend(monkeypatch):
 
 def test_example_analyzer_does_not_mutate(monkeypatch):
     _load(monkeypatch, EXAMPLES / "deterministic_analyzer")
+    _install_and_enable("deterministic_analyzer")
     composition = {
         "tracks": [
             {"events": [{"type": "note", "pitch": "C4"}, {"type": "rest"}]},
@@ -345,6 +381,7 @@ def test_example_analyzer_does_not_mutate(monkeypatch):
 
 def test_example_generator_is_listed_and_not_the_silent_default(monkeypatch):
     _load(monkeypatch, EXAMPLES / "sample_symbolic_generator")
+    _install_and_enable("sample_symbolic_generator")
     registry_mod.reload_registry({})
     ids = [model.id for model in registry_mod.list_models(capability=ModelCapability.SYMBOLIC_COMPOSER)]
     assert SAMPLE_MODEL_ID in ids
@@ -378,6 +415,7 @@ def test_example_generator_is_listed_and_not_the_silent_default(monkeypatch):
 
 def test_explicit_plugin_composer_validates_c4(monkeypatch):
     _load(monkeypatch, EXAMPLES / "sample_symbolic_generator")
+    _install_and_enable("sample_symbolic_generator")
     registry_mod.reload_registry({"AI_OP_GENERATE_COMPOSER": SAMPLE_MODEL_ID})
     first = generate_symbolic_composition(_plan(), model_id=SAMPLE_MODEL_ID, mood="bright", env={})
     second = generate_symbolic_composition(_plan(), model_id=SAMPLE_MODEL_ID, mood="dark", env={})
@@ -404,11 +442,12 @@ def test_empty_plugin_composition_is_invalid(monkeypatch, tmp_path):
         ),
     )
     _load(monkeypatch, tmp_path / "empty_composer")
+    _install_and_enable("empty_composer")
     registry_mod.reload_registry({})
     with pytest.raises(SymbolicCompositionGenerateError) as exc:
         generate_symbolic_composition(_plan(), model_id="plugin:empty_composer", env={})
     assert exc.value.code == "plugin_output_invalid"
-    assert get_record("empty_composer").status == "active"
+    assert get_record("empty_composer").status == "enabled"
 
 
 def test_agent_mutation_and_export_cap(monkeypatch, tmp_path):
@@ -441,6 +480,8 @@ def test_agent_mutation_and_export_cap(monkeypatch, tmp_path):
     monkeypatch.setenv("PLUGIN_MAX_EXPORT_BYTES", "8")
     monkeypatch.setenv("PLUGIN_PATHS", str(tmp_path))
     reload_plugins()
+    _install_and_enable("mutating_agent")
+    _install_and_enable("fat_export")
     with pytest.raises(PluginError) as agent_error:
         PluginHost().run_agent("mutating_agent", {})
     assert agent_error.value.code == "plugin_output_invalid"
@@ -459,8 +500,14 @@ def test_http_discovery_and_reload(monkeypatch, tmp_path):
         assert "sample_symbolic_generator" in ids
         detail = client.get("/plugins/sample_symbolic_generator")
         assert detail.status_code == 200
-        assert detail.json()["id"] == "sample_symbolic_generator"
-        assert detail.json()["model_id"] == SAMPLE_MODEL_ID
+        assert detail.json()["status"] == "discovered"
+        assert detail.json()["model_id"] is None
+        installed = client.post("/plugins/sample_symbolic_generator/install")
+        assert installed.status_code == 200
+        enabled = client.post("/plugins/sample_symbolic_generator/enable")
+        assert enabled.status_code == 200
+        assert enabled.json()["status"] == "enabled"
+        assert enabled.json()["model_id"] == SAMPLE_MODEL_ID
         missing = client.get("/plugins/plugin:sample_symbolic_generator")
         assert missing.status_code == 404
         assert missing.json()["detail"]["code"] == "plugin_not_found"
