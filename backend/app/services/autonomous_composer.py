@@ -36,6 +36,7 @@ from app.services.autonomous_composer_store import (
     replace_plan_json,
     set_checkpoint,
     set_pause_requested,
+    set_stage_instruction,
     update_run_fields,
     update_stage_status,
 )
@@ -652,6 +653,35 @@ def list_run_artifacts(run_id: str, *, db_path: Path | str | None = None) -> lis
         )
     return rows
 
+
+def store_stage_instruction(
+    run_id: str,
+    stage_id: str,
+    text: str,
+    *,
+    db_path: Path | str | None = None,
+) -> None:
+    """Validate and store instruction text. Unsafe text is refused before the write."""
+    from app.autonomous_composer_schemas import AutonomousPlanError
+    from app.services.autonomous_instruction import interpret_arrangement_instruction
+
+    if stage_id not in {"arrangement", "expression"}:
+        raise AutonomousStoreError("stage cannot take an instruction", code="autonomous_stage_invalid")
+    run = get_run(run_id, db_path=db_path)
+    if run.status == "running":
+        raise AutonomousPlanError("run is running", code="autonomous_instruction_unavailable")
+    if run.status not in {"paused", "awaiting_approval"}:
+        raise AutonomousPlanError("instruction unavailable", code="autonomous_instruction_unavailable")
+    if not run.plan_json:
+        raise AutonomousStoreError("plan missing", code="autonomous_run_invalid")
+    plan = ProjectPlanV1.model_validate_json(run.plan_json)
+    interpret_arrangement_instruction(
+        text,
+        forbidden_families=plan.constraints.forbidden_instrument_families,
+        opening_key=plan.constraints.opening_key,
+        final_section_key=plan.constraints.final_section_key,
+    )
+    set_stage_instruction(run_id, stage_id, text, db_path=db_path)
 
 
 def _stage(run, stage_id: str):

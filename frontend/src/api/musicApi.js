@@ -2618,6 +2618,7 @@ export async function startAutonomousRun(payload, { signal } = {}) {
       brief: payload.brief,
       project_id: payload.project_id || null,
       include_rendering: payload.include_rendering === true,
+      autonomy_mode: payload.autonomy_mode || 'autonomous',
       render_approval: payload.render_approval || 'required',
       seed: payload.seed ?? 0,
       operation_run_id: payload.operation_run_id || null,
@@ -2628,6 +2629,8 @@ export async function startAutonomousRun(payload, { signal } = {}) {
     console.debug('[musicApi] Autonomous run ready', {
       run_id_prefix: String(response.data?.run_id || '').slice(0, 16),
       status: response.data?.status || null,
+      autonomy_mode: response.data?.autonomy_mode || null,
+      checkpoint_id: response.data?.checkpoint_id || null,
       stage_count: Array.isArray(response.data?.stages) ? response.data.stages.length : 0,
     });
     return response.data;
@@ -2673,6 +2676,97 @@ export async function skipAutonomousStage(runId, stageId) {
   try {
     const response = await axios.post(
       `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/skip`,
+    );
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function previewAutonomousPlan(brief) {
+  console.debug('[musicApi] Autonomous plan preview', {
+    brief_len: JSON.stringify(brief || {}).length,
+  });
+  try {
+    const response = await axios.post('/ai/agents/autonomous/plans', brief);
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function pauseAutonomousRun(operationRunId) {
+  try {
+    const response = await axios.post('/ai/agents/autonomous/runs/pause', {
+      operation_run_id: operationRunId,
+    });
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function approveAutonomousCheckpoint(runId, checkpointId) {
+  try {
+    const response = await axios.post(
+      `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/checkpoints/${encodeURIComponent(checkpointId)}/approve`,
+    );
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function rejectAutonomousArrangement(runId) {
+  try {
+    const response = await axios.post(
+      `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/checkpoints/arrangement/reject`,
+    );
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function instructAutonomousStage(runId, stageId, text) {
+  try {
+    const response = await axios.post(
+      `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/instruction`,
+      { text },
+    );
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function retryAutonomousStage(runId, stageId) {
+  try {
+    const response = await axios.post(
+      `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/retry`,
+    );
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function openAutonomousStage(runId, stageId) {
+  try {
+    const response = await axios.post(
+      `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/open`,
+    );
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function branchAutonomousStage(runId, stageId, name) {
+  try {
+    const response = await axios.post(
+      `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/branch`,
+      { name },
     );
     return response.data;
   } catch (error) {

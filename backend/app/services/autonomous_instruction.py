@@ -16,7 +16,8 @@ from app.autonomous_composer_schemas import (
     AUTONOMOUS_INSTRUCTION_UNSAFE,
     AutonomousPlanError,
 )
-from app.composition_schemas import KEY_PATTERN
+from app.composition_schemas import KEY_PATTERN, CompositionV2, bar_duration_ticks
+from app.services.instrument_identity import normalize_instrument
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,51 @@ def interpret_arrangement_instruction(
     )
     return UNPARSED_EFFECT
 
+
+def apply_thin_strings(composition: CompositionV2) -> tuple[CompositionV2, int, int]:
+    """Drop odd-bar events on non-melody string-family tracks. Keep at least one."""
+    bar_ticks = max(1, bar_duration_ticks(composition.time_signature, composition.ticks_per_quarter))
+    dropped = 0
+    kept = 0
+    tracks = []
+    for track in composition.tracks:
+        if track.role in {"melody", "lead"}:
+            kept += len(track.events)
+            tracks.append(track)
+            continue
+        family = normalize_instrument(track.instrument).family
+        if family != "strings":
+            kept += len(track.events)
+            tracks.append(track)
+            continue
+        odd = [
+            event
+            for event in track.events
+            if (int(event.start_tick) // bar_ticks) % 2 == 1
+        ]
+        even = [
+            event
+            for event in track.events
+            if (int(event.start_tick) // bar_ticks) % 2 == 0
+        ]
+        if not even and odd:
+            retained = odd[:1]
+            removed = odd[1:]
+        else:
+            retained = even
+            removed = odd
+        dropped += len(removed)
+        kept += len(retained)
+        tracks.append(track.model_copy(update={"events": retained}))
+    logger.info(
+        "Thin string arrangement applied",
+        extra={
+            "dropped_event_count": dropped,
+            "kept_event_count": kept,
+            "effect": THIN_STRING_EFFECT,
+        },
+    )
+    return composition.model_copy(update={"tracks": tracks}), dropped, kept
 
 
 def _refuse(instruction_len: int) -> None:

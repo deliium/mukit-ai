@@ -720,6 +720,19 @@ async def retry_autonomous_stage(run_id: str, stage_id: str, request: Request) -
     return run_view(run.id, summary=summary).model_dump(mode="json")
 
 
+@router.post("/agents/autonomous/runs/{run_id}/stages/{stage_id}/instruction")
+async def instruct_autonomous_stage(run_id: str, stage_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    from app.autonomous_composer_schemas import AutonomousPlanError
+    from app.services.autonomous_composer import run_view, store_stage_instruction
+    from app.services.autonomous_composer_store import AutonomousStoreError
+
+    try:
+        store_stage_instruction(run_id, stage_id, str(body.get("text") or ""))
+    except (AutonomousPlanError, AutonomousStoreError) as exc:
+        _autonomous_http(exc)
+        raise
+    return run_view(run_id).model_dump(mode="json")
+
 
 @router.post("/agents/autonomous/runs/{run_id}/stages/{stage_id}/open")
 async def open_autonomous_stage(run_id: str, stage_id: str) -> dict[str, Any]:

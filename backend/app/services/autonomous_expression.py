@@ -10,9 +10,18 @@ from app.ai_agents.registry import ensure_registry, get_agent
 from app.ai_agents.revision_loop import _run_agent_node
 from app.ai_agents.schemas import AgentOperation, AgentRunRequest
 from app.ai_agents.workflow import build_initial_context
-from app.autonomous_composer_schemas import ProjectPlanV1
+from app.autonomous_composer_schemas import (
+    AUTONOMOUS_INSTRUCTION_UNPARSED,
+    ProjectPlanV1,
+)
 from app.composition_schemas import CompositionV2
-from app.services.autonomous_composer_store import update_stage_status
+from app.services.autonomous_composer_store import get_run, set_stage_warning, update_stage_status
+from app.services.autonomous_instruction import (
+    THIN_STRING_EFFECT,
+    UNPARSED_EFFECT,
+    apply_thin_strings,
+    interpret_arrangement_instruction,
+)
 from app.services.autonomous_constraints import (
     AutonomousConstraintError,
     assert_stage_completion,
@@ -51,6 +60,7 @@ async def apply_arrangement_stage(
     db_path: Path | str | None = None,
 ) -> StageOutcome:
     before_melody = _melody_fingerprint(composition)
+    instruction, effect = _arrangement_effect(run_id, plan, db_path=db_path)
     context = build_initial_context(composition)
     context, _stage, _codes = await _run_agent_node(
         "arrangement",
@@ -59,6 +69,18 @@ async def apply_arrangement_stage(
         selection={"preserve_melody": True},
     )
     realized = context.working_draft_composition
+    if effect == THIN_STRING_EFFECT:
+        realized, dropped, kept = apply_thin_strings(realized)
+        logger.info(
+            "Arrangement instruction applied",
+            extra={
+                "run_id": run_id[:16],
+                "dropped_event_count": dropped,
+                "kept_event_count": kept,
+                "instruction_len": len(instruction),
+                "effect": THIN_STRING_EFFECT,
+            },
+        )
     try:
         if _melody_fingerprint(realized) != before_melody:
             raise AutonomousConstraintError(
@@ -97,7 +119,41 @@ async def apply_arrangement_stage(
         completion_code="arrangement_preserved",
         db_path=db_path,
     )
+    if effect == UNPARSED_EFFECT:
+        set_stage_warning(
+            run_id,
+            "arrangement",
+            AUTONOMOUS_INSTRUCTION_UNPARSED,
+            db_path=db_path,
+        )
+        logger.warning(
+            "Arrangement instruction unparsed",
+            extra={
+                "code": AUTONOMOUS_INSTRUCTION_UNPARSED,
+                "instruction_len": len(instruction),
+            },
+        )
     return StageOutcome("completed", revision_id, None)
+
+
+def _arrangement_effect(
+    run_id: str,
+    plan: ProjectPlanV1,
+    *,
+    db_path: Path | str | None,
+) -> tuple[str, str | None]:
+    run = get_run(run_id, db_path=db_path)
+    stage = next(row for row in run.stages if row.stage_id == "arrangement")
+    text = stage.instruction or ""
+    if not text:
+        return "", None
+    effect = interpret_arrangement_instruction(
+        text,
+        forbidden_families=plan.constraints.forbidden_instrument_families,
+        opening_key=plan.constraints.opening_key,
+        final_section_key=plan.constraints.final_section_key,
+    )
+    return text, effect
 
 
 async def apply_expression_stage(
@@ -110,6 +166,17 @@ async def apply_expression_stage(
     db_path: Path | str | None = None,
 ) -> StageOutcome:
     before = pitch_timing_fingerprint(composition)
+    stored = get_run(run_id, db_path=db_path)
+    expression = next(row for row in stored.stages if row.stage_id == "expression")
+    if expression.instruction:
+        logger.info(
+            "Expression instruction stored for display",
+            extra={
+                "run_id": run_id[:16],
+                "instruction_len": len(expression.instruction),
+                "effect": "display_only",
+            },
+        )
     ensure_registry()
     agent = get_agent("performance_expression")
     context = build_initial_context(composition)

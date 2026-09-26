@@ -201,3 +201,83 @@ def test_open_and_branch_use_history(client: TestClient) -> None:
     assert stored.branch_id != branched.json()["branch_id"]
     current = client.get(f"/ai/agents/autonomous/runs/{waiting['run_id']}")
     assert current.json()["checkpoint_id"] == "arrangement"
+
+
+EXAMPLE_INSTRUCTION = "Keep the melody, but use a smaller string arrangement."
+
+
+def _load_composition(revision_id: str):
+    from app.composition_schemas import CompositionV2
+    from app.db.connection import get_connection
+    from app.services.project_history_store import get_snapshot_composition
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT snapshot_fingerprint FROM project_revisions WHERE id = ?",
+            (revision_id,),
+        ).fetchone()
+        composition = get_snapshot_composition(conn, row["snapshot_fingerprint"])
+    if isinstance(composition, CompositionV2):
+        return composition
+    return CompositionV2.model_validate(composition)
+
+
+def _family_events(composition, family: str) -> list[tuple]:
+    from app.services.instrument_identity import normalize_instrument
+
+    rows = []
+    for track in composition.tracks:
+        if track.role in {"melody", "lead"}:
+            continue
+        if normalize_instrument(track.instrument).family != family:
+            continue
+        for event in track.events:
+            rows.append((track.id, event.pitch, event.start_tick, event.duration_ticks))
+    return rows
+
+
+def test_guided_reject_and_thinner_strings(client: TestClient) -> None:
+    waiting = _walk_to_arrangement(client)
+    before = {stage["stage_id"]: stage["revision_id"] for stage in waiting["stages"]}
+    rejected = client.post(
+        f"/ai/agents/autonomous/runs/{waiting['run_id']}/checkpoints/arrangement/reject"
+    )
+    assert rejected.status_code == 200, rejected.text
+    rejected_body = rejected.json()
+    unsafe = client.post(
+        f"/ai/agents/autonomous/runs/{waiting['run_id']}/stages/arrangement/instruction",
+        json={"text": "Add drums"},
+    )
+    assert unsafe.status_code == 422
+    assert unsafe.json()["detail"]["code"] == "autonomous_instruction_unsafe"
+    stored = client.post(
+        f"/ai/agents/autonomous/runs/{waiting['run_id']}/stages/arrangement/instruction",
+        json={"text": EXAMPLE_INSTRUCTION},
+    )
+    assert stored.status_code == 200, stored.text
+    arrangement = next(stage for stage in stored.json()["stages"] if stage["stage_id"] == "arrangement")
+    assert arrangement["instruction"] == EXAMPLE_INSTRUCTION
+    retried = client.post(
+        f"/ai/agents/autonomous/runs/{waiting['run_id']}/stages/arrangement/retry"
+    )
+    assert retried.status_code == 200, retried.text
+    body = retried.json()
+    assert body["run_id"] == waiting["run_id"]
+    assert body["project_id"] == waiting["project_id"]
+    assert body["checkpoint_id"] == "arrangement"
+    renewed = next(stage for stage in body["stages"] if stage["stage_id"] == "arrangement")
+    assert renewed["status"] == "completed"
+    assert renewed["revision_id"]
+    assert renewed["revision_id"] != rejected_body["stages"][0]["revision_id"]
+    rejected_stage = next(
+        stage for stage in rejected_body["stages"] if stage["stage_id"] == "arrangement"
+    )
+    for stage_id in ("plan", "harmony_plan", "motif_plan", "symbolic", "critique"):
+        current = next(stage for stage in body["stages"] if stage["stage_id"] == stage_id)
+        assert current["status"] == "completed"
+        assert current["revision_id"] == before[stage_id]
+    previous = _load_composition(rejected_stage["rejected_revision_id"])
+    current_score = _load_composition(renewed["revision_id"])
+    assert len(_family_events(current_score, "strings")) < len(_family_events(previous, "strings"))
+    assert _family_events(current_score, "cello") == _family_events(previous, "cello")
+

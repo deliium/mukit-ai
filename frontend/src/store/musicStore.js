@@ -16,9 +16,17 @@ import {
   previewCompositionDevelopment,
   previewMultiAgentWorkflow,
   previewReharmonization,
+  approveAutonomousCheckpoint,
   approveAutonomousStage,
+  branchAutonomousStage,
   cancelAutonomousRun,
+  instructAutonomousStage,
+  openAutonomousStage,
+  pauseAutonomousRun,
+  previewAutonomousPlan,
+  rejectAutonomousArrangement,
   resumeAutonomousRun,
+  retryAutonomousStage,
   skipAutonomousStage,
   startAutonomousRun,
   ReharmonizeApiError,
@@ -40,6 +48,7 @@ import {
   fetchAudioRecoveryAssetJson,
   fetchBoundAudioRecovery,
 } from '../api/musicApi.js';
+import { briefFingerprint } from '../utils/autonomousControl.js';
 import { mintOperationRunId } from '../utils/operationSummaryText.js';
 import {
   createLivePredictAbortController,
@@ -1534,8 +1543,10 @@ export const useMusicStore = create((set, get) => ({
   autonomousRun: null,
   autonomousRunId: null,
   autonomousBaselineFingerprint: null,
-      autonomousLoadedFingerprint: null,
+  autonomousLoadedFingerprint: null,
   autonomousAbortController: null,
+  autonomousPreview: null,
+  autonomousPreviewFingerprint: null,
   ...initialDevelopmentPreviewState,
   ...initialMusicalReferenceSessionState,
   ...initialArrangementPreviewState,
@@ -11879,7 +11890,34 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
-  startAutonomousComposer: async (brief, { includeRendering = false } = {}) => {
+  previewAutonomousComposer: async (brief) => {
+    set({ autonomousStatus: 'loading', autonomousError: '' });
+    try {
+      const plan = await previewAutonomousPlan(brief);
+      console.debug('[musicStore] Autonomous plan preview', {
+        duration_bars: plan?.constraints?.duration_bars ?? null,
+        section_count: Array.isArray(plan?.sections) ? plan.sections.length : 0,
+        brief_len: JSON.stringify(brief || {}).length,
+      });
+      set({
+        autonomousPreview: plan,
+        autonomousPreviewFingerprint: briefFingerprint(brief),
+        autonomousStatus: 'idle',
+      });
+      return plan;
+    } catch (error) {
+      console.error('[musicStore] Autonomous preview failed', { code: error?.code || null });
+      set({
+        autonomousPreview: null,
+        autonomousPreviewFingerprint: null,
+        autonomousStatus: 'error',
+        autonomousError: error?.code || 'autonomous_brief_invalid',
+      });
+      return null;
+    }
+  },
+
+  startAutonomousComposer: async (brief, { includeRendering = false, autonomyMode = 'autonomous' } = {}) => {
     const baseline = get().workingFingerprint;
     const operationRunId = mintOperationRunId();
     const abortController = typeof globalThis.AbortController !== 'undefined'
@@ -11899,6 +11937,7 @@ export const useMusicStore = create((set, get) => ({
         brief,
         include_rendering: includeRendering,
         operation_run_id: operationRunId,
+        autonomy_mode: autonomyMode,
         project_id: projectId,
         expected_working_version: projectId ? get().workingVersion : null,
         expected_head_revision_id: projectId ? get().currentRevisionId : null,
@@ -11907,6 +11946,8 @@ export const useMusicStore = create((set, get) => ({
       console.debug('[musicStore] Autonomous run', {
         run_id_prefix: String(view?.run_id || '').slice(0, 16),
         status: view?.status || null,
+        autonomy_mode: view?.autonomy_mode || null,
+        checkpoint_id: view?.checkpoint_id || null,
         stage_count: Array.isArray(view?.stages) ? view.stages.length : 0,
       });
       await adoptAutonomousView(set, get, view, baseline);
@@ -11923,6 +11964,20 @@ export const useMusicStore = create((set, get) => ({
         autonomousError: aborted ? 'operation_cancelled' : (error?.code || error?.message || 'autonomous_run_invalid'),
         autonomousAbortController: null,
       });
+      return null;
+    }
+  },
+
+  pauseAutonomousComposer: async () => {
+    const operationRunId = get().autonomousRunId;
+    if (!operationRunId) return null;
+    try {
+      const view = await pauseAutonomousRun(operationRunId);
+      await adoptAutonomousView(set, get, view, get().autonomousBaselineFingerprint);
+      return view;
+    } catch (error) {
+      console.error('[musicStore] Autonomous pause failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_run_invalid' });
       return null;
     }
   },
@@ -11974,6 +12029,105 @@ export const useMusicStore = create((set, get) => ({
       return view;
     } catch (error) {
       console.error('[musicStore] Autonomous approve failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_run_invalid' });
+      return null;
+    }
+  },
+
+  approveAutonomousCheckpoint: async (checkpointId) => {
+    const runId = get().autonomousRun?.run_id;
+    if (!runId || !checkpointId) return null;
+    set({ autonomousStatus: 'loading', autonomousError: '' });
+    try {
+      const view = await approveAutonomousCheckpoint(runId, checkpointId);
+      await adoptAutonomousView(set, get, view, get().autonomousBaselineFingerprint);
+      return view;
+    } catch (error) {
+      console.error('[musicStore] Autonomous checkpoint approve failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_run_invalid' });
+      return null;
+    }
+  },
+
+  rejectAutonomousArrangement: async () => {
+    const runId = get().autonomousRun?.run_id;
+    if (!runId) return null;
+    set({ autonomousStatus: 'loading', autonomousError: '' });
+    try {
+      const view = await rejectAutonomousArrangement(runId);
+      await adoptAutonomousView(set, get, view, get().autonomousBaselineFingerprint);
+      return view;
+    } catch (error) {
+      console.error('[musicStore] Autonomous reject failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_run_invalid' });
+      return null;
+    }
+  },
+
+  instructAutonomousStage: async (stageId, text) => {
+    const runId = get().autonomousRun?.run_id;
+    if (!runId || !stageId) return null;
+    console.debug('[musicStore] Autonomous instruction', {
+      stage_id: stageId,
+      instruction_len: String(text || '').length,
+    });
+    try {
+      const view = await instructAutonomousStage(runId, stageId, text);
+      set({
+        autonomousRun: view,
+        autonomousStatus: 'success',
+        autonomousError: '',
+      });
+      return view;
+    } catch (error) {
+      console.error('[musicStore] Autonomous instruction failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_instruction_unsafe' });
+      return null;
+    }
+  },
+
+  retryAutonomousStage: async (stageId) => {
+    const runId = get().autonomousRun?.run_id;
+    if (!runId || !stageId) return null;
+    set({ autonomousStatus: 'loading', autonomousError: '' });
+    try {
+      const view = await retryAutonomousStage(runId, stageId);
+      await adoptAutonomousView(set, get, view, get().autonomousBaselineFingerprint);
+      return view;
+    } catch (error) {
+      console.error('[musicStore] Autonomous retry failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_run_invalid' });
+      return null;
+    }
+  },
+
+  openAutonomousStage: async (stageId) => {
+    const runId = get().autonomousRun?.run_id;
+    if (!runId || !stageId) return null;
+    set({ autonomousStatus: 'loading', autonomousError: '' });
+    try {
+      const view = await openAutonomousStage(runId, stageId);
+      await adoptAutonomousView(set, get, view, get().autonomousBaselineFingerprint);
+      return view;
+    } catch (error) {
+      console.error('[musicStore] Autonomous open failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_revision_not_head' });
+      return null;
+    }
+  },
+
+  branchAutonomousStage: async (stageId, name) => {
+    const runId = get().autonomousRun?.run_id;
+    if (!runId || !stageId) return null;
+    try {
+      const created = await branchAutonomousStage(runId, stageId, name);
+      console.debug('[musicStore] Autonomous branch', {
+        run_id_prefix: String(runId).slice(0, 16),
+        stage_id: stageId,
+      });
+      return created;
+    } catch (error) {
+      console.error('[musicStore] Autonomous branch failed', { code: error?.code || null });
       set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_run_invalid' });
       return null;
     }
@@ -12763,6 +12917,13 @@ function scheduleAutosave(set, get) {
 
 async function adoptAutonomousView(set, get, view, baselineFingerprint) {
   const failed = view?.status === 'failed';
+  console.debug('[musicStore] Autonomous view', {
+    run_id_prefix: String(view?.run_id || '').slice(0, 16),
+    status: view?.status || null,
+    autonomy_mode: view?.autonomy_mode || null,
+    checkpoint_id: view?.checkpoint_id || null,
+    stage_count: Array.isArray(view?.stages) ? view.stages.length : 0,
+  });
   set({
     autonomousRun: view,
     autonomousRunId: view?.run_id || get().autonomousRunId,
