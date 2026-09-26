@@ -28,6 +28,7 @@ from app.services.audio_recovery.pipeline import (
     get_audio_recovery_job,
     resolve_asset_file_path,
 )
+from app.routers.collaboration_guard import enforce_current
 
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ async def create_recovery_job(
         },
     )
     payload = await file.read()
+    enforce_current(project_id, "write_score")
     try:
         job = enqueue_audio_recovery_job(
             payload,
@@ -101,15 +103,19 @@ async def create_recovery_job(
 async def get_job(job_id: str) -> AudioRecoveryJobV1:
     logger.info("GET /audio-recovery/jobs/{id}", extra={"job_id": job_id})
     try:
-        return get_audio_recovery_job(job_id)
+        job = get_audio_recovery_job(job_id)
     except AudioRecoveryError as exc:
         raise _map_error(exc) from exc
+    enforce_current(job.project_id, "read")
+    return job
 
 
 @router.delete("/jobs/{job_id}", status_code=204)
 async def cancel_job(job_id: str) -> None:
     logger.info("DELETE /audio-recovery/jobs/{id}", extra={"job_id": job_id})
     try:
+        job = get_audio_recovery_job(job_id)
+        enforce_current(job.project_id, "write_score")
         delete_audio_recovery_job(job_id)
     except AudioRecoveryError as exc:
         raise _map_error(exc) from exc
@@ -125,6 +131,7 @@ async def bind_job(job_id: str, body: AudioRecoveryBindRequestV1) -> AudioRecove
             "event_map_count": len(body.event_map),
         },
     )
+    enforce_current(body.project_id, "write_score")
     try:
         result = bind_audio_recovery_job(job_id, body)
     except AudioRecoveryError as exc:
@@ -155,6 +162,7 @@ async def get_project_bound(project_id: str) -> AudioAlignmentBoundDiscoveryV1:
         "GET /audio-recovery/projects/{id}/bound",
         extra={"project_id_prefix": project_id[:8] if project_id else None},
     )
+    enforce_current(project_id, "read")
     try:
         discovery = discover_bound_recovery_for_project(project_id)
     except AudioRecoveryError as exc:

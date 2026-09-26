@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
+import { isScoreMutationShortcut, isScoreReadOnly } from '../utils/collaborationAccess.js';
 import { isCanonicalComposition, validateMusicJson } from '../utils/musicJsonValidation.js';
 import {
   SNAP_VALUES,
@@ -281,6 +282,8 @@ const NumberInput = styled.input`
 
 const PianoRollEditor = () => {
   const editedMusicJson = useMusicStore((state) => state.editedMusicJson);
+  const projectCollaboration = useMusicStore((state) => state.projectCollaboration);
+  const scoreReadOnly = isScoreReadOnly(projectCollaboration);
   const pianoRollTrackId = useMusicStore((state) => state.pianoRollTrackId);
   const pianoRollNoteId = useMusicStore((state) => state.pianoRollNoteId);
   const pianoRollNoteIds = useMusicStore((state) => state.pianoRollNoteIds);
@@ -950,14 +953,14 @@ const PianoRollEditor = () => {
         top: (metrics.maxMidi - item.pitchMidi) * metrics.rowHeight,
         width: (item.endTick - item.startTick) * metrics.pixelsPerTick,
         color: item.color,
-        editable: item.editable,
+        editable: scoreReadOnly ? false : item.editable,
         selectable: item.selectable !== false,
         opacity: onHighlightedTrack && motifRole ? 1 : (item.editable || selected ? 0.95 : CONTEXT_TRACK_OPACITY),
         selected,
         motifRole,
       };
     });
-  }, [metrics, visibleNoteGeoms, selectedNoteKeySet, motifHighlightSets]);
+  }, [metrics, visibleNoteGeoms, selectedNoteKeySet, motifHighlightSets, scoreReadOnly]);
 
   const pitchRows = useMemo(() => {
     if (!metrics) {
@@ -1104,6 +1107,14 @@ const PianoRollEditor = () => {
     if (!command) {
       return;
     }
+    if (scoreReadOnly && isScoreMutationShortcut(command)) {
+      event.preventDefault();
+      logger.debug('[FIX] Skipped piano-roll mutation shortcut', {
+        command,
+        role: projectCollaboration?.role || null,
+      });
+      return;
+    }
     event.preventDefault();
     logger.debug('Shortcut command', {
       command,
@@ -1213,6 +1224,8 @@ const PianoRollEditor = () => {
     handleZoomOut,
     handleZoomToFit,
     handleZoomToSelection,
+    scoreReadOnly,
+    projectCollaboration,
   ]);
 
   const handleKeyDown = (event) => {
@@ -1249,6 +1262,9 @@ const PianoRollEditor = () => {
   }, [extendEditorSelectionTo, toggleEditorSelectionRef, setEditorSelection]);
 
   const handleGridPointerDown = (event) => {
+    if (scoreReadOnly) {
+      return;
+    }
     if (!metrics || event.target !== event.currentTarget) {
       return;
     }

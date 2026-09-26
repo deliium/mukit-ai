@@ -49,6 +49,7 @@
 - [x] **V4 observability and resource controls** — Shared run ids and structured spans for workflow preview, agent calls, model calls, and neural render jobs; env budgets for model calls, wall time, tokens, cost, revisions, and render attempts; cancellation reaches in-flight children; `SystemExit` from an agent or model call stays inside the API process
 - [x] **V4 autonomous project composer** — One creative brief schedules specialized agents, commits a multi-section `composition.v2` project stage by stage, and can resume after restart. The spine preview stays preview-only. Render stays opt-in
 - [x] **V4 autonomous composer co-producer controls** — Brief review before any agent runs, Guided and Balanced checkpoints, pause, arrangement reject-and-continue with a safe instruction, and revision open/branch on the same run. Default mode stays autonomous
+- [x] **V4 collaborative project foundations** — Optional local actors and project roles, anchored comments, revision review, and an activity feed on the existing history graph. Collaboration stays off unless `COLLABORATION_ENABLED` is on
 
 ## Completed
 
@@ -101,3 +102,4 @@
 | V4 observability and resource controls | 2026-09-25 |
 | V4 autonomous project composer | 2026-09-26 |
 | V4 autonomous composer co-producer controls | 2026-09-26 |
+| V4 collaborative project foundations | 2026-09-26 |

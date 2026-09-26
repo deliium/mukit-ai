@@ -58,6 +58,8 @@ function resetProjectState(overrides = {}) {
     currentRevisionSequence: null,
     workingVersion: null,
     workingFingerprint: null,
+    projectCollaboration: null,
+    collaborationEnabled: false,
     saveConflict: null,
     projectList: [],
     projectListStatus: 'idle',
@@ -1264,3 +1266,34 @@ test('saveConflictAsNewBranch refreshes CAS then forks local draft', async (t) =
   );
   assert.equal(localBefore.tracks[0].events.some((e) => e.pitch === 'G4'), true);
 });
+
+test('scheduleAutosave skips commenter and viewer roles', () => {
+  resetProjectState({
+    currentProjectId: 'p1',
+    saveStatus: 'unsaved',
+    projectCollaboration: { role: 'viewer', accepted_revision_id: null },
+    lastSavedPersistRevision: 'stale',
+  });
+  const timers = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, delay) => {
+    timers.push({ fn, delay });
+    return timers.length;
+  };
+  try {
+    useMusicStore.getState().scheduleAutosave();
+    assert.equal(timers.length, 0);
+    useMusicStore.setState({
+      projectCollaboration: { role: 'commenter', accepted_revision_id: null },
+    });
+    useMusicStore.getState().scheduleAutosave();
+    assert.equal(timers.length, 0);
+    useMusicStore.setState({ projectCollaboration: null });
+    useMusicStore.getState().scheduleAutosave();
+    assert.equal(timers.length, 1);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    useMusicStore.setState({ projectCollaboration: null });
+  }
+});
+

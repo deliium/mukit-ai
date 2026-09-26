@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from ..collaboration_schemas import ProjectCollaborationBlock
+from ..collaboration_settings import collaboration_enabled
 
 from ..project_history_schemas import (
     DEFAULT_REVISION_PAGE_LIMIT,
@@ -68,10 +71,14 @@ from ..services.project_store import (
     list_projects,
     update_project,
 )
+from ..services.collaboration_store import get_membership, list_project_ids_for_actor
+from .collaboration_guard import enforce_project, optional_actor
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+ActorId = Annotated[str | None, Depends(optional_actor)]
 
 _CONFLICT_RESPONSE = {
     409: {
@@ -126,9 +133,25 @@ def _history_fields(project_id: str) -> dict[str, Any]:
         }
 
 
+def _collaboration_block(
+    record: ProjectRecord,
+    actor_id: str | None,
+) -> ProjectCollaborationBlock | None:
+    if not collaboration_enabled() or not actor_id:
+        return None
+    membership = get_membership(record.id, actor_id)
+    if membership is None:
+        return None
+    return ProjectCollaborationBlock(
+        role=membership.role,  # type: ignore[arg-type]
+        accepted_revision_id=record.accepted_revision_id,
+    )
+
+
 def _record_to_detail(
     record: ProjectRecord,
     *,
+    actor_id: str | None = None,
     composition=None,
     composition_migrated: bool = False,
     migration_path: str | None = None,
@@ -146,14 +169,21 @@ def _record_to_detail(
         generation_prompt=_prompt_dict(record),
         composition_migrated=composition_migrated,
         migration_path=migration_path,
+        collaboration=_collaboration_block(record, actor_id),
         **fields,
     )
 
 
-def _durable_to_detail(project_id: str, result: DurableCommandResponse) -> ProjectDetailResponse:
+def _durable_to_detail(
+    project_id: str,
+    result: DurableCommandResponse,
+    *,
+    actor_id: str | None = None,
+) -> ProjectDetailResponse:
     record = get_project(project_id)
     return _record_to_detail(
         record,
+        actor_id=actor_id,
         composition=result.composition,
         history_fields={
             "active_branch_id": result.active_branch_id,
@@ -244,9 +274,12 @@ def _open_composition(record: ProjectRecord, *, rewrite: bool = True):
 
 
 @router.get("", response_model=ProjectListResponse)
-async def list_project_summaries() -> ProjectListResponse:
+async def list_project_summaries(actor_id: ActorId) -> ProjectListResponse:
     logger.info("Project list requested")
     records = list_projects()
+    if collaboration_enabled() and actor_id:
+        allowed = set(list_project_ids_for_actor(actor_id))
+        records = [record for record in records if record.id in allowed]
     items = []
     for record in records:
         summary = record.composition_summary()
@@ -267,7 +300,7 @@ async def list_project_summaries() -> ProjectListResponse:
 
 
 @router.post("", response_model=ProjectDetailResponse, status_code=201)
-async def create_project_route(request: ProjectCreateRequest) -> ProjectDetailResponse:
+async def create_project_route(request: ProjectCreateRequest, actor_id: ActorId) -> ProjectDetailResponse:
     logger.info(
         "Project create requested",
         extra={
@@ -308,6 +341,7 @@ async def create_project_route(request: ProjectCreateRequest) -> ProjectDetailRe
     record = create_project(
         request.name,
         composition=composition_json,
+        actor_id=actor_id,
         **generation_kwargs,
     )
     logger.info(
@@ -320,6 +354,7 @@ async def create_project_route(request: ProjectCreateRequest) -> ProjectDetailRe
     )
     return _record_to_detail(
         record,
+        actor_id=actor_id,
         composition=composition,
         composition_migrated=migration_path == "legacy",
         migration_path=migration_path,
@@ -329,6 +364,7 @@ async def create_project_route(request: ProjectCreateRequest) -> ProjectDetailRe
 @router.get("/{project_id}/revisions", response_model=RevisionListResponse)
 async def list_project_revisions(
     project_id: str,
+    actor_id: ActorId,
     branch_id: str | None = None,
     limit: int = Query(default=DEFAULT_REVISION_PAGE_LIMIT, ge=1, le=MAX_REVISION_PAGE_LIMIT),
     before_sequence: int | None = Query(default=None, ge=1),
@@ -342,6 +378,7 @@ async def list_project_revisions(
             "before_sequence": before_sequence,
         },
     )
+    enforce_project(actor_id, project_id, "read")
     try:
         response = list_revisions(
             project_id,
@@ -363,11 +400,16 @@ async def list_project_revisions(
 
 
 @router.get("/{project_id}/revisions/{revision_id}", response_model=RevisionDetailResponse)
-async def get_project_revision(project_id: str, revision_id: str) -> RevisionDetailResponse:
+async def get_project_revision(
+    project_id: str,
+    revision_id: str,
+    actor_id: ActorId,
+) -> RevisionDetailResponse:
     logger.info(
         "Revision detail requested",
         extra={"project_id": project_id, "revision_id": revision_id},
     )
+    enforce_project(actor_id, project_id, "read")
     try:
         detail = get_revision_detail(project_id, revision_id)
     except (ProjectNotFoundError, ProjectHistoryNotFoundError, ProjectHistoryError) as exc:
@@ -384,7 +426,11 @@ async def get_project_revision(project_id: str, revision_id: str) -> RevisionDet
 
 
 @router.get("/{project_id}/artifacts/{artifact_id}")
-async def get_project_artifact(project_id: str, artifact_id: str) -> dict[str, Any]:
+async def get_project_artifact(
+    project_id: str,
+    artifact_id: str,
+    actor_id: ActorId,
+) -> dict[str, Any]:
     """Inspect a single agent artifact (size-capped payload; never listed in bulk)."""
     from app.ai_agents.errors import AgentError, map_agent_error_to_http
     from app.services.agent_artifact_workspace import get_artifact
@@ -396,6 +442,7 @@ async def get_project_artifact(project_id: str, artifact_id: str) -> dict[str, A
             "artifact_id_prefix": artifact_id[:12],
         },
     )
+    enforce_project(actor_id, project_id, "read")
     try:
         get_project(project_id)
         return get_artifact(project_id, artifact_id, include_payload=True)
@@ -416,6 +463,7 @@ async def get_project_artifact(project_id: str, artifact_id: str) -> dict[str, A
 async def commit_project_revision(
     project_id: str,
     request: DurableCommitRequest,
+    actor_id: ActorId,
 ) -> DurableCommandResponse:
     logger.info(
         "Durable revision commit requested",
@@ -426,8 +474,9 @@ async def commit_project_revision(
             "checkpoint_dirty_draft": request.checkpoint_dirty_draft,
         },
     )
+    enforce_project(actor_id, project_id, "write_score")
     try:
-        result = commit_revision(project_id, request)
+        result = commit_revision(project_id, request, actor_id=actor_id)
     except Exception as exc:
         from app.ai_agents.errors import AgentError, map_agent_error_to_http
 
@@ -467,6 +516,7 @@ async def name_project_revision(
     project_id: str,
     revision_id: str,
     request: RevisionNameRequest,
+    actor_id: ActorId,
 ) -> RevisionListItem:
     logger.info(
         "Revision name requested",
@@ -476,6 +526,7 @@ async def name_project_revision(
             "name_length": len(request.name or ""),
         },
     )
+    enforce_project(actor_id, project_id, "write_score")
     try:
         item = name_revision(project_id, revision_id, request)
     except (
@@ -500,6 +551,7 @@ async def restore_project_revision(
     project_id: str,
     revision_id: str,
     request: RestoreRevisionRequest,
+    actor_id: ActorId,
 ) -> DurableCommandResponse:
     logger.info(
         "Revision restore requested",
@@ -509,8 +561,9 @@ async def restore_project_revision(
             "branch_id": request.branch_id,
         },
     )
+    enforce_project(actor_id, project_id, "write_score")
     try:
-        result = restore_revision_command(project_id, revision_id, request)
+        result = restore_revision_command(project_id, revision_id, request, actor_id=actor_id)
     except (
         ProjectNotFoundError,
         ProjectHistoryNotFoundError,
@@ -532,8 +585,9 @@ async def restore_project_revision(
 
 
 @router.get("/{project_id}/branches", response_model=BranchListResponse)
-async def list_project_branches(project_id: str) -> BranchListResponse:
+async def list_project_branches(project_id: str, actor_id: ActorId) -> BranchListResponse:
     logger.info("Branch list requested", extra={"project_id": project_id})
+    enforce_project(actor_id, project_id, "read")
     try:
         response = list_branches(project_id)
     except ProjectNotFoundError as exc:
@@ -554,6 +608,7 @@ async def list_project_branches(project_id: str) -> BranchListResponse:
 async def create_project_branch(
     project_id: str,
     request: BranchCreateRequest,
+    actor_id: ActorId,
 ) -> BranchListItem:
     logger.info(
         "Branch create requested",
@@ -563,6 +618,7 @@ async def create_project_branch(
             "checkout": request.checkout,
         },
     )
+    enforce_project(actor_id, project_id, "write_score")
     try:
         item = create_branch(project_id, request)
     except (
@@ -594,6 +650,7 @@ async def create_project_branch(
 async def apply_as_branch_route(
     project_id: str,
     request: ApplyAsBranchRequest,
+    actor_id: ActorId,
 ) -> DurableCommandResponse:
     logger.info(
         "Apply-as-branch requested",
@@ -604,8 +661,9 @@ async def apply_as_branch_route(
             "name_length": len(request.name),
         },
     )
+    enforce_project(actor_id, project_id, "write_score")
     try:
-        result = apply_as_branch_command(project_id, request)
+        result = apply_as_branch_command(project_id, request, actor_id=actor_id)
     except Exception as exc:
         from app.ai_agents.errors import AgentError, map_agent_error_to_http
 
@@ -643,6 +701,7 @@ async def rename_project_branch(
     project_id: str,
     branch_id: str,
     request: BranchRenameRequest,
+    actor_id: ActorId,
 ) -> BranchListItem:
     logger.info(
         "Branch rename requested",
@@ -652,6 +711,7 @@ async def rename_project_branch(
             "name_length": len(request.name),
         },
     )
+    enforce_project(actor_id, project_id, "write_score")
     try:
         item = rename_branch(project_id, branch_id, request)
     except (
@@ -677,6 +737,7 @@ async def checkout_project_branch(
     project_id: str,
     branch_id: str,
     request: BranchCheckoutRequest,
+    actor_id: ActorId,
 ) -> ProjectDetailResponse:
     logger.info(
         "Branch checkout requested",
@@ -686,9 +747,10 @@ async def checkout_project_branch(
             "expected_active_branch_id": request.expected_active_branch_id,
         },
     )
+    enforce_project(actor_id, project_id, "write_score")
     try:
         result = checkout_branch_command(project_id, branch_id, request)
-        detail = _durable_to_detail(project_id, result)
+        detail = _durable_to_detail(project_id, result, actor_id=actor_id)
     except (
         ProjectNotFoundError,
         ProjectHistoryNotFoundError,
@@ -710,8 +772,9 @@ async def checkout_project_branch(
 
 
 @router.get("/{project_id}", response_model=ProjectDetailResponse)
-async def get_project_route(project_id: str) -> ProjectDetailResponse:
+async def get_project_route(project_id: str, actor_id: ActorId) -> ProjectDetailResponse:
     logger.info("Project open requested", extra={"project_id": project_id})
+    enforce_project(actor_id, project_id, "read")
     try:
         record = get_project(project_id)
     except ProjectNotFoundError as exc:
@@ -735,6 +798,7 @@ async def get_project_route(project_id: str) -> ProjectDetailResponse:
     )
     return _record_to_detail(
         record,
+        actor_id=actor_id,
         composition=composition,
         composition_migrated=migrated,
         migration_path=migration_path,
@@ -746,7 +810,11 @@ async def get_project_route(project_id: str) -> ProjectDetailResponse:
     response_model=ProjectDetailResponse,
     responses=_CONFLICT_RESPONSE,
 )
-async def patch_project_route(project_id: str, request: ProjectPatchRequest) -> ProjectDetailResponse:
+async def patch_project_route(
+    project_id: str,
+    request: ProjectPatchRequest,
+    actor_id: ActorId,
+) -> ProjectDetailResponse:
     logger.info(
         "Project patch requested",
         extra={
@@ -759,6 +827,17 @@ async def patch_project_route(project_id: str, request: ProjectPatchRequest) -> 
             "has_working_preconditions": request.expected_working_version is not None,
         },
     )
+    if request.name is not None:
+        enforce_project(actor_id, project_id, "delete_project")
+    touches_score = (
+        request.composition is not None
+        or request.clear_composition
+        or request.generation is not None
+        or request.clear_generation
+        or request.expected_working_version is not None
+    )
+    if touches_score or request.name is None:
+        enforce_project(actor_id, project_id, "write_score")
     composition_json = None
     composition = None
     migration_path = None
@@ -834,6 +913,7 @@ async def patch_project_route(project_id: str, request: ProjectPatchRequest) -> 
     )
     return _record_to_detail(
         record,
+        actor_id=actor_id,
         composition=composition,
         composition_migrated=bool(migration_path == "legacy"),
         migration_path=migration_path,
@@ -841,10 +921,11 @@ async def patch_project_route(project_id: str, request: ProjectPatchRequest) -> 
 
 
 @router.post("/{project_id}/duplicate", response_model=ProjectDuplicateResponse, status_code=201)
-async def duplicate_project_route(project_id: str) -> ProjectDuplicateResponse:
+async def duplicate_project_route(project_id: str, actor_id: ActorId) -> ProjectDuplicateResponse:
     logger.info("Project duplicate requested", extra={"project_id": project_id})
+    enforce_project(actor_id, project_id, "read")
     try:
-        record = duplicate_project(project_id)
+        record = duplicate_project(project_id, actor_id=actor_id)
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -864,6 +945,7 @@ async def duplicate_project_route(project_id: str) -> ProjectDuplicateResponse:
     return ProjectDuplicateResponse(
         **_record_to_detail(
             record,
+            actor_id=actor_id,
             composition=composition,
             composition_migrated=migrated,
             migration_path=migration_path,
@@ -872,8 +954,9 @@ async def duplicate_project_route(project_id: str) -> ProjectDuplicateResponse:
 
 
 @router.delete("/{project_id}", status_code=204)
-async def delete_project_route(project_id: str) -> None:
+async def delete_project_route(project_id: str, actor_id: ActorId) -> None:
     logger.info("Project delete requested", extra={"project_id": project_id})
+    enforce_project(actor_id, project_id, "delete_project")
     try:
         delete_project(project_id)
     except ProjectNotFoundError as exc:

@@ -858,6 +858,7 @@ def _insert_revision(
     affected_ranges_json: str = "[]",
     affected_track_ids_json: str = "[]",
     summary_json: str = "{}",
+    actor_id: str | None = None,
 ) -> str:
     revision_id = str(uuid.uuid4())
     conn.execute(
@@ -865,8 +866,9 @@ def _insert_revision(
         INSERT INTO project_revisions (
             id, project_id, parent_revision_id, snapshot_fingerprint, sequence,
             name, operation_type, ai_provider, ai_model, user_instruction,
-            affected_ranges_json, affected_track_ids_json, summary_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            affected_ranges_json, affected_track_ids_json, summary_json, created_at,
+            actor_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             revision_id,
@@ -883,6 +885,7 @@ def _insert_revision(
             affected_track_ids_json,
             summary_json,
             now,
+            actor_id,
         ),
     )
     logger.info(
@@ -1025,6 +1028,7 @@ def commit_durable_revision(
     affected_ranges_json: str = "[]",
     affected_track_ids_json: str = "[]",
     summary_json: str = "{}",
+    actor_id: str | None = None,
 ) -> DurableCommitResult:
     """Create durable revision(s) and advance branch head/draft atomically."""
     logger.debug(
@@ -1075,6 +1079,7 @@ def commit_durable_revision(
             sequence=sequence,
             operation_type=pre_ai_operation_type,
             now=now,
+            actor_id=actor_id,
         )
         created_ids.append(pre_id)
         parent_id = pre_id
@@ -1149,6 +1154,7 @@ def commit_durable_revision(
         affected_ranges_json=affected_ranges_json,
         affected_track_ids_json=affected_track_ids_json,
         summary_json=summary_json,
+        actor_id=actor_id,
     )
     created_ids.append(revision_id)
     working_version = state.working_version + 1
@@ -1206,6 +1212,7 @@ def restore_revision(
     expected_active_branch_id: str,
     expected_working_version: int,
     expected_head_revision_id: str,
+    actor_id: str | None = None,
 ) -> DurableCommitResult:
     """Create a revision-restore child equal to the selected historical snapshot."""
     ensure_project_history(conn, project_id)
@@ -1254,6 +1261,7 @@ def restore_revision(
             ensure_ascii=False,
             separators=(",", ":"),
         ),
+        actor_id=actor_id,
     )
     working_version = state.working_version + 1
     _update_branch_draft(
@@ -1372,6 +1380,7 @@ def apply_as_new_branch(
     affected_ranges_json: str = "[]",
     affected_track_ids_json: str = "[]",
     summary_json: str = "{}",
+    actor_id: str | None = None,
 ) -> ApplyAsBranchResult:
     """Create a named branch from the preview base and commit the candidate as its head."""
     ensure_project_history(conn, project_id)
@@ -1412,6 +1421,7 @@ def apply_as_new_branch(
         affected_ranges_json=affected_ranges_json,
         affected_track_ids_json=affected_track_ids_json,
         summary_json=summary_json,
+        actor_id=actor_id,
     )
     new_branch_id = str(uuid.uuid4())
     try:

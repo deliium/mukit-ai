@@ -312,6 +312,7 @@ def update_job_status(
             extra={"render_id": render_id},
         )
         return row
+    previous_status = str(row["status"])
     conn.execute(
         """
         UPDATE neural_audio_renders SET
@@ -339,6 +340,16 @@ def update_job_status(
             or (now if status in {"complete", "failed"} and not row["completed_at"] else None),
             render_id,
         ),
+    )
+    from app.services.collaboration_activity import record_render_activity
+
+    record_render_activity(
+        conn,
+        project_id=row.get("project_id"),
+        render_id=render_id,
+        previous_status=previous_status,
+        status=status,
+        model_id=row.get("model_id"),
     )
     logger.info(
         "Neural audio job status transition",

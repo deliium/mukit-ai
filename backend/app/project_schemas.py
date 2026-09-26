@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from .collaboration_schemas import ProjectCollaborationBlock
 from .schemas import CompositionV1, CompositionV2, LLMPromptParameters
 from .services.persistence_secret_guard import (
     assert_no_secret_fields,
@@ -136,6 +137,7 @@ class ProjectDetailResponse(BaseModel):
     current_revision_sequence: int | None = None
     working_version: int | None = None
     working_fingerprint: str | None = None
+    collaboration: ProjectCollaborationBlock | None = None
 
 
 class ProjectDuplicateResponse(ProjectDetailResponse):

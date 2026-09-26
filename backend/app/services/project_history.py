@@ -553,6 +553,7 @@ def commit_revision(
     project_id: str,
     request: DurableCommitRequest,
     *,
+    actor_id: str | None = None,
     db_path: Path | str | None = None,
 ) -> DurableCommandResponse:
     path = Path(db_path) if db_path is not None else get_project_db_path()
@@ -604,6 +605,7 @@ def commit_revision(
             affected_ranges_json=ranges_json,
             affected_track_ids_json=tracks_json,
             summary_json=json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
+            actor_id=actor_id,
         )
         if (
             request.operation_type == RevisionOperationType.MULTI_AGENT_APPLY
@@ -625,6 +627,18 @@ def commit_revision(
             project_id,
             previous_fingerprint=request.expected_source_fingerprint,
             next_fingerprint=result.working_fingerprint,
+        )
+        from app.services.collaboration_activity import record_revision_activity
+
+        record_revision_activity(
+            conn,
+            project_id=project_id,
+            revision_id=result.head_revision_id,
+            operation_type=request.operation_type.value,
+            actor_id=actor_id,
+            ai_provider=ai_fields["ai_provider"],
+            ai_model=ai_fields["ai_model"],
+            revision_created=result.revision_created,
         )
         branch_name = _load_active_branch_name(conn, project_id, result.branch_id)
         composition = (
@@ -655,6 +669,7 @@ def restore_revision_command(
     revision_id: str,
     request: RestoreRevisionRequest,
     *,
+    actor_id: str | None = None,
     db_path: Path | str | None = None,
 ) -> DurableCommandResponse:
     path = Path(db_path) if db_path is not None else get_project_db_path()
@@ -675,6 +690,19 @@ def restore_revision_command(
             expected_active_branch_id=request.expected_active_branch_id,
             expected_working_version=request.expected_working_version,
             expected_head_revision_id=request.expected_head_revision_id,
+            actor_id=actor_id,
+        )
+        from app.services.collaboration_activity import record_revision_activity
+
+        record_revision_activity(
+            conn,
+            project_id=project_id,
+            revision_id=result.head_revision_id,
+            operation_type="revision-restore",
+            actor_id=actor_id,
+            ai_provider=None,
+            ai_model=None,
+            revision_created=result.revision_created,
         )
         branch_name = _load_active_branch_name(conn, project_id, result.branch_id)
         composition = (
@@ -948,6 +976,7 @@ def apply_as_branch_command(
     project_id: str,
     request: ApplyAsBranchRequest,
     *,
+    actor_id: str | None = None,
     db_path: Path | str | None = None,
 ) -> DurableCommandResponse:
     path = Path(db_path) if db_path is not None else get_project_db_path()
@@ -987,6 +1016,7 @@ def apply_as_branch_command(
             affected_ranges_json=ranges_json,
             affected_track_ids_json=tracks_json,
             summary_json=json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
+            actor_id=actor_id,
         )
         if (
             request.operation_type == RevisionOperationType.MULTI_AGENT_APPLY
@@ -1007,6 +1037,18 @@ def apply_as_branch_command(
             project_id,
             previous_fingerprint=request.expected_source_fingerprint,
             next_fingerprint=result.working_fingerprint,
+        )
+        from app.services.collaboration_activity import record_revision_activity
+
+        record_revision_activity(
+            conn,
+            project_id=project_id,
+            revision_id=result.head_revision_id,
+            operation_type=request.operation_type.value,
+            actor_id=actor_id,
+            ai_provider=ai_fields["ai_provider"],
+            ai_model=ai_fields["ai_model"],
+            revision_created=True,
         )
         composition = (
             None

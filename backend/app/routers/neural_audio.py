@@ -36,6 +36,7 @@ from app.services.neural_audio_stems import (
     rerender_stem,
     resolve_stem_audio_file_path,
 )
+from app.routers.collaboration_guard import enforce_current
 
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ async def enqueue_render(body: NeuralAudioEnqueueRequest) -> NeuralAudioJobRespo
             "instruction_chars": len(body.instructions or ""),
         },
     )
+    enforce_current(body.project_id, "write_audio")
     try:
         job = enqueue_neural_audio_render(body, run_inline=True)
     except NeuralAudioError as exc:
@@ -93,6 +95,7 @@ async def list_renders(
     project_id: str = Query(..., min_length=1, max_length=64),
 ) -> NeuralAudioJobListResponse:
     logger.info("GET /neural-audio/renders", extra={"project_id": project_id})
+    enforce_current(project_id, "read")
     try:
         return list_neural_audio_jobs(project_id)
     except NeuralAudioError as exc:
@@ -103,9 +106,11 @@ async def list_renders(
 async def get_render(render_id: str) -> NeuralAudioJobResponse:
     logger.info("GET /neural-audio/renders/{id}", extra={"render_id": render_id})
     try:
-        return get_neural_audio_job(render_id)
+        job = get_neural_audio_job(render_id)
     except NeuralAudioError as exc:
         raise _map_error(exc) from exc
+    enforce_current(job.project_id, "read")
+    return job
 
 
 @router.get("/renders/{render_id}/audio")
@@ -115,6 +120,7 @@ async def download_render_audio(render_id: str) -> FileResponse:
         path, content_type, job = resolve_audio_file_path(render_id)
     except NeuralAudioError as exc:
         raise _map_error(exc) from exc
+    enforce_current(job.project_id, "read")
     filename = f"neural-audio-{render_id}.wav"
     if job.audio_relpath and job.audio_relpath.endswith(".flac"):
         filename = f"neural-audio-{render_id}.flac"
@@ -129,6 +135,8 @@ async def download_render_audio(render_id: str) -> FileResponse:
 async def delete_render(render_id: str) -> None:
     logger.info("DELETE /neural-audio/renders/{id}", extra={"render_id": render_id})
     try:
+        job = get_neural_audio_job(render_id)
+        enforce_current(job.project_id, "write_audio")
         delete_neural_audio_job(render_id)
     except NeuralAudioError as exc:
         raise _map_error(exc) from exc
@@ -151,6 +159,7 @@ async def enqueue_stem_set_route(
             "has_bar_range": body.bar_range is not None,
         },
     )
+    enforce_current(body.project_id, "write_audio")
     try:
         result = enqueue_stem_set(body, run_inline=True)
     except NeuralAudioError as exc:
@@ -175,6 +184,7 @@ async def list_stem_sets_route(
     project_id: str = Query(..., min_length=1, max_length=64),
 ) -> NeuralAudioStemSetListResponse:
     logger.info("GET /neural-audio/stem-sets", extra={"project_id": project_id})
+    enforce_current(project_id, "read")
     try:
         return list_stem_sets(project_id)
     except NeuralAudioError as exc:
@@ -185,9 +195,11 @@ async def list_stem_sets_route(
 async def get_stem_set_route(stem_set_id: str) -> NeuralAudioStemSetResponse:
     logger.info("GET /neural-audio/stem-sets/{id}", extra={"stem_set_id": stem_set_id})
     try:
-        return get_stem_set(stem_set_id)
+        result = get_stem_set(stem_set_id)
     except NeuralAudioError as exc:
         raise _map_error(exc) from exc
+    enforce_current(result.project_id, "read")
+    return result
 
 
 @router.post(
@@ -211,6 +223,8 @@ async def rerender_stem_route(
         },
     )
     try:
+        loaded = get_stem_set(stem_set_id)
+        enforce_current(loaded.project_id, "write_audio")
         result = rerender_stem(stem_set_id, stem_id, body, run_inline=True)
     except NeuralAudioError as exc:
         raise _map_error(exc) from exc
@@ -234,6 +248,7 @@ async def download_stem_audio(stem_id: str) -> FileResponse:
         path, content_type, stem = resolve_stem_audio_file_path(stem_id)
     except NeuralAudioError as exc:
         raise _map_error(exc) from exc
+    enforce_current(stem.project_id, "read")
     role = stem.stem_role or "stem"
     filename = f"{role}-{stem_id}.wav"
     if stem.audio_relpath and stem.audio_relpath.endswith(".flac"):
@@ -249,6 +264,8 @@ async def download_stem_audio(stem_id: str) -> FileResponse:
 async def delete_stem_set_route(stem_set_id: str) -> None:
     logger.info("DELETE /neural-audio/stem-sets/{id}", extra={"stem_set_id": stem_set_id})
     try:
+        loaded = get_stem_set(stem_set_id)
+        enforce_current(loaded.project_id, "write_audio")
         delete_stem_set_job(stem_set_id)
     except NeuralAudioError as exc:
         raise _map_error(exc) from exc

@@ -1,5 +1,7 @@
 import axios from 'axios';
 
+import { collaborationHeaders } from '../utils/collaborationAccess.js';
+
 export class ProjectRevisionConflictError extends Error {
   constructor(message, detail = {}) {
     super(message);
@@ -123,7 +125,12 @@ export async function applyAsBranch(projectId, payload) {
 async function request(method, endpoint, data) {
   console.debug('[projectApi] Request started', { method, endpoint });
   try {
-    const response = await axios({ method, url: endpoint, data });
+    const response = await axios({
+      method,
+      url: endpoint,
+      data,
+      headers: collaborationHeaders(),
+    });
     console.debug('[projectApi] Request completed', {
       method,
       endpoint,
@@ -211,4 +218,55 @@ function formatDetail(detail) {
   } catch {
     return String(detail);
   }
+}
+
+export async function fetchCollaborationStatus() {
+  return request('get', '/collaboration/status');
+}
+
+export async function listCollaborationActors() {
+  return request('get', '/collaboration/actors');
+}
+
+export async function createCollaborationActor(displayName) {
+  return request('post', '/collaboration/actors', { display_name: displayName });
+}
+
+export async function listProjectMembers(projectId) {
+  return request('get', `/projects/${encodeURIComponent(projectId)}/members`);
+}
+
+export async function grantProjectMember(projectId, payload) {
+  return request('post', `/projects/${encodeURIComponent(projectId)}/members`, payload);
+}
+
+export async function listProjectComments(projectId) {
+  return request('get', `/projects/${encodeURIComponent(projectId)}/comments`);
+}
+
+export async function createProjectComment(projectId, payload) {
+  return request('post', `/projects/${encodeURIComponent(projectId)}/comments`, payload);
+}
+
+export async function listProjectReviews(projectId) {
+  return request('get', `/projects/${encodeURIComponent(projectId)}/reviews`);
+}
+
+export async function openProjectReview(projectId, revisionId) {
+  return request(
+    'post',
+    `/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/reviews`,
+  );
+}
+
+export async function decideProjectReview(projectId, reviewId, decision, note) {
+  return request(
+    'post',
+    `/projects/${encodeURIComponent(projectId)}/reviews/${encodeURIComponent(reviewId)}/${decision}`,
+    note ? { note } : {},
+  );
+}
+
+export async function listProjectActivity(projectId) {
+  return request('get', `/projects/${encodeURIComponent(projectId)}/activity`);
 }

@@ -29,6 +29,7 @@ from app.services.mix_plan.pipeline import (
     revision_wav_path,
     undo_mix,
 )
+from app.routers.collaboration_guard import enforce_current
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ async def preview_mix_plan(request: MixPlanPreviewRequest) -> MixPlanPreviewResp
             "include_audio_preview": request.include_audio_preview,
         },
     )
+    enforce_current(request.project_id, "read")
     try:
         body = preview_mix(request)
     except MixPlanError as exc:
@@ -83,6 +85,7 @@ async def apply_mix_plan(request: MixPlanApplyRequest) -> MixPlanApplyResponse:
         "POST /mix-plan/apply",
         extra={"preview_id": request.preview_id, "stem_set_id": request.plan.stem_set_id},
     )
+    enforce_current(request.plan.project_id, "write_audio")
     try:
         body = apply_mix(request)
     except MixPlanError as exc:
@@ -105,6 +108,8 @@ async def apply_mix_plan(request: MixPlanApplyRequest) -> MixPlanApplyResponse:
 async def undo_mix_plan(revision_id: str) -> MixPlanUndoResponse:
     logger.info("POST /mix-plan/revisions/undo", extra={"revision_id": revision_id})
     try:
+        meta, _plan = get_revision_detail(revision_id)
+        enforce_current(meta.project_id, "write_audio")
         body = undo_mix(revision_id)
     except MixPlanError as exc:
         _raise(exc, revision_id=revision_id)
@@ -124,6 +129,7 @@ async def list_mix_plan_revisions(
         "GET /mix-plan/revisions",
         extra={"project_id": project_id, "stem_set_id": stem_set_id},
     )
+    enforce_current(project_id, "read")
     try:
         items = list_revisions(project_id, stem_set_id)
     except MixPlanError as exc:
@@ -137,6 +143,7 @@ async def get_mix_plan_revision(revision_id: str) -> MixPlanRevisionGetResponse:
         meta, plan = get_revision_detail(revision_id)
     except MixPlanError as exc:
         _raise(exc, revision_id=revision_id)
+    enforce_current(meta.project_id, "read")
     return MixPlanRevisionGetResponse(revision=meta, plan=plan)
 
 
@@ -144,6 +151,8 @@ async def get_mix_plan_revision(revision_id: str) -> MixPlanRevisionGetResponse:
 async def download_mix_revision_audio(revision_id: str) -> FileResponse:
     logger.info("GET mix plan revision audio", extra={"revision_id": revision_id})
     try:
+        meta, _plan = get_revision_detail(revision_id)
+        enforce_current(meta.project_id, "read")
         path = revision_wav_path(revision_id)
     except MixPlanError as exc:
         _raise(exc, revision_id=revision_id)

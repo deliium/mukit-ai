@@ -32,6 +32,7 @@ import {
   normalizeStyleReference,
 } from '../utils/compositionEmbeddingReference.js';
 import { createAppLogger } from '../utils/appLogger.js';
+import { collaborationHeaders } from '../utils/collaborationAccess.js';
 
 const arrangementLogger = createAppLogger('musicApi.arrangement');
 const embeddingLogger = createAppLogger('musicApi.embeddings');
@@ -1429,7 +1430,13 @@ async function extractBlobErrorDetail(error) {
 async function request(method, endpoint, data, config = {}) {
   console.debug('[musicApi] Request started', { method, endpoint });
   try {
-    const response = await axios({ method, url: endpoint, data, ...config });
+    const response = await axios({
+      method,
+      url: endpoint,
+      data,
+      ...config,
+      headers: { ...collaborationHeaders(), ...(config.headers || {}) },
+    });
     console.debug('[musicApi] Request completed', { method, endpoint, status: response.status });
     return response.data;
   } catch (error) {

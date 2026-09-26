@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState, lazy, Suspense } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import styled from 'styled-components';
 import NotationViewer from './NotationViewer.jsx';
 import PlaybackControls from './PlaybackControls.jsx';
@@ -18,6 +18,7 @@ import CompositionDevelopmentPanel from './CompositionDevelopmentPanel.jsx';
 import ArrangementPanel from './ArrangementPanel.jsx';
 import MultiAgentPanel from './MultiAgentPanel.jsx';
 import ProjectVersionsPanel from './ProjectVersionsPanel.jsx';
+import CollaborationPanel from './CollaborationPanel.jsx';
 import ComposerProfilesPanel from './ComposerProfilesPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
@@ -116,19 +117,31 @@ const ComposerWorkspace = () => {
   const setAnalysisTabVisible = useMusicStore((state) => state.setAnalysisTabVisible);
   const composerTabRequest = useMusicStore((state) => state.composerTabRequest);
   const composerTabRequestSeq = useMusicStore((state) => state.composerTabRequestSeq);
+  const collaborationEnabled = useMusicStore((state) => state.collaborationEnabled);
+  const loadCollaborationStatus = useMusicStore((state) => state.loadCollaborationStatus);
+  const tabs = useMemo(
+    () => (collaborationEnabled
+      ? [...TABS.slice(0, 3), { id: 'collaborate', label: 'Collaborate' }, ...TABS.slice(3)]
+      : TABS),
+    [collaborationEnabled],
+  );
   const tablistRef = useRef(null);
   const reactId = useId();
   const tabId = (id) => `composer-tab-${id}-${reactId}`;
   const panelId = (id) => `composer-panel-${id}-${reactId}`;
 
   useEffect(() => {
+    loadCollaborationStatus();
+  }, [loadCollaborationStatus]);
+
+  useEffect(() => {
     if (!composerTabRequest) {
       return;
     }
-    if (TABS.some((tab) => tab.id === composerTabRequest)) {
+    if (tabs.some((tab) => tab.id === composerTabRequest)) {
       setActiveTab(composerTabRequest);
     }
-  }, [composerTabRequest, composerTabRequestSeq]);
+  }, [composerTabRequest, composerTabRequestSeq, tabs]);
 
   useEffect(() => {
     const visible = activeTab === 'analysis';
@@ -147,14 +160,14 @@ const ComposerWorkspace = () => {
   const onTabChange = (tabIdValue) => {
     console.debug('[ComposerWorkspace] View tab changed', {
       activeTab: tabIdValue,
-      tabCount: TABS.length,
+      tabCount: tabs.length,
     });
     setActiveTab(tabIdValue);
   };
 
   const focusTabByIndex = (index) => {
-    const next = ((index % TABS.length) + TABS.length) % TABS.length;
-    const nextId = TABS[next].id;
+    const next = ((index % tabs.length) + tabs.length) % tabs.length;
+    const nextId = tabs[next].id;
     onTabChange(nextId);
     const button = tablistRef.current?.querySelector(`[data-tab-id="${nextId}"]`);
     if (button && typeof button.focus === 'function') {
@@ -180,7 +193,7 @@ const ComposerWorkspace = () => {
         break;
       case 'End':
         event.preventDefault();
-        focusTabByIndex(TABS.length - 1);
+        focusTabByIndex(tabs.length - 1);
         break;
       default:
         break;
@@ -203,7 +216,7 @@ const ComposerWorkspace = () => {
         role="tablist"
         aria-label="Composer views"
       >
-        {TABS.map((tab, index) => {
+        {tabs.map((tab, index) => {
           const selected = activeTab === tab.id;
           return (
             <TabButton
@@ -226,7 +239,7 @@ const ComposerWorkspace = () => {
         })}
       </TabRow>
 
-      {TABS.map((tab) => {
+      {tabs.map((tab) => {
         const selected = activeTab === tab.id;
         return (
           <Panel
@@ -249,6 +262,7 @@ const ComposerWorkspace = () => {
               </>
             ) : null}
             {tab.id === 'versions' && selected ? <ProjectVersionsPanel /> : null}
+            {tab.id === 'collaborate' && selected ? <CollaborationPanel /> : null}
             {tab.id === 'analysis' && selected ? <CompositionAnalysisPanel /> : null}
             {tab.id === 'develop' && selected ? <CompositionDevelopmentPanel /> : null}
             {tab.id === 'arrange' && selected ? <ArrangementPanel /> : null}

@@ -59,6 +59,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["ai-agents"])
 
 
+def _guard_autonomous_run(run_id: str, action: str) -> None:
+    """Editor-or-owner gate for autonomous routes that load a project. No-op when the flag is off."""
+    from app.collaboration_settings import collaboration_enabled
+    from app.routers.collaboration_guard import enforce_current
+    from app.services.autonomous_composer_store import get_run
+
+    if not collaboration_enabled():
+        return
+    run = get_run(run_id)
+    enforce_current(run.project_id, action)
+
+
 class AgentCatalogResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -521,6 +533,10 @@ async def start_autonomous_run(body: dict[str, Any], request: Request) -> dict[s
             status_code=422,
             detail={"code": "autonomous_brief_invalid", "message": "autonomous_brief_invalid"},
         ) from exc
+    if start.project_id:
+        from app.routers.collaboration_guard import enforce_current
+
+        enforce_current(start.project_id, "write_score")
     operation_run_id = _adopt_run_id(start.operation_run_id)
     try:
         record = prepare_run(
@@ -567,6 +583,7 @@ async def get_autonomous_run(run_id: str) -> dict[str, Any]:
     )
 
     try:
+        _guard_autonomous_run(run_id, "read")
         reconcile_interrupted_stages(run_id)
         return run_view(run_id).model_dump(mode="json")
     except AutonomousStoreError as exc:
@@ -617,6 +634,7 @@ async def resume_autonomous_run(run_id: str, request: Request) -> dict[str, Any]
     )
 
     try:
+        _guard_autonomous_run(run_id, "write_score")
         reconcile_interrupted_stages(run_id)
         run = get_run(run_id)
     except AutonomousStoreError as exc:
@@ -648,6 +666,7 @@ async def approve_autonomous_checkpoint(
     from app.services.autonomous_composer_store import AutonomousStoreError, get_run
 
     try:
+        _guard_autonomous_run(run_id, "write_score")
         if checkpoint_id == "render":
             approve_render_stage(run_id)
             return run_view(run_id).model_dump(mode="json")
@@ -677,6 +696,14 @@ async def pause_autonomous_run(body: dict[str, Any]) -> dict[str, Any]:
             status_code=422,
             detail={"code": "autonomous_brief_invalid", "message": "autonomous_brief_invalid"},
         )
+    from app.collaboration_settings import collaboration_enabled
+    from app.routers.collaboration_guard import enforce_current
+    from app.services.autonomous_composer_store import get_run_by_operation
+
+    if collaboration_enabled():
+        existing = get_run_by_operation(operation_run_id)
+        if existing is not None:
+            enforce_current(existing.project_id, "write_score")
     try:
         run = request_pause_by_operation(operation_run_id)
     except AutonomousStoreError as exc:
@@ -691,6 +718,7 @@ async def reject_autonomous_arrangement(run_id: str) -> dict[str, Any]:
     from app.services.autonomous_composer_store import AutonomousStoreError
 
     try:
+        _guard_autonomous_run(run_id, "write_score")
         reject_arrangement(run_id)
     except AutonomousStoreError as exc:
         _autonomous_http(exc)
@@ -705,6 +733,7 @@ async def retry_autonomous_stage(run_id: str, stage_id: str, request: Request) -
     from app.services.autonomous_composer_store import AutonomousStoreError, get_run
 
     try:
+        _guard_autonomous_run(run_id, "write_score")
         retry_stage(run_id, stage_id)
         run = get_run(run_id)
     except AutonomousStoreError as exc:
@@ -727,6 +756,7 @@ async def instruct_autonomous_stage(run_id: str, stage_id: str, body: dict[str, 
     from app.services.autonomous_composer_store import AutonomousStoreError
 
     try:
+        _guard_autonomous_run(run_id, "write_score")
         store_stage_instruction(run_id, stage_id, str(body.get("text") or ""))
     except (AutonomousPlanError, AutonomousStoreError) as exc:
         _autonomous_http(exc)
@@ -740,6 +770,7 @@ async def open_autonomous_stage(run_id: str, stage_id: str) -> dict[str, Any]:
     from app.services.autonomous_composer_store import AutonomousStoreError
 
     try:
+        _guard_autonomous_run(run_id, "write_score")
         open_stage_revision(run_id, stage_id)
     except AutonomousStoreError as exc:
         _autonomous_http(exc)
@@ -756,6 +787,7 @@ async def branch_autonomous_stage(run_id: str, stage_id: str, body: dict[str, An
     from app.services.project_history_store import ProjectHistoryError
 
     try:
+        _guard_autonomous_run(run_id, "write_score")
         return branch_from_stage(run_id, stage_id, str(body.get("name") or ""))
     except ValidationError as exc:
         raise HTTPException(

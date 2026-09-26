@@ -27,7 +27,7 @@ mukit-ai/
 │   │   ├── plugin_host/     # PLUGIN_PATHS discovery, import guard, catalog, host dispatch
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
-│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents + plugins HTTP API
+│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents + plugins + collaboration HTTP API
 │   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
@@ -195,6 +195,14 @@ mukit-ai/
 | `backend/app/services/agent_artifact_workspace.py` | Immutable typed artifact INSERT/promote/GC; never imported by `ai_agents/` |
 | `backend/app/services/artifact_role_map.py` | Validate `artifact_role_map` for `multi-agent-apply` |
 | `backend/app/routers/projects.py` | Project CRUD + autosave + revision/branch history APIs |
+| `backend/app/collaboration_settings.py` | `COLLABORATION_ENABLED` truthy set; off skips membership and activity |
+| `backend/app/services/collaboration_permissions.py` | Pure role matrix and revision origin partition |
+| `backend/app/services/collaboration_access.py` | Membership checks; flag off returns before any lookup |
+| `backend/app/services/collaboration_store.py` | Actors and one owner membership per project |
+| `backend/app/services/collaboration_comments.py` | Anchored comments beside the score |
+| `backend/app/services/collaboration_reviews.py` | Open, approve, and reject an immutable revision |
+| `backend/app/services/collaboration_activity.py` | Append-only activity; no comment bodies |
+| `backend/app/routers/collaboration.py` | Status, actors, members, comments, reviews, activity |
 | `backend/app/services/project_history.py` | Revision list/detail, durable commit/restore, branch checkout/apply-as-branch |
 | `backend/app/services/project_history_store.py` | SQLite CAS history graph + compressed composition snapshots |
 | `frontend/src/utils/compositionVersionComparison.js` | Deterministic working/revision composition compare |
@@ -275,6 +283,7 @@ mukit-ai/
 | Hybrid generation | `docs/hybrid-generation.md` | LLM plan + symbolic notes pipelines, seeds, multi-stage provenance |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |
 | Project persistence | `docs/project-persistence.md` | SQLite projects and migrations |
+| Collaboration | `docs/collaboration.md` | Optional local actors, roles, comments, reviews, activity |
 | Testing | `docs/testing.md` | How to run backend/frontend tests |
 | Codebase map | `docs/CODEBASE_MAP.md` | Broader navigation map |
 

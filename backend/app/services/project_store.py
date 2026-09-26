@@ -13,6 +13,7 @@ from typing import Any
 
 from ..db.connection import get_connection, get_project_db_path
 from .project_composition import ProjectCompositionError
+from .collaboration_store import LOCAL_ACTOR_ID, ensure_owner
 from .project_history_store import (
     ensure_project_history,
     rename_project_fields,
@@ -38,6 +39,7 @@ class ProjectRecord:
     updated_at: str
     active_branch_id: str | None = None
     current_revision_id: str | None = None
+    accepted_revision_id: str | None = None
 
     @property
     def has_composition(self) -> bool:
@@ -103,7 +105,7 @@ def _utc_now_iso() -> str:
 _PROJECT_COLUMNS = """
     id, name, composition_json, generation_provider, generation_model,
     generation_prompt_json, created_at, updated_at,
-    active_branch_id, current_revision_id
+    active_branch_id, current_revision_id, accepted_revision_id
 """
 
 
@@ -121,6 +123,9 @@ def _row_to_record(row: sqlite3.Row) -> ProjectRecord:
         active_branch_id=row["active_branch_id"] if "active_branch_id" in keys else None,
         current_revision_id=(
             row["current_revision_id"] if "current_revision_id" in keys else None
+        ),
+        accepted_revision_id=(
+            row["accepted_revision_id"] if "accepted_revision_id" in keys else None
         ),
     )
 
@@ -179,11 +184,17 @@ def create_project(
     generation_model: str | None = None,
     generation_prompt: Any | None = None,
     project_id: str | None = None,
+    actor_id: str | None = None,
     db_path: Path | str | None = None,
 ) -> ProjectRecord:
-    """Create a new project row and return it."""
+    """Create a new project row and return it.
+
+    ``actor_id`` becomes the sole owner in the same transaction. The default
+    is ``local``, including callers that do not know about collaboration.
+    """
     path = Path(db_path) if db_path is not None else get_project_db_path()
     new_id = project_id or str(uuid.uuid4())
+    owner_actor_id = actor_id or LOCAL_ACTOR_ID
     now = _utc_now_iso()
     composition_json = _composition_payload_to_text(composition)
     prompt_json = _serialize_prompt_json(generation_prompt)
@@ -218,6 +229,7 @@ def create_project(
                     now,
                 ),
             )
+            ensure_owner(new_id, owner_actor_id, conn=conn)
             history = None
             try:
                 history = ensure_project_history(
@@ -537,6 +549,7 @@ def duplicate_project(
     project_id: str,
     *,
     name_suffix: str = " (copy)",
+    actor_id: str | None = None,
     db_path: Path | str | None = None,
 ) -> ProjectRecord:
     """Clone a project with a new id, renamed title, and fresh timestamps."""
@@ -564,6 +577,7 @@ def duplicate_project(
         generation_provider=source.generation_provider,
         generation_model=source.generation_model,
         generation_prompt=prompt_payload,
+        actor_id=actor_id,
         db_path=path,
     )
     logger.info(

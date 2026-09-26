@@ -26,6 +26,7 @@ from app.services.mix_analysis_store import (
     load_settings_and_root,
     row_to_meta,
 )
+from app.routers.collaboration_guard import enforce_current
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ async def analyze_mix_route(request: MixAnalysisAnalyzeRequest) -> MixAnalysisAn
             "include_ai": request.include_ai_interpretation,
         },
     )
+    enforce_current(request.project_id, "write_audio" if request.persist else "read")
     try:
         report, persisted = analyze_mix(request)
     except MixAnalysisError as exc:
@@ -100,6 +102,7 @@ async def get_mix_analysis_report(report_id: str) -> MixAnalysisReportGetRespons
     except MixAnalysisError as exc:
         status, detail = map_mix_analysis_error_to_http(exc)
         raise HTTPException(status_code=status, detail=detail) from exc
+    enforce_current(meta.project_id, "read")
     return MixAnalysisReportGetResponse(meta=meta, report=report)
 
 
@@ -112,6 +115,7 @@ async def list_mix_analysis_reports(
         "GET /mix-analysis/reports",
         extra={"project_id": project_id, "limit": limit},
     )
+    enforce_current(project_id, "read")
     with get_connection(get_project_db_path()) as conn:
         items = list_project_reports(conn, project_id, limit=limit)
     return MixAnalysisReportListResponse(items=items)
@@ -123,6 +127,14 @@ async def delete_mix_analysis_report(report_id: str) -> dict[str, Any]:
     settings = load_settings_and_root()
     try:
         with get_connection(get_project_db_path()) as conn:
+            row = get_report_row(conn, report_id)
+            if row is None:
+                raise MixAnalysisError(
+                    "Mix analysis report not found",
+                    code="mix_analysis_not_found",
+                    http_status=404,
+                )
+            enforce_current(row_to_meta(row).project_id, "write_audio")
             delete_report(conn, settings, report_id)
     except MixAnalysisError as exc:
         status, detail = map_mix_analysis_error_to_http(exc)

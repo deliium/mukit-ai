@@ -150,3 +150,4 @@ No persistence test requires provider API keys.
 - [Composition Analysis](composition-analysis.md) — derived reports are not stored in `composition_json`
 - [Composition V1](composition-v1.md) — V1 parser compatibility
 - [Testing](testing.md) — full test matrix including version-history E2E
+- [Collaboration](collaboration.md) — optional local actors, roles, comments, reviews, and activity

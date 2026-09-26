@@ -11,7 +11,12 @@ from .composition_schemas import CompositionV2, UnsupportedSchemaVersionError
 from .db import ensure_database
 from .llm_settings import load_llm_settings
 from .ready import build_readiness_report, configure_logging, parse_cors_allow_origins
+from .services.collaboration_access import (
+    reset_request_actor_header,
+    set_request_actor_header,
+)
 from .routers.projects import router as projects_router
+from .routers.collaboration import router as collaboration_router
 from .routers.imports import router as imports_router
 from .routers.transcription import router as transcription_router
 from .routers.neural_audio import router as neural_audio_router
@@ -122,6 +127,17 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="LLM Music Composer API", version="1.0.0", lifespan=lifespan)
 
+
+@app.middleware("http")
+async def collaboration_actor_context(request, call_next):
+    """Capture X-Mukit-Actor for flag-gated checks. The value is a local selector."""
+    token = set_request_actor_header(request.headers.get("x-mukit-actor"))
+    try:
+        return await call_next(request)
+    finally:
+        reset_request_actor_header(token)
+
+
 _cors_origins = parse_cors_allow_origins()
 logger.debug("Installing CORS middleware", extra={"origins": _cors_origins})
 app.add_middleware(
@@ -134,6 +150,7 @@ app.add_middleware(
 )
 
 app.include_router(projects_router)
+app.include_router(collaboration_router)
 app.include_router(imports_router)
 app.include_router(transcription_router)
 app.include_router(neural_audio_router)

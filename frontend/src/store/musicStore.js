@@ -55,6 +55,7 @@ import {
   predictLiveAccompaniment,
 } from '../api/livePerformanceApi.js';
 import { createAppLogger } from '../utils/appLogger.js';
+import { isScoreReadOnly, setCollaborationActorId } from '../utils/collaborationAccess.js';
 import {
   applyAudioTranscriptionToComposition,
   defaultSelectedProvisionalIds,
@@ -174,6 +175,17 @@ import {
   patchProject as patchProjectRequest,
   renameBranch as renameBranchRequest,
   restoreRevision as restoreRevisionRequest,
+  fetchCollaborationStatus,
+  listCollaborationActors,
+  createCollaborationActor,
+  listProjectMembers,
+  grantProjectMember,
+  listProjectComments,
+  createProjectComment,
+  listProjectReviews,
+  openProjectReview,
+  decideProjectReview,
+  listProjectActivity,
 } from '../api/projectApi.js';
 import {
   PLAYBACK_MIXER_SCOPE_ARRANGEMENT,
@@ -458,6 +470,7 @@ const jamLogger = createAppLogger('liveJam');
 const audioLogger = createAppLogger('audioTranscription');
 const audioRecoveryLogger = createAppLogger('audioRecovery');
 const audioAlignmentLogger = createAppLogger('audioAlignment');
+const collaborationLogger = createAppLogger('collaboration');
 let sourceSeekRequestSeq = 0;
 let lastSourceSeekDebugAt = 0;
 
@@ -795,6 +808,7 @@ function historyStateFromProject(project) {
       currentRevisionSequence: null,
       workingVersion: null,
       workingFingerprint: null,
+      projectCollaboration: null,
     };
   }
   return {
@@ -804,6 +818,7 @@ function historyStateFromProject(project) {
     currentRevisionSequence: project.current_revision_sequence ?? null,
     workingVersion: project.working_version ?? null,
     workingFingerprint: project.working_fingerprint ?? null,
+    projectCollaboration: project.collaboration ?? null,
   };
 }
 
@@ -1493,6 +1508,14 @@ export const useMusicStore = create((set, get) => ({
   currentRevisionSequence: null,
   workingVersion: null,
   workingFingerprint: null,
+  projectCollaboration: null,
+  collaborationEnabled: false,
+  collaborationActorId: '',
+  collaborationActors: [],
+  collaborationMembers: [],
+  collaborationComments: [],
+  collaborationReviews: [],
+  collaborationActivity: [],
   saveConflict: null,
   ...initialVersionHistoryState,
   projectList: [],
@@ -5590,6 +5613,7 @@ export const useMusicStore = create((set, get) => ({
           currentRevisionSequence: null,
           workingVersion: null,
           workingFingerprint: null,
+          projectCollaboration: null,
           saveConflict: null,
           ...clearedVersionHistoryState(),
           activeView: 'home',
@@ -6676,6 +6700,125 @@ export const useMusicStore = create((set, get) => ({
       });
       throw error;
     }
+  },
+
+  refreshCollaboration: async () => {
+    const projectId = get().currentProjectId;
+    if (!projectId || !get().collaborationEnabled) {
+      return;
+    }
+    const [members, comments, reviews, activity] = await Promise.all([
+      listProjectMembers(projectId),
+      listProjectComments(projectId),
+      listProjectReviews(projectId),
+      listProjectActivity(projectId),
+    ]);
+    set({
+      collaborationMembers: members || [],
+      collaborationComments: comments || [],
+      collaborationReviews: reviews || [],
+      collaborationActivity: activity || [],
+    });
+  },
+
+  loadCollaborationStatus: async () => {
+    try {
+      const status = await fetchCollaborationStatus();
+      const enabled = Boolean(status?.enabled);
+      set({ collaborationEnabled: enabled });
+      if (!enabled) {
+        return status;
+      }
+      const actors = await listCollaborationActors();
+      set({ collaborationActors: actors || [] });
+      return status;
+    } catch (error) {
+      collaborationLogger.debug('Collaboration status unavailable', {
+        message: error.message,
+      });
+      set({ collaborationEnabled: false });
+      return { enabled: false };
+    }
+  },
+
+  selectCollaborationActor: async (actorId) => {
+    const next = String(actorId || '').trim();
+    setCollaborationActorId(next);
+    set({ collaborationActorId: next });
+    if (get().collaborationEnabled) {
+      await get().refreshCollaboration();
+    }
+  },
+
+  createCollaborationActorByName: async (displayName) => {
+    const created = await createCollaborationActor(displayName);
+    collaborationLogger.info('Collaboration actor created', {
+      actor_id: created?.id || null,
+      display_name_len: String(displayName || '').length,
+    });
+    const actors = await listCollaborationActors();
+    set({ collaborationActors: actors || [] });
+    return created;
+  },
+
+  shareProjectMember: async (actorId, role) => {
+    const projectId = get().currentProjectId;
+    const granted = await grantProjectMember(projectId, { actor_id: actorId, role });
+    collaborationLogger.info('Project member shared', {
+      project_id: projectId,
+      actor_id: actorId,
+      role,
+    });
+    await get().refreshCollaboration();
+    return granted;
+  },
+
+  postCollaborationComment: async ({ targetKind, body, revisionId, sectionId, trackId, startBar, endBar }) => {
+    const projectId = get().currentProjectId;
+    const created = await createProjectComment(projectId, {
+      target_kind: targetKind,
+      body,
+      revision_id: revisionId || null,
+      section_id: sectionId || null,
+      track_id: trackId || null,
+      start_bar: startBar ?? null,
+      end_bar: endBar ?? null,
+    });
+    collaborationLogger.info('Comment submitted', {
+      project_id: projectId,
+      comment_id: created?.id || null,
+      actor_id: get().collaborationActorId || null,
+      target_kind: targetKind,
+      body_len: String(body || '').length,
+    });
+    await get().refreshCollaboration();
+    return created;
+  },
+
+  openCollaborationReview: async (revisionId) => {
+    const projectId = get().currentProjectId;
+    const opened = await openProjectReview(projectId, revisionId);
+    collaborationLogger.info('Review opened', {
+      project_id: projectId,
+      revision_id: revisionId,
+      review_id: opened?.id || null,
+    });
+    await get().refreshCollaboration();
+    return opened;
+  },
+
+  decideCollaborationReview: async (reviewId, decision) => {
+    const projectId = get().currentProjectId;
+    const decided = await decideProjectReview(projectId, reviewId, decision);
+    collaborationLogger.info('Review decided', {
+      project_id: projectId,
+      review_id: reviewId,
+      decision,
+    });
+    await get().refreshCollaboration();
+    const project = await getProjectRequest(projectId);
+    set({ ...historyStateFromProject(project) });
+    return decided;
   },
 
   scheduleAutosave: () => {
@@ -12877,6 +13020,12 @@ function scheduleAutosave(set, get) {
   const state = get();
   if (!state.currentProjectId) {
     console.debug('[musicStore] Autosave skipped; no open project');
+    return;
+  }
+  if (isScoreReadOnly(state.projectCollaboration)) {
+    collaborationLogger.debug('Autosave skipped; read-only role', {
+      role: state.projectCollaboration?.role || null,
+    });
     return;
   }
   if (state.saveStatus === 'conflict') {
