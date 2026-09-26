@@ -186,7 +186,8 @@ mukit-ai/
 | `backend/examples/plugins/` | `deterministic_analyzer` and `sample_symbolic_generator` (discovered only when on `PLUGIN_PATHS`; not enabled until install) |
 | `docs/plugin-sdk.md` | Plugin lifecycle, resources, isolation refusal, protocols, env, and routes |
 | `backend/app/routers/ai_models.py` | `GET /ai/models` (+ `/{id}`) discovery |
-| `backend/app/routers/ai_agents.py` | `GET /ai/agents`, `POST /ai/agents/{id}/run`, workflow preview (optional `persist_workspace_artifacts`) |
+| `backend/app/routers/ai_agents.py` | `GET /ai/agents`, `POST /ai/agents/{id}/run`, workflow preview (optional `persist_workspace_artifacts`), autonomous runs |
+| `backend/app/services/autonomous_composer.py` | Schedules the brief’s stages, commits score revisions, and owns the autonomous run store |
 | `backend/app/services/agent_artifact_workspace.py` | Immutable typed artifact INSERT/promote/GC; never imported by `ai_agents/` |
 | `backend/app/services/artifact_role_map.py` | Validate `artifact_role_map` for `multi-agent-apply` |
 | `backend/app/routers/projects.py` | Project CRUD + autosave + revision/branch history APIs |
@@ -240,6 +241,7 @@ mukit-ai/
 | AI Runtime | `docs/ai-runtime.md` | Capability registry, operation routing, `/ai/models`, fallback, provenance |
 | Plugin SDK | `docs/plugin-sdk.md` | In-process plugins via `PLUGIN_PATHS`; `runtime=plugin` on `/ai/models`; no marketplace |
 | Multi-agent (V4) | `docs/multi-agent.md` | Specialized agents above runtime; workflow preview; Apply CAS |
+| Autonomous composer | `docs/autonomous-composer.md` | One brief to a durable multi-section project; spine preview stays preview-only |
 | Operation traces | `docs/observability.md` | Run ids, redacted spans, budgets, cancel, crash containment |
 | Optional local AI | `docs/local-ai.md` | AMD/ROCm Compose profiles, llama.cpp/vLLM, memory-safe defaults, troubleshooting |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |

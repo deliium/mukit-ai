@@ -16,6 +16,11 @@ import {
   previewCompositionDevelopment,
   previewMultiAgentWorkflow,
   previewReharmonization,
+  approveAutonomousStage,
+  cancelAutonomousRun,
+  resumeAutonomousRun,
+  skipAutonomousStage,
+  startAutonomousRun,
   ReharmonizeApiError,
   resolveMusicalReference,
   REHARMONIZE_CONTENT_POLICIES,
@@ -1524,6 +1529,13 @@ export const useMusicStore = create((set, get) => ({
   multiAgentComparePassIndex: null,
   multiAgentAuditionActive: false,
   multiAgentAbortController: null,
+  autonomousStatus: 'idle',
+  autonomousError: '',
+  autonomousRun: null,
+  autonomousRunId: null,
+  autonomousBaselineFingerprint: null,
+      autonomousLoadedFingerprint: null,
+  autonomousAbortController: null,
   ...initialDevelopmentPreviewState,
   ...initialMusicalReferenceSessionState,
   ...initialArrangementPreviewState,
@@ -11867,6 +11879,124 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
+  startAutonomousComposer: async (brief, { includeRendering = false } = {}) => {
+    const baseline = get().workingFingerprint;
+    const operationRunId = mintOperationRunId();
+    const abortController = typeof globalThis.AbortController !== 'undefined'
+      ? new globalThis.AbortController()
+      : null;
+    set({
+      autonomousStatus: 'loading',
+      autonomousError: '',
+      autonomousRun: null,
+      autonomousRunId: operationRunId,
+      autonomousBaselineFingerprint: baseline,
+      autonomousAbortController: abortController,
+    });
+    const projectId = get().currentProjectId;
+    try {
+      const view = await startAutonomousRun({
+        brief,
+        include_rendering: includeRendering,
+        operation_run_id: operationRunId,
+        project_id: projectId,
+        expected_working_version: projectId ? get().workingVersion : null,
+        expected_head_revision_id: projectId ? get().currentRevisionId : null,
+        expected_source_fingerprint: projectId ? baseline : null,
+      }, abortController ? { signal: abortController.signal } : {});
+      console.debug('[musicStore] Autonomous run', {
+        run_id_prefix: String(view?.run_id || '').slice(0, 16),
+        status: view?.status || null,
+        stage_count: Array.isArray(view?.stages) ? view.stages.length : 0,
+      });
+      await adoptAutonomousView(set, get, view, baseline);
+      set({ autonomousAbortController: null });
+      return view;
+    } catch (error) {
+      const aborted = error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED'
+        || error?.name === 'AbortError';
+      console.error('[musicStore] Autonomous start failed', {
+        code: aborted ? 'operation_cancelled' : (error?.code || null),
+      });
+      set({
+        autonomousStatus: aborted ? 'success' : 'error',
+        autonomousError: aborted ? 'operation_cancelled' : (error?.code || error?.message || 'autonomous_run_invalid'),
+        autonomousAbortController: null,
+      });
+      return null;
+    }
+  },
+
+  cancelAutonomousComposer: async () => {
+    const controller = get().autonomousAbortController;
+    if (controller) {
+      controller.abort();
+    }
+    const runId = get().autonomousRun?.run_id;
+    if (!runId) return null;
+    try {
+      const view = await cancelAutonomousRun(get().autonomousRun?.run_id || runId);
+      set({
+        autonomousRun: view,
+        autonomousStatus: view?.status === 'cancelled' ? 'success' : get().autonomousStatus,
+        autonomousError: view?.failure_code || '',
+      });
+      return view;
+    } catch (error) {
+      console.error('[musicStore] Autonomous cancel failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_run_invalid' });
+      return null;
+    }
+  },
+
+  resumeAutonomousComposer: async () => {
+    const runId = get().autonomousRun?.run_id;
+    if (!runId) return null;
+    const baseline = get().autonomousBaselineFingerprint;
+    set({ autonomousStatus: 'loading', autonomousError: '' });
+    try {
+      const view = await resumeAutonomousRun(runId);
+      await adoptAutonomousView(set, get, view, baseline);
+      return view;
+    } catch (error) {
+      console.error('[musicStore] Autonomous resume failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_run_invalid' });
+      return null;
+    }
+  },
+
+  approveAutonomousRender: async () => {
+    const runId = get().autonomousRun?.run_id;
+    if (!runId) return null;
+    try {
+      const view = await approveAutonomousStage(runId, 'render');
+      await adoptAutonomousView(set, get, view, get().autonomousBaselineFingerprint);
+      return view;
+    } catch (error) {
+      console.error('[musicStore] Autonomous approve failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_run_invalid' });
+      return null;
+    }
+  },
+
+  skipAutonomousRender: async () => {
+    const runId = get().autonomousRun?.run_id;
+    if (!runId) return null;
+    try {
+      const view = await skipAutonomousStage(runId, 'render');
+      set({
+        autonomousRun: view,
+        autonomousStatus: 'success',
+        autonomousError: '',
+      });
+      return view;
+    } catch (error) {
+      console.error('[musicStore] Autonomous skip failed', { code: error?.code || null });
+      set({ autonomousStatus: 'error', autonomousError: error?.code || 'autonomous_run_invalid' });
+      return null;
+    }
+  },
+
   applyMultiAgentCandidate: async ({ asNewBranch = false, branchName = '' } = {}) => {
     const state = get();
     const candidate = state.multiAgentCandidate;
@@ -12629,6 +12759,38 @@ function scheduleAutosave(set, get) {
       // error already recorded on saveStatus
     });
   }, AUTOSAVE_DEBOUNCE_MS);
+}
+
+async function adoptAutonomousView(set, get, view, baselineFingerprint) {
+  const failed = view?.status === 'failed';
+  set({
+    autonomousRun: view,
+    autonomousRunId: view?.run_id || get().autonomousRunId,
+    autonomousStatus: failed ? 'error' : 'success',
+    autonomousError: failed ? (view?.failure_code || view?.budget_code || '') : '',
+  });
+  if (!view?.project_id || !view?.head_revision_id) return;
+  const sameProject = get().currentProjectId === view.project_id;
+  const localMoved = Boolean(
+    baselineFingerprint
+    && get().workingFingerprint
+    && get().workingFingerprint !== baselineFingerprint,
+  );
+  if (sameProject && localMoved) {
+    console.debug('[musicStore] Autonomous reload skipped; editor moved', {
+      run_id_prefix: String(view.run_id || '').slice(0, 16),
+    });
+    return;
+  }
+  if (
+    get().autonomousLoadedFingerprint
+    && get().autonomousLoadedFingerprint === view.composition_fingerprint
+    && sameProject
+  ) {
+    return;
+  }
+  await get().openProject(view.project_id);
+  set({ autonomousLoadedFingerprint: view.composition_fingerprint || null });
 }
 
 function hydrateProject(set, get, project, { openComposer = true, markSaved = true } = {}) {

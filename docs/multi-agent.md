@@ -2,7 +2,7 @@
 
 Product **V4** is the multi-agent orchestration era. The canonical playable score remains **`composition.v2`**. There is no `composition.v4` schema.
 
-Agents are **in-process services** under `backend/app/ai_agents/`. They sit **above** the V3 `ai_runtime` model registry, exchange typed artifacts (not freeform prompts), never write SQLite, and never mutate durable Composition. Only an explicit session Apply → revision CAS (`multi-agent-apply`) lands a candidate.
+Agents are **in-process services** under `backend/app/ai_agents/`. They sit **above** the V3 `ai_runtime` model registry, exchange typed artifacts (not freeform prompts), never write SQLite, and never mutate durable Composition. Only an explicit session Apply → revision CAS (`multi-agent-apply`) lands a spine candidate. An autonomous run is a different route: `POST /ai/agents/autonomous/runs` commits a revision after each score-changing stage. See [autonomous-composer.md](autonomous-composer.md). The spine preview does not commit.
 
 ## Layering
 

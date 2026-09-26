@@ -8,6 +8,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from pydantic import ValidationError
+
+from app.ai_agents.artifact_schemas import AgentHarmonyPlanV1, AgentMotifPlanV1
 from app.autonomous_composer_schemas import (
     AUTONOMOUS_CONSTRAINT_FAILED,
     ProjectPlanV1,
@@ -89,6 +92,10 @@ def assert_stage_completion(
     rhythm_before: tuple[NoteRhythm, ...] = (),
     rhythm_after: tuple[NoteRhythm, ...] = (),
     outro_pitches: tuple[str, ...] = (),
+    merged_plan: ProjectPlanV1 | dict | None = None,
+    artifact_payload: dict | None = None,
+    artifact_content_type: str | None = None,
+    artifact_id: str | None = None,
 ) -> None:
     """Raise ``AutonomousConstraintError`` when ``code`` does not hold."""
     logger.debug("Checking autonomous completion code", extra={"completion_code": code})
@@ -141,7 +148,78 @@ def assert_stage_completion(
             logger.warning("Autonomous constraint failed", extra={"completion_code": code})
             _fail(code)
         return
+    if code == "project_plan_valid":
+        merged = _validated_plan(merged_plan)
+        if plan is None or merged is None:
+            logger.warning("[FIX] Autonomous constraint failed", extra={"completion_code": code})
+            _fail(code)
+        if [stage.stage_id for stage in merged.stages] != [stage.stage_id for stage in plan.stages]:
+            logger.warning("[FIX] Autonomous constraint failed", extra={"completion_code": code})
+            _fail(code)
+        compiled_bounds = [(section.id, section.start_bar, section.bar_count) for section in plan.sections]
+        merged_bounds = [(section.id, section.start_bar, section.bar_count) for section in merged.sections]
+        if compiled_bounds != merged_bounds:
+            logger.warning("[FIX] Autonomous constraint failed", extra={"completion_code": code})
+            _fail(code)
+        logger.info("[FIX] Completion code held", extra={"completion_code": code})
+        return
+    if code == "harmony_plan_key":
+        if plan is None or artifact_payload is None:
+            logger.warning("[FIX] Autonomous constraint failed", extra={"completion_code": code})
+            _fail(code)
+        try:
+            harmony = AgentHarmonyPlanV1.model_validate(artifact_payload)
+        except ValidationError:
+            logger.warning("Autonomous constraint failed", extra={"completion_code": code})
+            _fail(code)
+        starts = [section.start_bar for section in plan.sections]
+        bars = [event.bar for event in harmony.chord_events]
+        if harmony.key != plan.constraints.opening_key or sorted(bars) != sorted(starts) or len(bars) != len(starts):
+            logger.warning("[FIX] Autonomous constraint failed", extra={"completion_code": code})
+            _fail(code)
+        logger.info("[FIX] Completion code held", extra={"completion_code": code})
+        return
+    if code == "motif_plan_present":
+        if plan is None or artifact_payload is None:
+            logger.warning("[FIX] Autonomous constraint failed", extra={"completion_code": code})
+            _fail(code)
+        try:
+            motif_plan = AgentMotifPlanV1.model_validate(artifact_payload)
+        except ValidationError:
+            logger.warning("Autonomous constraint failed", extra={"completion_code": code})
+            _fail(code)
+        theme = next(
+            (section for section in plan.sections if section.id == plan.constraints.motif_section_id),
+            None,
+        )
+        listed = theme is not None and any(
+            entry.motif_label == plan.constraints.motif_label
+            and (theme.label in entry.section_labels or theme.id in entry.section_labels)
+            for entry in motif_plan.motifs
+        )
+        if not listed:
+            logger.warning("[FIX] Autonomous constraint failed", extra={"completion_code": code})
+            _fail(code)
+        logger.info("[FIX] Completion code held", extra={"completion_code": code})
+        return
+    if code == "critique_stored":
+        if artifact_content_type != "agent.critique.v1" or not artifact_id:
+            logger.warning("[FIX] Autonomous constraint failed", extra={"completion_code": code})
+            _fail(code)
+        logger.info("[FIX] Completion code held", extra={"completion_code": code})
+        return
     logger.debug("Completion code deferred to a later stage", extra={"completion_code": code})
+
+
+def _validated_plan(value: ProjectPlanV1 | dict | None) -> ProjectPlanV1 | None:
+    if value is None:
+        return None
+    if isinstance(value, ProjectPlanV1):
+        return value
+    try:
+        return ProjectPlanV1.model_validate(value)
+    except ValidationError:
+        return None
 
 
 def pitch_rhythm(events: list) -> tuple[NoteRhythm, ...]:

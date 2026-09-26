@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.ai_agents.registry import ensure_registry
-from app.ai_agents.schemas import AgentArtifactV1
+from app.ai_agents.schemas import AgentArtifactKind, AgentArtifactV1
 from app.ai_agents.workflow import build_initial_context
 from app.autonomous_composer_schemas import (
     AutonomousRunViewV1,
@@ -35,7 +35,7 @@ from app.services.autonomous_expression import apply_arrangement_stage, apply_ex
 from app.services.autonomous_project_plan import compile_project_plan
 from app.services.autonomous_revision import apply_revision_stage
 from app.services.autonomous_symbolic import commit_autonomous_stage, realize_symbolic_stage
-from app.services.autonomous_constraints import AutonomousConstraintError
+from app.services.autonomous_constraints import AutonomousConstraintError, assert_stage_completion
 from app.services.project_history_store import _load_branch_command_state
 from app.services.project_store import create_project, get_project
 from app.db.connection import get_connection
@@ -128,10 +128,23 @@ async def _cancelled(cancel_check: CancelCheck | None) -> bool:
     return bool(result)
 
 
-def _bump_agent_count(run_id: str, db_path: Path | str | None) -> str | None:
-    settings = load_autonomous_composer_settings()
+def _effective_agent_cap(request_cap: int | None) -> int:
+    """A request may only lower the env ceiling. Zero on the request does not disable it."""
+    cap = load_autonomous_composer_settings().max_agent_operations
+    if request_cap is None or request_cap <= 0:
+        return cap
+    if cap <= 0:
+        return cap
+    return min(cap, int(request_cap))
+
+
+def _bump_agent_count(
+    run_id: str,
+    db_path: Path | str | None,
+    *,
+    cap: int,
+) -> str | None:
     run = get_run(run_id, db_path=db_path)
-    cap = settings.max_agent_operations
     if cap > 0 and run.agent_operation_count >= cap:
         logger.warning(
             "Autonomous agent budget refused the next stage",
@@ -146,12 +159,130 @@ def _bump_agent_count(run_id: str, db_path: Path | str | None) -> str | None:
     return None
 
 
+def _restore_stage_inputs(
+    run: Any,
+    *,
+    db_path: Path | str | None,
+) -> dict[str, Any]:
+    """Reload durable plans so a resumed run does not regenerate from an empty scaffold."""
+    from app.services.agent_artifact_workspace import get_artifact
+
+    harmony = None
+    motif = None
+    critique = None
+    working = None
+    for stage in run.stages:
+        if stage.status != "completed" or not stage.artifact_ids:
+            continue
+        meta = get_artifact(
+            run.project_id,
+            stage.artifact_ids[-1],
+            include_payload=True,
+            db_path=db_path,
+        )
+        payload = meta.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if stage.stage_id == "harmony_plan":
+            harmony = payload
+        elif stage.stage_id == "motif_plan":
+            motif = payload
+        elif stage.stage_id == "critique":
+            critique = AgentArtifactV1(
+                artifact_id=str(meta["artifact_id"]),
+                kind=AgentArtifactKind(str(meta["kind"])),
+                producer_agent_id=str(meta["producer_agent_id"]),
+                content_type=str(meta["content_type"]),
+                payload=payload,
+            )
+    if run.head_revision_id:
+        working = _load_working(run.project_id, db_path)
+    return {"harmony": harmony, "motif": motif, "critique": critique, "working": working}
+
+
+def dispatch_render(run_id: str, *, db_path: Path | str | None = None) -> str:
+    """Enqueue one neural render. Does not change the composition fingerprint."""
+    from app.neural_audio_schemas import NeuralAudioEnqueueRequest
+    from app.services.neural_audio_render import enqueue_neural_audio_render
+
+    run = get_run(run_id, db_path=db_path)
+    before = run.composition_fingerprint
+    job = enqueue_neural_audio_render(
+        NeuralAudioEnqueueRequest(
+            project_id=run.project_id,
+            source_revision_id=run.head_revision_id,
+            operation_run_id=run.operation_run_id,
+            seed=run.seed or 0,
+        ),
+        db_path=db_path,
+    )
+    after = get_run(run_id, db_path=db_path).composition_fingerprint
+    if before != after:
+        raise AutonomousStoreError(
+            "render changed the composition fingerprint",
+            code="autonomous_constraint_failed",
+        )
+    logger.info(
+        "Autonomous render enqueued",
+        extra={"run_id": run_id[:16], "job_prefix": str(job.id)[:16]},
+    )
+    return str(job.id)
+
+
+def approve_render_stage(run_id: str, *, db_path: Path | str | None = None) -> None:
+    run = get_run(run_id, db_path=db_path)
+    stage = next((row for row in run.stages if row.stage_id == "render"), None)
+    if stage is None or stage.status != "awaiting_approval":
+        raise AutonomousStoreError(
+            "render stage is not awaiting approval",
+            code="autonomous_run_not_resumable",
+        )
+    job_id = dispatch_render(run_id, db_path=db_path)
+    update_stage_status(
+        run_id,
+        "render",
+        "completed",
+        completion_code="render_dispatched",
+        artifact_ids=[job_id],
+        db_path=db_path,
+    )
+    _finish_run_status(run_id, db_path)
+
+
+def skip_render_stage(run_id: str, *, db_path: Path | str | None = None) -> None:
+    run = get_run(run_id, db_path=db_path)
+    stage = next((row for row in run.stages if row.stage_id == "render"), None)
+    if stage is None or stage.status != "awaiting_approval":
+        raise AutonomousStoreError(
+            "render stage is not awaiting approval",
+            code="autonomous_run_not_resumable",
+        )
+    update_stage_status(
+        run_id,
+        "render",
+        "skipped",
+        completion_code="render_dispatched",
+        db_path=db_path,
+    )
+    _finish_run_status(run_id, db_path)
+
+
+def _finish_run_status(run_id: str, db_path: Path | str | None) -> None:
+    fresh = get_run(run_id, db_path=db_path)
+    statuses = {row.status for row in fresh.stages}
+    if statuses <= {"completed", "skipped"}:
+        update_run_fields(run_id, status="completed", db_path=db_path)
+    elif "awaiting_approval" in statuses:
+        update_run_fields(run_id, status="awaiting_approval", db_path=db_path)
+
+
 async def execute_autonomous_run(
     run_id: str,
     *,
     db_path: Path | str | None = None,
     cancel_check: CancelCheck | None = None,
     render_approval: str = "required",
+    max_agent_operations: int | None = None,
 ) -> None:
     """Walk pending stages in graph order. Completed stages are left alone."""
     started = time.perf_counter()
@@ -168,6 +299,14 @@ async def execute_autonomous_run(
     critique: AgentArtifactV1 | None = None
     harmony_payload: dict[str, Any] | None = None
     motif_payload: dict[str, Any] | None = None
+    agent_cap = _effective_agent_cap(max_agent_operations)
+    restored = _restore_stage_inputs(run, db_path=db_path)
+    harmony_payload = restored["harmony"]
+    motif_payload = restored["motif"]
+    critique = restored["critique"]
+    working = restored["working"]
+    if working is not None:
+        context = build_initial_context(working)
     update_run_fields(run_id, status="running", db_path=db_path)
     logger.info(
         "Autonomous run started",
@@ -208,7 +347,7 @@ async def execute_autonomous_run(
                     "motif_plan": "melody_motif",
                     "critique": "critic",
                 }[stage.stage_id]
-                budget = _bump_agent_count(run_id, db_path)
+                budget = _bump_agent_count(run_id, db_path, cap=agent_cap)
                 if budget:
                     update_stage_status(run_id, stage.stage_id, "pending", db_path=db_path)
                     update_run_fields(run_id, status="failed", budget_code=budget, db_path=db_path)
@@ -237,17 +376,32 @@ async def execute_autonomous_run(
                         critique = artifact
                 if result.working_draft_update is not None:
                     context = context.with_working_draft(result.working_draft_update)
+                completion_code = {
+                    "plan": "project_plan_valid",
+                    "harmony_plan": "harmony_plan_key",
+                    "motif_plan": "motif_plan_present",
+                    "critique": "critique_stored",
+                }[stage.stage_id]
+                assert_stage_completion(
+                    completion_code,
+                    plan=plan,
+                    merged_plan=artifact.payload if artifact is not None and stage.stage_id == "plan" else None,
+                    artifact_payload=dict(artifact.payload) if artifact is not None else None,
+                    artifact_content_type=artifact.content_type if artifact is not None else None,
+                    artifact_id=artifact_id,
+                )
+                if stage.stage_id == "plan" and artifact is not None:
+                    plan = ProjectPlanV1.model_validate(artifact.payload)
+                    selection = {
+                        **selection,
+                        "compiled_project_plan": plan.model_dump(mode="json"),
+                    }
                 update_stage_status(
                     run_id,
                     stage.stage_id,
                     "completed",
                     artifact_ids=[artifact_id] if artifact_id else [],
-                    completion_code={
-                        "plan": "project_plan_valid",
-                        "harmony_plan": "harmony_plan_key",
-                        "motif_plan": "motif_plan_present",
-                        "critique": "critique_stored",
-                    }[stage.stage_id],
+                    completion_code=completion_code,
                     db_path=db_path,
                 )
             elif stage.stage_id == "symbolic":
@@ -297,7 +451,7 @@ async def execute_autonomous_run(
             elif stage.stage_id == "arrangement":
                 if working is None:
                     working = _load_working(run.project_id, db_path)
-                budget = _bump_agent_count(run_id, db_path)
+                budget = _bump_agent_count(run_id, db_path, cap=agent_cap)
                 if budget:
                     update_stage_status(run_id, "arrangement", "pending", db_path=db_path)
                     update_run_fields(run_id, status="failed", budget_code=budget, db_path=db_path)
@@ -322,7 +476,7 @@ async def execute_autonomous_run(
             elif stage.stage_id == "expression":
                 if working is None:
                     working = _load_working(run.project_id, db_path)
-                budget = _bump_agent_count(run_id, db_path)
+                budget = _bump_agent_count(run_id, db_path, cap=agent_cap)
                 if budget:
                     update_stage_status(run_id, "expression", "pending", db_path=db_path)
                     update_run_fields(run_id, status="failed", budget_code=budget, db_path=db_path)
@@ -354,11 +508,13 @@ async def execute_autonomous_run(
                         db_path=db_path,
                     )
                 elif render_approval == "auto":
+                    job_id = dispatch_render(run_id, db_path=db_path)
                     update_stage_status(
                         run_id,
                         "render",
                         "completed",
                         completion_code="render_dispatched",
+                        artifact_ids=[job_id],
                         db_path=db_path,
                     )
                 else:

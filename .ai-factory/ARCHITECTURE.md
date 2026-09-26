@@ -230,7 +230,7 @@ FastAPI backend
 - ✅ Frontend components call Zustand actions and API modules; playback/notation utils stay free of React components
 - ✅ Cross-module use goes through service functions or shared schemas (`composition.v2` operational, `composition.v1` migration input), not private helpers inside another module’s files when avoidable
 - ❌ Services must not import FastAPI routers or request objects
-- ❌ `ai_agents/` must not import `agent_artifact_workspace`, `db/`, or project stores
+- ❌ `ai_agents/` must not import `agent_artifact_workspace`, `db/`, `autonomous_composer_store`, or project stores. `services/autonomous_composer.py` owns those writes
 - ❌ Plugins may import `app.plugin_sdk` only. They must not import `plugin_host`, `ai_runtime`, `ai_agents`, `services`, `db`, or routers
 - ❌ `db/` / store implementations must not import route handlers
 - ❌ Frontend `utils/` must not import React components or the Zustand store (keep pure functions testable)

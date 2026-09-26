@@ -8,8 +8,9 @@ no OpenTelemetry exporter.
 
 | Request | What it is |
 |---------|------------|
-| `POST /ai/agents/workflows/preview` | One autonomous run (spine, including its revision loop) |
+| `POST /ai/agents/workflows/preview` | One spine preview (session only; it does not commit a project) |
 | `POST /ai/agents/{id}/run` | One single-agent run |
+| `POST /ai/agents/autonomous/runs` | One autonomous composition. Same `operation_run_id` for agent calls and an optional render. See [autonomous-composer.md](autonomous-composer.md) |
 
 The client may send `operation_run_id` (UUID string, at most 64 characters)
 before the work starts. Anything else is HTTP 422 `operation_run_id_invalid`.
@@ -82,6 +83,7 @@ cannot raise an env ceiling.
 | `OPERATION_REMOTE_COST_MICROS` | empty (off) | Fires only after an adapter reports a cost number |
 | `OPERATION_MAX_REVISIONS` | `8` | Passed into revision `resolve_max_passes`. Values above 8 are stored as 8 |
 | `NEURAL_AUDIO_MAX_ATTEMPTS` | `2` | Attempts per render or stem-set job, including the first. Range 1–5 |
+| `AUTONOMOUS_MAX_AGENT_OPERATIONS` | `24` | Stop before the next autonomous-composer agent. `0` disables. A request may only lower it. Budget code `autonomous_agent_operation_budget` |
 
 The tighter of this ceiling and the existing revision-loop budget wins. Mode
 caps stay 1 / 2 / 3. The runtime ceiling is checked before each spine agent,

@@ -6,6 +6,7 @@ import { critiqueSummaryFromArtifact } from '../utils/compositionCritique.js';
 import { createAppLogger } from '../utils/appLogger.js';
 import { normalizeRevisionMode } from '../utils/revisionLoopModes.js';
 import { operationSummaryText } from '../utils/operationSummaryText.js';
+import AutonomousComposerPanel from './AutonomousComposerPanel.jsx';
 
 const logger = createAppLogger('MultiAgentPanel');
 
@@ -164,6 +165,7 @@ const MultiAgentPanel = () => {
 
   return (
     <Panel data-testid="multi-agent-panel">
+      <AutonomousComposerPanel />
       <Title>Multi-agent (V4)</Title>
       <Hint>
         Runs Creative Director → Harmony → Melody → Arrangement → Critic as a session

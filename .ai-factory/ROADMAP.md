@@ -47,6 +47,7 @@
 - [x] **V4 plugin and extension SDK** — In-process `plugin.manifest.v1` packages on `PLUGIN_PATHS`; `runtime=plugin` symbolic composers on `GET /ai/models` and the generate-composer seam; other categories on `GET /plugins`; no marketplace and no `composition.v4` / `DATASET_ROOT` writes
 - [x] **Secure plugin lifecycle and permission boundaries** — Explicit install/enable/disable, durable desired state, manifest resource declarations refused in-process, and a Plugins panel. A broken optional plugin does not stop startup or project open. No marketplace
 - [x] **V4 observability and resource controls** — Shared run ids and structured spans for workflow preview, agent calls, model calls, and neural render jobs; env budgets for model calls, wall time, tokens, cost, revisions, and render attempts; cancellation reaches in-flight children; `SystemExit` from an agent or model call stays inside the API process
+- [x] **V4 autonomous project composer** — One creative brief schedules specialized agents, commits a multi-section `composition.v2` project stage by stage, and can resume after restart. The spine preview stays preview-only. Render stays opt-in
 
 ## Completed
 
@@ -97,3 +98,4 @@
 | V4 plugin and extension SDK | 2026-09-25 |
 | Secure plugin lifecycle and permission boundaries | 2026-09-25 |
 | V4 observability and resource controls | 2026-09-25 |
+| V4 autonomous project composer | 2026-09-26 |

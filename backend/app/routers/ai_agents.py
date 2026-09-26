@@ -525,6 +525,7 @@ async def start_autonomous_run(body: dict[str, Any], request: Request) -> dict[s
                     record.id,
                     cancel_check=_cancel_check,
                     render_approval=start.render_approval,
+                    max_agent_operations=start.max_agent_operations,
                 )
             finally:
                 await _stop_watcher(watcher)
@@ -596,7 +597,7 @@ async def resume_autonomous_run(run_id: str, request: Request) -> dict[str, Any]
     except AutonomousStoreError as exc:
         _autonomous_http(exc)
         raise
-    if run.status in {"completed", "cancelled"}:
+    if run.status in {"completed", "cancelled", "awaiting_approval"}:
         _autonomous_http(AutonomousStoreError("not resumable", code="autonomous_run_not_resumable"))
     async def _cancel_check() -> bool:
         return is_run_cancelled(run.operation_run_id)
@@ -605,3 +606,39 @@ async def resume_autonomous_run(run_id: str, request: Request) -> dict[str, Any]
         await execute_autonomous_run(run.id, cancel_check=_cancel_check)
     summary = build_summary(span).model_dump(mode="json")
     return run_view(run.id, summary=summary).model_dump(mode="json")
+
+
+@router.post("/agents/autonomous/runs/{run_id}/stages/{stage_id}/approve")
+async def approve_autonomous_stage(run_id: str, stage_id: str) -> dict[str, Any]:
+    from app.services.autonomous_composer import approve_render_stage, run_view
+    from app.services.autonomous_composer_store import AutonomousStoreError
+
+    if stage_id != "render":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "autonomous_brief_invalid", "message": "autonomous_brief_invalid"},
+        )
+    try:
+        approve_render_stage(run_id)
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
+    return run_view(run_id).model_dump(mode="json")
+
+
+@router.post("/agents/autonomous/runs/{run_id}/stages/{stage_id}/skip")
+async def skip_autonomous_stage(run_id: str, stage_id: str) -> dict[str, Any]:
+    from app.services.autonomous_composer import run_view, skip_render_stage
+    from app.services.autonomous_composer_store import AutonomousStoreError
+
+    if stage_id != "render":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "autonomous_brief_invalid", "message": "autonomous_brief_invalid"},
+        )
+    try:
+        skip_render_stage(run_id)
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
+    return run_view(run_id).model_dump(mode="json")

@@ -445,9 +445,9 @@ On the Agents tab, above the spine controls, `frontend/src/components/Autonomous
 - [x] Task 6: Arrangement and expression realizes with hard checks
 
 ### Phase 4: Loop, UI, docs
-- [ ] Task 7: HTTP loop, budgets, cancel, resume, and optional render
-- [ ] Task 8: Agents-tab brief, stage status, and project reload
-- [ ] Task 9: Document the workflow and add the roadmap milestone
+- [x] Task 7: HTTP loop, budgets, cancel, resume, and optional render
+- [x] Task 8: Agents-tab brief, stage status, and project reload
+- [x] Task 9: Document the workflow and add the roadmap milestone
 
 ### Task 1: Add the brief, project plan, and deterministic compiler
 

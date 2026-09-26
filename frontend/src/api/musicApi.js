@@ -2593,3 +2593,89 @@ export async function previewMultiAgentWorkflow(payload, { signal } = {}) {
     pass_candidates: passCandidates,
   };
 }
+
+function autonomousError(error) {
+  const detail = error?.response?.data?.detail;
+  const code = detail && typeof detail === 'object' && detail.code
+    ? String(detail.code)
+    : 'autonomous_run_invalid';
+  console.error('[musicApi] Autonomous request failed', { code });
+  const wrapped = new Error(code);
+  wrapped.code = code;
+  wrapped.status = error?.response?.status || 0;
+  return wrapped;
+}
+
+/**
+ * POST /ai/agents/autonomous/runs — creates an editable project. Does not call the spine.
+ */
+export async function startAutonomousRun(payload, { signal } = {}) {
+  console.debug('[musicApi] Autonomous run requested', {
+    run_id_prefix: String(payload?.operation_run_id || '').slice(0, 16),
+  });
+  try {
+    const response = await axios.post('/ai/agents/autonomous/runs', {
+      brief: payload.brief,
+      project_id: payload.project_id || null,
+      include_rendering: payload.include_rendering === true,
+      render_approval: payload.render_approval || 'required',
+      seed: payload.seed ?? 0,
+      operation_run_id: payload.operation_run_id || null,
+      expected_working_version: payload.expected_working_version ?? null,
+      expected_head_revision_id: payload.expected_head_revision_id ?? null,
+      expected_source_fingerprint: payload.expected_source_fingerprint ?? null,
+    }, signal ? { signal } : undefined);
+    console.debug('[musicApi] Autonomous run ready', {
+      run_id_prefix: String(response.data?.run_id || '').slice(0, 16),
+      status: response.data?.status || null,
+      stage_count: Array.isArray(response.data?.stages) ? response.data.stages.length : 0,
+    });
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function cancelAutonomousRun(runId) {
+  try {
+    const response = await axios.post(
+      `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/cancel`,
+    );
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function resumeAutonomousRun(runId) {
+  try {
+    const response = await axios.post(
+      `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/resume`,
+    );
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function approveAutonomousStage(runId, stageId) {
+  try {
+    const response = await axios.post(
+      `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/approve`,
+    );
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
+
+export async function skipAutonomousStage(runId, stageId) {
+  try {
+    const response = await axios.post(
+      `/ai/agents/autonomous/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/skip`,
+    );
+    return response.data;
+  } catch (error) {
+    throw autonomousError(error);
+  }
+}
