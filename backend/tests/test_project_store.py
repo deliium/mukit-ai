@@ -33,7 +33,7 @@ def test_migrations_apply_cleanly(project_db, caplog):
             ).fetchall()
         }
 
-    assert alembic_revisions == ["20260926_0012"]
+    assert alembic_revisions == ["20260926_0013"]
     assert "projects" in tables
     assert "composition_snapshots" in tables
     assert "project_revisions" in tables

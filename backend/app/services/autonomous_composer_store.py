@@ -40,8 +40,10 @@ RUN_STATUSES = frozenset(
         "failed",
         "awaiting_approval",
         "cancelled",
+        "paused",
     }
 )
+STAGE_DECISIONS = frozenset({"approved", "rejected"})
 STAGE_STATUSES = frozenset(
     {
         "pending",
@@ -79,6 +81,10 @@ class AutonomousStageRecord:
     recoverable: int
     started_at: str | None
     finished_at: str | None
+    instruction: str | None = None
+    decision: str | None = None
+    rejected_revision_id: str | None = None
+    warning_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +109,10 @@ class AutonomousRunRecord:
     created_at: str
     updated_at: str
     stages: tuple[AutonomousStageRecord, ...]
+    autonomy_mode: str = "autonomous"
+    pause_requested: bool = False
+    checkpoint_id: str | None = None
+    plan_json: str | None = None
 
 
 def insert_run(
@@ -114,6 +124,7 @@ def insert_run(
     plan: ProjectPlanV1 | dict[str, Any],
     seed: int | None = None,
     include_rendering: bool = False,
+    autonomy_mode: str = "autonomous",
     run_id: str | None = None,
     db_path: Path | str | None = None,
 ) -> AutonomousRunRecord:
@@ -126,6 +137,8 @@ def insert_run(
         limit=PLAN_JSON_MAX_BYTES,
         field_name="plan_json",
     )
+    if autonomy_mode not in {"guided", "balanced", "autonomous"}:
+        raise AutonomousStoreError("invalid autonomy mode", code="autonomous_run_invalid")
     _reject_secrets(brief, plan_model.model_dump())
     new_id = run_id or str(uuid.uuid4())
     now = _utc_now_iso()
@@ -148,13 +161,15 @@ def insert_run(
                 brief_json, plan_json, head_revision_id, composition_fingerprint,
                 agent_operation_count, revision_pass_count, prompt_tokens,
                 completion_tokens, provider_reported_cost_micros, active_runtime_ms,
-                failure_code, budget_code, seed, include_rendering, created_at, updated_at
+                failure_code, budget_code, seed, include_rendering, created_at, updated_at,
+                autonomy_mode
             ) VALUES (
                 ?, ?, ?, ?, 'pending',
                 ?, ?, NULL, NULL,
                 0, 0, NULL,
                 NULL, NULL, 0,
-                NULL, NULL, ?, ?, ?, ?
+                NULL, NULL, ?, ?, ?, ?,
+                ?
             )
             """,
             (
@@ -168,6 +183,7 @@ def insert_run(
                 1 if include_rendering else 0,
                 now,
                 now,
+                autonomy_mode,
             ),
         )
         for position, stage in enumerate(plan_model.stages):
@@ -195,6 +211,7 @@ def insert_run(
             "run_id": new_id[:16],
             "project_id": project_id,
             "stage_count": len(plan_model.stages),
+            "autonomy_mode": autonomy_mode,
         },
     )
     return get_run(new_id, db_path=path)
@@ -420,6 +437,262 @@ def update_run_fields(
     )
 
 
+def set_pause_requested(
+    run_id: str,
+    requested: bool,
+    *,
+    status: str | None = None,
+    db_path: Path | str | None = None,
+) -> None:
+    """Set the pause flag. Optional status is written in the same transaction."""
+    if status is not None and status not in RUN_STATUSES:
+        raise AutonomousStoreError("invalid run status", code="autonomous_run_invalid")
+    path = Path(db_path) if db_path is not None else get_project_db_path()
+    now = _utc_now_iso()
+    assignments = ["pause_requested = ?", "updated_at = ?"]
+    params: list[Any] = [1 if requested else 0, now]
+    if status is not None:
+        assignments.append("status = ?")
+        params.append(status)
+    params.append(run_id)
+    with get_connection(path) as conn:
+        updated = conn.execute(
+            f"UPDATE autonomous_runs SET {', '.join(assignments)} WHERE id = ?",
+            params,
+        )
+        if updated.rowcount != 1:
+            raise AutonomousStoreError("run not found", code=AUTONOMOUS_RUN_NOT_FOUND)
+    logger.info(
+        "Autonomous pause flag stored",
+        extra={
+            "run_id": run_id[:16],
+            "pause_requested": bool(requested),
+            "status": status,
+        },
+    )
+
+
+def set_checkpoint(
+    run_id: str,
+    *,
+    checkpoint_id: str | None,
+    stage_id: str | None = None,
+    decision: str | None = None,
+    status: str | None = None,
+    db_path: Path | str | None = None,
+) -> None:
+    """Write checkpoint_id and an optional stage decision in one transaction."""
+    if decision is not None and decision not in STAGE_DECISIONS:
+        raise AutonomousStoreError("invalid stage decision", code="autonomous_stage_invalid")
+    if status is not None and status not in RUN_STATUSES:
+        raise AutonomousStoreError("invalid run status", code="autonomous_run_invalid")
+    path = Path(db_path) if db_path is not None else get_project_db_path()
+    now = _utc_now_iso()
+    with get_connection(path) as conn:
+        assignments = ["checkpoint_id = ?", "updated_at = ?"]
+        params: list[Any] = [checkpoint_id, now]
+        if status is not None:
+            assignments.append("status = ?")
+            params.append(status)
+        updated = conn.execute(
+            f"UPDATE autonomous_runs SET {', '.join(assignments)} WHERE id = ?",
+            [*params, run_id],
+        )
+        if updated.rowcount != 1:
+            raise AutonomousStoreError("run not found", code=AUTONOMOUS_RUN_NOT_FOUND)
+        if stage_id is not None and decision is not None:
+            stage = conn.execute(
+                """
+                UPDATE autonomous_stages
+                SET decision = ?
+                WHERE run_id = ? AND stage_id = ?
+                """,
+                (decision, run_id, stage_id),
+            )
+            if stage.rowcount != 1:
+                raise AutonomousStoreError("stage not found", code="autonomous_stage_not_found")
+    logger.info(
+        "Autonomous checkpoint stored",
+        extra={
+            "run_id": run_id[:16],
+            "checkpoint_id": checkpoint_id,
+            "decision": decision,
+            "stage_id": stage_id,
+        },
+    )
+
+
+def set_stage_instruction(
+    run_id: str,
+    stage_id: str,
+    text: str,
+    *,
+    db_path: Path | str | None = None,
+) -> None:
+    """Store user instruction text. The text is not logged."""
+    from app.arrangement_schemas import ARRANGEMENT_MAX_INSTRUCTION_CHARS
+
+    if not text or len(text) > ARRANGEMENT_MAX_INSTRUCTION_CHARS:
+        raise AutonomousStoreError("instruction length", code="autonomous_instruction_invalid")
+    _reject_instruction(text)
+    path = Path(db_path) if db_path is not None else get_project_db_path()
+    now = _utc_now_iso()
+    with get_connection(path) as conn:
+        updated = conn.execute(
+            """
+            UPDATE autonomous_stages
+            SET instruction = ?
+            WHERE run_id = ? AND stage_id = ?
+            """,
+            (text, run_id, stage_id),
+        )
+        if updated.rowcount != 1:
+            raise AutonomousStoreError("stage not found", code="autonomous_stage_not_found")
+        conn.execute(
+            "UPDATE autonomous_runs SET updated_at = ? WHERE id = ?",
+            (now, run_id),
+        )
+    logger.info(
+        "Autonomous stage instruction stored",
+        extra={
+            "run_id": run_id[:16],
+            "stage_id": stage_id,
+            "instruction_len": len(text),
+        },
+    )
+
+
+def set_stage_warning(
+    run_id: str,
+    stage_id: str,
+    warning_code: str | None,
+    *,
+    db_path: Path | str | None = None,
+) -> None:
+    path = Path(db_path) if db_path is not None else get_project_db_path()
+    now = _utc_now_iso()
+    with get_connection(path) as conn:
+        updated = conn.execute(
+            """
+            UPDATE autonomous_stages
+            SET warning_code = ?
+            WHERE run_id = ? AND stage_id = ?
+            """,
+            (warning_code, run_id, stage_id),
+        )
+        if updated.rowcount != 1:
+            raise AutonomousStoreError("stage not found", code="autonomous_stage_not_found")
+        conn.execute(
+            "UPDATE autonomous_runs SET updated_at = ? WHERE id = ?",
+            (now, run_id),
+        )
+    logger.info(
+        "Autonomous stage warning stored",
+        extra={
+            "run_id": run_id[:16],
+            "stage_id": stage_id,
+            "warning_code": warning_code,
+        },
+    )
+
+
+def mark_stage_rejected(
+    run_id: str,
+    stage_id: str,
+    *,
+    rejected_revision_id: str,
+    failure_code: str,
+    head_revision_id: str | None = None,
+    composition_fingerprint: str | None = None,
+    db_path: Path | str | None = None,
+) -> None:
+    """Mark a finished stage retryable and pause the run. One transaction."""
+    path = Path(db_path) if db_path is not None else get_project_db_path()
+    now = _utc_now_iso()
+    with get_connection(path) as conn:
+        updated = conn.execute(
+            """
+            UPDATE autonomous_stages
+            SET status = 'failed',
+                failure_code = ?,
+                recoverable = 1,
+                rejected_revision_id = ?,
+                revision_id = NULL,
+                decision = 'rejected',
+                finished_at = ?
+            WHERE run_id = ? AND stage_id = ?
+            """,
+            (failure_code, rejected_revision_id, now, run_id, stage_id),
+        )
+        if updated.rowcount != 1:
+            raise AutonomousStoreError("stage not found", code="autonomous_stage_not_found")
+        conn.execute(
+            """
+            UPDATE autonomous_runs
+            SET status = 'paused',
+                checkpoint_id = NULL,
+                pause_requested = 0,
+                head_revision_id = COALESCE(?, head_revision_id),
+                composition_fingerprint = COALESCE(?, composition_fingerprint),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (head_revision_id, composition_fingerprint, now, run_id),
+        )
+    logger.info(
+        "Autonomous stage rejected",
+        extra={
+            "run_id": run_id[:16],
+            "stage_id": stage_id,
+            "status": "paused",
+            "old_revision_id": rejected_revision_id[:16],
+            "new_revision_id": (head_revision_id or "")[:16],
+        },
+    )
+
+
+def replace_plan_json(
+    run_id: str,
+    plan: dict[str, Any],
+    *,
+    db_path: Path | str | None = None,
+) -> None:
+    """Replace stored plan JSON after the secret guard."""
+    _reject_secrets({}, plan)
+    plan_text = _bounded_json(plan, limit=PLAN_JSON_MAX_BYTES, field_name="plan_json")
+    path = Path(db_path) if db_path is not None else get_project_db_path()
+    now = _utc_now_iso()
+    with get_connection(path) as conn:
+        updated = conn.execute(
+            """
+            UPDATE autonomous_runs
+            SET plan_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (plan_text, now, run_id),
+        )
+        if updated.rowcount != 1:
+            raise AutonomousStoreError("run not found", code=AUTONOMOUS_RUN_NOT_FOUND)
+    logger.info(
+        "Autonomous plan JSON replaced",
+        extra={"run_id": run_id[:16], "plan_bytes": len(plan_text.encode("utf-8"))},
+    )
+
+
+def _reject_instruction(text: str) -> None:
+    try:
+        assert_payload_has_no_secret_values({"instruction": text}, context="autonomous_instruction")
+    except PersistenceSecretError as exc:
+        logger.warning(
+            "Autonomous instruction rejected",
+            extra={"code": PERSISTENCE_SECRET_REJECTED},
+        )
+        raise AutonomousStoreError(
+            "secret rejected",
+            code=PERSISTENCE_SECRET_REJECTED,
+        ) from exc
+
+
 def _reject_secrets(brief: dict[str, Any], plan: dict[str, Any]) -> None:
     try:
         assert_payload_has_no_secret_values(brief, context="autonomous_brief")
@@ -464,6 +737,10 @@ def _run_from_rows(row: Any, stage_rows: list[Any]) -> AutonomousRunRecord:
         budget_code=row["budget_code"],
         seed=row["seed"],
         include_rendering=bool(row["include_rendering"]),
+        autonomy_mode=str(row["autonomy_mode"] or "autonomous"),
+        pause_requested=bool(row["pause_requested"]),
+        checkpoint_id=row["checkpoint_id"],
+        plan_json=row["plan_json"],
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
         stages=tuple(_stage_from_row(item) for item in stage_rows),
@@ -487,6 +764,10 @@ def _stage_from_row(row: Any) -> AutonomousStageRecord:
         recoverable=int(row["recoverable"]),
         started_at=row["started_at"],
         finished_at=row["finished_at"],
+        instruction=row["instruction"],
+        decision=row["decision"],
+        rejected_revision_id=row["rejected_revision_id"],
+        warning_code=row["warning_code"],
     )
 
 

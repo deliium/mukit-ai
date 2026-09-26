@@ -75,6 +75,9 @@ StageId = Literal[
 StageOperation = Literal["plan", "realize", "critique", "propose", "advise"]
 StageApproval = Literal["auto", "required"]
 ScoreCommitPolicy = Literal["no", "yes", "when_changed"]
+AutonomyMode = Literal["guided", "balanced", "autonomous"]
+CheckpointId = Literal["form", "harmony", "motif", "critique", "arrangement", "render"]
+StageDecision = Literal["approved", "rejected"]
 
 COMPLETION_CODES: frozenset[str] = frozenset(
     {
@@ -109,6 +112,8 @@ STAGE_IDS: tuple[StageId, ...] = (
 AUTONOMOUS_INSTRUMENT_UNKNOWN = "autonomous_instrument_unknown"
 AUTONOMOUS_CONSTRAINT_FAILED = "autonomous_constraint_failed"
 AUTONOMOUS_BRIEF_INVALID = "autonomous_brief_invalid"
+AUTONOMOUS_INSTRUCTION_UNSAFE = "autonomous_instruction_unsafe"
+AUTONOMOUS_INSTRUCTION_UNPARSED = "autonomous_instruction_unparsed"
 
 
 class AutonomousPlanError(ValueError):
@@ -339,11 +344,56 @@ class AutonomousRunStartV1(BaseModel):
     include_rendering: bool = False
     render_approval: Literal["required", "auto"] = "required"
     seed: int = 0
+    autonomy_mode: AutonomyMode = "autonomous"
     operation_run_id: str | None = None
     expected_working_version: int | None = None
     expected_head_revision_id: str | None = None
     expected_source_fingerprint: str | None = None
     max_agent_operations: int | None = Field(default=None, ge=0)
+
+
+class PublicPlanGoalV1(BaseModel):
+    """Goal fields shown on the run view. No score material."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    summary: str
+    section_id: str
+
+
+class PublicPlanSectionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    type: str
+    label: str
+    start_bar: int
+    bar_count: int
+    density: DensityBand
+    key: str
+    narrative: str
+
+
+class PublicPlanConstraintsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    opening_key: str
+    final_section_key: str | None = None
+    duration_bars: int
+    instruments: list[str]
+    forbidden_instrument_families: list[str] = Field(default_factory=list)
+    motif_label: str
+
+
+class PublicPlanProjectionV1(BaseModel):
+    """Public slice of project.plan.v1. Composition bodies stay off this object."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goals: list[PublicPlanGoalV1]
+    sections: list[PublicPlanSectionV1]
+    constraints: PublicPlanConstraintsV1
 
 
 class AutonomousStageViewV1(BaseModel):
@@ -355,6 +405,11 @@ class AutonomousStageViewV1(BaseModel):
     revision_id: str | None = None
     failure_code: str | None = None
     artifact_ids: list[str] = Field(default_factory=list)
+    decision: StageDecision | None = None
+    instruction: str | None = Field(default=None, max_length=500)
+    rejected_revision_id: str | None = None
+    completion_code: str | None = None
+    warning_code: str | None = None
 
 
 class AutonomousRunViewV1(BaseModel):
@@ -364,6 +419,10 @@ class AutonomousRunViewV1(BaseModel):
     run_id: str
     project_id: str
     status: str
+    autonomy_mode: AutonomyMode = "autonomous"
+    checkpoint_id: CheckpointId | None = None
+    pause_requested: bool = False
+    plan: PublicPlanProjectionV1 | None = None
     head_revision_id: str | None = None
     composition_fingerprint: str | None = None
     budget_code: str | None = None
