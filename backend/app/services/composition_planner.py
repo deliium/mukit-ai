@@ -106,7 +106,9 @@ class ComposerFormPlan(BaseModel):
     tempo: int = Field(..., ge=40, le=240)
     key: str
     time_signature: str
-    bar_count: int = Field(..., ge=1, le=LLM_GENERATION_MAX_BARS)
+    # Autonomous briefs may span up to 512 bars. LLM request staging still
+    # rejects anything above LLM_GENERATION_MAX_BARS.
+    bar_count: int = Field(..., ge=1, le=512)
     sections: list[ComposerFormSection] = Field(..., min_length=1)
     instrumentation: list[str] = Field(default_factory=list)
 

@@ -30,6 +30,7 @@ class RealizeService(StrEnum):
     ARRANGEMENT_CANDIDATE = "arrangement_candidate"
     MOTIF_APPLY = "motif_apply"
     VALIDATED_V2 = "validated_v2"
+    EXPRESSION_CANDIDATE = "expression_candidate"
 
 
 _TRUSTED = frozenset(RealizeService)

@@ -10,6 +10,7 @@ import inspect
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any, Mapping, Awaitable
 
@@ -175,10 +176,12 @@ class _AgentStop(Exception):
         reason: RevisionStopReason,
         *,
         budget_code: str | None = None,
+        failure_code: str | None = None,
     ) -> None:
         super().__init__(reason.value)
         self.reason = reason
         self.budget_code = budget_code
+        self.failure_code = failure_code
 
 
 def _budget_exhausted(
@@ -301,7 +304,10 @@ async def _run_agent_node(
                     "model_id": None,
                 },
             )
-            stop = _AgentStop(RevisionStopReason.VALIDATION_FAILED_KEPT_LAST_VALID)
+            stop = _AgentStop(
+                RevisionStopReason.VALIDATION_FAILED_KEPT_LAST_VALID,
+                failure_code="operation_model_crashed",
+            )
             result = None
         except OperationCancelled:
             agent_span.status = "cancelled"
@@ -953,4 +959,250 @@ async def run_revision_loop(
         revision_mode=mode,
         max_passes=max_passes,
         budget_code=budget_code,
+    )
+
+
+@dataclass(frozen=True)
+class TargetedRevisionResult:
+    """Last valid draft after targeted passes. The caller commits."""
+
+    composition: CompositionV2
+    changed: bool
+    stop_reason: RevisionStopReason
+    failure_code: str | None
+    budget_code: str | None
+    pass_count: int
+
+
+async def run_targeted_revision_passes(
+    composition: CompositionV2,
+    critique: AgentArtifactV1,
+    *,
+    max_revisions: int | None = 1,
+    revision_mode: RevisionMode | str | None = RevisionMode.BALANCED,
+    agent_model_overrides: Mapping[str, str] | None = None,
+    selection: dict[str, Any] | None = None,
+    critic_parameters: dict[str, Any] | None = None,
+    env: Mapping[str, str] | None = None,
+) -> TargetedRevisionResult:
+    """Revise only agents named by an existing critique. Does not run the spine."""
+    settings = load_revision_loop_settings(dict(env) if env is not None else None)
+    op_settings = load_operation_budget_settings(dict(env) if env is not None else None)
+    mode, max_passes = resolve_max_passes(
+        revision_mode=revision_mode,
+        max_revisions=max_revisions,
+        revision_ceiling=op_settings.max_revisions,
+    )
+    recommendation = critique.payload.get("recommendation")
+    findings = critique.payload.get("findings")
+    findings_list = list(findings) if isinstance(findings, list) else []
+    logger.info(
+        "Targeted revision start",
+        extra={
+            "findings_count": len(findings_list),
+            "max_passes": max_passes,
+            "revision_mode": mode.value,
+        },
+    )
+    if recommendation != CritiqueRecommendation.REVISE.value and recommendation != CritiqueRecommendation.REVISE:
+        logger.info(
+            "Targeted revision skipped",
+            extra={
+                "pass_index": 0,
+                "target_agent_ids": [],
+                "stop_reason": RevisionStopReason.CRITIC_APPROVE.value,
+                "budget_code": None,
+            },
+        )
+        return TargetedRevisionResult(
+            composition=composition,
+            changed=False,
+            stop_reason=RevisionStopReason.CRITIC_APPROVE,
+            failure_code=None,
+            budget_code=None,
+            pass_count=0,
+        )
+
+    ensure_registry(env)
+    context = build_initial_context(composition)
+    context = context.with_slot("critique", critique).with_recommendation(
+        CritiqueRecommendation.REVISE
+    )
+    started = time.perf_counter()
+    usage = RevisionLoopUsage(usage_status=UsageStatus.UNAVAILABLE)
+    last_valid = _snapshot_candidate(context.working_draft_composition)
+    last_fp = composition_edit_fingerprint(last_valid)
+    origin_fp = last_fp
+    stop_reason: RevisionStopReason | None = None
+    budget_code: str | None = None
+    failure_code: str | None = None
+    pass_count = 0
+    critic_params = dict(critic_parameters or {})
+    resolved_budgets = RevisionLoopBudgets(
+        max_wall_ms=default_wall_ms_for_mode(mode.value, settings),
+        max_prompt_tokens=default_prompt_token_cap_for_mode(mode.value, settings),
+    )
+
+    def _budget_hit() -> str | None:
+        nonlocal budget_code
+        code = _budget_exhausted(started=started, usage=usage, budgets=resolved_budgets)
+        if code and code.startswith("operation_"):
+            budget_code = code
+        return code
+
+    while stop_reason is None and context.revise_count < max_passes:
+        pass_index = context.revise_count + 1
+        context = context.with_revise_count(pass_index)
+        plan_model = build_revision_plan_from_findings(
+            findings_list,
+            pass_index=pass_index,
+            recommendation=CritiqueRecommendation.REVISE,
+            revise_on_technical=bool(critic_params.get("revise_on_technical"))
+            or settings.revise_on_technical,
+            settings=settings,
+        )
+        target_agents = [
+            agent_id
+            for agent_id in plan_model.target_agent_ids
+            if agent_id in {"harmony", "melody_motif", "arrangement"}
+        ]
+        logger.info(
+            "Targeted revision pass",
+            extra={
+                "pass_index": pass_index,
+                "target_agent_ids": target_agents,
+                "stop_reason": None,
+                "budget_code": budget_code,
+                "findings_count": len(findings_list),
+            },
+        )
+        before_draft = _snapshot_candidate(context.working_draft_composition)
+        pass_failed = False
+        for agent_id in target_agents:
+            if _budget_hit():
+                stop_reason = RevisionStopReason.RESOURCE_BUDGET_EXHAUSTED
+                context = context.with_working_draft(last_valid)
+                pass_failed = True
+                break
+            try:
+                context, stage, _codes = await _run_agent_node(
+                    agent_id,
+                    context,
+                    agent_model_overrides=agent_model_overrides,
+                    selection=selection,
+                )
+            except _AgentStop as exc:
+                stop_reason = exc.reason
+                budget_code = exc.budget_code or budget_code
+                failure_code = exc.failure_code
+                context = context.with_working_draft(last_valid)
+                pass_failed = True
+                break
+            delta = _usage_from_stage(stage)
+            usage = _accumulate_usage(usage, delta)
+        if failure_code == "operation_model_crashed":
+            logger.info(
+                "Targeted revision pass",
+                extra={
+                    "pass_index": pass_index,
+                    "target_agent_ids": target_agents,
+                    "stop_reason": stop_reason.value if stop_reason else None,
+                    "budget_code": budget_code,
+                },
+            )
+            break
+        if not pass_failed:
+            after_draft = context.working_draft_composition
+            preserve_ok = assert_preserve_outside_targets(
+                before_draft,
+                after_draft,
+                affected_ranges=plan_model.affected_ranges,
+                affected_tracks=plan_model.affected_tracks,
+                preserve_outside_targets=plan_model.preserve_outside_targets,
+            )
+            try:
+                report = validate_composition_integrity(after_draft, profile="canonical")
+                if not report.ok or not preserve_ok:
+                    raise ValueError("preserve_violation" if not preserve_ok else "integrity_failed")
+                last_valid = _snapshot_candidate(after_draft)
+                last_fp = composition_edit_fingerprint(last_valid)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Targeted revision preserve failed",
+                    extra={
+                        "pass_index": pass_index,
+                        "fingerprint_prefix": edit_fingerprint_log_prefix(last_fp),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                context = context.with_working_draft(last_valid)
+                stop_reason = RevisionStopReason.VALIDATION_FAILED_KEPT_LAST_VALID
+                pass_failed = True
+        if pass_failed:
+            if stop_reason is None:
+                stop_reason = RevisionStopReason.VALIDATION_FAILED_KEPT_LAST_VALID
+            logger.info(
+                "Targeted revision pass",
+                extra={
+                    "pass_index": pass_index,
+                    "target_agent_ids": target_agents,
+                    "stop_reason": stop_reason.value,
+                    "budget_code": budget_code,
+                },
+            )
+            break
+        pass_count = pass_index
+        try:
+            context, stage, _codes = await _run_agent_node(
+                "critic",
+                context,
+                agent_model_overrides=agent_model_overrides,
+                selection=selection,
+                parameters=critic_params,
+            )
+        except _AgentStop as exc:
+            stop_reason = exc.reason
+            failure_code = exc.failure_code
+            budget_code = exc.budget_code or budget_code
+            context = context.with_working_draft(last_valid)
+            break
+        delta = _usage_from_stage(stage)
+        usage = _accumulate_usage(usage, delta)
+        if context.critique is not None:
+            raw_findings = (context.critique.payload or {}).get("findings")
+            if isinstance(raw_findings, list):
+                findings_list = raw_findings
+        logger.info(
+            "Targeted revision pass",
+            extra={
+                "pass_index": pass_index,
+                "target_agent_ids": target_agents,
+                "stop_reason": (
+                    context.recommendation.value if context.recommendation else None
+                ),
+                "budget_code": budget_code,
+            },
+        )
+        if context.recommendation != CritiqueRecommendation.REVISE:
+            stop_reason = RevisionStopReason.CRITIC_APPROVE
+            break
+    if stop_reason is None:
+        stop_reason = RevisionStopReason.MAX_PASSES_REACHED
+    logger.info(
+        "Targeted revision finished",
+        extra={
+            "pass_index": pass_count,
+            "target_agent_ids": [],
+            "stop_reason": stop_reason.value,
+            "budget_code": budget_code,
+            "findings_count": len(findings_list),
+        },
+    )
+    return TargetedRevisionResult(
+        composition=last_valid,
+        changed=last_fp != origin_fp and failure_code is None,
+        stop_reason=stop_reason,
+        failure_code=failure_code,
+        budget_code=budget_code,
+        pass_count=pass_count,
     )

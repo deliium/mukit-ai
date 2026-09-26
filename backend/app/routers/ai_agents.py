@@ -455,3 +455,153 @@ async def preview_agent_workflow(
         usage=usage_payload,
         operation_summary=operation_summary,
     )
+
+
+def _autonomous_http(exc: Exception) -> None:
+    code = getattr(exc, "code", "autonomous_run_invalid")
+    status = 404 if code == "autonomous_run_not_found" else 409 if code in {
+        "project_revision_conflict",
+        "autonomous_run_limit",
+        "autonomous_run_not_resumable",
+    } else 422
+    raise HTTPException(status_code=status, detail={"code": code, "message": code}) from exc
+
+
+@router.post("/agents/autonomous/runs", response_model=None)
+async def start_autonomous_run(body: dict[str, Any], request: Request) -> dict[str, Any]:
+    from app.autonomous_composer_schemas import AutonomousPlanError, AutonomousRunStartV1, CreativeBriefV1
+    from app.operation_trace import build_summary, is_run_cancelled, operation_span
+    from app.services.autonomous_composer import execute_autonomous_run, prepare_run, run_view
+    from app.services.autonomous_composer_store import AutonomousStoreError
+
+    try:
+        if body.get("schema_version") == "creative.brief.v1" or "brief" not in body:
+            brief = CreativeBriefV1.model_validate(body)
+            start = AutonomousRunStartV1(
+                brief=brief,
+                project_id=body.get("project_id"),
+                include_rendering=bool(body.get("include_rendering", False)),
+                render_approval=body.get("render_approval") or "required",
+                seed=int(body.get("seed") or 0),
+                operation_run_id=body.get("operation_run_id"),
+                expected_working_version=body.get("expected_working_version"),
+                expected_head_revision_id=body.get("expected_head_revision_id"),
+                expected_source_fingerprint=body.get("expected_source_fingerprint"),
+                max_agent_operations=body.get("max_agent_operations"),
+            )
+        else:
+            start = AutonomousRunStartV1.model_validate(body)
+            brief = start.brief
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "autonomous_brief_invalid", "message": "autonomous_brief_invalid"},
+        ) from exc
+    operation_run_id = _adopt_run_id(start.operation_run_id)
+    try:
+        record = prepare_run(
+            brief,
+            project_id=start.project_id,
+            operation_run_id=operation_run_id,
+            include_rendering=start.include_rendering,
+            seed=start.seed,
+            expected_working_version=start.expected_working_version,
+            expected_head_revision_id=start.expected_head_revision_id,
+            expected_source_fingerprint=start.expected_source_fingerprint,
+            db_path=None,
+        )
+    except (AutonomousPlanError, AutonomousStoreError) as exc:
+        _autonomous_http(exc)
+        raise
+    summary = None
+    if record.status == "pending":
+        async def _cancel_check() -> bool:
+            return is_run_cancelled(operation_run_id)
+
+        async with operation_span("run", run_id=operation_run_id) as span:
+            watcher = asyncio.create_task(_watch_disconnect(request, operation_run_id))
+            try:
+                await execute_autonomous_run(
+                    record.id,
+                    cancel_check=_cancel_check,
+                    render_approval=start.render_approval,
+                )
+            finally:
+                await _stop_watcher(watcher)
+        summary = build_summary(span).model_dump(mode="json")
+    return run_view(record.id, summary=summary).model_dump(mode="json")
+
+
+@router.get("/agents/autonomous/runs/{run_id}")
+async def get_autonomous_run(run_id: str) -> dict[str, Any]:
+    from app.services.autonomous_composer import run_view
+    from app.services.autonomous_composer_store import (
+        AutonomousStoreError,
+        reconcile_interrupted_stages,
+    )
+
+    try:
+        reconcile_interrupted_stages(run_id)
+        return run_view(run_id).model_dump(mode="json")
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
+
+
+@router.post("/agents/autonomous/runs/{run_id}/cancel")
+async def cancel_autonomous_run(run_id: str) -> dict[str, Any]:
+    from app.operation_trace import mark_run_cancelled
+    from app.services.autonomous_composer import run_view
+    from app.services.autonomous_composer_store import (
+        AutonomousStoreError,
+        get_run,
+        update_run_fields,
+        update_stage_status,
+    )
+
+    try:
+        run = get_run(run_id)
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
+    if run.status in {"completed", "failed", "cancelled"}:
+        return run_view(run_id).model_dump(mode="json")
+    mark_run_cancelled(run.operation_run_id)
+    for stage in run.stages:
+        if stage.status == "running":
+            update_stage_status(
+                run_id,
+                stage.stage_id,
+                "failed",
+                failure_code="operation_cancelled",
+                recoverable=0,
+            )
+    update_run_fields(run_id, status="cancelled", failure_code="operation_cancelled")
+    return run_view(run_id).model_dump(mode="json")
+
+
+@router.post("/agents/autonomous/runs/{run_id}/resume")
+async def resume_autonomous_run(run_id: str, request: Request) -> dict[str, Any]:
+    from app.operation_trace import build_summary, is_run_cancelled, operation_span
+    from app.services.autonomous_composer import execute_autonomous_run, run_view
+    from app.services.autonomous_composer_store import (
+        AutonomousStoreError,
+        get_run,
+        reconcile_interrupted_stages,
+    )
+
+    try:
+        reconcile_interrupted_stages(run_id)
+        run = get_run(run_id)
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
+    if run.status in {"completed", "cancelled"}:
+        _autonomous_http(AutonomousStoreError("not resumable", code="autonomous_run_not_resumable"))
+    async def _cancel_check() -> bool:
+        return is_run_cancelled(run.operation_run_id)
+
+    async with operation_span("run", run_id=run.operation_run_id) as span:
+        await execute_autonomous_run(run.id, cancel_check=_cancel_check)
+    summary = build_summary(span).model_dump(mode="json")
+    return run_view(run.id, summary=summary).model_dump(mode="json")

@@ -12,6 +12,7 @@ from app.ai_agents.agents.creative_director import CreativeDirectorAgent
 from app.ai_agents.agents.critic import CriticAgent
 from app.ai_agents.agents.harmony import HarmonyAgent
 from app.ai_agents.agents.melody_motif import MelodyMotifAgent
+from app.ai_agents.agents.performance_expression import PerformanceExpressionAgent
 from app.ai_agents.agents.stubs import StubAgent
 from app.ai_agents.schemas import KNOWN_AGENT_IDS
 
@@ -23,6 +24,7 @@ _SPINE_FACTORIES: dict[str, type[BaseMusicAgent]] = {
     "melody_motif": MelodyMotifAgent,
     "arrangement": ArrangementAgent,
     "critic": CriticAgent,
+    "performance_expression": PerformanceExpressionAgent,
 }
 
 

@@ -26,6 +26,7 @@ from app.ai_agents.schemas import (
     CritiqueRecommendation,
 )
 from app.composition_plan_schemas import CompositionPlan
+from app.autonomous_composer_schemas import PROJECT_PLAN_SCHEMA_VERSION, ProjectPlanV1
 from app.schemas import KEY_PATTERN, SUPPORTED_TRACK_ROLES
 
 logger = logging.getLogger(__name__)
@@ -404,6 +405,7 @@ _CONTENT_TYPE_MODELS: dict[str, Type[BaseModel]] = {
     AGENT_COMPOSITION_PATCH_SCHEMA: AgentCompositionPatchV1,
     AGENT_RENDER_PLAN_SCHEMA: AgentRenderPlanV1,
     COMPOSITION_PLAN_SCHEMA: CompositionPlan,
+    PROJECT_PLAN_SCHEMA_VERSION: ProjectPlanV1,
     MUSIC_ANALYSIS_BOUNDED_SCHEMA: MusicAnalysisBoundedProjectionV1,
 }
 

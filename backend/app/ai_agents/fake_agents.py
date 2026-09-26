@@ -35,9 +35,13 @@ from app.ai_agents.agents.typed_emit import (
     depends_on_edges,
     form_plan_from_composition,
     harmony_plan_from_composition,
+    harmony_plan_from_project,
+    load_compiled_project_plan,
     make_plan_artifact,
     motif_plan_from_composition,
+    motif_plan_from_project,
 )
+from app.services.autonomous_project_plan import merge_director_text
 from app.ai_agents.schemas import (
     AGENT_CONTENT_TYPES,
     AGENT_FORM_PLAN_SCHEMA,
@@ -79,8 +83,8 @@ _DISPLAY: dict[str, str] = {
 _OPS: dict[str, list[AgentOperation]] = {
     "creative_director": [AgentOperation.PLAN, AgentOperation.RUN],
     "structure_form": [AgentOperation.PLAN, AgentOperation.RUN],
-    "harmony": [AgentOperation.PROPOSE, AgentOperation.RUN],
-    "melody_motif": [AgentOperation.PROPOSE, AgentOperation.RUN],
+    "harmony": [AgentOperation.PLAN, AgentOperation.PROPOSE, AgentOperation.RUN],
+    "melody_motif": [AgentOperation.PLAN, AgentOperation.PROPOSE, AgentOperation.RUN],
     "arrangement": [AgentOperation.PROPOSE, AgentOperation.RUN],
     "orchestration": [AgentOperation.PROPOSE, AgentOperation.ADVISE, AgentOperation.RUN],
     "performance_expression": [AgentOperation.ADVISE, AgentOperation.RUN],
@@ -184,6 +188,32 @@ class FakeAgent:
 
 class FakeCreativeDirectorAgent(FakeAgent):
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
+        compiled = load_compiled_project_plan(request.selection)
+        if compiled is not None:
+            merged = merge_director_text(compiled, compiled)
+            art = make_plan_artifact(
+                kind=AgentArtifactKind.PLAN,
+                producer_agent_id=self._descriptor.id,
+                content_type="project.plan.v1",
+                payload=merged.model_dump(mode="json"),
+                source_fingerprint=request.context.source_fingerprint,
+                provenance=self._provenance("agent_creative_director_plan"),
+            )
+            logger.info(
+                "Fake director project plan produced",
+                extra={
+                    "agent_id": self._descriptor.id,
+                    "operation": request.operation.value,
+                    "content_types": [art.content_type],
+                },
+            )
+            return AgentRunResult(
+                agent_id=self._descriptor.id,
+                operation=request.operation,
+                artifacts=[art],
+                updated_context_slots={"project_plan": art},
+                provenance_stage=self._stage("agent_creative_director_plan"),
+            )
         brief = AgentBriefV1(
             intent="fake multi-agent spine brief",
             mood="calm",
@@ -243,6 +273,40 @@ class FakeCreativeDirectorAgent(FakeAgent):
 
 class FakeHarmonyAgent(FakeAgent):
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
+        if request.operation == AgentOperation.PLAN:
+            compiled = load_compiled_project_plan(request.selection)
+            payload = (
+                harmony_plan_from_project(compiled)
+                if compiled is not None
+                else harmony_plan_from_composition(request.context.working_draft_composition)
+            )
+            art = make_plan_artifact(
+                kind=AgentArtifactKind.PLAN,
+                producer_agent_id=self._descriptor.id,
+                content_type=AGENT_HARMONY_PLAN_SCHEMA,
+                payload=payload,
+                source_fingerprint=request.context.source_fingerprint,
+                provenance=self._provenance("agent_harmony_plan"),
+            )
+            logger.info(
+                "Fake harmony plan produced",
+                extra={
+                    "agent_id": self._descriptor.id,
+                    "operation": request.operation.value,
+                    "content_types": [art.content_type],
+                },
+            )
+            logger.debug(
+                "PLAN skips realize",
+                extra={"agent_id": self._descriptor.id, "operation": request.operation.value},
+            )
+            return AgentRunResult(
+                agent_id=self._descriptor.id,
+                operation=request.operation,
+                artifacts=[art],
+                updated_context_slots={"harmony_artifact": art},
+                provenance_stage=self._stage("agent_harmony_plan"),
+            )
         draft = request.context.working_draft_composition
         nudged = draft.model_copy(update={"tempo": min(200, int(draft.tempo) + 1)})
         realized = apply_realized_composition(
@@ -301,6 +365,40 @@ class FakeHarmonyAgent(FakeAgent):
 
 class FakeMelodyMotifAgent(FakeAgent):
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
+        if request.operation == AgentOperation.PLAN:
+            compiled = load_compiled_project_plan(request.selection)
+            payload = (
+                motif_plan_from_project(compiled)
+                if compiled is not None
+                else motif_plan_from_composition(request.context.working_draft_composition)
+            )
+            art = make_plan_artifact(
+                kind=AgentArtifactKind.PLAN,
+                producer_agent_id=self._descriptor.id,
+                content_type=AGENT_MOTIF_PLAN_SCHEMA,
+                payload=payload,
+                source_fingerprint=request.context.source_fingerprint,
+                provenance=self._provenance("agent_melody_motif_plan"),
+            )
+            logger.info(
+                "Fake motif plan produced",
+                extra={
+                    "agent_id": self._descriptor.id,
+                    "operation": request.operation.value,
+                    "content_types": [art.content_type],
+                },
+            )
+            logger.debug(
+                "PLAN skips realize",
+                extra={"agent_id": self._descriptor.id, "operation": request.operation.value},
+            )
+            return AgentRunResult(
+                agent_id=self._descriptor.id,
+                operation=request.operation,
+                artifacts=[art],
+                updated_context_slots={"melody_artifact": art},
+                provenance_stage=self._stage("agent_melody_motif_plan"),
+            )
         draft = request.context.working_draft_composition
         motif_plan = make_plan_artifact(
             kind=AgentArtifactKind.PLAN,
@@ -589,12 +687,20 @@ class FakeStubAgent(FakeAgent):
         )
 
 
+class FakePerformanceExpressionAgent(FakeAgent):
+    async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
+        from app.ai_agents.agents.performance_expression import PerformanceExpressionAgent
+
+        return await PerformanceExpressionAgent._run_impl(self, request)
+
+
 _FACTORIES: dict[str, type[FakeAgent]] = {
     "creative_director": FakeCreativeDirectorAgent,
     "harmony": FakeHarmonyAgent,
     "melody_motif": FakeMelodyMotifAgent,
     "arrangement": FakeArrangementAgent,
     "critic": FakeCriticAgent,
+    "performance_expression": FakePerformanceExpressionAgent,
 }
 
 

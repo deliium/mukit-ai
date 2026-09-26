@@ -213,6 +213,48 @@ def _insert_row(
     return artifact_id
 
 
+def insert_durable(
+    project_id: str,
+    artifact: AgentArtifactV1,
+    *,
+    conn: sqlite3.Connection | None = None,
+    db_path: Path | str | None = None,
+    source_revision_id: str | None = None,
+) -> str:
+    """Insert a durable artifact row with no expiry and no revision link."""
+    started = time.perf_counter()
+    payload = _validate_for_persist(artifact)
+
+    def _do(connection: sqlite3.Connection) -> str:
+        artifact_id = _insert_row(
+            connection,
+            project_id=project_id,
+            artifact=artifact,
+            payload=payload,
+            retention_class="durable",
+            expires_at=None,
+            source_revision_id=source_revision_id,
+        )
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "Agent artifact durable insert",
+            extra={
+                "project_id_prefix": project_id[:12],
+                "artifact_id_prefix": artifact_id[:12],
+                "content_type": artifact.content_type[:80],
+                "producer_agent_id": artifact.producer_agent_id,
+                "retention_class": "durable",
+                "duration_ms": duration_ms,
+            },
+        )
+        return artifact_id
+
+    if conn is not None:
+        return _do(conn)
+    with get_connection(_resolve_path(db_path)) as connection:
+        return _do(connection)
+
+
 def insert_temporary(
     project_id: str,
     artifact: AgentArtifactV1,

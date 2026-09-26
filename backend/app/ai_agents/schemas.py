@@ -165,6 +165,7 @@ AGENT_CONTENT_TYPES: frozenset[str] = frozenset(
         AGENT_RENDER_PLAN_SCHEMA,
         "composition.v2",
         "composition.plan.v1",
+        "project.plan.v1",
         "composition.analysis.v1",  # critic deterministic sidecar
         "composition.analysis.bounded.v1",
         "arrangement.candidate",

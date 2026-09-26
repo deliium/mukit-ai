@@ -16,6 +16,8 @@ from app.ai_agents.agents.typed_emit import (
     composition_patch_payload,
     depends_on_edges,
     harmony_plan_from_composition,
+    harmony_plan_from_project,
+    load_compiled_project_plan,
     make_plan_artifact,
     parent_ids_from_context,
 )
@@ -23,6 +25,7 @@ from app.ai_agents.progressive_realize import RealizeService, apply_realized_com
 from app.ai_agents.schemas import (
     AgentArtifactKind,
     AgentArtifactV1,
+    AgentOperation,
     AgentRunRequest,
     AgentRunResult,
 )
@@ -39,6 +42,8 @@ class HarmonyAgent(BaseMusicAgent):
     """Propose harmony via ``preview_reharmonization`` (deterministic engine by default)."""
 
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
+        if request.operation == AgentOperation.PLAN:
+            return self._emit_plan(request)
         draft = request.context.working_draft_composition
         selection = request.selection or {}
         bar_count = max(1, int(draft.bar_count or 1))
@@ -154,6 +159,7 @@ class HarmonyAgent(BaseMusicAgent):
             "Harmony typed plans produced",
             extra={
                 "agent_id": self._descriptor.id,
+                "operation": request.operation.value,
                 "content_types": [
                     harmony_plan.content_type,
                     patch.content_type,
@@ -171,4 +177,38 @@ class HarmonyAgent(BaseMusicAgent):
                 "agent_harmony_propose", runtime="reharmonize_deterministic"
             ),
             warning_codes=warning_codes,
+        )
+
+    def _emit_plan(self, request: AgentRunRequest) -> AgentRunResult:
+        compiled = load_compiled_project_plan(request.selection)
+        if compiled is None:
+            payload = harmony_plan_from_composition(request.context.working_draft_composition)
+        else:
+            payload = harmony_plan_from_project(compiled)
+        art = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_HARMONY_PLAN_SCHEMA,
+            payload=payload,
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_harmony_plan", runtime="reharmonize_deterministic"),
+        )
+        logger.info(
+            "Harmony plan produced",
+            extra={
+                "agent_id": self._descriptor.id,
+                "operation": request.operation.value,
+                "content_types": [art.content_type],
+            },
+        )
+        logger.debug(
+            "PLAN skips realize",
+            extra={"agent_id": self._descriptor.id, "operation": request.operation.value},
+        )
+        return AgentRunResult(
+            agent_id=self._descriptor.id,
+            operation=request.operation,
+            artifacts=[art],
+            updated_context_slots={"harmony_artifact": art},
+            provenance_stage=self._stage("agent_harmony_plan", runtime="reharmonize_deterministic"),
         )

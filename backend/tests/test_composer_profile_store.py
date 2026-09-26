@@ -30,7 +30,7 @@ def test_migration_creates_composer_profiles_table(project_db):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-    assert revision == "20260925_0010"
+    assert revision == "20260926_0012"
     assert "composer_profiles" in tables
 
 

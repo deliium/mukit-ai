@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Mapping
 
 from app.ai_agents.artifact_schemas import (
     AgentArrangementPlanV1,
@@ -31,6 +31,7 @@ from app.ai_agents.schemas import (
     ArtifactDependencyEdge,
     CritiqueRecommendation,
 )
+from app.autonomous_composer_schemas import ProjectPlanV1
 from app.composition_schemas import CompositionV2
 
 logger = logging.getLogger(__name__)
@@ -206,6 +207,56 @@ def make_plan_artifact(
         },
     )
     return art
+
+
+def load_compiled_project_plan(selection: Mapping[str, Any] | None) -> ProjectPlanV1 | None:
+    """Return the compiler plan from selection, or None when the spine omitted it."""
+    raw = (selection or {}).get("compiled_project_plan")
+    if isinstance(raw, ProjectPlanV1):
+        return raw
+    if isinstance(raw, dict):
+        return ProjectPlanV1.model_validate(raw)
+    return None
+
+
+def tonic_chord_symbol(key: str) -> str:
+    parts = key.split()
+    root = parts[0] if parts else key
+    if len(parts) > 1 and parts[1].lower() == "minor":
+        return f"{root}m"[:32]
+    return root[:32]
+
+
+def harmony_plan_from_project(plan: ProjectPlanV1) -> dict[str, Any]:
+    """One tonic chord at each section start. Never one chord per bar."""
+    symbol = tonic_chord_symbol(plan.constraints.opening_key)
+    events = [
+        HarmonyPlanEvent(bar=section.start_bar, chord=symbol, function="tonic")
+        for section in plan.sections
+    ]
+    return AgentHarmonyPlanV1(
+        key=plan.constraints.opening_key,
+        chord_events=events,
+        comment="section_tonic",
+    ).model_dump(mode="json")
+
+
+def motif_plan_from_project(plan: ProjectPlanV1) -> dict[str, Any]:
+    section = next(
+        (item for item in plan.sections if item.id == plan.constraints.motif_section_id),
+        plan.sections[0],
+    )
+    return AgentMotifPlanV1(
+        motifs=[
+            MotifPlanEntry(
+                motif_label=plan.constraints.motif_label,
+                role="melody",
+                section_labels=[section.label],
+                recurrence="theme",
+            )
+        ],
+        comment="compiled_motif",
+    ).model_dump(mode="json")
 
 
 def bounded_analysis_payload(report: Any) -> dict[str, Any]:

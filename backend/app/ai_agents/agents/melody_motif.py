@@ -11,14 +11,17 @@ from app.ai_agents.agents.typed_emit import (
     AGENT_MOTIF_PLAN_SCHEMA,
     composition_patch_payload,
     depends_on_edges,
+    load_compiled_project_plan,
     make_plan_artifact,
     motif_plan_from_composition,
+    motif_plan_from_project,
     parent_ids_from_context,
 )
 from app.ai_agents.progressive_realize import RealizeService, apply_realized_composition
 from app.ai_agents.schemas import (
     AgentArtifactKind,
     AgentArtifactV1,
+    AgentOperation,
     AgentRunRequest,
     AgentRunResult,
 )
@@ -34,6 +37,8 @@ class MelodyMotifAgent(BaseMusicAgent):
     """Wrap motif apply when selection/motifs allow; otherwise pass-through draft."""
 
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
+        if request.operation == AgentOperation.PLAN:
+            return self._emit_plan(request)
         draft = request.context.working_draft_composition
         selection = request.selection or {}
         warning_codes: list[str] = []
@@ -144,6 +149,7 @@ class MelodyMotifAgent(BaseMusicAgent):
             "Melody/motif typed plans produced",
             extra={
                 "agent_id": self._descriptor.id,
+                "operation": request.operation.value,
                 "content_types": [motif_plan.content_type, patch.content_type, art.content_type],
             },
         )
@@ -155,4 +161,38 @@ class MelodyMotifAgent(BaseMusicAgent):
             working_draft_update=working_draft_update,
             provenance_stage=self._stage("agent_melody_motif_propose", runtime="motif_service"),
             warning_codes=warning_codes,
+        )
+
+    def _emit_plan(self, request: AgentRunRequest) -> AgentRunResult:
+        compiled = load_compiled_project_plan(request.selection)
+        if compiled is None:
+            payload = motif_plan_from_composition(request.context.working_draft_composition)
+        else:
+            payload = motif_plan_from_project(compiled)
+        art = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type=AGENT_MOTIF_PLAN_SCHEMA,
+            payload=payload,
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_melody_motif_plan", runtime="motif_service"),
+        )
+        logger.info(
+            "Motif plan produced",
+            extra={
+                "agent_id": self._descriptor.id,
+                "operation": request.operation.value,
+                "content_types": [art.content_type],
+            },
+        )
+        logger.debug(
+            "PLAN skips realize",
+            extra={"agent_id": self._descriptor.id, "operation": request.operation.value},
+        )
+        return AgentRunResult(
+            agent_id=self._descriptor.id,
+            operation=request.operation,
+            artifacts=[art],
+            updated_context_slots={"melody_artifact": art},
+            provenance_stage=self._stage("agent_melody_motif_plan", runtime="motif_service"),
         )

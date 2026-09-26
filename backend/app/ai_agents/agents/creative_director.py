@@ -8,8 +8,10 @@ from app.ai_agents.agents.common import BaseMusicAgent, selection_str
 from app.ai_agents.agents.typed_emit import (
     AGENT_FORM_PLAN_SCHEMA,
     form_plan_from_composition,
+    load_compiled_project_plan,
     make_plan_artifact,
 )
+from app.services.autonomous_project_plan import merge_director_text
 from app.ai_agents.schemas import (
     AGENT_SPINE_WORKFLOW_ID,
     AgentArtifactKind,
@@ -31,6 +33,9 @@ class CreativeDirectorAgent(BaseMusicAgent):
     async def _run_impl(self, request: AgentRunRequest) -> AgentRunResult:
         draft = request.context.working_draft_composition
         selection = request.selection or {}
+        compiled = load_compiled_project_plan(selection)
+        if compiled is not None:
+            return self._emit_project_plan(request, compiled)
         intent = selection_str(
             selection,
             "intent",
@@ -108,5 +113,39 @@ class CreativeDirectorAgent(BaseMusicAgent):
                 "structure_plan": form_art,
                 "workflow_plan": plan_art,
             },
+            provenance_stage=self._stage("agent_creative_director_plan", runtime="language_planner"),
+        )
+
+    def _emit_project_plan(
+        self,
+        request: AgentRunRequest,
+        compiled,
+    ) -> AgentRunResult:
+        merged = merge_director_text(compiled, compiled)
+        art = make_plan_artifact(
+            kind=AgentArtifactKind.PLAN,
+            producer_agent_id=self._descriptor.id,
+            content_type="project.plan.v1",
+            payload=merged.model_dump(mode="json"),
+            source_fingerprint=request.context.source_fingerprint,
+            provenance=self._provenance("agent_creative_director_plan", runtime="language_planner"),
+        )
+        logger.info(
+            "Creative director project plan produced",
+            extra={
+                "agent_id": self._descriptor.id,
+                "operation": request.operation.value,
+                "content_types": [art.content_type],
+            },
+        )
+        logger.debug(
+            "Director plan left the draft unchanged",
+            extra={"agent_id": self._descriptor.id, "operation": request.operation.value},
+        )
+        return AgentRunResult(
+            agent_id=self._descriptor.id,
+            operation=request.operation,
+            artifacts=[art],
+            updated_context_slots={"project_plan": art},
             provenance_stage=self._stage("agent_creative_director_plan", runtime="language_planner"),
         )

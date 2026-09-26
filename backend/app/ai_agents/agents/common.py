@@ -39,8 +39,8 @@ DISPLAY_NAMES: dict[str, str] = {
 SUPPORTED_OPS: dict[str, list[AgentOperation]] = {
     "creative_director": [AgentOperation.PLAN, AgentOperation.RUN],
     "structure_form": [AgentOperation.PLAN, AgentOperation.RUN],
-    "harmony": [AgentOperation.PROPOSE, AgentOperation.RUN],
-    "melody_motif": [AgentOperation.PROPOSE, AgentOperation.RUN],
+    "harmony": [AgentOperation.PLAN, AgentOperation.PROPOSE, AgentOperation.RUN],
+    "melody_motif": [AgentOperation.PLAN, AgentOperation.PROPOSE, AgentOperation.RUN],
     "arrangement": [AgentOperation.PROPOSE, AgentOperation.RUN],
     "orchestration": [AgentOperation.PROPOSE, AgentOperation.ADVISE, AgentOperation.RUN],
     "performance_expression": [AgentOperation.ADVISE, AgentOperation.RUN],
