@@ -49,16 +49,29 @@ Durable artifacts use `insert_durable` (`retention_class=durable`, `expires_at` 
 
 | Method | Path | Effect |
 |--------|------|--------|
-| POST | `/ai/agents/autonomous/runs` | Start. Response is `autonomous.run.v1` and has no composition body |
+| POST | `/ai/agents/autonomous/plans` | Compiler preview only. No run, no project, no model call |
+| POST | `/ai/agents/autonomous/runs` | Start. Optional `autonomy_mode` (`guided`, `balanced`, `autonomous`). Response is `autonomous.run.v1` and has no composition body |
 | GET | `/ai/agents/autonomous/runs/{id}` | Reconcile a stage left `running`, then return the view |
-| POST | `/ai/agents/autonomous/runs/{id}/cancel` | Cancel. Completed stages stay completed |
-| POST | `/ai/agents/autonomous/runs/{id}/resume` | Continue a recoverable failed stage |
+| POST | `/ai/agents/autonomous/runs/pause` | Body `{ "operation_run_id" }`. Sets `pause_requested` while the run is `running`. The in-flight stage finishes; the next stage stays `pending` and the run becomes `paused` |
+| POST | `/ai/agents/autonomous/runs/{id}/cancel` | Cancel. The in-flight stage fails with `operation_cancelled` and is not recoverable |
+| POST | `/ai/agents/autonomous/runs/{id}/resume` | Continue a `paused` run or a recoverable failure. `awaiting_approval` is `409 autonomous_run_not_resumable` |
+| POST | `/ai/agents/autonomous/runs/{id}/checkpoints/{checkpoint_id}/approve` | Clear that checkpoint and continue. The finished stage stays `completed` |
+| POST | `/ai/agents/autonomous/runs/{id}/checkpoints/arrangement/reject` | Restore the previous score revision as a child, mark arrangement retryable, and pause the same run |
+| POST | `/ai/agents/autonomous/runs/{id}/stages/{stage_id}/retry` | Re-queue one `failed` stage with `recoverable=1`. Not `operation_cancelled`. Later completed stages stay completed |
+| POST | `/ai/agents/autonomous/runs/{id}/stages/{stage_id}/instruction` | Store user text on `arrangement` or `expression` (max 500). Refused while the run is `running` |
+| POST | `/ai/agents/autonomous/runs/{id}/stages/{stage_id}/open` | Restore that stage’s revision as a child when it is the run head |
+| POST | `/ai/agents/autonomous/runs/{id}/stages/{stage_id}/branch` | Create a branch from that stage’s revision. Does not checkout and does not change the run’s branch |
+| GET | `/ai/agents/autonomous/runs/{id}/artifacts` | Public artifact projection. No note lists, pitches, prompts, critique `explanation`, or `evidence` |
 | POST | `/ai/agents/autonomous/runs/{id}/stages/render/approve` | Enqueue the neural job when the stage is `awaiting_approval` |
 | POST | `/ai/agents/autonomous/runs/{id}/stages/render/skip` | Skip that render and finish the run |
 
-The client mints `operation_run_id` before the start request. Model calls and an optional render share that id. See [observability](observability.md).
+The client mints `operation_run_id` before the start request. Pause posts that id and does not abort the start request. Model calls and an optional render share that id. See [observability](observability.md).
 
-`include_rendering` defaults false, so the render stage is `skipped`. When rendering is on, `render_approval` defaults to `required` and the run pauses at `awaiting_approval` before enqueue.
+Omitted `autonomy_mode` is `autonomous`. The nine-stage graph is unchanged. `project.plan.v1` stays immutable after compile. `autonomy_mode` and `checkpoint_id` live on the run. Guided mode holds after the plan, harmony, theme, critique, and arrangement. In Guided mode the user can approve the theme, reject the arrangement, send “Keep the melody, but use a smaller string arrangement.”, and continue from the arrangement stage on the same run and project. Melody fingerprints and forbidden instrument families still gate the commit.
+
+The panel shows musical labels (Composition plan, Harmony, the brief’s motif label, Critique, Arrangement, Final performance). It does not show `operation_summary`, prompts, critique `explanation`, critique `evidence`, or any reasoning field.
+
+`include_rendering` defaults false, so the render stage is `skipped`. When rendering is on, `render_approval` defaults to `required` and the run waits at `awaiting_approval` with `checkpoint_id=render` before enqueue.
 
 ## Operators
 
@@ -73,5 +86,10 @@ Codes you will see, without note text:
 - `autonomous_stage_interrupted` — a `running` stage had no revision when the process stopped. Resume can retry it
 - `autonomous_agent_operation_budget` — the next agent was not called
 - `operation_cancelled` — the in-flight stage failed; earlier completed stages stay completed
+- `autonomous_instruction_unsafe` — the instruction was refused before it was stored
+- `autonomous_instruction_unparsed` — the text was stored as a warning and did not change the score
+- `autonomous_stage_rejected` — the arrangement revision stays in history and the stage can be retried
+- `autonomous_stage_not_rejectable` — reject was not on the arrangement checkpoint
+- `autonomous_revision_not_head` — open was asked for a revision that is not the run head. Branch that stage instead
 
 A fingerprint mismatch against the project is `409 project_revision_conflict`. The previous revision stays head.

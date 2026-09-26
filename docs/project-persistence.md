@@ -17,6 +17,8 @@ Projects store metadata and operational **`composition.v2`** JSON in a backend *
 9. Restart containers with `docker compose restart` (do **not** use `docker compose down -v`).
 10. Reopen the same project — active branch draft, branch names, and revision graph return from SQLite.
 
+Autonomous composer runs use this same history graph. Pause, a musical checkpoint, or rejecting an arrangement does not start a second graph. A rejected arrangement stays as an older revision; restore writes a new child and the working head moves back to the score from the previous stage. Branching from a stage calls the existing `POST /projects/{id}/branches` route and does not check out that branch or change the run’s `branch_id`.
+
 Compose loads backend secrets from `.env` (see root `.env.example`). Frontend nginx proxies `/projects` to the backend on the same origin in production-local Docker.
 
 Rename, duplicate, and delete (with confirmation) are available on the home screen. The composer bar shows the project name and save status, plus a **Projects** back button and **History**.

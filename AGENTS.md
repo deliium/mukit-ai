@@ -188,6 +188,10 @@ mukit-ai/
 | `backend/app/routers/ai_models.py` | `GET /ai/models` (+ `/{id}`) discovery |
 | `backend/app/routers/ai_agents.py` | `GET /ai/agents`, `POST /ai/agents/{id}/run`, workflow preview (optional `persist_workspace_artifacts`), autonomous runs |
 | `backend/app/services/autonomous_composer.py` | Schedules the brief’s stages, commits score revisions, and owns the autonomous run store |
+| `backend/app/services/autonomous_instruction.py` | Closed arrangement-instruction interpreter (`thin_strings` or `unparsed`); never logs the text |
+| `backend/app/services/autonomous_progress.py` | Musical progress board for a run’s stages |
+| `frontend/src/components/AutonomousComposerPanel.jsx` | Agents-tab brief editor, plan review, and co-producer controls |
+| `frontend/src/utils/autonomousControl.js` | Brief fingerprint, start gate, musical board, client instruction check |
 | `backend/app/services/agent_artifact_workspace.py` | Immutable typed artifact INSERT/promote/GC; never imported by `ai_agents/` |
 | `backend/app/services/artifact_role_map.py` | Validate `artifact_role_map` for `multi-agent-apply` |
 | `backend/app/routers/projects.py` | Project CRUD + autosave + revision/branch history APIs |
@@ -241,7 +245,7 @@ mukit-ai/
 | AI Runtime | `docs/ai-runtime.md` | Capability registry, operation routing, `/ai/models`, fallback, provenance |
 | Plugin SDK | `docs/plugin-sdk.md` | In-process plugins via `PLUGIN_PATHS`; `runtime=plugin` on `/ai/models`; no marketplace |
 | Multi-agent (V4) | `docs/multi-agent.md` | Specialized agents above runtime; workflow preview; Apply CAS |
-| Autonomous composer | `docs/autonomous-composer.md` | One brief to a durable multi-section project; spine preview stays preview-only |
+| Autonomous composer | `docs/autonomous-composer.md` | One brief to a durable multi-section project; Guided checkpoints and pause stay on the same run; spine preview stays preview-only |
 | Operation traces | `docs/observability.md` | Run ids, redacted spans, budgets, cancel, crash containment |
 | Optional local AI | `docs/local-ai.md` | AMD/ROCm Compose profiles, llama.cpp/vLLM, memory-safe defaults, troubleshooting |
 | Composition V2 | `docs/composition-v2.md` | Operational canonical contract and export fidelity |
