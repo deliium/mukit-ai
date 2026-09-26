@@ -19,6 +19,10 @@ from app.autonomous_composer_schemas import (
     AutonomousStageViewV1,
     CreativeBriefV1,
     ProjectPlanV1,
+    PublicPlanConstraintsV1,
+    PublicPlanGoalV1,
+    PublicPlanProjectionV1,
+    PublicPlanSectionV1,
 )
 from app.autonomous_composer_settings import load_autonomous_composer_settings
 from app.composition_schemas import CompositionV2
@@ -28,6 +32,10 @@ from app.services.autonomous_composer_store import (
     get_run,
     get_run_by_operation,
     insert_run,
+    mark_stage_rejected,
+    replace_plan_json,
+    set_checkpoint,
+    set_pause_requested,
     update_run_fields,
     update_stage_status,
 )
@@ -44,13 +52,100 @@ logger = logging.getLogger(__name__)
 
 CancelCheck = Callable[[], bool | Awaitable[bool]]
 
+_CHECKPOINT_AFTER: dict[str, str] = {
+    "plan": "form",
+    "harmony_plan": "harmony",
+    "symbolic": "motif",
+    "critique": "critique",
+    "arrangement": "arrangement",
+}
+_MODE_HOLDS: dict[str, frozenset[str]] = {
+    "guided": frozenset({"form", "harmony", "motif", "critique", "arrangement"}),
+    "balanced": frozenset({"form", "motif", "arrangement"}),
+    "autonomous": frozenset(),
+}
+_CHECKPOINT_STAGE: dict[str, str] = {
+    "form": "plan",
+    "harmony": "harmony_plan",
+    "motif": "symbolic",
+    "critique": "critique",
+    "arrangement": "arrangement",
+    "render": "render",
+}
+_STAGE_ORDER = (
+    "plan",
+    "harmony_plan",
+    "motif_plan",
+    "symbolic",
+    "critique",
+    "revision",
+    "arrangement",
+    "expression",
+    "render",
+)
+
+
+def project_public_plan(plan: ProjectPlanV1 | dict[str, Any]) -> PublicPlanProjectionV1:
+    """Fields the panel may show. Note lists and prompts stay off this object."""
+    model = plan if isinstance(plan, ProjectPlanV1) else ProjectPlanV1.model_validate(plan)
+    return PublicPlanProjectionV1(
+        goals=[
+            PublicPlanGoalV1(id=goal.id, summary=goal.summary, section_id=goal.section_id)
+            for goal in model.goals
+        ],
+        sections=[
+            PublicPlanSectionV1(
+                id=section.id,
+                type=section.type,
+                label=section.label,
+                start_bar=section.start_bar,
+                bar_count=section.bar_count,
+                density=section.density,
+                key=section.key,
+                narrative=section.narrative,
+            )
+            for section in model.sections
+        ],
+        constraints=PublicPlanConstraintsV1(
+            opening_key=model.constraints.opening_key,
+            final_section_key=model.constraints.final_section_key,
+            duration_bars=model.constraints.duration_bars,
+            instruments=list(model.constraints.instruments),
+            forbidden_instrument_families=list(model.constraints.forbidden_instrument_families),
+            motif_label=model.constraints.motif_label,
+        ),
+    )
+
+
+def preview_compiled_plan(brief: CreativeBriefV1) -> ProjectPlanV1:
+    """Compile a plan for review. Does not insert a run or call an agent."""
+    plan = compile_project_plan(brief)
+    brief_text = brief.model_dump_json()
+    logger.info(
+        "Autonomous plan preview compiled",
+        extra={
+            "duration_bars": plan.constraints.duration_bars,
+            "section_count": len(plan.sections),
+            "opening_key": plan.constraints.opening_key,
+            "brief_len": len(brief_text),
+        },
+    )
+    return plan
+
 
 def run_view(run_id: str, *, db_path: Path | str | None = None, summary: dict | None = None) -> AutonomousRunViewV1:
     run = get_run(run_id, db_path=db_path)
+    plan = None
+    if run.plan_json:
+        plan = project_public_plan(ProjectPlanV1.model_validate_json(run.plan_json))
     return AutonomousRunViewV1(
         run_id=run.id,
         project_id=run.project_id,
         status=run.status,
+        autonomy_mode=run.autonomy_mode,  # type: ignore[arg-type]
+        checkpoint_id=run.checkpoint_id,  # type: ignore[arg-type]
+        pause_requested=run.pause_requested,
+        plan=plan,
         head_revision_id=run.head_revision_id,
         composition_fingerprint=run.composition_fingerprint,
         budget_code=run.budget_code,
@@ -63,6 +158,11 @@ def run_view(run_id: str, *, db_path: Path | str | None = None, summary: dict | 
                 revision_id=stage.revision_id,
                 failure_code=stage.failure_code,
                 artifact_ids=list(stage.artifact_ids),
+                decision=stage.decision,  # type: ignore[arg-type]
+                instruction=stage.instruction,
+                rejected_revision_id=stage.rejected_revision_id,
+                completion_code=stage.completion_code,
+                warning_code=stage.warning_code,
             )
             for stage in run.stages
         ],
@@ -235,8 +335,15 @@ def approve_render_stage(run_id: str, *, db_path: Path | str | None = None) -> N
     if stage is None or stage.status != "awaiting_approval":
         raise AutonomousStoreError(
             "render stage is not awaiting approval",
-            code="autonomous_run_not_resumable",
-        )
+        code="autonomous_run_not_resumable",
+    )
+    set_checkpoint(
+        run_id,
+        checkpoint_id=None,
+        stage_id="render",
+        decision="approved",
+        db_path=db_path,
+    )
     job_id = dispatch_render(run_id, db_path=db_path)
     update_stage_status(
         run_id,
@@ -257,6 +364,7 @@ def skip_render_stage(run_id: str, *, db_path: Path | str | None = None) -> None
             "render stage is not awaiting approval",
             code="autonomous_run_not_resumable",
         )
+    set_checkpoint(run_id, checkpoint_id=None, db_path=db_path)
     update_stage_status(
         run_id,
         "render",
@@ -274,6 +382,373 @@ def _finish_run_status(run_id: str, db_path: Path | str | None) -> None:
         update_run_fields(run_id, status="completed", db_path=db_path)
     elif "awaiting_approval" in statuses:
         update_run_fields(run_id, status="awaiting_approval", db_path=db_path)
+    if fresh.checkpoint_id == "render" and statuses <= {"completed", "skipped"}:
+        set_checkpoint(run_id, checkpoint_id=None, db_path=db_path)
+
+
+def maybe_hold_checkpoint(
+    run_id: str,
+    stage_id: str,
+    *,
+    db_path: Path | str | None = None,
+) -> bool:
+    """Pause before the next stage when the mode requires this checkpoint."""
+    fresh = get_run(run_id, db_path=db_path)
+    stage = next((row for row in fresh.stages if row.stage_id == stage_id), None)
+    if stage is None or stage.status not in {"completed", "skipped"}:
+        return False
+    checkpoint_id = _CHECKPOINT_AFTER.get(stage_id)
+    if checkpoint_id is None or checkpoint_id not in _MODE_HOLDS.get(fresh.autonomy_mode, frozenset()):
+        return False
+    set_checkpoint(
+        run_id,
+        checkpoint_id=checkpoint_id,
+        status="awaiting_approval",
+        db_path=db_path,
+    )
+    next_stage = _next_stage_id(stage_id)
+    logger.info(
+        "Autonomous checkpoint holding",
+        extra={
+            "run_id": run_id[:16],
+            "checkpoint_id": checkpoint_id,
+            "autonomy_mode": fresh.autonomy_mode,
+        },
+    )
+    logger.debug(
+        "Autonomous stage not started",
+        extra={"run_id": run_id[:16], "stage_id": next_stage},
+    )
+    return True
+
+
+def approve_checkpoint(
+    run_id: str,
+    checkpoint_id: str,
+    *,
+    db_path: Path | str | None = None,
+) -> None:
+    """Clear a matching checkpoint and record decision=approved."""
+    fresh = get_run(run_id, db_path=db_path)
+    if fresh.status != "awaiting_approval" or fresh.checkpoint_id != checkpoint_id:
+        raise AutonomousStoreError("not resumable", code="autonomous_run_not_resumable")
+    stage_id = _CHECKPOINT_STAGE.get(checkpoint_id)
+    if stage_id is None:
+        raise AutonomousStoreError("not resumable", code="autonomous_run_not_resumable")
+    set_checkpoint(
+        run_id,
+        checkpoint_id=None,
+        stage_id=stage_id,
+        decision="approved",
+        db_path=db_path,
+    )
+    logger.info(
+        "Autonomous checkpoint approved",
+        extra={
+            "run_id": run_id[:16],
+            "checkpoint_id": checkpoint_id,
+            "autonomy_mode": fresh.autonomy_mode,
+            "decision": "approved",
+        },
+    )
+
+
+def _next_stage_id(stage_id: str) -> str | None:
+    try:
+        index = _STAGE_ORDER.index(stage_id)
+    except ValueError:
+        return None
+    if index + 1 >= len(_STAGE_ORDER):
+        return None
+    return _STAGE_ORDER[index + 1]
+
+
+def request_pause_by_operation(
+    operation_run_id: str,
+    *,
+    db_path: Path | str | None = None,
+):
+    """Set pause_requested while a run is in flight. Other statuses are unchanged."""
+    run = get_run_by_operation(operation_run_id, db_path=db_path)
+    if run is None:
+        raise AutonomousStoreError("run not found", code="autonomous_run_not_found")
+    if run.status != "running":
+        logger.info(
+            "Autonomous pause ignored",
+            extra={"run_id": run.id[:16], "status": run.status},
+        )
+        return run
+    set_pause_requested(run.id, True, db_path=db_path)
+    paused = get_run(run.id, db_path=db_path)
+    logger.info(
+        "Autonomous pause requested",
+        extra={"run_id": paused.id[:16], "status": paused.status},
+    )
+    return paused
+
+
+def retry_stage(run_id: str, stage_id: str, *, db_path: Path | str | None = None) -> None:
+    """Re-queue one recoverable failed stage. Later completed stages stay completed."""
+    run = get_run(run_id, db_path=db_path)
+    if run.status == "cancelled":
+        raise AutonomousStoreError("not resumable", code="autonomous_run_not_resumable")
+    stage = _stage(run, stage_id)
+    if (
+        stage.status != "failed"
+        or not stage.recoverable
+        or stage.failure_code == "operation_cancelled"
+    ):
+        raise AutonomousStoreError("not resumable", code="autonomous_run_not_resumable")
+    update_stage_status(
+        run_id,
+        stage_id,
+        "pending",
+        failure_code=None,
+        recoverable=1,
+        db_path=db_path,
+    )
+    logger.info(
+        "Autonomous stage retry queued",
+        extra={"run_id": run_id[:16], "stage_id": stage_id, "status": "pending"},
+    )
+
+
+def reject_arrangement(run_id: str, *, db_path: Path | str | None = None) -> None:
+    """Restore the pre-arrangement score and leave arrangement retryable."""
+    run = get_run(run_id, db_path=db_path)
+    arrangement = _stage(run, "arrangement")
+    expression = _stage(run, "expression")
+    if (
+        run.checkpoint_id != "arrangement"
+        or arrangement.status != "completed"
+        or expression.status != "pending"
+        or not arrangement.revision_id
+    ):
+        logger.warning(
+            "Arrangement reject refused",
+            extra={"code": "autonomous_stage_not_rejectable", "run_id": run_id[:16]},
+        )
+        raise AutonomousStoreError(
+            "arrangement is not rejectable",
+            code="autonomous_stage_not_rejectable",
+        )
+    previous = _pre_arrangement_revision_id(run)
+    restored = _restore_historical_revision(run, previous, db_path=db_path)
+    mark_stage_rejected(
+        run_id,
+        "arrangement",
+        rejected_revision_id=arrangement.revision_id,
+        failure_code="autonomous_stage_rejected",
+        head_revision_id=restored[0],
+        composition_fingerprint=restored[1],
+        db_path=db_path,
+    )
+    logger.info(
+        "Autonomous arrangement rejected",
+        extra={
+            "run_id": run_id[:16],
+            "stage_id": "arrangement",
+            "status": "paused",
+            "old_revision_id": arrangement.revision_id[:16],
+            "new_revision_id": restored[0][:16],
+        },
+    )
+
+
+def open_stage_revision(run_id: str, stage_id: str, *, db_path: Path | str | None = None) -> None:
+    """Restore the stage revision when it is still the run head."""
+    run = get_run(run_id, db_path=db_path)
+    if run.status not in {"paused", "awaiting_approval", "completed"}:
+        raise AutonomousStoreError("not resumable", code="autonomous_run_not_resumable")
+    stage = _stage(run, stage_id)
+    if not stage.revision_id or stage.revision_id != run.head_revision_id:
+        raise AutonomousStoreError(
+            "revision is not the run head",
+            code="autonomous_revision_not_head",
+        )
+    restored = _restore_historical_revision(run, stage.revision_id, db_path=db_path)
+    update_run_fields(
+        run_id,
+        head_revision_id=restored[0],
+        composition_fingerprint=restored[1],
+        set_head_revision_id=True,
+        set_fingerprint=True,
+        db_path=db_path,
+    )
+    logger.info(
+        "Autonomous stage revision opened",
+        extra={"run_id": run_id[:16], "stage_id": stage_id, "status": run.status},
+    )
+
+
+def branch_from_stage(
+    run_id: str,
+    stage_id: str,
+    name: str,
+    *,
+    db_path: Path | str | None = None,
+) -> dict[str, str]:
+    """Create a branch at the stage revision without checkout or retargeting the run."""
+    from app.project_history_schemas import BranchCreateRequest
+    from app.services.project_history import create_branch
+
+    run = get_run(run_id, db_path=db_path)
+    stage = _stage(run, stage_id)
+    if not stage.revision_id:
+        raise AutonomousStoreError("revision is not the run head", code="autonomous_revision_not_head")
+    original_branch = run.branch_id
+    created = create_branch(
+        run.project_id,
+        BranchCreateRequest(name=name, from_revision_id=stage.revision_id, checkout=False),
+        db_path=db_path,
+    )
+    latest = get_run(run_id, db_path=db_path)
+    if latest.branch_id != original_branch:
+        raise AutonomousStoreError("run branch changed", code="autonomous_run_invalid")
+    logger.info(
+        "Autonomous stage branch created",
+        extra={"run_id": run_id[:16], "stage_id": stage_id, "status": latest.status},
+    )
+    return {"branch_id": created.id, "name": created.name}
+
+
+def list_run_artifacts(run_id: str, *, db_path: Path | str | None = None) -> list[dict[str, Any]]:
+    """Projected artifact rows. Findings omit explanation and evidence."""
+    from app.services.agent_artifact_workspace import ArtifactNotFoundError, get_artifact
+
+    run = get_run(run_id, db_path=db_path)
+    rows: list[dict[str, Any]] = []
+    for stage in run.stages:
+        if not stage.artifact_ids and not stage.revision_id:
+            continue
+        artifact_id = stage.artifact_ids[0] if stage.artifact_ids else None
+        content_type = None
+        projection: dict[str, Any] | None = None
+        if artifact_id:
+            try:
+                meta = get_artifact(
+                    run.project_id,
+                    artifact_id,
+                    include_payload=True,
+                    db_path=db_path,
+                )
+            except ArtifactNotFoundError:
+                meta = None
+            if meta is not None:
+                content_type = str(meta.get("content_type") or "")
+                payload = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
+                projection = _project_artifact_payload(content_type, payload)
+        rows.append(
+            {
+                "stage_id": stage.stage_id,
+                "artifact_id": artifact_id,
+                "content_type": content_type,
+                "revision_id": stage.revision_id,
+                "rejected_revision_id": stage.rejected_revision_id,
+                "projection": projection if projection is not None else (
+                    {"content_type": content_type} if content_type else None
+                ),
+            }
+        )
+    return rows
+
+
+
+def _stage(run, stage_id: str):
+    stage = next((row for row in run.stages if row.stage_id == stage_id), None)
+    if stage is None:
+        raise AutonomousStoreError("stage not found", code="autonomous_stage_not_found")
+    return stage
+
+
+def _pre_arrangement_revision_id(run) -> str:
+    revision = _stage(run, "revision")
+    if revision.revision_id:
+        return revision.revision_id
+    symbolic = _stage(run, "symbolic")
+    if not symbolic.revision_id:
+        raise AutonomousStoreError("score revision missing", code="autonomous_stage_not_rejectable")
+    return symbolic.revision_id
+
+
+def _restore_historical_revision(run, revision_id: str, *, db_path: Path | str | None) -> tuple[str, str]:
+    from app.project_history_schemas import RestoreRevisionRequest
+    from app.services.project_history import restore_revision_command
+    from app.services.project_history_store import (
+        ProjectHistoryError,
+        ProjectRevisionConflictError,
+    )
+
+    path = Path(db_path) if db_path is not None else None
+    with get_connection(path) as conn:
+        state = _load_branch_command_state(conn, run.project_id, run.branch_id)
+    if state.working_fingerprint != state.head_snapshot_fingerprint:
+        raise AutonomousStoreError("dirty draft", code="project_revision_conflict")
+    request = RestoreRevisionRequest(
+        branch_id=run.branch_id,
+        expected_active_branch_id=state.active_branch_id or run.branch_id,
+        expected_working_version=state.working_version,
+        expected_head_revision_id=state.head_revision_id or "",
+    )
+    try:
+        restored = restore_revision_command(
+            run.project_id,
+            revision_id,
+            request,
+            db_path=db_path,
+        )
+    except ProjectRevisionConflictError as exc:
+        raise AutonomousStoreError("revision conflict", code="project_revision_conflict") from exc
+    except ProjectHistoryError as exc:
+        message = str(exc).lower()
+        if "clean" in message or "fingerprint" in message:
+            raise AutonomousStoreError("dirty draft", code="project_revision_conflict") from exc
+        raise AutonomousStoreError("restore failed", code="autonomous_run_invalid") from exc
+    return restored.current_revision_id, restored.working_fingerprint
+
+
+def _project_artifact_payload(content_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if content_type == "project.plan.v1":
+        return project_public_plan(payload).model_dump(mode="json")
+    if content_type == "agent.harmony_plan.v1":
+        events = payload.get("chord_events") or []
+        return {"key": payload.get("key"), "chord_event_count": len(events)}
+    if content_type == "agent.motif_plan.v1":
+        motifs = payload.get("motifs") if isinstance(payload.get("motifs"), list) else []
+        labels = [
+            str(item.get("motif_label"))
+            for item in motifs
+            if isinstance(item, dict) and item.get("motif_label")
+        ]
+        section_ids: list[str] = []
+        for item in motifs:
+            if not isinstance(item, dict):
+                continue
+            for key in ("section_ids", "section_labels"):
+                values = item.get(key)
+                if isinstance(values, list):
+                    section_ids.extend(str(value) for value in values)
+        return {"motif_label": labels[0] if labels else None, "section_ids": section_ids}
+    if content_type == "agent.critique.v1":
+        findings = []
+        for finding in payload.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            affected = finding.get("affected_range") if isinstance(finding.get("affected_range"), dict) else {}
+            findings.append(
+                {
+                    "code": finding.get("code"),
+                    "severity": finding.get("severity"),
+                    "stratum": finding.get("stratum"),
+                    "suggested_action": finding.get("suggested_action"),
+                    "bar_range": {
+                        "start_bar": affected.get("start_bar"),
+                        "end_bar": affected.get("end_bar"),
+                    },
+                }
+            )
+        return {"recommendation": payload.get("recommendation"), "findings": findings}
+    return {"content_type": content_type}
 
 
 async def execute_autonomous_run(
@@ -323,6 +798,18 @@ async def execute_autonomous_run(
             continue
         if stage.status == "failed" and not stage.recoverable:
             update_run_fields(run_id, status="failed", failure_code=stage.failure_code, db_path=db_path)
+            return
+        fresh = get_run(run_id, db_path=db_path)
+        if fresh.pause_requested:
+            set_pause_requested(run_id, False, status="paused", db_path=db_path)
+            logger.info(
+                "Autonomous run paused",
+                extra={"run_id": run_id[:16], "stage_id": stage.stage_id, "status": "paused"},
+            )
+            logger.debug(
+                "Autonomous stage not started",
+                extra={"run_id": run_id[:16], "stage_id": stage.stage_id},
+            )
             return
         if await _cancelled(cancel_check):
             update_stage_status(
@@ -392,9 +879,11 @@ async def execute_autonomous_run(
                 )
                 if stage.stage_id == "plan" and artifact is not None:
                     plan = ProjectPlanV1.model_validate(artifact.payload)
+                    merged = plan.model_dump(mode="json")
+                    replace_plan_json(run_id, merged, db_path=db_path)
                     selection = {
                         **selection,
-                        "compiled_project_plan": plan.model_dump(mode="json"),
+                        "compiled_project_plan": merged,
                     }
                 update_stage_status(
                     run_id,
@@ -525,8 +1014,23 @@ async def execute_autonomous_run(
                         completion_code="render_dispatched",
                         db_path=db_path,
                     )
-                    update_run_fields(run_id, status="awaiting_approval", db_path=db_path)
+                    set_checkpoint(
+                        run_id,
+                        checkpoint_id="render",
+                        status="awaiting_approval",
+                        db_path=db_path,
+                    )
+                    logger.info(
+                        "Autonomous checkpoint holding",
+                        extra={
+                            "run_id": run_id[:16],
+                            "checkpoint_id": "render",
+                            "autonomy_mode": run.autonomy_mode,
+                        },
+                    )
                     return
+            if maybe_hold_checkpoint(run_id, stage.stage_id, db_path=db_path):
+                return
         except AutonomousConstraintError as exc:
             update_stage_status(
                 run_id,
@@ -586,6 +1090,7 @@ def prepare_run(
     expected_working_version: int | None,
     expected_head_revision_id: str | None,
     expected_source_fingerprint: str | None,
+    autonomy_mode: str = "autonomous",
     db_path: Path | str | None,
 ):
     existing = get_run_by_operation(operation_run_id, db_path=db_path)
@@ -623,5 +1128,6 @@ def prepare_run(
         plan=plan,
         seed=seed,
         include_rendering=include_rendering,
+        autonomy_mode=autonomy_mode,
         db_path=db_path,
     )

@@ -58,6 +58,8 @@ def test_example_brief_completes_without_rendering(client: TestClient) -> None:
     body = response.json()
     assert body["schema_version"] == "autonomous.run.v1"
     assert body["status"] == "completed"
+    assert body["autonomy_mode"] == "autonomous"
+    assert body["checkpoint_id"] is None
     assert body["head_revision_id"]
     assert body["project_id"]
     assert "composition" not in body

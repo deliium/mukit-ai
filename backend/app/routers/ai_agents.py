@@ -459,12 +459,35 @@ async def preview_agent_workflow(
 
 def _autonomous_http(exc: Exception) -> None:
     code = getattr(exc, "code", "autonomous_run_invalid")
-    status = 404 if code == "autonomous_run_not_found" else 409 if code in {
+    status = 404 if code in {"autonomous_run_not_found", "autonomous_stage_not_found"} else 409 if code in {
         "project_revision_conflict",
         "autonomous_run_limit",
         "autonomous_run_not_resumable",
+        "autonomous_revision_not_head",
+        "autonomous_stage_not_rejectable",
     } else 422
     raise HTTPException(status_code=status, detail={"code": code, "message": code}) from exc
+
+
+@router.post("/agents/autonomous/plans", response_model=None)
+async def preview_autonomous_plan(body: dict[str, Any]) -> dict[str, Any]:
+    from app.autonomous_composer_schemas import AutonomousPlanError, CreativeBriefV1
+    from app.services.autonomous_composer import preview_compiled_plan
+
+    try:
+        brief_body = body.get("brief") if isinstance(body.get("brief"), dict) else body
+        brief = CreativeBriefV1.model_validate(brief_body)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "autonomous_brief_invalid", "message": "autonomous_brief_invalid"},
+        ) from exc
+    try:
+        plan = preview_compiled_plan(brief)
+    except AutonomousPlanError as exc:
+        _autonomous_http(exc)
+        raise
+    return plan.model_dump(mode="json")
 
 
 @router.post("/agents/autonomous/runs", response_model=None)
@@ -488,6 +511,7 @@ async def start_autonomous_run(body: dict[str, Any], request: Request) -> dict[s
                 expected_head_revision_id=body.get("expected_head_revision_id"),
                 expected_source_fingerprint=body.get("expected_source_fingerprint"),
                 max_agent_operations=body.get("max_agent_operations"),
+                autonomy_mode=body.get("autonomy_mode") or "autonomous",
             )
         else:
             start = AutonomousRunStartV1.model_validate(body)
@@ -508,6 +532,7 @@ async def start_autonomous_run(body: dict[str, Any], request: Request) -> dict[s
             expected_working_version=start.expected_working_version,
             expected_head_revision_id=start.expected_head_revision_id,
             expected_source_fingerprint=start.expected_source_fingerprint,
+            autonomy_mode=start.autonomy_mode,
             db_path=None,
         )
     except (AutonomousPlanError, AutonomousStoreError) as exc:
@@ -597,7 +622,7 @@ async def resume_autonomous_run(run_id: str, request: Request) -> dict[str, Any]
     except AutonomousStoreError as exc:
         _autonomous_http(exc)
         raise
-    if run.status in {"completed", "cancelled", "awaiting_approval"}:
+    if run.status not in {"paused", "failed", "running", "pending"}:
         _autonomous_http(AutonomousStoreError("not resumable", code="autonomous_run_not_resumable"))
     async def _cancel_check() -> bool:
         return is_run_cancelled(run.operation_run_id)
@@ -606,6 +631,139 @@ async def resume_autonomous_run(run_id: str, request: Request) -> dict[str, Any]
         await execute_autonomous_run(run.id, cancel_check=_cancel_check)
     summary = build_summary(span).model_dump(mode="json")
     return run_view(run.id, summary=summary).model_dump(mode="json")
+
+
+@router.post("/agents/autonomous/runs/{run_id}/checkpoints/{checkpoint_id}/approve")
+async def approve_autonomous_checkpoint(
+    run_id: str,
+    checkpoint_id: str,
+) -> dict[str, Any]:
+    from app.operation_trace import build_summary, is_run_cancelled, operation_span
+    from app.services.autonomous_composer import (
+        approve_checkpoint,
+        approve_render_stage,
+        execute_autonomous_run,
+        run_view,
+    )
+    from app.services.autonomous_composer_store import AutonomousStoreError, get_run
+
+    try:
+        if checkpoint_id == "render":
+            approve_render_stage(run_id)
+            return run_view(run_id).model_dump(mode="json")
+        approve_checkpoint(run_id, checkpoint_id)
+        run = get_run(run_id)
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
+
+    async def _cancel_check() -> bool:
+        return is_run_cancelled(run.operation_run_id)
+
+    async with operation_span("run", run_id=run.operation_run_id) as span:
+        await execute_autonomous_run(run.id, cancel_check=_cancel_check)
+    summary = build_summary(span).model_dump(mode="json")
+    return run_view(run.id, summary=summary).model_dump(mode="json")
+
+
+@router.post("/agents/autonomous/runs/pause")
+async def pause_autonomous_run(body: dict[str, Any]) -> dict[str, Any]:
+    from app.services.autonomous_composer import request_pause_by_operation, run_view
+    from app.services.autonomous_composer_store import AutonomousStoreError
+
+    operation_run_id = str(body.get("operation_run_id") or "")
+    if not operation_run_id:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "autonomous_brief_invalid", "message": "autonomous_brief_invalid"},
+        )
+    try:
+        run = request_pause_by_operation(operation_run_id)
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
+    return run_view(run.id).model_dump(mode="json")
+
+
+@router.post("/agents/autonomous/runs/{run_id}/checkpoints/arrangement/reject")
+async def reject_autonomous_arrangement(run_id: str) -> dict[str, Any]:
+    from app.services.autonomous_composer import reject_arrangement, run_view
+    from app.services.autonomous_composer_store import AutonomousStoreError
+
+    try:
+        reject_arrangement(run_id)
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
+    return run_view(run_id).model_dump(mode="json")
+
+
+@router.post("/agents/autonomous/runs/{run_id}/stages/{stage_id}/retry")
+async def retry_autonomous_stage(run_id: str, stage_id: str, request: Request) -> dict[str, Any]:
+    from app.operation_trace import build_summary, is_run_cancelled, operation_span
+    from app.services.autonomous_composer import execute_autonomous_run, retry_stage, run_view
+    from app.services.autonomous_composer_store import AutonomousStoreError, get_run
+
+    try:
+        retry_stage(run_id, stage_id)
+        run = get_run(run_id)
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
+
+    async def _cancel_check() -> bool:
+        return is_run_cancelled(run.operation_run_id)
+
+    async with operation_span("run", run_id=run.operation_run_id) as span:
+        await execute_autonomous_run(run.id, cancel_check=_cancel_check)
+    summary = build_summary(span).model_dump(mode="json")
+    return run_view(run.id, summary=summary).model_dump(mode="json")
+
+
+
+@router.post("/agents/autonomous/runs/{run_id}/stages/{stage_id}/open")
+async def open_autonomous_stage(run_id: str, stage_id: str) -> dict[str, Any]:
+    from app.services.autonomous_composer import open_stage_revision, run_view
+    from app.services.autonomous_composer_store import AutonomousStoreError
+
+    try:
+        open_stage_revision(run_id, stage_id)
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
+    return run_view(run_id).model_dump(mode="json")
+
+
+@router.post("/agents/autonomous/runs/{run_id}/stages/{stage_id}/branch")
+async def branch_autonomous_stage(run_id: str, stage_id: str, body: dict[str, Any]) -> dict[str, str]:
+    from pydantic import ValidationError
+
+    from app.services.autonomous_composer import branch_from_stage
+    from app.services.autonomous_composer_store import AutonomousStoreError
+    from app.services.project_history_store import ProjectHistoryError
+
+    try:
+        return branch_from_stage(run_id, stage_id, str(body.get("name") or ""))
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "autonomous_brief_invalid", "message": "autonomous_brief_invalid"},
+        ) from exc
+    except (AutonomousStoreError, ProjectHistoryError) as exc:
+        _autonomous_http(exc)
+        raise
+
+
+@router.get("/agents/autonomous/runs/{run_id}/artifacts")
+async def get_autonomous_artifacts(run_id: str) -> dict[str, Any]:
+    from app.services.autonomous_composer import list_run_artifacts
+    from app.services.autonomous_composer_store import AutonomousStoreError
+
+    try:
+        return {"artifacts": list_run_artifacts(run_id)}
+    except AutonomousStoreError as exc:
+        _autonomous_http(exc)
+        raise
 
 
 @router.post("/agents/autonomous/runs/{run_id}/stages/{stage_id}/approve")
