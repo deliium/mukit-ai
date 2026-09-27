@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from alembic.script import ScriptDirectory
+
 from app.db import initialize_database, reset_database_initialization_cache
-from app.db.connection import get_connection
+from app.db.connection import _alembic_config, get_connection
 from app.services import project_store
 from app.services.autonomous_composer_store import (
     AUTONOMOUS_RUN_LIMIT,
@@ -63,7 +65,7 @@ def test_migration_creates_tables(project_db: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-    assert revision["version_num"] == "20260926_0013"
+    assert revision["version_num"] == ScriptDirectory.from_config(_alembic_config(project_db)).get_current_head()
     assert "autonomous_runs" in tables
     assert "autonomous_stages" in tables
 

@@ -1,0 +1,54 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 96,
+  "key": "D major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "bar_count": 2,
+  "duration_ticks": 3840,
+  "sections": [
+    {
+      "id": "section-ref",
+      "type": "intro",
+      "label": "Reference",
+      "start_bar": 1,
+      "bar_count": 2,
+      "start_tick": 0,
+      "duration_ticks": 3840
+    }
+  ],
+  "tracks": [
+    {
+      "id": "melody-1",
+      "name": "Melody",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "is_drum": false,
+      "volume": 100,
+      "pan": 0,
+      "events": [
+        {
+          "type": "note",
+          "id": "ref-1",
+          "pitch": "F#5",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 80
+        },
+        {
+          "type": "note",
+          "id": "ref-2",
+          "pitch": "F#5",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 76
+        }
+      ]
+    }
+  ],
+  "harmony": [],
+  "motifs": [],
+  "markers": []
+}
