@@ -14,13 +14,13 @@ Planning depth: final, ultra-thorough
 - Scope: introduce a first-class **audio↔symbolic alignment** representation and **round-trip editing** loop on top of shipped V4 audio recovery + neural audio egress — map composition ticks/bars ↔ source-audio timestamps (and stem **roles** where available); synchronize waveform audition with piano roll / playback cursor; bar-range selection → audio time window; invalidate dependent neural renders when audio-derived symbolic material changes; **never** silently modify original source audio; preserve provenance across original audio → recovery revision → edited composition → generated render; publish alignment quality/confidence metadata — **without** putting alignment/confidence on playable `composition.v2` note events, **without** inventing a new `playbackSource` / Tone Transport owner for source WAV, **without** inventing `composition.v4`, and **without** writing to `DATASET_ROOT`
 - Parent plans / shipped foundations:
   - `.ai-factory/plans/v4-audio-to-symbolic-workflow.md` (**shipped** — mixed recovery jobs, Bind durable source + `audio.recovery.result.v1` overlay, scaffolding/`beat_grid`, HTMLAudio vs Tone ownership lock)
-  - `.ai-factory/plans/audio-to-symbolic-musical-input.md` (**shipped** — mono `transcription.preview.v1`; seconds→ticks alignment helpers; ephemeral audio — **no durable source for seek**)
-  - `.ai-factory/plans/optional-neural-audio-rendering.md` (**shipped** — `/neural-audio/renders` jobs pin `source_fingerprint`; never mutates V2; never overwrites ingress assets)
-  - `.ai-factory/plans/expressive-v2-playback-and-mixing.md` (**shipped** — Tone Transport; `playbackSource`; `tickToSeconds` / `compileTimeline`)
-  - `.ai-factory/plans/upgrade-v2-music-editing-workflow.md` (**shipped** — bar/selection ranges, edit cursor, play-from-cursor)
-  - `.ai-factory/plans/interactive-harmony-reharmonization.md` (**shipped** — harmony tick spans; Apply fingerprint gate — exemplar for “edit bars 9–12 then continue”)
+  - `.ai-factory/plans/v3-audio-to-symbolic-musical-input.md` (**shipped** — mono `transcription.preview.v1`; seconds→ticks alignment helpers; ephemeral audio — **no durable source for seek**)
+  - `.ai-factory/plans/v3-optional-neural-audio-rendering.md` (**shipped** — `/neural-audio/renders` jobs pin `source_fingerprint`; never mutates V2; never overwrites ingress assets)
+  - `.ai-factory/plans/v2-expressive-v2-playback-and-mixing.md` (**shipped** — Tone Transport; `playbackSource`; `tickToSeconds` / `compileTimeline`)
+  - `.ai-factory/plans/v2-upgrade-v2-music-editing-workflow.md` (**shipped** — bar/selection ranges, edit cursor, play-from-cursor)
+  - `.ai-factory/plans/v2-interactive-harmony-reharmonization.md` (**shipped** — harmony tick spans; Apply fingerprint gate — exemplar for “edit bars 9–12 then continue”)
   - `.ai-factory/plans/safe-ai-experimentation-and-versioning.md` (**shipped** — revisions/CAS fingerprints for provenance anchors)
-  - `.ai-factory/plans/daw-interop-v3-e2e-hardening.md` (**shipped** — `generation.provenance.v1` secret-safe fragment pattern)
+  - `.ai-factory/plans/v3-daw-interop-v3-e2e-hardening.md` (**shipped** — `generation.provenance.v1` secret-safe fragment pattern)
 
 ## Roadmap Linkage
 Milestone: "V4 audio-symbolic alignment and round-trip editing" *(proposed — ROADMAP currently has all items checked, including recovery; `/aif-implement` docs checkpoint or `/aif-roadmap` must add this unchecked milestone)*

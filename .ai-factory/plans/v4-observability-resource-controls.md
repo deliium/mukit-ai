@@ -12,7 +12,7 @@ Planning depth: full
 - Refined: 2026-09-25 (`/aif-improve`, all findings applied)
 - Default prefs source: `.ai-factory/config.yaml` (`plan_testing: yes`, `plan_logging: verbose`, `plan_docs: yes`, `plan_link_roadmap: true`, `plan_default_milestone: auto`) plus the request’s “include tests and documentation”
 - Scope: shared operation IDs and structured spans for autonomous multi-agent runs, agent calls, model calls, and neural render jobs; configurable model-call / token / wall / render-attempt budgets; cancellation that reaches in-flight children; crash containment so one model `SystemExit` leaves the API process up. Diagnosis is the span log plus the response summary
-- Parent (reuse, do not fork): `.ai-factory/plans/controlled-critique-revision-loops.md` — shipped `RevisionLoopBudgets`, `usage_status`, `cancel_check`, stop reason `resource_budget_exhausted`, and the rule that currency is never invented. This plan adds an outer operation span and call-count / render-attempt caps. It keeps revision modes, pass caps, and last-valid behavior
+- Parent (reuse, do not fork): `.ai-factory/plans/v4-controlled-critique-revision-loops.md` — shipped `RevisionLoopBudgets`, `usage_status`, `cancel_check`, stop reason `resource_budget_exhausted`, and the rule that currency is never invented. This plan adds an outer operation span and call-count / render-attempt caps. It keeps revision modes, pass caps, and last-valid behavior
 
 ## Roadmap Linkage
 Milestone: "V4 observability and resource controls"

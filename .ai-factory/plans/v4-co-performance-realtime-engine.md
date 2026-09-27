@@ -13,12 +13,12 @@ Planning depth: final, ultra-thorough
 - Default prefs source: `.ai-factory/config.yaml` (`plan_testing` / `plan_logging` / `plan_docs` / `plan_link_roadmap`)
 - Scope: ship **low-latency real-time co-performance infrastructure** — live transport, beat/bar clock, incoming MIDI stream, prediction horizon, scheduled accompaniment buffer, active harmony context, latency instrumentation, and degradation — so AI-assisted live performance can run **without** replacing deterministic editor/playback, **without** writing every transient MIDI event to persistence, and **without** blocking Tone.js transport on heavy LLM calls
 - Parent plans / shipped foundations:
-  - `.ai-factory/plans/expressive-v2-playback-and-mixing.md` (**shipped** — Tone.js Transport ownership, relocate, mixer scopes, seconds schedule)
-  - `.ai-factory/plans/midi-keyboard-live-midi-input.md` (**shipped** — Web MIDI / QWERTY → session take → one V2 commit; metronome ephemeral; **no** backend MIDI WebSocket)
+  - `.ai-factory/plans/v2-expressive-v2-playback-and-mixing.md` (**shipped** — Tone.js Transport ownership, relocate, mixer scopes, seconds schedule)
+  - `.ai-factory/plans/v3-midi-keyboard-live-midi-input.md` (**shipped** — Web MIDI / QWERTY → session take → one V2 commit; metronome ephemeral; **no** backend MIDI WebSocket)
   - `.ai-factory/plans/v4-multi-agent-music-architecture.md` (**shipped** — agents above runtime; preview → Apply CAS; never `composition.v4`)
-  - `.ai-factory/plans/hybrid-llm-symbolic-composition-pipeline.md` (**shipped** — `fake:symbolic-tiny` / MT note engines; heavy generation off hot path pattern)
-  - `.ai-factory/plans/reference-conditioned-generation-editing.md` (**related ACP / soft conditioning** — preserve/borrow/regenerate for offline generate/develop/edit; **not** wired into RT predict v1; never event arrays / never hot path)
-  - `.ai-factory/plans/interactive-harmony-reharmonization.md` (**shipped** — V2 harmony tick spans; reharm preview; BE `_harmony_at` + `parse_chord_symbol`)
+  - `.ai-factory/plans/v3-hybrid-llm-symbolic-composition-pipeline.md` (**shipped** — `fake:symbolic-tiny` / MT note engines; heavy generation off hot path pattern)
+  - `.ai-factory/plans/v4-reference-conditioned-generation-editing.md` (**related ACP / soft conditioning** — preserve/borrow/regenerate for offline generate/develop/edit; **not** wired into RT predict v1; never event arrays / never hot path)
+  - `.ai-factory/plans/v2-interactive-harmony-reharmonization.md` (**shipped** — V2 harmony tick spans; reharm preview; BE `_harmony_at` + `parse_chord_symbol`)
 
 ## Roadmap Linkage
 Milestone: "V4 multi-agent music architecture"
@@ -329,7 +329,7 @@ Never store chunks in SQLite. Cap event counts (`LIVE_ACCOMP_MAX_EVENTS_PER_CHUN
 Prefer `routers/live_performance.py` + `services/live_accompaniment_predict.py` + `live_performance_schemas.py` (incl. `LivePerformanceError` + mapper); register with `app.include_router` in `main.py` — do not grow unrelated logic in `main.py`. Fake mode returns deterministic pattern from harmony hash. **No** new `AiOperation` required for fake predict.
 
 **7. Reference conditioning / multi-agent**
-Out of RT hot path and **out of predict v1 request**. Offline ACP plan (`.ai-factory/plans/reference-conditioned-generation-editing.md`) remains complementary for generate/develop/edit only. Future soft prefs into predict must stay abstract — **never** event arrays from references.
+Out of RT hot path and **out of predict v1 request**. Offline ACP plan (`.ai-factory/plans/v4-reference-conditioned-generation-editing.md`) remains complementary for generate/develop/edit only. Future soft prefs into predict must stay abstract — **never** event arrays from references.
 
 **8. Shared engine access**
 `PlaybackControls` registers the live engine instance (e.g. store callback / module registry with dispose clear). Co-performance start fails closed if no engine. Dispose/unmount clears the handle and cancels live session.
@@ -428,7 +428,7 @@ Out of RT hot path and **out of predict v1 request**. Offline ACP plan (`.ai-fac
 - Keep `ai_agents/` free of SQLite; live predict service may call fake helpers but must not import project history stores.
 - Respect RULES: only `tracks[].events[]` are playable canonical notes; harmony is context only.
 - Verbose logging default; strip payloads; gate with env levels.
-- Do **not** implement reference-conditioning policy on predict or UI for this plan — keep RT engine independent of `.ai-factory/plans/reference-conditioned-generation-editing.md`.
+- Do **not** implement reference-conditioning policy on predict or UI for this plan — keep RT engine independent of `.ai-factory/plans/v4-reference-conditioned-generation-editing.md`.
 - Do **not** introduce Web Workers unless Task 8 produces measured main-thread jank evidence and a follow-on task is explicitly added.
 
 ## INFO

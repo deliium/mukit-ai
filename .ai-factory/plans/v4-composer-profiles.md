@@ -13,15 +13,15 @@ Planning depth: final, ultra-thorough
 - Default prefs source: `.ai-factory/config.yaml` (`plan_testing` / `plan_logging` / `plan_docs` / `plan_link_roadmap`)
 - Scope: ship **durable, explicitly visible Composer Profiles** — named abstract musical preference documents that optionally condition generation at a user-selected strength — **without** hidden behavioral inference as authority, without copying melodies into profiles, without writing private projects into `DATASET_ROOT`, and without letting profile soft prefs override project prompt / hard `GenerationConstraints`
 - Parent plans / shipped foundations:
-  - `.ai-factory/plans/style-semantic-embeddings-conditioning.md` (**shipped** — handcrafted features, reference conditioning, privacy vs dataset)
-  - `.ai-factory/plans/deterministic-composition-v2-analysis.md` (**shipped** — melody/harmony/density/repetition/tension sidecars)
-  - `.ai-factory/plans/enforce-generation-prompt-constraints.md` (**shipped** — hard vs soft constraint split)
-  - `.ai-factory/plans/feature-local-project-composition-persistence.md` (**shipped** — SQLite `PROJECT_DB_PATH` + Alembic)
-  - `.ai-factory/plans/controlled-critique-revision-loops.md` (session preview patterns; not a dependency — profiles are durable prefs, not revision loops)
+  - `.ai-factory/plans/v3-style-semantic-embeddings-conditioning.md` (**shipped** — handcrafted features, reference conditioning, privacy vs dataset)
+  - `.ai-factory/plans/v2-deterministic-composition-v2-analysis.md` (**shipped** — melody/harmony/density/repetition/tension sidecars)
+  - `.ai-factory/plans/v1-enforce-generation-prompt-constraints.md` (**shipped** — hard vs soft constraint split)
+  - `.ai-factory/plans/v1-feature-local-project-composition-persistence.md` (**shipped** — SQLite `PROJECT_DB_PATH` + Alembic)
+  - `.ai-factory/plans/v4-controlled-critique-revision-loops.md` (session preview patterns; not a dependency — profiles are durable prefs, not revision loops)
 
 ## Roadmap Linkage
-Milestone: "Style/semantic embeddings and conditioning for symbolic composition"
-Rationale: Embeddings shipped **per-request musical reference** conditioning; this follow-on closes the product gap for **persistent, user-authored preference profiles** (multi-project derived + manual) with explicit strength Off/Light/Normal/Strong, while reusing analysis/embedding abstract stats and keeping the same privacy boundary (never silent `DATASET_ROOT` ingest; never artist≡style ids).
+Milestone: "V4 composer profiles"
+Rationale: Embeddings shipped **per-request musical reference** conditioning; this follow-on closes the product gap for **persistent, user-authored preference profiles** (multi-project derived + manual) with explicit strength Off/Light/Normal/Strong, while reusing analysis/embedding abstract stats and keeping the same privacy boundary (never silent `DATASET_ROOT` ingest; never artist≡style ids). It is its own checked V4 milestone, separate from the V3 embeddings line.
 
 ## Goal
 

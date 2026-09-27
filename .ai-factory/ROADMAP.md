@@ -36,6 +36,9 @@
 - [x] **Audio-to-symbolic musical input (monophonic)** — Mic/file monophonic transcription → session `transcription.preview.v1` review (confidence, expressive vs quantize) → Apply into `composition.v2`; local engines + fake CI path; never persists audio or confidence on notes
 - [x] **Optional neural audio rendering** — Job-based generative/neural instrument egress (`/neural-audio/renders`) with adapters + fidelity labels; optional MusicGen sidecar profile; never mutates V2 / FluidSynth / Tone.js
 - [x] **DAW interoperability and V3 end-to-end platform hardening** — SMF Type 1 + MusicXML DAW handoff (section markers, drag/download UX); durable `generation.provenance.v1` on revisions; checkpoint path confinement; `scripts/v3_docker_acceptance.sh` restart + seeded reproduce gate (fake modes)
+- [x] **V4 composer profiles** — Durable `composer.profile.v1` preference documents with Off/Light/Normal/Strong soft generate conditioning; prompt and hard constraints always win; never copies melodies or writes `DATASET_ROOT`
+- [x] **V4 reference feature decomposition** — User-selected `reference.features.v1` dimensions condition generate and develop; multi-reference masks; never copies melodies or mutates the reference Composition
+- [x] **V4 reference-conditioned generation and editing** — Preserve / borrow / regenerate policy (`reference.conditioning.policy.v1`) with per-dimension strength on generate, develop, and AI region edit; never overrides hard constraints
 - [x] **V4 multi-agent music architecture** — Extensible specialized agents (`ai_agents/`) above V3 runtime; typed artifacts + progressive realize; spine workflow preview; `GET/POST /ai/agents*`; durable `agent_id` provenance; Apply via `multi-agent-apply` CAS only
 - [x] **V4 co-performance real-time engine** — Shared Tone transport, Transport-synced MIDI stream, horizon accompaniment buffer, local degradation, optional `POST /live/accompaniment/predict`, explicit Commit; never per-note persist / never `composition.v4`
 - [x] **V4 AI Jam real-time co-composition** — Jam modes (`user_melody` / `user_chords`), live features + harmony belief/hysteresis, jam controls, multi-role local generators, multi-track Commit (+ optional harmony spans); graceful predict/AbortController fallback; never invents notes from harmony alone
@@ -84,13 +87,14 @@
 | Symbolic music PyTorch Music Transformer | 2026-09-21 |
 | Reproducible symbolic music training and evaluation | 2026-09-21 |
 | Style/semantic embeddings and conditioning for symbolic composition | 2026-09-21 |
-| Composer profiles follow-on (durable prefs + generate soft merge) | 2026-09-22 |
-| Reference features follow-on (dimension masks + generate/develop wire) | 2026-09-22 |
 | Hybrid LLM planner + symbolic note generation pipeline | 2026-09-21 |
 | MIDI keyboard / live MIDI performance input | 2026-09-21 |
 | Audio-to-symbolic musical input (monophonic) | 2026-09-21 |
 | Optional neural audio rendering | 2026-09-21 |
 | DAW interoperability and V3 end-to-end platform hardening | 2026-09-21 |
+| V4 composer profiles | 2026-09-22 |
+| V4 reference feature decomposition | 2026-09-22 |
+| V4 reference-conditioned generation and editing | 2026-09-22 |
 | V4 multi-agent music architecture | 2026-09-22 |
 | V4 co-performance real-time engine | 2026-09-23 |
 | V4 AI Jam real-time co-composition | 2026-09-23 |

@@ -13,16 +13,16 @@ Planning depth: final, ultra-thorough
 - Default prefs source: `.ai-factory/config.yaml` (`plan_testing` / `plan_logging` / `plan_docs` / `plan_link_roadmap`)
 - Scope: ship **explicit preserve / borrow / regenerate property policy** on top of shipped `reference.features.v1`, with **per-dimension conditioning strength**, **multi-reference dimension assignment**, and **AI region-edit wiring**, so users can generate or edit canonical `composition.v2` using selected abstract properties from references while inventing genuinely new pitch material — **without** mutating reference Compositions, without literal motif/melody copying (unless own-project + explicit reuse), without overriding hard `GenerationConstraints` / edit selection bounds, and without `DATASET_ROOT` ingest
 - Parent plans / shipped foundations:
-  - `.ai-factory/plans/reference-music-analysis-feature-decomposition.md` (**shipped** — `reference.features.v1` analyzer, dimension masks, generate/develop soft fragments, affinity+compare_to, FE Generate+Develop checkboxes, provenance `reference_features[]`)
-  - `.ai-factory/plans/style-semantic-embeddings-conditioning.md` (**shipped** — scopes, `style_reference`, legacy whole summary)
-  - `.ai-factory/plans/composer-profiles.md` (**shipped** — durable prefs + `profile_strength`; complementary soft merge; **generate-only** in this plan’s AC path)
-  - `.ai-factory/plans/enforce-generation-prompt-constraints.md` (**shipped** — hard vs soft; reference policy stays soft)
-  - `.ai-factory/plans/context-aware-composition-development.md` (**shipped** — develop preview; already accepts `style_reference` / `style_references`)
+  - `.ai-factory/plans/v4-reference-music-analysis-feature-decomposition.md` (**shipped** — `reference.features.v1` analyzer, dimension masks, generate/develop soft fragments, affinity+compare_to, FE Generate+Develop checkboxes, provenance `reference_features[]`)
+  - `.ai-factory/plans/v3-style-semantic-embeddings-conditioning.md` (**shipped** — scopes, `style_reference`, legacy whole summary)
+  - `.ai-factory/plans/v4-composer-profiles.md` (**shipped** — durable prefs + `profile_strength`; complementary soft merge; **generate-only** in this plan’s AC path)
+  - `.ai-factory/plans/v1-enforce-generation-prompt-constraints.md` (**shipped** — hard vs soft; reference policy stays soft)
+  - `.ai-factory/plans/v2-context-aware-composition-development.md` (**shipped** — develop preview; already accepts `style_reference` / `style_references`)
   - AI region editing (milestone shipped) — `LLMCompositionEditRequest` / `replace_region` — **currently unwired** for reference features; **no** `generation_parameters` on edit response today
 
 ## Roadmap Linkage
-Milestone: "Style/semantic embeddings and conditioning for symbolic composition"
-Rationale: Embeddings + reference-feature masks shipped selective soft transfer on generate/develop. This follow-on closes the product gap for **operation-level property policy** (preserve vs borrow vs regenerate), **per-dimension strength**, **multi-reference UI assignment** (A→harmony, B→rhythm), and **AI edit** conditioning — matching the AC “texture of A + rhythm of B, new melody and harmony.” Docs/implement may add a dedicated unchecked roadmap line via `/aif-roadmap` if product wants a distinct V4 label (all current ROADMAP milestones are already checked).
+Milestone: "V4 reference-conditioned generation and editing"
+Rationale: Embeddings + reference-feature masks shipped selective soft transfer on generate/develop. This follow-on closes the product gap for **operation-level property policy** (preserve vs borrow vs regenerate), **per-dimension strength**, **multi-reference UI assignment** (A→harmony, B→rhythm), and **AI edit** conditioning — matching the AC “texture of A + rhythm of B, new melody and harmony.” It is its own checked V4 milestone, separate from the V3 embeddings line.
 
 ## Goal
 

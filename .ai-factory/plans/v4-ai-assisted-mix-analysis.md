@@ -12,12 +12,12 @@ Default prefs source: `.ai-factory/config.yaml` (`plan_testing` / `plan_logging`
 - Planning depth: final, ultra-thorough
 - Scope: analyze **already-rendered** neural stem-set / mix WAVs with deterministic DSP measurements + optional AI interpretation into concrete production observations — **never** mutating stem/mix audio, **never** mutating `composition.v2`, **never** inventing `composition.v4`, **never** writing `DATASET_ROOT`, **never** conflating this with symbolic `composition.analysis.v1` or recovery Demucs stems, **never** inventing a new `AiOperation` for interpretation in v1
 - Parent plans / shipped foundations:
-  - `.ai-factory/plans/stem-aware-neural-rendering.md` (**shipped** — stem sets, roles, timeline_sync, download routes, fake multi-WAV, supersede)
-  - `.ai-factory/plans/optional-neural-audio-rendering.md` (**shipped** — mix jobs, quotas, fake engine, `NEURAL_AUDIO_RENDER_ROOT`)
-  - `.ai-factory/plans/deterministic-composition-v2-analysis.md` (**shipped** — symbolic analysis sidecar pattern; reuse *shape* not domain)
-  - `.ai-factory/plans/controlled-critique-revision-loops.md` / critique engine (**shipped** — finding locus + evidence + strata; reuse *finding shape* + `llm_composition_critique` fake path)
+  - `.ai-factory/plans/v4-stem-aware-neural-rendering.md` (**shipped** — stem sets, roles, timeline_sync, download routes, fake multi-WAV, supersede)
+  - `.ai-factory/plans/v3-optional-neural-audio-rendering.md` (**shipped** — mix jobs, quotas, fake engine, `NEURAL_AUDIO_RENDER_ROOT`)
+  - `.ai-factory/plans/v2-deterministic-composition-v2-analysis.md` (**shipped** — symbolic analysis sidecar pattern; reuse *shape* not domain)
+  - `.ai-factory/plans/v4-controlled-critique-revision-loops.md` / critique engine (**shipped** — finding locus + evidence + strata; reuse *finding shape* + `llm_composition_critique` fake path)
   - `.ai-factory/plans/v4-audio-symbolic-alignment-round-trip.md` (**shipped** — tick↔seconds mapping helpers; soft-stale fingerprints)
-  - `.ai-factory/plans/audio-to-symbolic-musical-input.md` (**shipped** — optional `requirements-*-extras.txt` + fake CI pattern)
+  - `.ai-factory/plans/v3-audio-to-symbolic-musical-input.md` (**shipped** — optional `requirements-*-extras.txt` + fake CI pattern)
 
 ## Roadmap Linkage
 Milestone: "V4 AI-assisted mix analysis"

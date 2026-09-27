@@ -345,7 +345,7 @@ Verbose structured extras: `pipeline_id`, stage name, model_id, capability, oper
 
 ## Related plans
 
-- `.ai-factory/plans/style-semantic-embeddings-conditioning.md` — optional style_reference conditioning into planner/tokenizer bridge (reuse; do not re-implement embeddings).
-- `.ai-factory/plans/symbolic-music-transformer.md` / `reproducible-symbolic-music-training.md` — engine + seed + eval metrics (consume, do not retrain).
-- `.ai-factory/plans/unified-ai-runtime-model-provider-v3.md` — registry/ops reserved fields now activated.
-- `.ai-factory/plans/enforce-generation-prompt-constraints.md` — hard constraints must remain authoritative.
+- `.ai-factory/plans/v3-style-semantic-embeddings-conditioning.md` — optional style_reference conditioning into planner/tokenizer bridge (reuse; do not re-implement embeddings).
+- `.ai-factory/plans/v3-symbolic-music-transformer.md` / `v3-reproducible-symbolic-music-training.md` — engine + seed + eval metrics (consume, do not retrain).
+- `.ai-factory/plans/v3-unified-ai-runtime-model-provider-v3.md` — registry/ops reserved fields now activated.
+- `.ai-factory/plans/v1-enforce-generation-prompt-constraints.md` — hard constraints must remain authoritative.

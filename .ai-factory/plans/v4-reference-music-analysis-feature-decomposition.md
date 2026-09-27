@@ -13,16 +13,16 @@ Planning depth: final, ultra-thorough
 - Default prefs source: `.ai-factory/config.yaml` (`plan_testing` / `plan_logging` / `plan_docs` / `plan_link_roadmap`)
 - Scope: ship **user-selected reference feature dimensions** — analyze a musical reference into named abstract property summaries, let the user choose which dimensions condition generate/develop, support multi-reference masks, section/range scopes, reliability warnings, and embedding-backed similarity where slices exist — **without** modifying the reference Composition, without copying melodies/event arrays, without silent `DATASET_ROOT` ingest, and without replacing Composer Profiles or monolithic V3 `style_reference`
 - Parent plans / shipped foundations:
-  - `.ai-factory/plans/style-semantic-embeddings-conditioning.md` (**shipped** — handcrafted embeddings, scopes, `style_reference`, provenance, privacy vs dataset)
-  - `.ai-factory/plans/deterministic-composition-v2-analysis.md` (**shipped** — melody/harmony/density/repetition/tension/role sidecars + `insufficient_*` warnings)
-  - `.ai-factory/plans/composer-profiles.md` (**shipped** — durable abstract prefs; complementary, not a substitute for per-request reference masks)
-  - `.ai-factory/plans/midi-musicxml-import-composition-v2.md` (**shipped** — MIDI/MusicXML → V2 session material usable as inline reference)
-  - `.ai-factory/plans/audio-to-symbolic-musical-input.md` (**shipped** — monophonic preview → Apply into V2; reference only after symbolic V2 exists)
-  - `.ai-factory/plans/enforce-generation-prompt-constraints.md` (**shipped** — hard vs soft; reference features stay soft)
+  - `.ai-factory/plans/v3-style-semantic-embeddings-conditioning.md` (**shipped** — handcrafted embeddings, scopes, `style_reference`, provenance, privacy vs dataset)
+  - `.ai-factory/plans/v2-deterministic-composition-v2-analysis.md` (**shipped** — melody/harmony/density/repetition/tension/role sidecars + `insufficient_*` warnings)
+  - `.ai-factory/plans/v4-composer-profiles.md` (**shipped** — durable abstract prefs; complementary, not a substitute for per-request reference masks)
+  - `.ai-factory/plans/v2-midi-musicxml-import-composition-v2.md` (**shipped** — MIDI/MusicXML → V2 session material usable as inline reference)
+  - `.ai-factory/plans/v3-audio-to-symbolic-musical-input.md` (**shipped** — monophonic preview → Apply into V2; reference only after symbolic V2 exists)
+  - `.ai-factory/plans/v1-enforce-generation-prompt-constraints.md` (**shipped** — hard vs soft; reference features stay soft)
 
 ## Roadmap Linkage
-Milestone: "Style/semantic embeddings and conditioning for symbolic composition"
-Rationale: Embeddings shipped whole-reference conditioning; Composer Profiles shipped durable prefs. This follow-on closes the product gap for **selective, multi-reference feature transfer** (“use A’s rhythm+texture, B’s harmonic rhythm — do not copy melodies”), reusing analysis + embedding group slices while keeping the same privacy boundary. Docs/implement may add a dedicated unchecked roadmap line via `/aif-roadmap` if product wants a distinct V4 milestone label.
+Milestone: "V4 reference feature decomposition"
+Rationale: Embeddings shipped whole-reference conditioning; Composer Profiles shipped durable prefs. This follow-on closes the product gap for **selective, multi-reference feature transfer** (“use A’s rhythm+texture, B’s harmonic rhythm — do not copy melodies”), reusing analysis + embedding group slices while keeping the same privacy boundary. It is its own checked V4 milestone, separate from the V3 embeddings line.
 
 ## Goal
 

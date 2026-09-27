@@ -217,7 +217,7 @@ Suggested layout (implementer may merge into `docker-compose.yml` or split files
 - [x] Task 1: Capture host/Docker assumptions and runtime choice matrix
   Deliverable: Short design note section in the plan’s implementer checklist (or `docs/local-ai.md` draft skeleton) confirming: default Compose has no GPU requirement; gfx1152 ROCm preferred for llama.cpp; Vulkan fallback; vLLM separate; NPU non-critical; PyTorch+ROCm only under `training` stub. Verify `backend/Dockerfile` `models/` directory intent vs new `./models/llm` host mount naming.
   LOGGING: N/A (docs/design). If a probe script is added for host detection later, log only device enum and support booleans.
-  Files: `.ai-factory/plans/optional-local-ai-inference-amd-rocm.md` (reference), start `docs/local-ai.md` skeleton optional here or in Task 12.
+  Files: `.ai-factory/plans/v3-optional-local-ai-inference-amd-rocm.md` (reference), start `docs/local-ai.md` skeleton optional here or in Task 12.
 
 - [x] Task 2: Add optional Compose profiles for llama.cpp, vLLM, and training stub
   Deliverable: Compose changes such that:

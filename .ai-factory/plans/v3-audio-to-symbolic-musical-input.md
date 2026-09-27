@@ -304,7 +304,7 @@ Selection: `AUDIO_TRANSCRIPTION_ENGINE` env (default `auto`: prefer `basic_pitch
 - V2 `extra=forbid` makes session preview mandatory for confidence — do not “temporarily” smuggle fields into events.
 - `AiOperation.TRANSCRIBE` stub exists — extend carefully; never call language models for pitch.
 - Keep monophonic copy honest in UI (“Melody transcription (mono)”).
-- Related prior plan: `.ai-factory/plans/midi-keyboard-live-midi-input.md` (capture/commit UX patterns; different ingress).
+- Related prior plan: `.ai-factory/plans/v3-midi-keyboard-live-midi-input.md` (capture/commit UX patterns; different ingress).
 
 ## Out-of-Scope Reminders (do not implement in this plan)
 

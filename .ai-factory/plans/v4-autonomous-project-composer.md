@@ -13,7 +13,7 @@ Planning depth: ultra
 - Default prefs source: `.ai-factory/config.yaml` (`plan_testing: yes`, `plan_logging: verbose`, `plan_docs: yes`, `plan_link_roadmap: true`, `plan_default_milestone: auto`) plus the request’s mocked end-to-end tests
 - Scope: one creative brief schedules the existing specialized agents, writes an explicit project plan, realizes a multi-section `composition.v2` through symbolic generation, critique, targeted revision, arrangement, and expression, optionally renders, and leaves a durable editable project. Stage status and budgets survive restart. The Agents-tab spine preview stays preview-only
 - Parent (reuse, do not fork): `.ai-factory/plans/v4-observability-resource-controls.md` — shipped `operation.span.v1`, `operation.summary.v1`, `reserve_model_call`, `mark_run_cancelled`, `OPERATION_*` ceilings, and neural `operation_run_id`. This plan adds an agent-operation counter and a durable stage machine. It keeps span kinds, the rule that currency is never invented, and the rule that the spine does not start renders
-- Also reuse: `.ai-factory/plans/v4-multi-agent-music-architecture.md` (agent ids, typed artifacts, `apply_realized_composition`) and `.ai-factory/plans/controlled-critique-revision-loops.md` (stop reasons, preserve-outside-targets, last valid)
+- Also reuse: `.ai-factory/plans/v4-multi-agent-music-architecture.md` (agent ids, typed artifacts, `apply_realized_composition`) and `.ai-factory/plans/v4-controlled-critique-revision-loops.md` (stop reasons, preserve-outside-targets, last valid)
 
 ## Roadmap Linkage
 Milestone: "V4 autonomous project composer"

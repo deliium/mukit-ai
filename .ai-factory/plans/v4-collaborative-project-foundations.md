@@ -75,7 +75,7 @@ membership role
 
 ## Repository findings
 
-There is no `users` table and no auth dependency. `backend/app/routers/projects.py` and `frontend/src/api/projectApi.js` are open to whoever can reach the API. `.ai-factory/plans/feature-local-project-composition-persistence.md` chose SQLite for a single-user local app. `docs/project-persistence.md` describes one local file.
+There is no `users` table and no auth dependency. `backend/app/routers/projects.py` and `frontend/src/api/projectApi.js` are open to whoever can reach the API. `.ai-factory/plans/v1-feature-local-project-composition-persistence.md` chose SQLite for a single-user local app. `docs/project-persistence.md` describes one local file.
 
 Optimistic conflicts already exist. `project_branches.working_version` increments on draft save. Durable commits send `branch_id`, `expected_active_branch_id`, `expected_working_version`, `expected_head_revision_id`, and `expected_source_fingerprint`. A mismatch raises `ProjectRevisionConflictError`, mapped to 409 `project_revision_conflict` with fingerprint prefixes only. The composer bar Reload and Save as branch path is `saveConflictAsNewBranch` in `frontend/src/store/musicStore.js`.
 

@@ -14,10 +14,10 @@ Planning depth: final, ultra-thorough
 - Scope: ship **AI Jam product modes** on top of the shipped V4 co-performance real-time engine — user-melody / user-chords role partitions, deterministic live performance analysis with confidence/hysteresis, jam controls (complexity / density / style / instrument set / responsiveness), multi-role local+fake generation into the existing horizon buffer, multi-track Commit into editable `composition.v2`, and graceful fallback when local/runtime predict is unavailable — **without** replacing the co-performance transport/MIDI/buffer stack, **without** per-note persistence, and **without** heavy remote LLM calls on every note
 - Parent plans / shipped foundations:
   - `.ai-factory/plans/v4-co-performance-realtime-engine.md` (**shipped** — shared Tone engine, Transport-synced MIDI stream, horizon buffer, local pattern degradation, optional `POST /live/accompaniment/predict`, single-track Commit, `docs/co-performance.md`)
-  - `.ai-factory/plans/midi-keyboard-live-midi-input.md` (**shipped** — Web MIDI / QWERTY; exclusive with live phases)
-  - `.ai-factory/plans/expressive-v2-playback-and-mixing.md` (**shipped** — Transport ownership)
-  - `.ai-factory/plans/hybrid-llm-symbolic-composition-pipeline.md` (**shipped** — `fake:symbolic-tiny` / MT off hot path)
-  - `.ai-factory/plans/interactive-harmony-reharmonization.md` (**shipped** — V2 harmony spans; `parse_chord_symbol`)
+  - `.ai-factory/plans/v3-midi-keyboard-live-midi-input.md` (**shipped** — Web MIDI / QWERTY; exclusive with live phases)
+  - `.ai-factory/plans/v2-expressive-v2-playback-and-mixing.md` (**shipped** — Transport ownership)
+  - `.ai-factory/plans/v3-hybrid-llm-symbolic-composition-pipeline.md` (**shipped** — `fake:symbolic-tiny` / MT off hot path)
+  - `.ai-factory/plans/v2-interactive-harmony-reharmonization.md` (**shipped** — V2 harmony spans; `parse_chord_symbol`)
   - `.ai-factory/plans/v4-multi-agent-music-architecture.md` (**shipped** — agents above runtime; never `composition.v4`)
 
 ## Roadmap Linkage

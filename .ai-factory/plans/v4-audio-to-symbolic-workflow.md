@@ -13,12 +13,12 @@ Planning depth: final, ultra-thorough
 - Default prefs source: `.ai-factory/config.yaml` (`plan_testing` / `plan_logging` / `plan_docs` / `plan_link_roadmap`)
 - Scope: extend shipped **V3 monophonic** `transcription.preview.v1` into a **V4 mixed-audio recovery workflow** — optional source separation into stems, per-stem/combined estimation of tempo / beat grid / structure / key / harmony, practical polyphonic transcription where confidence supports it, durable related project assets (original audio + recovery result with confidence), side-by-side audio vs transcription vs piano roll/notation, user correction of uncertain material **without fabricating notes**, and **optional** heavy Docker/model sidecars — **without** promising perfect transcription, **without** putting `confidence` on playable `composition.v2` note events (`extra="forbid"`), **without** inventing playable notes from harmony alone, and **without** writing to `DATASET_ROOT`
 - Parent plans / shipped foundations:
-  - `.ai-factory/plans/audio-to-symbolic-musical-input.md` (**shipped** — mono mic/file → session preview → Apply; confidence off V2; audio deleted; `docs/audio-transcription.md`)
-  - `.ai-factory/plans/optional-neural-audio-rendering.md` (**shipped** — SQLite metadata + filesystem audio root pattern; optional Compose profile; never mutates V2)
-  - `.ai-factory/plans/midi-musicxml-import-composition-v2.md` (**shipped** — multipart limits, content sniff, session reports; no retained source bytes)
-  - `.ai-factory/plans/deterministic-composition-v2-analysis.md` (**shipped** — `composition.analysis.v1` sidecar over V2; not playable)
-  - `.ai-factory/plans/interactive-harmony-reharmonization.md` (**shipped** — V2 `harmony[]` tick spans; Apply fingerprint gate)
-  - `.ai-factory/plans/expressive-v2-playback-and-mixing.md` (**shipped** — Tone Transport; browser playback)
+  - `.ai-factory/plans/v3-audio-to-symbolic-musical-input.md` (**shipped** — mono mic/file → session preview → Apply; confidence off V2; audio deleted; `docs/audio-transcription.md`)
+  - `.ai-factory/plans/v3-optional-neural-audio-rendering.md` (**shipped** — SQLite metadata + filesystem audio root pattern; optional Compose profile; never mutates V2)
+  - `.ai-factory/plans/v2-midi-musicxml-import-composition-v2.md` (**shipped** — multipart limits, content sniff, session reports; no retained source bytes)
+  - `.ai-factory/plans/v2-deterministic-composition-v2-analysis.md` (**shipped** — `composition.analysis.v1` sidecar over V2; not playable)
+  - `.ai-factory/plans/v2-interactive-harmony-reharmonization.md` (**shipped** — V2 `harmony[]` tick spans; Apply fingerprint gate)
+  - `.ai-factory/plans/v2-expressive-v2-playback-and-mixing.md` (**shipped** — Tone Transport; browser playback)
   - `.ai-factory/plans/v4-ai-jam-realtime-co-composition.md` (**adjacent V4** — confidence/hysteresis *live MIDI* analysis; **not** a dependency for audio recovery hot path; reuse only terminology discipline for confidence vs belief-like holds — **do not** import `ensureJamRoleTracks` / jam modules)
   - `.ai-factory/plans/v4-multi-agent-music-architecture.md` (**shipped** — never `composition.v4`; agents above runtime)
 
@@ -472,7 +472,7 @@ New migration revises current head (`20260922_0004_composer_profiles` at plan ti
 - Source audition = HTMLAudio; composition audition = existing PlaybackControls / Tone.
 - Keep UI copy humble: estimated, confidence-gated, optional separation.
 - Fake modes must exercise Apply → Bind + overlay + side-by-side for AC without GPUs.
-- Related plans: `.ai-factory/plans/audio-to-symbolic-musical-input.md` (parent mono), `.ai-factory/plans/optional-neural-audio-rendering.md` (asset/`run_inline` pattern), `.ai-factory/plans/v4-ai-jam-realtime-co-composition.md` (adjacent V4 only).
+- Related plans: `.ai-factory/plans/v3-audio-to-symbolic-musical-input.md` (parent mono), `.ai-factory/plans/v3-optional-neural-audio-rendering.md` (asset/`run_inline` pattern), `.ai-factory/plans/v4-ai-jam-realtime-co-composition.md` (adjacent V4 only).
 
 ## Out-of-Scope Reminders (do not implement in this plan)
 

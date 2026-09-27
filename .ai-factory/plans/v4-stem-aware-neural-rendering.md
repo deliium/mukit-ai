@@ -12,11 +12,11 @@ Default prefs source: `.ai-factory/config.yaml` (`plan_testing` / `plan_logging`
 - Planning depth: final, ultra-thorough
 - Scope: move neural egress from single final WAV to **independently manageable musical stems** (piano/bass/strings/drums/vocals/other) while reusing `/neural-audio` job architecture, adapters, `NEURAL_AUDIO_RENDER_ROOT`, fake mode, and fidelity labeling — **never** mutating `composition.v2`, **never** claiming sample-accurate unchanged audio for generative engines, **never** silently swapping generative→FluidSynth, **never** writing `DATASET_ROOT` / inventing `composition.v4`
 - Parent plans / shipped foundations:
-  - `.ai-factory/plans/optional-neural-audio-rendering.md` (**shipped** — mix jobs, adapters, quotas, fake/sidecar)
+  - `.ai-factory/plans/v3-optional-neural-audio-rendering.md` (**shipped** — mix jobs, adapters, quotas, fake/sidecar)
   - `.ai-factory/plans/v4-audio-symbolic-alignment-round-trip.md` (**shipped** — soft-stale via snapshot fingerprint; recovery `stem_bindings` are role→track only, **not** durable neural stem WAVs)
-  - `.ai-factory/plans/feature-server-side-wav-rendering.md` (**shipped** — FluidSynth deterministic mix)
-  - `.ai-factory/plans/daw-interop-v3-e2e-hardening.md` (**shipped** — secret-safe provenance patterns)
-  - `.ai-factory/plans/safe-ai-preview-version-history-branches.md` (**shipped** — revision fingerprints)
+  - `.ai-factory/plans/v1-feature-server-side-wav-rendering.md` (**shipped** — FluidSynth deterministic mix)
+  - `.ai-factory/plans/v3-daw-interop-v3-e2e-hardening.md` (**shipped** — secret-safe provenance patterns)
+  - `.ai-factory/plans/v2-safe-ai-preview-version-history-branches.md` (**shipped** — revision fingerprints)
 
 ## Roadmap Linkage
 Milestone: "Stem-aware neural audio rendering" *(present in `.ai-factory/ROADMAP.md` and marked complete; residual Gaps Close-out is Tasks 11–13 — do not re-insert or reopen the milestone)*

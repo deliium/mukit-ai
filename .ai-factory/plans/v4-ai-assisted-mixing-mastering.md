@@ -13,10 +13,10 @@ Default prefs source: `.ai-factory/config.yaml` (`plan_testing` / `plan_logging`
 - Scope: non-destructive **mix plans** over **completed neural stem sets** — inspectable gain / pan / EQ / compression / reverb-send / simple filtering / bounded automation, compiled from mix-analysis observations and natural-language intents, previewed, explicitly applied as a **new mix/master revision**, rejected, and undone — **never** rewriting source stem bytes, **never** mutating `composition.v2`, **never** inventing `composition.v4`, **never** writing `DATASET_ROOT`, **never** treating master targets as loudness guarantees, **never** hosting DAW plugins
 - Parent plans / shipped foundations:
   - `.ai-factory/plans/v4-ai-assisted-mix-analysis.md` (**shipped** — `mix.analysis.v1` measurements, observations, locus, optional advisory interpretation; read-only WAV; active heads; soft-stale banners)
-  - `.ai-factory/plans/stem-aware-neural-rendering.md` (**shipped** — stem sets, roles `piano|bass|strings|drums|vocals|other`, `absolute_audio_path`, supersede, fake multi-WAV)
-  - `.ai-factory/plans/optional-neural-audio-rendering.md` (**shipped** — mix job egress, quotas, path confinement)
-  - `.ai-factory/plans/expressive-v2-playback-and-mixing.md` (**shipped** — ephemeral Tone.js trim/pan/send; **session-only**; not this product)
-  - `.ai-factory/plans/safe-ai-preview-version-history-branches.md` (**shipped** — preview then explicit apply; reuse *shape* of head/parent, not composition snapshots)
+  - `.ai-factory/plans/v4-stem-aware-neural-rendering.md` (**shipped** — stem sets, roles `piano|bass|strings|drums|vocals|other`, `absolute_audio_path`, supersede, fake multi-WAV)
+  - `.ai-factory/plans/v3-optional-neural-audio-rendering.md` (**shipped** — mix job egress, quotas, path confinement)
+  - `.ai-factory/plans/v2-expressive-v2-playback-and-mixing.md` (**shipped** — ephemeral Tone.js trim/pan/send; **session-only**; not this product)
+  - `.ai-factory/plans/v2-safe-ai-preview-version-history-branches.md` (**shipped** — preview then explicit apply; reuse *shape* of head/parent, not composition snapshots)
 
 ## Roadmap Linkage
 Milestone: "V4 AI-assisted mixing and mastering"
