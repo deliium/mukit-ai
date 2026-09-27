@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from app.storage_root_policy import reject_storage_root
+
 logger = logging.getLogger(__name__)
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +50,7 @@ def load_mix_plan_settings(env: Mapping[str, str] | None = None) -> MixPlanSetti
     source = env if env is not None else os.environ
     root_raw = (source.get("MIX_PLAN_ROOT") or "").strip()
     plan_root = Path(root_raw).expanduser() if root_raw else default_mix_plan_root(source)
+    _accept_storage_root("mix_plan", plan_root, source)
     settings = MixPlanSettings(
         plan_root=plan_root,
         fake_mode=_bool_env(source, "MIX_PLAN_FAKE_MODE", default=False),
@@ -82,6 +85,20 @@ def load_mix_plan_settings(env: Mapping[str, str] | None = None) -> MixPlanSetti
         },
     )
     return settings
+
+
+def _accept_storage_root(settings_name: str, root: Path, source: Mapping[str, str]) -> None:
+    dataset_raw = (source.get("DATASET_ROOT") or "").strip()
+    dataset_root = Path(dataset_raw).expanduser() if dataset_raw else None
+    reject_storage_root(
+        root,
+        dataset_root=dataset_root,
+        project_db=_resolve_project_db_path(source),
+    )
+    logger.info(
+        "storage_root_accepted",
+        extra={"settings": settings_name, "basename": root.name},
+    )
 
 
 def _bool_env(env: Mapping[str, str], key: str, *, default: bool) -> bool:

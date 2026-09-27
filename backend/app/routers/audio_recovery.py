@@ -20,6 +20,8 @@ from app.audio_recovery_schemas import (
     AudioRecoveryError,
     AudioRecoveryJobV1,
 )
+from app.audio_recovery_settings import load_audio_recovery_settings
+from app.audio_upload import UploadTooLargeError, read_upload_bounded
 from app.services.audio_recovery.pipeline import (
     bind_audio_recovery_job,
     delete_audio_recovery_job,
@@ -70,7 +72,26 @@ async def create_recovery_job(
             "disable_separation": disable_separation,
         },
     )
-    payload = await file.read()
+    settings = load_audio_recovery_settings()
+    try:
+        payload = await read_upload_bounded(file, max_bytes=settings.max_upload_bytes)
+    except UploadTooLargeError as exc:
+        logger.info(
+            "audio_payload_too_large",
+            extra={
+                "code": "audio_payload_too_large",
+                "limit_bytes": exc.limit_bytes,
+                "basename": _path_basename(filename),
+            },
+        )
+        raise _map_error(
+            AudioRecoveryError(
+                "audio_payload_too_large",
+                "Upload exceeded configured audio byte limit.",
+                http_status=413,
+                details={"limit_bytes": exc.limit_bytes},
+            )
+        ) from exc
     enforce_current(project_id, "write_score")
     try:
         job = enqueue_audio_recovery_job(

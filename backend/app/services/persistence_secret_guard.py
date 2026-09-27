@@ -20,6 +20,7 @@ FORBIDDEN_SECRET_FIELD_NAMES = {
     "password",
     "bearer",
     "token",
+    "refresh_token",
 }
 
 # Conservative patterns for common provider tokens / bearer credentials.
@@ -59,16 +60,28 @@ def contains_forbidden_secret_fields(payload: Any, *, path: str = "") -> list[st
     return found
 
 
+_PLACEHOLDER_SECRET_VALUES = frozenset({"fake", "unused", "changeme", "local"})
+_PROVIDER_SECRET_ENV_KEYS = ("OPENAI_API_KEY", "DEEPSEEK_API_KEY", "LOCAL_LLM_API_KEY")
+
+
 def configured_provider_secrets(env: Mapping[str, str] | None = None) -> tuple[str, ...]:
-    """Exact configured provider secret values (non-empty only)."""
+    """Exact configured provider secret values (non-empty, non-placeholder)."""
     source = env if env is not None else os.environ
+    logger.debug(
+        "Scanning configured provider secrets",
+        extra={"key_count": len(_PROVIDER_SECRET_ENV_KEYS)},
+    )
     values: list[str] = []
-    for key in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY"):
+    for key in _PROVIDER_SECRET_ENV_KEYS:
         raw = source.get(key)
         if isinstance(raw, str):
             cleaned = raw.strip()
-            if cleaned and cleaned.lower() not in {"fake", "unused", "changeme"}:
+            if cleaned and cleaned.lower() not in _PLACEHOLDER_SECRET_VALUES:
                 values.append(cleaned)
+    logger.debug(
+        "Configured provider secrets collected",
+        extra={"secret_count": len(values)},
+    )
     return tuple(values)
 
 

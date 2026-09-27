@@ -42,6 +42,7 @@ FORBIDDEN_LOG_FIELD_NAMES: tuple[str, ...] = (
     "password",
     "bearer",
     "token",
+    "refresh_token",
 )
 
 _DROP_EXACT = frozenset(

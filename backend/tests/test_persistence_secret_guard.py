@@ -54,6 +54,33 @@ def test_exact_configured_provider_secret_rejected(monkeypatch):
         )
 
 
+def test_local_placeholder_is_not_a_credential():
+    text = "Keep the local accompaniment and a brighter chorus."
+    env = {"LOCAL_LLM_API_KEY": "local"}
+    assert find_secret_value_hits(text, env=env) == []
+    assert_no_secret_values(text, field_name="user_instruction", env=env)
+    assert_payload_has_no_secret_values({"note": "a local motif"}, context="generation", env=env)
+
+
+def test_local_provider_secret_rejected_without_logging_the_key(caplog):
+    secret = "real-local-provider-key-value"
+    caplog.set_level("WARNING")
+    with pytest.raises(PersistenceSecretError) as exc:
+        assert_no_secret_values(
+            f"instruction with {secret} inside",
+            field_name="user_instruction",
+            env={"LOCAL_LLM_API_KEY": secret},
+        )
+    assert exc.value.code == "forbidden_secret_value"
+    assert any(getattr(record, "code", None) == "forbidden_secret_value" for record in caplog.records)
+    assert secret not in caplog.text
+
+
+def test_refresh_token_field_is_forbidden():
+    hits = contains_forbidden_secret_fields({"session": {"refresh_token": "abc"}})
+    assert hits == ["session.refresh_token"]
+
+
 def test_nested_generation_prompt_secret_rejected():
     with pytest.raises(PersistenceSecretError):
         assert_payload_has_no_secret_values(

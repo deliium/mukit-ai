@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Mapping
 
+from app.storage_root_policy import reject_storage_root
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,7 @@ def load_audio_recovery_settings(
         asset_root = Path(root_raw).expanduser()
     else:
         asset_root = default_audio_recovery_asset_root(source)
+    _accept_storage_root("audio_recovery", asset_root, source)
 
     settings = AudioRecoverySettings(
         asset_root=asset_root,
@@ -238,6 +240,20 @@ def load_audio_recovery_settings(
         },
     )
     return settings
+
+
+def _accept_storage_root(settings_name: str, root: Path, source: Mapping[str, str]) -> None:
+    dataset_raw = (source.get("DATASET_ROOT") or "").strip()
+    dataset_root = Path(dataset_raw).expanduser() if dataset_raw else None
+    reject_storage_root(
+        root,
+        dataset_root=dataset_root,
+        project_db=_resolve_project_db_path(source),
+    )
+    logger.info(
+        "storage_root_accepted",
+        extra={"settings": settings_name, "basename": root.name},
+    )
 
 
 def _engine_env(

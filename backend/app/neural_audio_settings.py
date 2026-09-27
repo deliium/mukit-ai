@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Mapping
 
+from app.storage_root_policy import reject_storage_root
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ def load_neural_audio_settings(
         render_root = Path(root_raw).expanduser()
     else:
         render_root = default_neural_audio_render_root(source)
+    _accept_storage_root("neural_audio", render_root, source)
 
     settings = NeuralAudioSettings(
         render_root=render_root,
@@ -180,6 +182,20 @@ def load_neural_audio_settings(
         },
     )
     return settings
+
+
+def _accept_storage_root(settings_name: str, root: Path, source: Mapping[str, str]) -> None:
+    dataset_raw = (source.get("DATASET_ROOT") or "").strip()
+    dataset_root = Path(dataset_raw).expanduser() if dataset_raw else None
+    reject_storage_root(
+        root,
+        dataset_root=dataset_root,
+        project_db=_resolve_project_db_path(source),
+    )
+    logger.info(
+        "storage_root_accepted",
+        extra={"settings": settings_name, "basename": root.name},
+    )
 
 
 def _engine_env(

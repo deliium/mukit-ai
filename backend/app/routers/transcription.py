@@ -16,6 +16,7 @@ from app.audio_transcription_schemas import (
     AudioTranscriptionResponse,
 )
 from app.audio_transcription_settings import load_audio_transcription_settings
+from app.audio_upload import UploadTooLargeError, read_upload_bounded
 from app.services.audio_transcription import transcribe_audio_bytes
 
 
@@ -23,29 +24,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/transcription", tags=["transcription"])
 
-_CHUNK_SIZE = 64 * 1024
-
 
 async def _read_upload_bounded(upload: UploadFile, *, max_bytes: int) -> bytes:
-    chunks: list[bytes] = []
-    total = 0
     try:
-        while True:
-            chunk = await upload.read(_CHUNK_SIZE)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > max_bytes:
-                raise AudioTranscriptionError(
-                    "audio_payload_too_large",
-                    "Upload exceeds configured audio byte limit",
-                    http_status=413,
-                    details={"limit_bytes": max_bytes},
-                )
-            chunks.append(chunk)
-    finally:
-        await upload.close()
-    return b"".join(chunks)
+        return await read_upload_bounded(upload, max_bytes=max_bytes)
+    except UploadTooLargeError as exc:
+        raise AudioTranscriptionError(
+            "audio_payload_too_large",
+            "Upload exceeds configured audio byte limit",
+            http_status=413,
+            details={"limit_bytes": exc.limit_bytes},
+        ) from exc
 
 
 def _sanitize_display_filename(filename: str | None, *, fallback: str) -> str:

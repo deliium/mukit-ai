@@ -47,6 +47,7 @@ def test_redact_keeps_token_fields_and_drops_secrets() -> None:
             "completion_tokens": 4,
             "max_prompt_tokens": 8,
             "api_key": "sk-secret",
+            "refresh_token": "session-secret",
             "openai_api_key": "sk-other",
             "vendor_api_key": "hidden",
             "prompt": "do not log",
@@ -60,6 +61,7 @@ def test_redact_keeps_token_fields_and_drops_secrets() -> None:
     assert payload["completion_tokens"] == 4
     assert payload["max_prompt_tokens"] == 8
     assert "api_key" not in payload
+    assert "refresh_token" not in payload
     assert "openai_api_key" not in payload
     assert "vendor_api_key" not in payload
     assert "prompt" not in payload

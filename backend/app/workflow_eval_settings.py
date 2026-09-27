@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from app.storage_root_policy import StorageRootError, reject_storage_root
+
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -43,30 +45,17 @@ def _resolve_project_db_path(env: Mapping[str, str]) -> Path:
 
 def _reject_root(root: Path, *, dataset_root: Path | None, project_db: Path) -> None:
     try:
-        resolved = root.resolve()
-    except OSError:
-        resolved = root
-    rejected: str | None = None
-    if dataset_root is not None:
-        try:
-            dataset_resolved = dataset_root.resolve()
-        except OSError:
-            dataset_resolved = dataset_root
-        if resolved == dataset_resolved:
-            rejected = "dataset_root"
-    try:
-        db_resolved = project_db.resolve()
-    except OSError:
-        db_resolved = project_db
-    if resolved == db_resolved:
-        rejected = "project_db_path"
-    if rejected is None:
-        return
-    logger.warning(
-        "benchmark_root_rejected",
-        extra={"code": "benchmark_root_rejected", "reason": rejected},
+        reject_storage_root(root, dataset_root=dataset_root, project_db=project_db)
+    except StorageRootError as exc:
+        logger.warning(
+            "benchmark_root_rejected",
+            extra={"code": "benchmark_root_rejected", "reason": exc.reason},
+        )
+        raise WorkflowEvalConfigError("benchmark_root_rejected") from exc
+    logger.info(
+        "storage_root_accepted",
+        extra={"settings": "workflow_eval", "basename": root.name},
     )
-    raise WorkflowEvalConfigError("benchmark_root_rejected")
 
 
 def load_workflow_eval_settings(
