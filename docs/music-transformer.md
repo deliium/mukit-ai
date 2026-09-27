@@ -204,3 +204,4 @@ Acceptance: train ≥1 step on fixture → save → load → greedy generate wit
 - [Symbolic tokenizer](tokenizer.md) — train/inference token contract
 - [Datasets](datasets.md) — offline `DATASET_ROOT` examples / splits
 - [Local AI](local-ai.md) — llama.cpp/vLLM sidecars; Compose `training` profile points at this offline CLI
+- [Musical workflow evaluation](workflow-evaluation.md) — V3 versus V4 workflow arms on a versioned brief set. Separate from this symbolic eval.

@@ -77,6 +77,7 @@ finding with concrete bars is returned. Findings without `affected_range` /
 
 - [Multi-agent (V4)](multi-agent.md) — Critic agent, controlled revision loops, workspace promote
 - [Composition Analysis](composition-analysis.md) — metric sidecar
+- [Musical workflow evaluation](workflow-evaluation.md) — versioned V3/V4 briefs and hard-metric regression, not taste
 - [Project persistence](project-persistence.md) — revision AI artifact summary
 
 > Note: automatic Critic → revise → re-critique is owned by the multi-agent

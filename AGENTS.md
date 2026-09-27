@@ -23,6 +23,7 @@ mukit-ai/
 │   │   ├── ready.py         # LOG_LEVEL, CORS parse, /ready helpers
 │   │   ├── ai_runtime/      # Capability registry, operation routing, typed model adapters
 │   │   ├── ai_agents/       # V4 multi-agent layer (registry, spine workflow, progressive realize, typed artifact schemas, revision_loop)
+│   │   ├── workflow_eval/   # Offline musical workflow benchmark CLI; not imported by ai_agents/
 │   │   ├── plugin_sdk/      # Public plugin import surface (manifest, protocols, context)
 │   │   ├── plugin_host/     # PLUGIN_PATHS discovery, import guard, catalog, host dispatch
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
@@ -109,6 +110,8 @@ mukit-ai/
 | `backend/app/tokenizer/cli.py` | Offline tokenizer CLI (`python -m app.tokenizer.cli`) |
 | `backend/app/embeddings/cli.py` | Offline embedding eval CLI (`python -m app.embeddings.cli`) |
 | `backend/app/music_transformer/cli.py` | Offline Music Transformer train/generate/eval/listen/compare CLI (`python -m app.music_transformer.cli`) |
+| `backend/app/workflow_eval/cli.py` | Offline V3/V4 musical workflow benchmark (`python -m app.workflow_eval.cli`) |
+| `backend/app/workflow_eval_settings.py` | `EVAL_BENCHMARK_ROOT`; refuses `DATASET_ROOT` and `PROJECT_DB_PATH` |
 | `backend/app/routers/embeddings.py` | `POST /embeddings/compute`, `/similarity`, `/related-motifs`, `/reference/resolve` |
 | `backend/app/routers/composer_profiles.py` | Composer profile CRUD / derive / promote / preview / compare / export/import |
 | `backend/app/routers/reference_features.py` | `POST /reference-features/analyze` (dimension-masked reference reports) |
@@ -280,6 +283,7 @@ mukit-ai/
 | Composer profiles | `docs/composer-profiles.md` | Durable preference profiles, soft generate conditioning, derive/promote |
 | Reference features | `docs/reference-features.md` | Selective dimension masks + preserve/borrow/regenerate policy for generate/develop/edit |
 | Symbolic Music Transformer | `docs/music-transformer.md` | PyTorch decoder-only LM, train/generate CLI, checkpoint card, optional API |
+| Musical workflow evaluation | `docs/workflow-evaluation.md` | Versioned V3/V4 brief suite, hard-metric regression, blinded listening |
 | Hybrid generation | `docs/hybrid-generation.md` | LLM plan + symbolic notes pipelines, seeds, multi-stage provenance |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |
 | Project persistence | `docs/project-persistence.md` | SQLite projects and migrations |

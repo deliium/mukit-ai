@@ -358,6 +358,7 @@ mukit-ai/
 | [Symbolic datasets](docs/datasets.md) | Offline licensed corpus pipeline (`DATASET_ROOT`, CLI build/verify) |
 | [Symbolic tokenizer](docs/tokenizer.md) | Composition V2 ↔ token ids (`tokenizer.v1`, CLI encode/decode) |
 | [Symbolic Music Transformer](docs/music-transformer.md) | PyTorch decoder-only LM train/generate (`tokenizer.v1` binding) |
+| [Musical workflow evaluation](docs/workflow-evaluation.md) | Versioned V3/V4 brief suite, hard-metric regression, blinded listening |
 | [Hybrid generation](docs/hybrid-generation.md) | LLM plan + symbolic notes pipelines, seeds, provenance, repair lanes |
 | [Composition V1](docs/composition-v1.md) | V1 compatibility, staged generation, region editing |
 | [Project persistence](docs/project-persistence.md) | SQLite projects, migrate-on-open, autosave |

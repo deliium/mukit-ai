@@ -232,6 +232,7 @@ Never log prompts, API keys, full V2 event arrays, full payloads, or full critiq
 
 Thin **Agents** tab (`MultiAgentPanel`): revision mode selector (Off/Fast/Balanced/Thorough),
 Preview spine → Cancel / Apply / Discard, inspectable pass history + fingerprint compare.
+A lazy **Listening** panel under the autonomous panel auditions a blinded packet without Apply.
 Setting a multi-agent candidate discards competing arrangement / development / reharmonize session candidates. Versions panel shows AI role summary for multi-agent revisions.
 
 ## See also
@@ -240,3 +241,4 @@ Setting a multi-agent candidate discards competing arrangement / development / r
 - [Composition V2](./composition-v2.md)
 - [Composition Arrangement](./composition-arrangement.md)
 - [Project persistence](./project-persistence.md)
+- [Musical workflow evaluation](./workflow-evaluation.md) — offline comparison of V3 generate, the spine, and the revision loop

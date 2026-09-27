@@ -93,3 +93,5 @@ Codes you will see, without note text:
 - `autonomous_revision_not_head` — open was asked for a revision that is not the run head. Branch that stage instead
 
 A fingerprint mismatch against the project is `409 project_revision_conflict`. The previous revision stays head.
+
+The offline benchmark can measure this composer as the `v4_autonomous` arm. See [Musical workflow evaluation](workflow-evaluation.md). It reads existing run counters and does not add benchmark columns to `autonomous_runs`.

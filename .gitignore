@@ -15,6 +15,8 @@ lib64/
 parts/
 sdist/
 var/
+# Musical workflow benchmark reports (also covered by var/)
+var/workflow-benchmarks/
 wheels/
 *.egg-info/
 .installed.cfg

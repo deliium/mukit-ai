@@ -50,6 +50,7 @@
 - [x] **V4 autonomous project composer** — One creative brief schedules specialized agents, commits a multi-section `composition.v2` project stage by stage, and can resume after restart. The spine preview stays preview-only. Render stays opt-in
 - [x] **V4 autonomous composer co-producer controls** — Brief review before any agent runs, Guided and Balanced checkpoints, pause, arrangement reject-and-continue with a safe instruction, and revision open/branch on the same run. Default mode stays autonomous
 - [x] **V4 collaborative project foundations** — Optional local actors and project roles, anchored comments, revision review, and an activity feed on the existing history graph. Collaboration stays off unless `COLLABORATION_ENABLED` is on
+- [x] **V4 musical workflow evaluation** — Versioned `workflow.benchmark.v1` suite scored through V3 generate, the V4 spine, and the V4 revision loop, with hard-metric regression against a stored baseline
 
 ## Completed
 
@@ -103,3 +104,4 @@
 | V4 autonomous project composer | 2026-09-26 |
 | V4 autonomous composer co-producer controls | 2026-09-26 |
 | V4 collaborative project foundations | 2026-09-26 |
+| V4 musical workflow evaluation | 2026-09-27 |
