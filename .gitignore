@@ -17,6 +17,9 @@ sdist/
 var/
 # Musical workflow benchmark reports (also covered by var/)
 var/workflow-benchmarks/
+# Offline SQLite backup CLI destinations (also covered by var/)
+var/backups/
+var/restore/
 wheels/
 *.egg-info/
 .installed.cfg

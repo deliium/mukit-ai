@@ -42,6 +42,8 @@ mukit-ai/
 │   │   ├── import_settings.py      # IMPORT_* limits and conversion policy
 │   │   ├── audio_transcription_settings.py  # AUDIO_* limits / engine policy
 │   │   ├── audio_transcription_schemas.py   # transcription.preview.v1 DTOs
+│   │   ├── audio_upload.py         # Bounded upload reader shared by transcription and recovery
+│   │   ├── storage_root_policy.py  # Refuse DATASET_ROOT and PROJECT_DB_PATH as writable roots
 │   │   ├── audio_recovery_settings.py       # AUDIO_RECOVERY_* limits / asset root / engines
 │   │   ├── audio_recovery_schemas.py        # audio.recovery.preview/result/bind.v1 DTOs
 │   │   ├── audio_alignment_schemas.py       # audio.alignment.v1 + roundtrip provenance DTOs
@@ -112,6 +114,10 @@ mukit-ai/
 | `backend/app/music_transformer/cli.py` | Offline Music Transformer train/generate/eval/listen/compare CLI (`python -m app.music_transformer.cli`) |
 | `backend/app/workflow_eval/cli.py` | Offline V3/V4 musical workflow benchmark (`python -m app.workflow_eval.cli`) |
 | `backend/app/workflow_eval_settings.py` | `EVAL_BENCHMARK_ROOT`; refuses `DATASET_ROOT` and `PROJECT_DB_PATH` |
+| `backend/app/storage_root_policy.py` | Shared storage-root refusal for recovery, neural, mix, and workflow eval |
+| `backend/app/audio_upload.py` | Chunked upload bound; recovery maps overflow to HTTP 413 |
+| `backend/app/db/backup.py` | Offline `python -m app.db.backup` copy of `PROJECT_DB_PATH` |
+| `scripts/v4_docker_acceptance.sh` | Opt-in fake autonomous run, backend restart, reopen |
 | `backend/app/routers/embeddings.py` | `POST /embeddings/compute`, `/similarity`, `/related-motifs`, `/reference/resolve` |
 | `backend/app/routers/composer_profiles.py` | Composer profile CRUD / derive / promote / preview / compare / export/import |
 | `backend/app/routers/reference_features.py` | `POST /reference-features/analyze` (dimension-masked reference reports) |
@@ -284,6 +290,7 @@ mukit-ai/
 | Reference features | `docs/reference-features.md` | Selective dimension masks + preserve/borrow/regenerate policy for generate/develop/edit |
 | Symbolic Music Transformer | `docs/music-transformer.md` | PyTorch decoder-only LM, train/generate CLI, checkpoint card, optional API |
 | Musical workflow evaluation | `docs/workflow-evaluation.md` | Versioned V3/V4 brief suite, hard-metric regression, blinded listening |
+| V4 studio operations | `docs/v4-studio-operations.md` | Fake-mode studio scenarios, migration ladder, backup CLI, opt-in Docker gate |
 | Hybrid generation | `docs/hybrid-generation.md` | LLM plan + symbolic notes pipelines, seeds, multi-stage provenance |
 | Composition V1 | `docs/composition-v1.md` | V1 compatibility, staged generation, region editing |
 | Project persistence | `docs/project-persistence.md` | SQLite projects and migrations |

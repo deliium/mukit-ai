@@ -65,6 +65,10 @@ Fresh empty files receive the baseline revision (`20260914_0001`: projects + his
 - `docker compose down` keeps the named volume (projects remain).
 - `docker compose down -v` **deletes** `mukit_project_data` and permanently wipes saved projects.
 
+### Offline SQLite backup
+
+Revision restore writes a child revision on the same database. An offline copy is `python -m app.db.backup` from `backend/`. Stop the backend first. Restore writes a new file; it does not replace the live `PROJECT_DB_PATH` through HTTP. Details: [v4-studio-operations.md](v4-studio-operations.md).
+
 ## Composition migration on open
 
 Opening or saving a project runs compositions through `normalize_composition_json`, which **always returns validated V2**:

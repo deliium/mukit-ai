@@ -87,7 +87,7 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Neural audio render: `NEURAL_AUDIO_*` + optional `compose.neural-audio.yml --profile neural-audio`. Details: [docs/neural-audio-rendering.md](docs/neural-audio-rendering.md).
 - Mix analysis: `MIX_ANALYSIS_*` (read-only DSP over stem/mix WAVs). Details: [docs/mix-analysis.md](docs/mix-analysis.md).
 - Mix plans: `MIX_PLAN_*` (new mix revisions; never overwrite stems). Details: [docs/ai-assisted-mixing.md](docs/ai-assisted-mixing.md).
-- Acceptance commands: see `docs/testing.md` (`./scripts/run_tests.sh`, pytest, Playwright, Docker persistence scripts).
+- Acceptance commands: see `docs/testing.md` (`./scripts/run_tests.sh`, pytest, Playwright, Docker persistence scripts). Studio runbook: [docs/v4-studio-operations.md](docs/v4-studio-operations.md).
 
 ## Installation (host-local optional)
 
@@ -359,6 +359,7 @@ mukit-ai/
 | [Symbolic tokenizer](docs/tokenizer.md) | Composition V2 ↔ token ids (`tokenizer.v1`, CLI encode/decode) |
 | [Symbolic Music Transformer](docs/music-transformer.md) | PyTorch decoder-only LM train/generate (`tokenizer.v1` binding) |
 | [Musical workflow evaluation](docs/workflow-evaluation.md) | Versioned V3/V4 brief suite, hard-metric regression, blinded listening |
+| [V4 studio operations](docs/v4-studio-operations.md) | Fake-mode studio scenarios, migration ladder, backup CLI, opt-in Docker |
 | [Hybrid generation](docs/hybrid-generation.md) | LLM plan + symbolic notes pipelines, seeds, provenance, repair lanes |
 | [Composition V1](docs/composition-v1.md) | V1 compatibility, staged generation, region editing |
 | [Project persistence](docs/project-persistence.md) | SQLite projects, migrate-on-open, autosave |

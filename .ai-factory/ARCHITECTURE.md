@@ -232,6 +232,7 @@ FastAPI backend
 - ✅ Cross-module use goes through service functions or shared schemas (`composition.v2` operational, `composition.v1` migration input), not private helpers inside another module’s files when avoidable
 - ❌ Services must not import FastAPI routers or request objects
 - ❌ `ai_agents/` must not import `agent_artifact_workspace`, `db/`, `autonomous_composer_store`, `workflow_eval`, or project stores. `services/autonomous_composer.py` owns those writes. Arrangement instructions reach the score through that service, not through `ai_agents/`
+- ✅ Studio acceptance is a pytest package (`backend/tests/studio_acceptance/`) and an opt-in `scripts/v4_docker_acceptance.sh`. `app/` does not import the test package. Sidecars stay optional Compose profiles and are not part of the default gate
 - ❌ Plugins may import `app.plugin_sdk` only. They must not import `plugin_host`, `ai_runtime`, `ai_agents`, `services`, `db`, or routers
 - ❌ `db/` / store implementations must not import route handlers
 - ❌ Frontend `utils/` must not import React components or the Zustand store (keep pure functions testable)
