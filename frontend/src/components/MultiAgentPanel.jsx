@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { Suspense, lazy, useEffect } from 'react';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
 import { isCanonicalComposition } from '../utils/musicJsonValidation.js';
@@ -7,6 +7,8 @@ import { createAppLogger } from '../utils/appLogger.js';
 import { normalizeRevisionMode } from '../utils/revisionLoopModes.js';
 import { operationSummaryText } from '../utils/operationSummaryText.js';
 import AutonomousComposerPanel from './AutonomousComposerPanel.jsx';
+
+const WorkflowListeningPanel = lazy(() => import('./WorkflowListeningPanel.jsx'));
 
 const logger = createAppLogger('MultiAgentPanel');
 
@@ -166,6 +168,9 @@ const MultiAgentPanel = () => {
   return (
     <Panel data-testid="multi-agent-panel">
       <AutonomousComposerPanel />
+      <Suspense fallback={null}>
+        <WorkflowListeningPanel />
+      </Suspense>
       <Title>Multi-agent (V4)</Title>
       <Hint>
         Runs Creative Director → Harmony → Melody → Arrangement → Critic as a session
