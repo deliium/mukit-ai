@@ -6,7 +6,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { createLivePredictAbortController, LIVE_PREDICT_NO_ABORT } from '../api/livePerformanceApi.js';
 import { createLiveAccompanimentScheduler } from './liveAccompanimentScheduler.js';
@@ -469,6 +471,12 @@ describe('liveJam.simulatedMidi', () => {
 
     const validation = validateMusicJson(committed.composition);
     assert.equal(validation.valid, true, validation.message);
+    const goldenPath = fileURLToPath(new URL(
+      '../../../backend/tests/fixtures/studio/jam_committed_take.json',
+      import.meta.url,
+    ));
+    const golden = JSON.parse(readFileSync(goldenPath, 'utf8'));
+    assert.deepEqual(committed.composition, golden);
 
     // Original untouched
     assert.equal(composition.tracks[0].events.length, 0);

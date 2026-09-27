@@ -1,0 +1,411 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 120,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "duration_ticks": 7680,
+  "bar_count": 4,
+  "sections": [
+    {
+      "id": "s1",
+      "type": "verse",
+      "start_bar": 1,
+      "bar_count": 4,
+      "start_tick": 0,
+      "duration_ticks": 7680
+    }
+  ],
+  "tracks": [
+    {
+      "id": "melody-1",
+      "name": "Melody",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "expression": 127,
+      "sustain_pedals": [],
+      "events": [
+        {
+          "type": "note",
+          "pitch": "C4",
+          "start_tick": 0,
+          "duration_ticks": 360,
+          "velocity": 80,
+          "id": "jam-user-melody-1-C4-0-360-0"
+        },
+        {
+          "type": "note",
+          "pitch": "D4",
+          "start_tick": 480,
+          "duration_ticks": 360,
+          "velocity": 85,
+          "id": "jam-user-melody-1-D4-480-360-1"
+        },
+        {
+          "type": "note",
+          "pitch": "E4",
+          "start_tick": 960,
+          "duration_ticks": 360,
+          "velocity": 90,
+          "id": "jam-user-melody-1-E4-960-360-2"
+        },
+        {
+          "type": "note",
+          "pitch": "F4",
+          "start_tick": 1440,
+          "duration_ticks": 360,
+          "velocity": 80,
+          "id": "jam-user-melody-1-F4-1440-360-3"
+        },
+        {
+          "type": "note",
+          "pitch": "F4",
+          "start_tick": 1920,
+          "duration_ticks": 360,
+          "velocity": 80,
+          "id": "jam-user-melody-1-F4-1920-360-4"
+        },
+        {
+          "type": "note",
+          "pitch": "G4",
+          "start_tick": 2400,
+          "duration_ticks": 360,
+          "velocity": 85,
+          "id": "jam-user-melody-1-G4-2400-360-5"
+        },
+        {
+          "type": "note",
+          "pitch": "C#4",
+          "start_tick": 2580,
+          "duration_ticks": 60,
+          "velocity": 50,
+          "id": "jam-user-melody-1-C#4-2580-60-6"
+        },
+        {
+          "type": "note",
+          "pitch": "A4",
+          "start_tick": 2880,
+          "duration_ticks": 360,
+          "velocity": 90,
+          "id": "jam-user-melody-1-A4-2880-360-7"
+        },
+        {
+          "type": "note",
+          "pitch": "B4",
+          "start_tick": 3360,
+          "duration_ticks": 360,
+          "velocity": 80,
+          "id": "jam-user-melody-1-B4-3360-360-8"
+        }
+      ]
+    },
+    {
+      "id": "bass-1",
+      "name": "Bass",
+      "instrument": "bass",
+      "role": "bass",
+      "midi_program": 32,
+      "channel": 2,
+      "expression": 127,
+      "sustain_pedals": [],
+      "events": [
+        {
+          "type": "note",
+          "pitch": "C2",
+          "start_tick": 0,
+          "duration_ticks": 420,
+          "velocity": 54,
+          "id": "jam-bass-bass-1-C2-0-420-0"
+        },
+        {
+          "type": "note",
+          "pitch": "C2",
+          "start_tick": 480,
+          "duration_ticks": 420,
+          "velocity": 54,
+          "id": "jam-bass-bass-1-C2-480-420-1"
+        },
+        {
+          "type": "note",
+          "pitch": "C2",
+          "start_tick": 960,
+          "duration_ticks": 420,
+          "velocity": 54,
+          "id": "jam-bass-bass-1-C2-960-420-2"
+        },
+        {
+          "type": "note",
+          "pitch": "C2",
+          "start_tick": 1440,
+          "duration_ticks": 420,
+          "velocity": 54,
+          "id": "jam-bass-bass-1-C2-1440-420-3"
+        },
+        {
+          "type": "note",
+          "pitch": "C2",
+          "start_tick": 1920,
+          "duration_ticks": 420,
+          "velocity": 54,
+          "id": "jam-bass-bass-1-C2-1920-420-4"
+        },
+        {
+          "type": "note",
+          "pitch": "C2",
+          "start_tick": 2400,
+          "duration_ticks": 420,
+          "velocity": 54,
+          "id": "jam-bass-bass-1-C2-2400-420-5"
+        },
+        {
+          "type": "note",
+          "pitch": "C2",
+          "start_tick": 2880,
+          "duration_ticks": 420,
+          "velocity": 54,
+          "id": "jam-bass-bass-1-C2-2880-420-6"
+        },
+        {
+          "type": "note",
+          "pitch": "C2",
+          "start_tick": 3360,
+          "duration_ticks": 420,
+          "velocity": 54,
+          "id": "jam-bass-bass-1-C2-3360-420-7"
+        }
+      ]
+    },
+    {
+      "id": "pad-1",
+      "name": "Pad",
+      "instrument": "strings",
+      "role": "harmony",
+      "midi_program": 48,
+      "channel": 3,
+      "expression": 127,
+      "sustain_pedals": [],
+      "events": [
+        {
+          "type": "note",
+          "pitch": "C3",
+          "start_tick": 0,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-C3-0-420-0"
+        },
+        {
+          "type": "note",
+          "pitch": "E3",
+          "start_tick": 0,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-E3-0-420-1"
+        },
+        {
+          "type": "note",
+          "pitch": "G3",
+          "start_tick": 0,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-G3-0-420-2"
+        },
+        {
+          "type": "note",
+          "pitch": "C3",
+          "start_tick": 480,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-C3-480-420-3"
+        },
+        {
+          "type": "note",
+          "pitch": "E3",
+          "start_tick": 480,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-E3-480-420-4"
+        },
+        {
+          "type": "note",
+          "pitch": "G3",
+          "start_tick": 480,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-G3-480-420-5"
+        },
+        {
+          "type": "note",
+          "pitch": "C3",
+          "start_tick": 960,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-C3-960-420-6"
+        },
+        {
+          "type": "note",
+          "pitch": "E3",
+          "start_tick": 960,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-E3-960-420-7"
+        },
+        {
+          "type": "note",
+          "pitch": "G3",
+          "start_tick": 960,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-G3-960-420-8"
+        },
+        {
+          "type": "note",
+          "pitch": "C3",
+          "start_tick": 1440,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-C3-1440-420-9"
+        },
+        {
+          "type": "note",
+          "pitch": "E3",
+          "start_tick": 1440,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-E3-1440-420-10"
+        },
+        {
+          "type": "note",
+          "pitch": "G3",
+          "start_tick": 1440,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-G3-1440-420-11"
+        },
+        {
+          "type": "note",
+          "pitch": "C3",
+          "start_tick": 1920,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-C3-1920-420-12"
+        },
+        {
+          "type": "note",
+          "pitch": "E3",
+          "start_tick": 1920,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-E3-1920-420-13"
+        },
+        {
+          "type": "note",
+          "pitch": "G3",
+          "start_tick": 1920,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-G3-1920-420-14"
+        },
+        {
+          "type": "note",
+          "pitch": "C3",
+          "start_tick": 2400,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-C3-2400-420-15"
+        },
+        {
+          "type": "note",
+          "pitch": "E3",
+          "start_tick": 2400,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-E3-2400-420-16"
+        },
+        {
+          "type": "note",
+          "pitch": "G3",
+          "start_tick": 2400,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-G3-2400-420-17"
+        },
+        {
+          "type": "note",
+          "pitch": "C3",
+          "start_tick": 2880,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-C3-2880-420-18"
+        },
+        {
+          "type": "note",
+          "pitch": "E3",
+          "start_tick": 2880,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-E3-2880-420-19"
+        },
+        {
+          "type": "note",
+          "pitch": "G3",
+          "start_tick": 2880,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-G3-2880-420-20"
+        },
+        {
+          "type": "note",
+          "pitch": "C3",
+          "start_tick": 3360,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-C3-3360-420-21"
+        },
+        {
+          "type": "note",
+          "pitch": "E3",
+          "start_tick": 3360,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-E3-3360-420-22"
+        },
+        {
+          "type": "note",
+          "pitch": "G3",
+          "start_tick": 3360,
+          "duration_ticks": 420,
+          "velocity": 62,
+          "id": "jam-accompaniment-pad-1-G3-3360-420-23"
+        },
+        {
+          "type": "note",
+          "pitch": "C5",
+          "start_tick": 0,
+          "duration_ticks": 3840,
+          "velocity": 32,
+          "id": "jam-texture-pad-1-C5-0-3840-24"
+        },
+        {
+          "type": "note",
+          "pitch": "E5",
+          "start_tick": 0,
+          "duration_ticks": 3840,
+          "velocity": 32,
+          "id": "jam-texture-pad-1-E5-0-3840-25"
+        },
+        {
+          "type": "note",
+          "pitch": "G5",
+          "start_tick": 0,
+          "duration_ticks": 3840,
+          "velocity": 32,
+          "id": "jam-texture-pad-1-G5-0-3840-26"
+        }
+      ]
+    }
+  ],
+  "harmony": [],
+  "markers": []
+}
