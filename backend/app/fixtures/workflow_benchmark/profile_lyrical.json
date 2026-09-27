@@ -1,0 +1,21 @@
+{
+  "schema_version": "composer.profile.v1",
+  "id": "lyrical-soft",
+  "name": "Lyrical",
+  "created_at": "2026-09-27T00:00:00Z",
+  "updated_at": "2026-09-27T00:00:00Z",
+  "source_projects": [],
+  "explicit": {
+    "midi_mean_band": "moderate",
+    "range_semitones_band": "low",
+    "rhythmic_density_band": "low",
+    "preferred_instruments": ["piano"],
+    "arrangement_density_band": "low",
+    "repetition_amount_band": "moderate",
+    "tension_shape": "arch",
+    "dynamics_band": "low",
+    "velocity_tendency_band": "low"
+  },
+  "derived": {},
+  "notes": "Coarse lyrical bands for soft conditioning. No note lists."
+}

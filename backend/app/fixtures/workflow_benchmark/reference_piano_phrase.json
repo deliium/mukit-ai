@@ -1,0 +1,45 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 76,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "duration_ticks": 7680,
+  "bar_count": 4,
+  "sections": [
+    {
+      "id": "phrase",
+      "type": "verse",
+      "label": "Phrase",
+      "start_bar": 1,
+      "bar_count": 4,
+      "start_tick": 0,
+      "duration_ticks": 7680
+    }
+  ],
+  "tracks": [
+    {
+      "id": "piano-1",
+      "name": "Piano",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "is_drum": false,
+      "volume": 90,
+      "pan": 0,
+      "expression": 100,
+      "staff": "treble",
+      "events": [
+        {"type": "note", "pitch": "E4", "start_tick": 0, "duration_ticks": 480, "velocity": 70},
+        {"type": "note", "pitch": "G4", "start_tick": 480, "duration_ticks": 480, "velocity": 72},
+        {"type": "note", "pitch": "A4", "start_tick": 960, "duration_ticks": 960, "velocity": 74},
+        {"type": "note", "pitch": "G4", "start_tick": 1920, "duration_ticks": 480, "velocity": 68},
+        {"type": "note", "pitch": "E4", "start_tick": 2400, "duration_ticks": 1440, "velocity": 66},
+        {"type": "note", "pitch": "D4", "start_tick": 3840, "duration_ticks": 480, "velocity": 64},
+        {"type": "note", "pitch": "C4", "start_tick": 4320, "duration_ticks": 1920, "velocity": 62}
+      ]
+    }
+  ],
+  "harmony": []
+}

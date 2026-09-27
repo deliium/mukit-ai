@@ -1,0 +1,180 @@
+{
+  "schema_version": "workflow.benchmark.v1",
+  "benchmark_id": "musical-workflows",
+  "benchmark_version": "1.0.0",
+  "tolerances": {
+    "invalid_composition_rate_max_rise": 0.0,
+    "hard_constraint_pass_max_drop": 0.0,
+    "structural_pass_max_drop": 0.0,
+    "instrument_range_pass_max_drop": 0.0,
+    "revision_preservation_pass_max_drop": 0.0
+  },
+  "cases": [
+    {
+      "id": "melody-line",
+      "kind": "melody-focused",
+      "seed": 11001,
+      "v3_pipeline": "hybrid_plan_symbolic",
+      "prompt": {
+        "mood": "singing",
+        "genre": "chamber",
+        "tempo_min": 92,
+        "tempo_max": 92,
+        "key": "C major",
+        "time_signature": "4/4",
+        "instruments": ["piano", "bass"],
+        "sections": [{"type": "verse", "bars": 4}],
+        "complexity": "simple",
+        "duration_bars": 4,
+        "instructions": "Keep one singing piano line in a short rising question that settles."
+      }
+    },
+    {
+      "id": "harmony-progression",
+      "kind": "harmonic",
+      "seed": 11002,
+      "prompt": {
+        "mood": "warm",
+        "genre": "chamber",
+        "tempo_min": 84,
+        "tempo_max": 84,
+        "key": "G major",
+        "time_signature": "4/4",
+        "instruments": ["piano", "acoustic guitar"],
+        "sections": [{"type": "verse", "bars": 4}],
+        "complexity": "moderate",
+        "duration_bars": 4,
+        "instructions": "Let the second instrument carry block chords under a quiet upper line."
+      }
+    },
+    {
+      "id": "orchestra-tutti",
+      "kind": "orchestral",
+      "seed": 11003,
+      "allow_extra_instrument_families": false,
+      "prompt": {
+        "mood": "broad",
+        "genre": "orchestral",
+        "tempo_min": 96,
+        "tempo_max": 96,
+        "key": "D major",
+        "time_signature": "4/4",
+        "instruments": ["violin", "flute", "trumpet", "cello"],
+        "sections": [{"type": "chorus", "bars": 4}],
+        "complexity": "moderate",
+        "duration_bars": 4,
+        "instructions": "Four families only, playing together for one short tutti phrase."
+      }
+    },
+    {
+      "id": "sparse-texture",
+      "kind": "minimalist",
+      "seed": 11004,
+      "prompt": {
+        "mood": "still",
+        "genre": "minimalist",
+        "tempo_min": 60,
+        "tempo_max": 60,
+        "key": "A minor",
+        "time_signature": "4/4",
+        "instruments": ["piano"],
+        "sections": [{"type": "intro", "bars": 4}],
+        "complexity": "simple",
+        "duration_bars": 4,
+        "instructions": "Leave long gaps. A few quiet tones are enough for a valid phrase."
+      }
+    },
+    {
+      "id": "two-section-form",
+      "kind": "multi-section",
+      "seed": 11005,
+      "prompt": {
+        "mood": "narrative",
+        "genre": "chamber",
+        "tempo_min": 88,
+        "tempo_max": 88,
+        "key": "F major",
+        "time_signature": "4/4",
+        "instruments": ["piano"],
+        "sections": [
+          {"type": "intro", "bars": 4},
+          {"type": "chorus", "bars": 4}
+        ],
+        "complexity": "moderate",
+        "duration_bars": 8,
+        "instructions": "Open sparsely, then answer with a clearer second section of equal length."
+      }
+    },
+    {
+      "id": "reference-borrow",
+      "kind": "reference-conditioned",
+      "seed": 11006,
+      "reference_fixture": "reference_piano_phrase.json",
+      "reference_dimensions": ["density"],
+      "reference_policy": {
+        "schema_version": "reference.conditioning.policy.v1",
+        "preserve_dimensions": [],
+        "regenerate_dimensions": ["melodic_contour"],
+        "dimension_strengths": {"density": "normal"},
+        "default_borrow_strength": "normal",
+        "allow_motif_reuse": false,
+        "strict_partition": true
+      },
+      "prompt": {
+        "mood": "lyrical",
+        "genre": "chamber",
+        "tempo_min": 76,
+        "tempo_max": 76,
+        "key": "C major",
+        "time_signature": "4/4",
+        "instruments": ["piano"],
+        "sections": [{"type": "verse", "bars": 4}],
+        "complexity": "simple",
+        "duration_bars": 4,
+        "instructions": "Borrow only abstract density. Write a new melody that is not a copy."
+      }
+    },
+    {
+      "id": "profile-soft",
+      "kind": "profile-conditioned",
+      "seed": 11007,
+      "profile_id": "lyrical-soft",
+      "profile_strength": "normal",
+      "prompt": {
+        "mood": "lyrical",
+        "genre": "chamber",
+        "tempo_min": 72,
+        "tempo_max": 72,
+        "key": "E minor",
+        "time_signature": "4/4",
+        "instruments": ["piano"],
+        "sections": [{"type": "verse", "bars": 4}],
+        "complexity": "simple",
+        "duration_bars": 4,
+        "instructions": "Soft lyrical preference only. Hard key and bar count stay locked."
+      }
+    },
+    {
+      "id": "keep-the-rest",
+      "kind": "revision-preservation",
+      "seed": 11008,
+      "preservation_fixture": "composition_v2_expressive.json",
+      "prompt": {
+        "mood": "warm",
+        "genre": "chamber",
+        "tempo_min": 100,
+        "tempo_max": 100,
+        "key": "C major",
+        "time_signature": "4/4",
+        "instruments": ["piano"],
+        "sections": [
+          {"type": "intro", "bars": 2},
+          {"type": "outro", "bars": 2}
+        ],
+        "complexity": "moderate",
+        "duration_bars": 4,
+        "instructions": "Revise only targeted bars. Leave every other note where it was."
+      }
+    }
+  ]
+}
