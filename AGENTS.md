@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders; mix analysis (`mix.analysis.v1`) measures completed neural stem/mix WAVs without mutating audio or V2. Projects persist in SQLite. V1 remains migration/parser input.
+Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders; mix analysis (`mix.analysis.v1`) measures completed neural stem/mix WAVs without mutating audio or V2. Projects persist in SQLite. A project may also store `adaptive.score.v1` graphs that reference V2 sections, bars, tracks, motifs, or revisions without copying note events. V1 remains migration/parser input.
 
 ## Tech Stack
 
@@ -28,8 +28,8 @@ mukit-ai/
 │   │   ├── plugin_host/     # PLUGIN_PATHS discovery, import guard, catalog, host dispatch
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
-│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents + plugins + collaboration HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. composition_critique, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
+│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents + plugins + collaboration + adaptive_scores HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. composition_critique, adaptive_score_*, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
@@ -146,6 +146,10 @@ mukit-ai/
 | `backend/app/operation_budget_settings.py` | `OPERATION_*` and `NEURAL_AUDIO_MAX_ATTEMPTS` ceilings |
 | `backend/app/services/composition_revision_preserve.py` | Preserve-outside-targets event fingerprint helper |
 | `backend/app/routers/critique.py` | `POST /critique/evaluate` (session-only) |
+| `backend/app/adaptive_score_schemas.py` | `adaptive.score.v1` graph DTOs (references only; no note events) |
+| `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD plus read-only validate |
+| `backend/app/services/adaptive_score_store.py` | SQLite `adaptive_scores` CAS; does not load Composition |
+| `backend/app/services/adaptive_score_service.py` | Read-only composition binding before store writes |
 | `backend/app/motif_schemas.py` | Motif apply request/response DTOs |
 | `backend/app/routers/analysis.py` | `POST /analysis/composition` |
 | `backend/app/routers/motifs.py` | `POST /motifs/apply` |
@@ -281,6 +285,7 @@ mukit-ai/
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
 | Composition Critique | `docs/composition-critique.md` | Evaluation engine, strata, climax AC, `/critique/evaluate` |
+| Adaptive score | `docs/adaptive-score.md` | `adaptive.score.v1` state graph over V2 references; no playback runtime |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |
 | MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
 | Symbolic datasets | `docs/datasets.md` | Offline `DATASET_ROOT` corpus pipeline, provenance, CLI |

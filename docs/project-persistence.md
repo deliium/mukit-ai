@@ -92,7 +92,13 @@ Migration is **source-immutable** and **idempotent**: repeated opens of an alrea
 | `GET` | `/projects/{id}` | Open full project (migrate composition to V2 on read; history fields included) |
 | `PATCH` | `/projects/{id}` | Rename and/or autosave draft (+ optional CAS working-version fields) |
 | `POST` | `/projects/{id}/duplicate` | Clone with new id and ` (copy)` name; fresh `Original` root only |
-| `DELETE` | `/projects/{id}` | Hard delete (cascades revisions/branches; snapshot GC deferred) |
+| `DELETE` | `/projects/{id}` | Hard delete (cascades revisions/branches and `adaptive_scores`; snapshot GC deferred) |
+| `GET` | `/projects/{id}/adaptive-scores` | List adaptive-score summaries (no `body_json`) |
+| `POST` | `/projects/{id}/adaptive-scores` | Create an `adaptive.score.v1` document (server-assigned id) |
+| `GET` | `/projects/{id}/adaptive-scores/{score_id}` | Full document plus `document_revision` and `binding_status` |
+| `PUT` | `/projects/{id}/adaptive-scores/{score_id}` | Replace the document with compare-and-swap |
+| `DELETE` | `/projects/{id}/adaptive-scores/{score_id}` | Delete one adaptive score |
+| `POST` | `/projects/{id}/adaptive-scores/{score_id}/validate` | Read-only graph and binding findings |
 | `GET` | `/projects/{id}/revisions` | Metadata-only paginated history (`branch_id`, `limit`, `before_sequence`) |
 | `GET` | `/projects/{id}/revisions/{revision_id}` | One validated snapshot (`CompositionV2 \| null`) + bounded metadata |
 | `POST` | `/projects/{id}/revisions` | Durable commit (Save / AI Apply) with CAS + optional `checkpoint_dirty_draft` |
@@ -105,6 +111,10 @@ Migration is **source-immutable** and **idempotent**: repeated opens of an alrea
 | `PATCH` | `/projects/{id}/branches/{branch_id}` | Rename branch (Unicode NFKC+casefold uniqueness) |
 
 Payloads that include API-key-like fields are rejected with `422`. History list responses never include composition JSON.
+
+### Adaptive scores
+
+`adaptive_scores` stores one `adaptive.score.v1` JSON document per row (`body_json`), scoped by `project_id` with `ON DELETE CASCADE`. `document_revision` is the adaptive compare-and-swap counter, not a composition revision id. A partial unique index allows one `is_default=1` row per project. Writes do not modify `projects.composition_json`. See `docs/adaptive-score.md`.
 
 ## Logging
 
