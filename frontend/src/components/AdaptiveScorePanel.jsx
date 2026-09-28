@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import styled from 'styled-components';
 
 import { useMusicStore } from '../store/musicStore.js';
+import { formatAdaptiveLayerStatus } from '../utils/adaptiveLayerIntensity.js';
 import { layoutAdaptiveScoreGraph } from '../utils/adaptiveScoreGraph.js';
 
 const Panel = styled.section`
@@ -123,6 +124,19 @@ function submitCommand(event, run, op, payload) {
   return run(op, payload);
 }
 
+const LAYER_ROLES = ['harmony', 'bass', 'percussion', 'strings', 'brass', 'ambient', 'other'];
+
+function parsedPlayhead(value) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return 0;
+  }
+  const tick = Number.parseInt(value, 10);
+  if (!Number.isInteger(tick) || tick < 0 || String(tick) !== value.trim()) {
+    return 0;
+  }
+  return tick;
+}
+
 const TRANSITION_QUANTIZATIONS = [
   'immediate',
   'beat',
@@ -151,6 +165,14 @@ const AdaptiveScorePanel = () => {
   const scheduled = useMusicStore((state) => state.adaptiveScheduledTransition);
   const scheduleAdaptiveTransition = useMusicStore((state) => state.scheduleAdaptiveTransition);
   const cancelAdaptiveTransition = useMusicStore((state) => state.cancelAdaptiveTransition);
+  const layerIntensity = useMusicStore((state) => state.adaptiveLayerIntensity);
+  const layerIntensityError = useMusicStore((state) => state.adaptiveLayerIntensityError);
+  const layerPlanPreview = useMusicStore((state) => state.adaptiveLayerPlanPreview);
+  const mapAdaptiveLayers = useMusicStore((state) => state.mapAdaptiveLayers);
+  const previewLayerPlan = useMusicStore((state) => state.previewAdaptiveLayerPlan);
+  const applyLayerPlan = useMusicStore((state) => state.applyAdaptiveLayerPlan);
+  const applySessionMute = useMusicStore((state) => state.applyAdaptiveLayerSessionMute);
+  const restoreSessionMute = useMusicStore((state) => state.restoreAdaptiveLayerMute);
 
   const [stateName, setStateName] = useState('');
   const [materialKind, setMaterialKind] = useState('section');
@@ -168,6 +190,12 @@ const AdaptiveScorePanel = () => {
   const [boundaryValue, setBoundaryValue] = useState('1');
   const [scheduleToStateId, setScheduleToStateId] = useState('');
   const [positionTick, setPositionTick] = useState('0');
+  const [runtimeIntensity, setRuntimeIntensity] = useState('0');
+  const [playheadTick, setPlayheadTick] = useState('');
+  const [planRole, setPlanRole] = useState('ambient');
+  const [planMin, setPlanMin] = useState('0');
+  const [planMax, setPlanMax] = useState('1');
+  const [planProposals, setPlanProposals] = useState([]);
 
   useEffect(() => {
     if (!currentProjectId) {
@@ -188,6 +216,12 @@ const AdaptiveScorePanel = () => {
   const states = score?.states || [];
   const selected = states.find((state) => state.id === selectedStateId) || null;
   const sectionOptions = sections.filter((section) => section?.id);
+
+  useEffect(() => {
+    if (typeof selected?.intensity === 'number') {
+      setRuntimeIntensity(String(selected.intensity));
+    }
+  }, [selected]);
 
   useEffect(() => {
     const transition = (score?.transitions || []).find((item) => item.id === transitionId);
@@ -254,6 +288,126 @@ const AdaptiveScorePanel = () => {
           {score.variants?.length || 0} variants, {score.layers?.length || 0} layers, {score.stingers?.length || 0} stingers
         </span>
       </Header>
+      <section>
+        <strong>Runtime intensity</strong>
+        <Row>
+          <Control
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            aria-label="Runtime intensity"
+            data-testid="adaptive-intensity"
+            value={runtimeIntensity}
+            onChange={(event) => {
+              setRuntimeIntensity(event.target.value);
+              useMusicStore.setState({ adaptiveLayerIntensity: null });
+            }}
+            onMouseUp={(event) => mapAdaptiveLayers(Number(event.currentTarget.value), parsedPlayhead(playheadTick))}
+            onKeyUp={(event) => mapAdaptiveLayers(Number(event.currentTarget.value), parsedPlayhead(playheadTick))}
+          />
+          <Control
+            aria-label="Playhead tick"
+            data-testid="adaptive-playhead-tick"
+            value={playheadTick}
+            onChange={(event) => setPlayheadTick(event.target.value)}
+          />
+          <Button
+            type="button"
+            data-testid="adaptive-map-layers"
+            onClick={() => mapAdaptiveLayers(Number(runtimeIntensity), parsedPlayhead(playheadTick))}
+          >
+            Map layers
+          </Button>
+        </Row>
+        {(layerIntensity?.layers || []).map((row) => {
+          const stored = (score.layers || []).find((layer) => layer.id === row.layer_id);
+          const windowLabel = stored
+            ? `${stored.intensity_min}–${stored.intensity_max}`
+            : '';
+          return (
+            <div key={row.layer_id} data-testid={`adaptive-layer-row-${row.layer_id}`}>
+              <span data-testid={`adaptive-layer-active-${row.layer_id}`}>
+                {row.active ? 'active' : 'inactive'}
+              </span>
+              <span>{formatAdaptiveLayerStatus(row)}</span>
+              <span>{windowLabel}</span>
+              <span>{row.audible ? 'audible' : 'waiting'}</span>
+              <span>{row.reason}</span>
+              <span>{row.fade_end_tick}</span>
+            </div>
+          );
+        })}
+        {layerIntensityError ? <p>{layerIntensityError}</p> : null}
+        <Row>
+          <Button
+            type="button"
+            data-testid="adaptive-session-mute"
+            disabled={!(layerIntensity?.layers || []).length || (layerIntensity?.layers || []).some((row) => row.material_kind !== 'track_range')}
+            onClick={() => applySessionMute()}
+          >
+            Session mute
+          </Button>
+          <Secondary type="button" data-testid="adaptive-restore-mute" onClick={() => restoreSessionMute()}>
+            Restore mute
+          </Secondary>
+        </Row>
+        <details>
+          <summary>Plan proposals</summary>
+          <Row>
+            <Select aria-label="Proposal role" value={planRole} onChange={(event) => setPlanRole(event.target.value)}>
+              {LAYER_ROLES.map((role) => (
+                <option key={role} value={role}>{role}</option>
+              ))}
+            </Select>
+            <Control aria-label="Proposal minimum" value={planMin} onChange={(event) => setPlanMin(event.target.value)} />
+            <Control aria-label="Proposal maximum" value={planMax} onChange={(event) => setPlanMax(event.target.value)} />
+            <Secondary
+              type="button"
+              onClick={() => {
+                const material = selected?.material
+                  || (sectionOptions[0]?.id
+                    ? { kind: 'section', section_id: sectionOptions[0].id }
+                    : { kind: 'bar_range', start_bar: 1, end_bar: 1 });
+                setPlanProposals((current) => [
+                  ...current,
+                  {
+                    name: planRole,
+                    role: planRole,
+                    intensity_min: Number(planMin),
+                    intensity_max: Number(planMax),
+                    mix_hint: 'bed',
+                    material,
+                  },
+                ]);
+              }}
+            >
+              Add proposal
+            </Secondary>
+            <Secondary
+              type="button"
+              data-testid="adaptive-preview-plan"
+              disabled={!planProposals.length}
+              onClick={() => previewLayerPlan(planProposals, Number(runtimeIntensity))}
+            >
+              Preview plan
+            </Secondary>
+            <Button
+              type="button"
+              data-testid="adaptive-apply-plan"
+              disabled={!planProposals.length}
+              onClick={() => applyLayerPlan(planProposals)}
+            >
+              Apply plan
+            </Button>
+          </Row>
+          {(layerPlanPreview?.layers || []).map((row) => (
+            <div key={row.layer_id} data-testid={`adaptive-plan-row-${row.layer_id}`}>
+              {formatAdaptiveLayerStatus(row)}
+            </div>
+          ))}
+        </details>
+      </section>
       <GraphRegion data-testid="adaptive-graph">
         <GraphStage style={{ width: Math.max(layout.width, 180), height: Math.max(layout.height, 96) }}>
           <svg width={Math.max(layout.width, 180)} height={Math.max(layout.height, 96)} aria-hidden="true">

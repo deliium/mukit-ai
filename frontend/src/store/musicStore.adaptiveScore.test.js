@@ -218,3 +218,133 @@ test('schedule stores latency and a conflict leaves the pending object', async (
     restore();
   }
 });
+
+test('layer map stores the response and a project switch clears it', async () => {
+  seedScore();
+  useMusicStore.setState({
+    adaptiveLayerMuteSnapshot: { 'track-bass': true },
+    editedMusicJson: { schema_version: 'composition.v2', tracks: [{ id: 'track-bass', events: [] }] },
+  });
+  const compositionBefore = useMusicStore.getState().editedMusicJson;
+  const mapped = {
+    schema_version: 'adaptive.layer.intensity.v1',
+    layers: [
+      {
+        layer_id: 'layer-bass',
+        role: 'bass',
+        material_kind: 'track_range',
+        track_ids: ['track-bass'],
+        active: true,
+        audible: true,
+        reason: 'in_window',
+      },
+    ],
+  };
+  const restore = installAxiosStub(async () => ({ status: 200, data: mapped }));
+  try {
+    await useMusicStore.getState().mapAdaptiveLayers(0.5, 0);
+    assert.equal(useMusicStore.getState().adaptiveLayerIntensity.layers[0].layer_id, 'layer-bass');
+    assert.equal(useMusicStore.getState().editedMusicJson, compositionBefore);
+  } finally {
+    restore();
+  }
+  const open = installAxiosStub(async () => ({
+    status: 200,
+    data: {
+      id: 'p2',
+      name: 'Next',
+      composition: {
+        schema_version: 'composition.v2',
+        tempo: 100,
+        key: 'C major',
+        time_signature: '4/4',
+        ticks_per_quarter: 480,
+        duration_ticks: 1920,
+        bar_count: 1,
+        sections: [],
+        tracks: [],
+      },
+      active_branch_id: null,
+      working_version: 0,
+    },
+  }));
+  try {
+    await useMusicStore.getState().openProject('p2');
+    const state = useMusicStore.getState();
+    assert.equal(state.adaptiveLayerIntensity, null);
+    assert.equal(state.adaptiveLayerPlanPreview, null);
+    assert.equal(state.adaptiveLayerMuteSnapshot, null);
+    assert.equal(state.adaptiveLayerIntensityError, '');
+  } finally {
+    open();
+  }
+});
+
+test('session mute follows active track rows and restore writes the snapshot', () => {
+  seedScore();
+  const compositionBefore = useMusicStore.getState().editedMusicJson;
+  useMusicStore.setState({
+    trackControls: {
+      'track-bass': { muted: true },
+      'track-perc': { muted: false },
+      'track-shared': { muted: true },
+      'track-drums': { muted: true },
+    },
+    adaptiveLayerIntensity: {
+      layers: [
+        { layer_id: 'layer-bass', material_kind: 'track_range', track_ids: ['track-bass'], active: true },
+        { layer_id: 'layer-perc', material_kind: 'track_range', track_ids: ['track-perc'], active: false },
+        { layer_id: 'layer-low', material_kind: 'track_range', track_ids: ['track-shared'], active: false },
+        { layer_id: 'layer-high', material_kind: 'track_range', track_ids: ['track-shared'], active: true },
+      ],
+    },
+  });
+  useMusicStore.getState().applyAdaptiveLayerSessionMute();
+  const muted = (id) => useMusicStore.getState().trackControls[id].muted;
+  assert.equal(muted('track-bass'), false);
+  assert.equal(muted('track-perc'), true);
+  assert.equal(muted('track-shared'), false);
+  assert.equal(muted('track-drums'), true);
+  assert.deepEqual(useMusicStore.getState().adaptiveLayerMuteSnapshot, {
+    'track-bass': true,
+    'track-perc': false,
+    'track-shared': true,
+  });
+  assert.equal(useMusicStore.getState().editedMusicJson, compositionBefore);
+  useMusicStore.getState().restoreAdaptiveLayerMute();
+  assert.equal(muted('track-bass'), true);
+  assert.equal(muted('track-perc'), false);
+  assert.equal(muted('track-shared'), true);
+  assert.equal(useMusicStore.getState().adaptiveLayerMuteSnapshot, null);
+});
+
+test('apply plan threads document revision from the first command', async () => {
+  seedScore();
+  const revisions = [];
+  const restore = installAxiosStub(async (config) => {
+    const body = JSON.parse(config.data);
+    revisions.push(body.expected_document_revision);
+    const next = body.expected_document_revision + 1;
+    return {
+      status: 200,
+      data: {
+        score: PREVIOUS,
+        document_revision: next,
+        binding_status: 'fresh',
+        findings: [],
+        is_default: true,
+        created_at: 't',
+        updated_at: 't',
+      },
+    };
+  });
+  try {
+    await useMusicStore.getState().applyAdaptiveLayerPlan([
+      { name: 'Pad', role: 'ambient', intensity_min: 0, intensity_max: 1, mix_hint: 'bed', material: { kind: 'section', section_id: 's' } },
+      { name: 'Bass', role: 'bass', intensity_min: 0.5, intensity_max: 1, mix_hint: 'bed', material: { kind: 'section', section_id: 's' } },
+    ]);
+    assert.deepEqual(revisions, [2, 3]);
+  } finally {
+    restore();
+  }
+});

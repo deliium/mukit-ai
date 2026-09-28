@@ -14,6 +14,8 @@ const PATHS = Object.freeze({
   schedule: '/projects/{project_id}/adaptive-scores/{score_id}/transition-requests',
   current: '/projects/{project_id}/adaptive-scores/{score_id}/transition-requests/current',
   cancel: '/projects/{project_id}/adaptive-scores/{score_id}/transition-requests/{request_id}',
+  intensity: '/projects/{project_id}/adaptive-scores/{score_id}/layer-intensity',
+  preview: '/projects/{project_id}/adaptive-scores/{score_id}/layer-plans/preview',
 });
 
 function projectScoresPath(projectId) {
@@ -148,6 +150,24 @@ export async function getCurrentAdaptiveTransition(projectId, scoreId) {
   } catch (error) {
     throw raiseAdaptiveError(error, PATHS.current);
   }
+}
+
+export function mapAdaptiveLayerIntensity(projectId, scoreId, body) {
+  return request(
+    'post',
+    PATHS.intensity,
+    `${scorePath(projectId, scoreId)}/layer-intensity`,
+    body,
+  );
+}
+
+export function previewAdaptiveLayerPlan(projectId, scoreId, body) {
+  return request(
+    'post',
+    PATHS.preview,
+    `${scorePath(projectId, scoreId)}/layer-plans/preview`,
+    body,
+  );
 }
 
 export async function cancelAdaptiveTransition(projectId, scoreId, requestId) {

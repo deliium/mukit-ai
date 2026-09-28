@@ -6,6 +6,8 @@ import {
   getAdaptiveScore,
   getCurrentAdaptiveTransition,
   listAdaptiveScores,
+  mapAdaptiveLayerIntensity,
+  previewAdaptiveLayerPlan,
   scheduleAdaptiveTransition,
   validateAdaptiveScore,
 } from '../api/adaptiveScoreApi.js';
@@ -421,6 +423,10 @@ export const initialAdaptiveScoreState = {
   adaptiveCommandError: '',
   adaptiveStatus: 'idle',
   adaptiveScheduledTransition: null,
+  adaptiveLayerIntensity: null,
+  adaptiveLayerIntensityError: '',
+  adaptiveLayerPlanPreview: null,
+  adaptiveLayerMuteSnapshot: null,
 };
 
 let adaptiveScoreRequestSeq = 0;
@@ -12534,6 +12540,10 @@ export const useMusicStore = create((set, get) => ({
         adaptiveCommandError: '',
         adaptiveStatus: 'ready',
         adaptiveScheduledTransition: null,
+        adaptiveLayerIntensity: null,
+        adaptiveLayerIntensityError: '',
+        adaptiveLayerPlanPreview: null,
+        adaptiveLayerMuteSnapshot: null,
       });
       try {
         const pending = await getCurrentAdaptiveTransition(projectId, score.id);
@@ -12742,6 +12752,160 @@ export const useMusicStore = create((set, get) => ({
       });
       return null;
     }
+  },
+
+  mapAdaptiveLayers: async (intensity, positionTick) => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    const revision = get().adaptiveDocumentRevision;
+    const stateId = get().adaptiveSelectedStateId;
+    if (!projectId || !scoreId || !revision || !stateId) {
+      return null;
+    }
+    const parsedTick = Number.isInteger(positionTick) && positionTick >= 0 ? positionTick : 0;
+    const parsedIntensity = typeof intensity === 'number' && !Number.isNaN(intensity) ? intensity : 0;
+    console.debug('[musicStore] Adaptive layer map', {
+      scoreId,
+      stateId,
+      intensity: parsedIntensity,
+      positionTick: parsedTick,
+    });
+    set({ adaptiveLayerIntensity: null, adaptiveLayerIntensityError: '' });
+    try {
+      const body = await mapAdaptiveLayerIntensity(projectId, scoreId, {
+        expected_document_revision: revision,
+        state_id: stateId,
+        intensity: parsedIntensity,
+        position_tick: parsedTick,
+      });
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      const activeCount = Array.isArray(body?.layers)
+        ? body.layers.filter((row) => row.active).length
+        : 0;
+      console.debug('[musicStore] Adaptive layer map stored', { scoreId, activeCount });
+      set({ adaptiveLayerIntensity: body, adaptiveLayerIntensityError: '' });
+      return body;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      console.warn('[musicStore] Adaptive layer map failed', {
+        code: error.code || null,
+        status: error.status || null,
+      });
+      set({
+        adaptiveLayerIntensity: null,
+        adaptiveLayerIntensityError: error.message || 'Layer map failed',
+      });
+      return null;
+    }
+  },
+
+  previewAdaptiveLayerPlan: async (proposals, intensity) => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    const revision = get().adaptiveDocumentRevision;
+    const stateId = get().adaptiveSelectedStateId;
+    if (!projectId || !scoreId || !revision || !stateId || !Array.isArray(proposals) || !proposals.length) {
+      return null;
+    }
+    const parsedIntensity = typeof intensity === 'number' && !Number.isNaN(intensity) ? intensity : 0;
+    console.debug('[musicStore] Adaptive layer plan preview', {
+      scoreId,
+      stateId,
+      proposalCount: proposals.length,
+    });
+    try {
+      const body = await previewAdaptiveLayerPlan(projectId, scoreId, {
+        expected_document_revision: revision,
+        state_id: stateId,
+        intensity: parsedIntensity,
+        proposals,
+      });
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      set({ adaptiveLayerPlanPreview: body, adaptiveLayerIntensityError: '' });
+      return body;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      console.warn('[musicStore] Adaptive layer plan preview failed', {
+        code: error.code || null,
+        status: error.status || null,
+      });
+      set({ adaptiveLayerIntensityError: error.message || 'Layer plan preview failed' });
+      return null;
+    }
+  },
+
+  applyAdaptiveLayerPlan: async (proposals) => {
+    if (!Array.isArray(proposals) || !proposals.length) {
+      return null;
+    }
+    console.info('[musicStore] Adaptive layer plan apply', { proposalCount: proposals.length });
+    for (const proposal of proposals) {
+      const detail = await get().runAdaptiveScoreCommand('create_layer', proposal);
+      if (!detail) {
+        return null;
+      }
+    }
+    return get().adaptiveScore;
+  },
+
+  applyAdaptiveLayerSessionMute: () => {
+    const response = get().adaptiveLayerIntensity;
+    const rows = Array.isArray(response?.layers) ? response.layers : [];
+    if (!rows.length || rows.some((row) => row.material_kind !== 'track_range')) {
+      return null;
+    }
+    const activeByTrack = new Map();
+    const named = new Set();
+    for (const row of rows) {
+      const trackIds = Array.isArray(row.track_ids) ? row.track_ids : [];
+      for (const trackId of trackIds) {
+        if (!trackId) {
+          continue;
+        }
+        named.add(trackId);
+        if (row.active === true) {
+          activeByTrack.set(trackId, true);
+        } else if (!activeByTrack.has(trackId)) {
+          activeByTrack.set(trackId, false);
+        }
+      }
+    }
+    const snapshot = { ...(get().adaptiveLayerMuteSnapshot || {}) };
+    const controls = get().trackControls || {};
+    for (const trackId of named) {
+      if (!Object.prototype.hasOwnProperty.call(snapshot, trackId)) {
+        snapshot[trackId] = Boolean(controls[trackId]?.muted);
+      }
+      get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_WORKING, trackId, {
+        muted: activeByTrack.get(trackId) !== true,
+      });
+    }
+    set({ adaptiveLayerMuteSnapshot: snapshot });
+    console.debug('[musicStore] Adaptive layer session mute', { trackCount: named.size });
+    return snapshot;
+  },
+
+  restoreAdaptiveLayerMute: () => {
+    const snapshot = get().adaptiveLayerMuteSnapshot;
+    if (!snapshot) {
+      return null;
+    }
+    for (const [trackId, muted] of Object.entries(snapshot)) {
+      get().updateMixerTrackControl(PLAYBACK_MIXER_SCOPE_WORKING, trackId, { muted: Boolean(muted) });
+    }
+    set({ adaptiveLayerMuteSnapshot: null });
+    console.debug('[musicStore] Adaptive layer mute restored', {
+      trackCount: Object.keys(snapshot).length,
+    });
+    return null;
   },
 
   validateLoadedAdaptiveScore: async () => {

@@ -56,6 +56,24 @@ The request does not send a quantization. Timing comes from the authored edge. C
 
 **Vertical layering** is simultaneous material inside one state, or in any state when `state_id` is null. `mix_hint` is a label (`bed`, `foreground`, `ornament`), not a gain curve and not `mix.plan.v1`.
 
+**Runtime intensity** is a slider value in `0..1`. It is a different field from the state's authored `intensity`. **Current state** stays the selected card. **Active** means the intensity window, the state scope, and any exclusive group selected the layer. **Audible** means active and the playhead sits inside the layer's material span. Resolve does not write `projects.composition_json` or the score row.
+
+Optional layer fields default so older scores still parse: `role` (`other`), `exclusive_group` (null, additive), `priority` (`0`), and `fade` (`cut` / `cut` / `0` / `0`). A non-null exclusive group matches `^[a-z][a-z0-9_]{0,40}$` and keeps one winner: higher `priority`, then higher `intensity_min`, then `id`. `default_active` stays stored and does not change the map. `target_gain` is `1` or `0`. Fade completion is a tick: `cut` stays on `position_tick`, `linear` adds the millisecond lead, and `bar` uses the next bar boundary. The response schema is `adaptive.layer.intensity.v1`. It is not stored in `body_json`. A layer plan is a session proposal list. Apply posts `create_layer` after an explicit command.
+
+Locked example, one state `state-exploration`, tempo 120, `4/4`, `ticks_per_quarter` 480:
+
+| id | role | window | group | priority | active at |
+|----|------|--------|-------|----------|-----------|
+| `layer-pad` | ambient | 0–1 | — | 0 | 0, 0.5, 0.8, 0.9, 1 |
+| `layer-piano` | harmony | 0–1 | — | 0 | 0, 0.5, 0.8, 0.9, 1 |
+| `layer-bass` | bass | 0.5–1 | — | 0 | 0.5, 0.8, 0.9, 1 |
+| `layer-strings` | strings | 0.5–1 | — | 0 | 0.5, 0.8, 0.9, 1 |
+| `layer-perc` | percussion | 0.8–1 | — | 0 | 0.8, 0.9, 1 |
+| `layer-brass-hint` | brass | 0.9–1 | `orchestration` | 0 | 0.9 |
+| `layer-orch` | brass | 1–1 | `orchestration` | 1 | 1 (suppresses `layer-brass-hint`) |
+
+At `position_tick` 2400, a `bar` fade ends at tick 3840 and a `linear` fade of 400 ms ends at tick 2784. Repeating the call returns the same ids and integers.
+
 A **variant** is alternate material for one state, selected by an intensity window. A **stinger** is a short reference with an interrupt policy (`overlay`, `duck_bed`, `wait_for_exit`).
 
 Bar numbers are absolute composition bars, the same coordinate as `CompositionV2Section.start_bar`.
@@ -123,8 +141,11 @@ A graph or binding error is `422`. `detail.code` is the first error finding's co
 | `assign_loop` | Replace `state.loop`. |
 | `assign_intensity` | Replace intensity with a number from 0 to 1. A boolean is rejected. |
 | `assign_boundary` | Replace `entry` or `exit`. |
+| `create_layer` | Append one layer. Id is `layer_` plus 8 hex. Unknown `state_id` is `422 dangling_state_ref` and does not write. |
+| `edit_layer` | Copy only fields present on the payload. An explicit null `exclusive_group` clears it. An omitted `fade` keeps the stored fade. `intensity_max < intensity_min` is `422 adaptive_score_invalid` and does not write. |
+| `delete_layer` | Remove that layer only. An unknown id is `422 adaptive_score_invalid` with `target_id`. |
 
-Whole-document `PUT` remains the path for `initial_state_id`, variants, layers, and stingers. Commands do not create those three collections.
+`assign_intensity` still edits a state's nominal intensity. It does not edit layer windows. Whole-document `PUT` remains the path for `initial_state_id`, variants, and stingers.
 
 ## Finding codes
 
@@ -142,7 +163,9 @@ Messages are at most 200 characters and name the entity id and the numbers that 
 
 ## Adaptive tab
 
-The workspace tab id is `adaptive`. It loads the default score, or offers **New adaptive score** for an empty draft named `Exploration cue`. State cards, transition edges, a material summary, and the finding list come from the saved document. The header `Current state:` is the selected card, seeded from `initial_state_id`. Selecting a card does not call the server and does not edit `composition.v2`. The initial state has a separate badge. Variant, layer, and stinger counts are shown; the tab does not create them.
+The workspace tab id is `adaptive`. It loads the default score, or offers **New adaptive score** for an empty draft named `Exploration cue`. State cards, transition edges, a material summary, and the finding list come from the saved document. The header `Current state:` is the selected card, seeded from `initial_state_id`. Selecting a card does not call the server and does not edit `composition.v2`. The initial state has a separate badge.
+
+**Runtime intensity** is a separate control. Releasing the slider, or pressing **Map layers**, posts `layer-intensity` for the selected state. Rows show id, role, window, active, audible, reason, and fade end tick. **Session mute** is enabled only when every row is `track_range`. A named track stays unmuted when any active row names it, and is muted when only inactive rows name it. Tracks the response does not name stay as they were. **Restore mute** writes the remembered flags back. Session mute does not rewrite note events. A plan disclosure can preview proposals and Apply them as `create_layer` commands, threading `document_revision` from each success.
 
 ## HTTP
 
@@ -160,10 +183,12 @@ Prefix: `/projects/{project_id}/adaptive-scores`.
 | `POST` | `/{score_id}/transition-requests` | Read-only schedule. `201` or `200` when replacing. Does not write the score |
 | `GET` | `/{score_id}/transition-requests/current` | Pending schedule, or `204` with no body |
 | `DELETE` | `/{score_id}/transition-requests/{request_id}` | Cancel the current id. `204` with no body |
+| `POST` | `/{score_id}/layer-intensity` | Read-only `adaptive.layer.intensity.v1`. Does not write the score or the composition |
+| `POST` | `/{score_id}/layer-plans/preview` | Same response for a proposal list. Assigns `preview-00` ids and does not store them |
 
 Unknown project: `404 project_not_found`. Unknown score: `404 adaptive_score_not_found`. CAS mismatch: `409 adaptive_score_conflict`. One default score per project; setting `is_default` clears the previous default in the same transaction.
 
-Collaboration uses `read` for GET, validate, and transition schedule/current/cancel, and `write_score` for POST, PUT, DELETE, and commands. When `COLLABORATION_ENABLED` is off, those routes stay open.
+Collaboration uses `read` for GET, validate, transition schedule/current/cancel, layer intensity, and layer-plan preview, and `write_score` for POST, PUT, DELETE, and commands. When `COLLABORATION_ENABLED` is off, those routes stay open.
 
 Deleting a project cascades `adaptive_scores` via the foreign key on `project_id`.
 
@@ -180,6 +205,8 @@ INFO may include `schema_version`, `project_id`, `score_id`, `op`, entity counts
 DEBUG may include finding codes, `target_id`, `severity`, `component_size` for a deadlock, state ids, material kinds, section ids, revision ids, and a fingerprint **prefix**.
 
 INFO on a transition route may include `method`, `project_id`, `score_id`, `http_status`, `quantization`, `boundary_tick`, `latency_ms`, `latency_ticks`, `realization_kind`, `request_id`, `duration_ms`, and `replaced`.
+
+INFO on an intensity map includes `project_id`, `score_id`, `state_id`, intensity, active count, and warning count. Command INFO also includes `layer_count`. None of these lines include layer names, material, or `body_json`.
 
 DEBUG in the resolver may include `transition_id`, `position_tick`, `boundary_tick`, `latency_ticks`, `latency_ms`, warning codes, `realization_kind`, and `flag_count`.
 

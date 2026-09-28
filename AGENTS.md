@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders; mix analysis (`mix.analysis.v1`) measures completed neural stem/mix WAVs without mutating audio or V2. Projects persist in SQLite. A project may also store `adaptive.score.v1` graphs that reference V2 sections, bars, tracks, motifs, or revisions without copying note events. V1 remains migration/parser input.
+Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders; mix analysis (`mix.analysis.v1`) measures completed neural stem/mix WAVs without mutating audio or V2. Projects persist in SQLite. A project may also store `adaptive.score.v1` graphs that reference V2 sections, bars, tracks, motifs, or revisions without copying note events. Runtime intensity returns `adaptive.layer.intensity.v1` and does not rewrite those note events. V1 remains migration/parser input.
 
 ## Tech Stack
 
@@ -146,9 +146,11 @@ mukit-ai/
 | `backend/app/operation_budget_settings.py` | `OPERATION_*` and `NEURAL_AUDIO_MAX_ATTEMPTS` ceilings |
 | `backend/app/services/composition_revision_preserve.py` | Preserve-outside-targets event fingerprint helper |
 | `backend/app/routers/critique.py` | `POST /critique/evaluate` (session-only) |
-| `backend/app/adaptive_score_schemas.py` | `adaptive.score.v1` graph DTOs (references only; no note events) |
-| `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD, `POST .../commands`, read-only validate, and transition schedule/current/cancel |
-| `backend/app/services/adaptive_score_commands.py` | Pure graph edits for the nine authoring operations; no SQLite |
+| `backend/app/adaptive_score_schemas.py` | `adaptive.score.v1` graph DTOs plus `adaptive.layer.intensity.v1` (references only; no note events) |
+| `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD, `POST .../commands`, read-only validate, transition schedule/current/cancel, and read-only layer intensity / plan preview |
+| `backend/app/services/adaptive_score_commands.py` | Pure graph edits, including `create_layer`, `edit_layer`, and `delete_layer`; no SQLite |
+| `backend/app/services/adaptive_score_layers.py` | Pure runtime-intensity map; no SQLite, FastAPI, or LLM |
+| `backend/app/services/adaptive_score_layer_service.py` | Load score and span projections, then return `adaptive.layer.intensity.v1`; no score write |
 | `backend/app/services/adaptive_score_store.py` | SQLite `adaptive_scores` CAS; does not load Composition |
 | `backend/app/services/adaptive_score_service.py` | Bind, then store writes for PUT and commands |
 | `backend/app/services/adaptive_score_transition_service.py` | Load score and timeline, schedule, then hold the pending slot; no score write |
@@ -290,7 +292,7 @@ mukit-ai/
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
 | Composition Critique | `docs/composition-critique.md` | Evaluation engine, strata, climax AC, `/critique/evaluate` |
-| Adaptive score | `docs/adaptive-score.md` | `adaptive.score.v1` state graph over V2 references; no playback runtime |
+| Adaptive score | `docs/adaptive-score.md` | `adaptive.score.v1` state graph over V2 references; `adaptive.layer.intensity.v1` selects layers; no playback runtime |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |
 | MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
 | Symbolic datasets | `docs/datasets.md` | Offline `DATASET_ROOT` corpus pipeline, provenance, CLI |
