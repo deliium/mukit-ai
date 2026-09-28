@@ -367,7 +367,7 @@ flowchart TD
 
 **To change composition analysis**: Start in `backend/app/routers/analysis.py`, `analysis_schemas.py`, and `services/composition_analysis*.py` / related analyzers; update `docs/composition-analysis.md`, fixtures under `backend/tests/fixtures/analysis/`, and frontend `CompositionAnalysisPanel` / `musicStore` analysis slice.
 
-**To change adaptive scores**: Start in `backend/app/routers/adaptive_scores.py`, `adaptive_score_schemas.py`, and `services/adaptive_score_*.py`. The graph references `composition.v2` and must not store note events. See `docs/adaptive-score.md`.
+**To change adaptive scores**: Start in `backend/app/routers/adaptive_scores.py` (CRUD, commands, validate), `adaptive_score_schemas.py`, and `services/adaptive_score_{commands,validation,service,store}.py`. The workspace graph is `frontend/src/components/AdaptiveScorePanel.jsx` with `api/adaptiveScoreApi.js` and `utils/adaptiveScoreGraph.js`. The graph references `composition.v2` and must not store note events. See `docs/adaptive-score.md`.
 
 **To change arrangement / orchestration**: Start in `backend/app/routers/arrangement.py`, `arrangement_schemas.py`, `services/instrument_catalog.py`, and `composition_arrangement_*` / `llm_composition_arrangement.py`; keep frontend `ArrangementPanel`, `compositionArrangementCandidates.js`, and the arrangement slice of `musicStore` in sync. Catalog IDs/ranges are not V2 fields — see `docs/composition-arrangement.md`.
 
@@ -400,7 +400,7 @@ flowchart TD
 ## See Also
 
 - [Composition V2](composition-v2.md) — operational canonical contract
-- [Adaptive score](adaptive-score.md) — non-linear state graph that references V2 material
+- [Adaptive score](adaptive-score.md) — non-linear state graph, authoring commands, and the Adaptive tab
 - [Composition Analysis](composition-analysis.md) — deterministic sidecar and Analysis tab
 - [MIDI and MusicXML import](import.md) — ingestion flow and limits
 - [Composition V1](composition-v1.md) — staged generation and V1 compatibility

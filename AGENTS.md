@@ -147,9 +147,11 @@ mukit-ai/
 | `backend/app/services/composition_revision_preserve.py` | Preserve-outside-targets event fingerprint helper |
 | `backend/app/routers/critique.py` | `POST /critique/evaluate` (session-only) |
 | `backend/app/adaptive_score_schemas.py` | `adaptive.score.v1` graph DTOs (references only; no note events) |
-| `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD plus read-only validate |
+| `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD, `POST .../commands`, and read-only validate |
+| `backend/app/services/adaptive_score_commands.py` | Pure graph edits for the nine authoring operations; no SQLite |
 | `backend/app/services/adaptive_score_store.py` | SQLite `adaptive_scores` CAS; does not load Composition |
-| `backend/app/services/adaptive_score_service.py` | Read-only composition binding before store writes |
+| `backend/app/services/adaptive_score_service.py` | Bind, then store writes for PUT and commands |
+| `frontend/src/components/AdaptiveScorePanel.jsx` | Adaptive tab: state cards, transitions, authoring selection, findings |
 | `backend/app/motif_schemas.py` | Motif apply request/response DTOs |
 | `backend/app/routers/analysis.py` | `POST /analysis/composition` |
 | `backend/app/routers/motifs.py` | `POST /motifs/apply` |
