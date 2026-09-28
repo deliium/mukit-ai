@@ -792,3 +792,66 @@ def _chain(*, loop_back: bool) -> AdaptiveScoreV1:
         ],
         transitions=transitions,
     )
+
+
+def test_bar_cycle_still_saves_and_disabled_loop_end_is_impossible() -> None:
+    score = parse_adaptive_score(adventure_score())
+    assert "impossible_transition" not in {item.code for item in validate_adaptive_score_graph(score)}
+    payload = adventure_score()
+    payload["transitions"][0]["quantization"] = "loop_end"
+    looped = parse_adaptive_score(payload)
+    hits = [
+        item
+        for item in validate_adaptive_score_graph(looped)
+        if item.code == "impossible_transition"
+    ]
+    assert hits
+    assert "state-exploration" in hits[0].message
+    assert "disabled" in hits[0].message
+
+
+def test_phrase_unaligned_is_a_warning_until_strict() -> None:
+    payload = adventure_score()
+    payload["states"] = payload["states"][:2]
+    payload["states"][0]["material"] = {"kind": "motif", "motif_id": "motif-explore"}
+    payload["states"][0]["transition_ids"] = ["to-suspense"]
+    payload["states"][1]["transition_ids"] = []
+    payload["variants"] = []
+    payload["layers"] = []
+    payload["stingers"] = []
+    payload["transitions"] = [
+        {
+            "id": "to-suspense",
+            "from_state_id": "state-exploration",
+            "to_state_id": "state-suspense",
+            "quantization": "phrase",
+            "conditions": [{"kind": "manual"}],
+        }
+    ]
+    score = parse_adaptive_score(payload)
+    composition = _composition(bar_count=4)
+    warnings = bind_material_refs(score, composition)
+    phrase = [item for item in warnings if item.code == "phrase_unaligned"]
+    assert len(phrase) == 1
+    assert phrase[0].severity == "warning"
+    strict = bind_material_refs(score, composition, strict=True)
+    promoted = [item for item in strict if item.code == "phrase_unaligned"]
+    assert promoted[0].severity == "error"
+
+
+def test_phrase_material_on_a_second_revision_is_mixed() -> None:
+    payload = adventure_score()
+    payload["states"][0]["material"]["revision_id"] = "rev-a"
+    payload["transitions"][0]["realization"] = {
+        "kind": "phrase",
+        "phrase_material": {
+            "kind": "revision_region",
+            "revision_id": "rev-b",
+            "start_bar": 1,
+            "end_bar": 2,
+        },
+    }
+    score = parse_adaptive_score(payload)
+    codes = {item.code for item in validate_adaptive_score_graph(score)}
+    assert "mixed_revision_targets" in codes
+

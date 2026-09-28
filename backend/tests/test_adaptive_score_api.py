@@ -14,8 +14,10 @@ from fastapi.testclient import TestClient
 from app.db import reset_database_initialization_cache
 from app.main import app
 from app.services.collaboration_store import create_actor, grant_member
+from app.services.adaptive_score_transition_pending import reset_default_registry
 from tests.test_adaptive_score_schema import adventure_score
 from tests.test_composition_schema import valid_composition
+from tests.test_composition_v2_schema import minimal_v2
 
 FIXTURE = (
     Path(__file__).resolve().parents[1] / "app" / "fixtures" / "composition_v2_expressive.json"
@@ -31,6 +33,7 @@ def _client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, collab: bool):
     else:
         monkeypatch.delenv("COLLABORATION_ENABLED", raising=False)
     reset_database_initialization_cache()
+    reset_default_registry()
     client = TestClient(app)
     return client, db_path
 
@@ -386,3 +389,162 @@ def test_command_viewer_denied(
     )
     assert denied.status_code == 403
     client.close()
+
+
+def _clock_composition() -> dict:
+    return minimal_v2(
+        tempo=120,
+        bar_count=4,
+        duration_ticks=7680,
+        sections=[
+            {
+                "id": "section-explore",
+                "type": "intro",
+                "start_bar": 1,
+                "bar_count": 4,
+                "start_tick": 0,
+                "duration_ticks": 7680,
+            }
+        ],
+    )
+
+
+def _bar_pair() -> dict:
+    return {
+        "schema_version": "adaptive.score.v1",
+        "name": "Main cue",
+        "initial_state_id": "state-exploration",
+        "default_state_id": "state-exploration",
+        "states": [
+            {
+                "id": "state-exploration",
+                "name": "Exploration",
+                "intensity": 0.2,
+                "material": {"kind": "bar_range", "start_bar": 1, "end_bar": 4},
+                "transition_ids": ["to-combat"],
+            },
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.8,
+                "material": {"kind": "bar_range", "start_bar": 1, "end_bar": 2},
+                "transition_ids": [],
+            },
+        ],
+        "transitions": [
+            {
+                "id": "to-combat",
+                "from_state_id": "state-exploration",
+                "to_state_id": "state-combat",
+                "quantization": "bar",
+                "conditions": [{"kind": "manual"}],
+            }
+        ],
+    }
+
+
+def _schedule_body(revision: int, position_tick: int = 2400) -> dict:
+    return {
+        "expected_document_revision": revision,
+        "from_state_id": "state-exploration",
+        "to_state_id": "state-combat",
+        "transition_id": None,
+        "position_tick": position_tick,
+        "runtime": {"intensity": 0, "flags": {}, "bars_in_state": 0},
+    }
+
+
+def test_bar_schedule_replaces_and_does_not_write_the_score(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, db_path = _client(tmp_path, monkeypatch, collab=False)
+    created = client.post("/projects", json={"name": "Clock", "composition": _clock_composition()})
+    assert created.status_code == 201, created.text
+    project_id = created.json()["id"]
+    before = _composition_text(db_path, project_id)
+    posted = client.post(
+        f"/projects/{project_id}/adaptive-scores",
+        json={"score": _bar_pair()},
+    )
+    assert posted.status_code == 201, posted.text
+    score_id = posted.json()["score"]["id"]
+    revision = posted.json()["document_revision"]
+    path = f"/projects/{project_id}/adaptive-scores/{score_id}/transition-requests"
+    first = client.post(path, json=_schedule_body(revision))
+    assert first.status_code == 201, first.text
+    body = first.json()
+    assert body["schema_version"] == "adaptive.transition.schedule.v1"
+    assert body["boundary_tick"] == 3840
+    assert body["latency_ticks"] == 1440
+    assert body["latency_ms"] == 1500
+    assert body["quantization"] == "bar"
+    second = client.post(path, json=_schedule_body(revision))
+    assert second.status_code == 200, second.text
+    assert second.json()["replaced_request_id"] == body["request_id"]
+    assert second.json()["boundary_tick"] == 3840
+    mismatch = client.post(path, json=_schedule_body(revision + 9))
+    assert mismatch.status_code == 409
+    assert mismatch.json()["detail"]["code"] == "adaptive_score_conflict"
+    current = client.get(f"{path}/current")
+    assert current.status_code == 200
+    assert current.json()["request_id"] == second.json()["request_id"]
+    stored = client.get(f"/projects/{project_id}/adaptive-scores/{score_id}")
+    assert stored.json()["document_revision"] == revision
+    assert _composition_text(db_path, project_id) == before
+    cancelled = client.delete(f"{path}/{second.json()['request_id']}")
+    assert cancelled.status_code == 204
+    empty = client.get(f"{path}/current")
+    assert empty.status_code == 204
+    assert empty.content == b""
+    client.close()
+
+
+def test_viewer_can_schedule_and_asset_only_uses_the_working_clock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, db_path = _client(tmp_path, monkeypatch, collab=True)
+    created = client.post("/projects", json={"name": "Roles", "composition": _clock_composition()})
+    assert created.status_code == 201, created.text
+    project_id = created.json()["id"]
+    editor = create_actor("Editor", db_path=db_path)
+    viewer = create_actor("Viewer", db_path=db_path)
+    grant_member(project_id, editor.id, "editor", db_path=db_path)
+    grant_member(project_id, viewer.id, "viewer", db_path=db_path)
+    posted = client.post(
+        f"/projects/{project_id}/adaptive-scores",
+        headers={"X-Mukit-Actor": editor.id},
+        json={"score": _bar_pair()},
+    )
+    assert posted.status_code == 201, posted.text
+    score_id = posted.json()["score"]["id"]
+    scheduled = client.post(
+        f"/projects/{project_id}/adaptive-scores/{score_id}/transition-requests",
+        headers={"X-Mukit-Actor": viewer.id},
+        json=_schedule_body(1),
+    )
+    assert scheduled.status_code == 201, scheduled.text
+    assert scheduled.json()["boundary_tick"] == 3840
+
+    asset = _bar_pair()
+    asset["name"] = "Asset bed"
+    for state in asset["states"]:
+        state["material"] = {"kind": "asset", "asset_kind": "neural_mix", "asset_id": "mix-1"}
+    asset_score = client.post(
+        f"/projects/{project_id}/adaptive-scores",
+        headers={"X-Mukit-Actor": editor.id},
+        json={"score": asset, "is_default": False},
+    )
+    assert asset_score.status_code == 201, asset_score.text
+    asset_id = asset_score.json()["score"]["id"]
+    asset_schedule = client.post(
+        f"/projects/{project_id}/adaptive-scores/{asset_id}/transition-requests",
+        headers={"X-Mukit-Actor": viewer.id},
+        json=_schedule_body(1),
+    )
+    assert asset_schedule.status_code == 201, asset_schedule.text
+    assert asset_schedule.json()["boundary_tick"] == 3840
+    assert asset_schedule.json()["quantization"] == "bar"
+    client.close()
+

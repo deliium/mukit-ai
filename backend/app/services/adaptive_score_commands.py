@@ -284,6 +284,10 @@ def _transition_body(payload: Any, transition_id: str) -> dict[str, Any]:
     }
     if payload.custom_grid_bars is not None:
         body["custom_grid_bars"] = payload.custom_grid_bars
+    if payload.cue_label is not None:
+        body["cue_label"] = payload.cue_label
+    if payload.realization is not None:
+        body["realization"] = payload.realization.model_dump(mode="json")
     if payload.fallback_transition_id:
         body["fallback_transition_id"] = payload.fallback_transition_id
     try:
@@ -335,6 +339,8 @@ def _edit_transition(score: AdaptiveScoreV1, payload: Any) -> AdaptiveScoreV1:
         "fallback_behavior",
         "fallback_transition_id",
         "custom_grid_bars",
+        "cue_label",
+        "realization",
     ):
         if key in fields:
             current[key] = getattr(payload, key)

@@ -6,6 +6,7 @@ import logging
 import time
 
 from fastapi import APIRouter, Body, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 
 from app.adaptive_score_schemas import (
     AdaptiveScoreCommandResponse,
@@ -15,6 +16,8 @@ from app.adaptive_score_schemas import (
     AdaptiveScoreListResponse,
     AdaptiveScoreUpdateRequest,
     AdaptiveScoreValidateResponse,
+    AdaptiveTransitionScheduleRequest,
+    AdaptiveTransitionScheduleV1,
     map_adaptive_score_error_to_http,
     parse_adaptive_score_command,
 )
@@ -27,6 +30,11 @@ from app.services.adaptive_score_service import (
     list_adaptive_scores,
     replace_adaptive_score,
     validate_adaptive_score,
+)
+from app.services.adaptive_score_transition_service import (
+    cancel_pending_transition,
+    get_pending_transition,
+    schedule_adaptive_transition,
 )
 
 logger = logging.getLogger(__name__)
@@ -252,3 +260,146 @@ async def command_project_adaptive_score(
         },
     )
     return result
+
+
+def _schedule_log(
+    *,
+    method: str,
+    project_id: str,
+    score_id: str,
+    http_status: int,
+    started: float,
+    schedule: AdaptiveTransitionScheduleV1 | None = None,
+    replaced: bool = False,
+) -> None:
+    logger.info(
+        f"{method} adaptive transition request",
+        extra={
+            "method": method,
+            "project_id": project_id,
+            "score_id": score_id,
+            "http_status": http_status,
+            "quantization": None if schedule is None else schedule.quantization,
+            "boundary_tick": None if schedule is None else schedule.boundary_tick,
+            "latency_ms": None if schedule is None else schedule.latency_ms,
+            "latency_ticks": None if schedule is None else schedule.latency_ticks,
+            "realization_kind": None if schedule is None else schedule.realization.kind,
+            "request_id": None if schedule is None else schedule.request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "replaced": replaced,
+        },
+    )
+
+
+@router.post("/{score_id}/transition-requests", response_model=AdaptiveTransitionScheduleV1)
+async def schedule_project_transition(
+    project_id: str,
+    score_id: str,
+    request: AdaptiveTransitionScheduleRequest,
+) -> JSONResponse:
+    started = time.perf_counter()
+    enforce_current(project_id, "read")
+    try:
+        schedule, status = schedule_adaptive_transition(project_id, score_id, request)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive transition request rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _schedule_log(
+            method="POST",
+            project_id=project_id,
+            score_id=score_id,
+            http_status=exc.http_status,
+            started=started,
+        )
+        _raise(exc)
+    _schedule_log(
+        method="POST",
+        project_id=project_id,
+        score_id=score_id,
+        http_status=status,
+        started=started,
+        schedule=schedule,
+        replaced=schedule.replaced_request_id is not None,
+    )
+    return JSONResponse(status_code=status, content=schedule.model_dump(mode="json"))
+
+
+@router.get("/{score_id}/transition-requests/current", response_model=AdaptiveTransitionScheduleV1)
+async def get_project_transition_request(project_id: str, score_id: str) -> Response:
+    started = time.perf_counter()
+    enforce_current(project_id, "read")
+    try:
+        schedule = get_pending_transition(project_id, score_id)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive transition request rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _schedule_log(
+            method="GET",
+            project_id=project_id,
+            score_id=score_id,
+            http_status=exc.http_status,
+            started=started,
+        )
+        _raise(exc)
+    if schedule is None:
+        _schedule_log(
+            method="GET",
+            project_id=project_id,
+            score_id=score_id,
+            http_status=204,
+            started=started,
+        )
+        return Response(status_code=204)
+    _schedule_log(
+        method="GET",
+        project_id=project_id,
+        score_id=score_id,
+        http_status=200,
+        started=started,
+        schedule=schedule,
+        replaced=schedule.replaced_request_id is not None,
+    )
+    return JSONResponse(status_code=200, content=schedule.model_dump(mode="json"))
+
+
+@router.delete("/{score_id}/transition-requests/{request_id}", status_code=204)
+async def cancel_project_transition_request(
+    project_id: str,
+    score_id: str,
+    request_id: str,
+) -> Response:
+    started = time.perf_counter()
+    enforce_current(project_id, "read")
+    try:
+        cancel_pending_transition(project_id, score_id, request_id)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive transition request rejected",
+            extra={
+                "code": exc.code,
+                "project_id": project_id,
+                "score_id": score_id,
+                "request_id": request_id,
+            },
+        )
+        _schedule_log(
+            method="DELETE",
+            project_id=project_id,
+            score_id=score_id,
+            http_status=exc.http_status,
+            started=started,
+        )
+        _raise(exc)
+    _schedule_log(
+        method="DELETE",
+        project_id=project_id,
+        score_id=score_id,
+        http_status=204,
+        started=started,
+    )
+    return Response(status_code=204)
+

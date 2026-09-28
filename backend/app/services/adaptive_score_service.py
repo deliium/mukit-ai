@@ -37,6 +37,7 @@ from app.services.adaptive_score_store import (
 from app.services.adaptive_score_validation import (
     bind_material_refs,
     binding_status_for,
+    iter_material_refs,
     raise_on_error_findings,
     score_is_ready,
     validate_adaptive_score_graph,
@@ -110,15 +111,9 @@ def _parse_incoming(raw: dict, *, project_id: str, score_id: str | None) -> Adap
 def _symbolic_revision_id(score: AdaptiveScoreV1) -> str | None:
     revision_ids = {
         material.revision_id
-        for _target, material in (
-            (state.id, state.material) for state in score.states
-        )
+        for _target, material in iter_material_refs(score)
         if material.kind != "asset"
     }
-    for collection in (score.variants, score.layers, score.stingers):
-        for item in collection:
-            if item.material.kind != "asset":
-                revision_ids.add(item.material.revision_id)
     if len(revision_ids) > 1:
         raise AdaptiveScoreError(
             "mixed_revision_targets",
@@ -131,11 +126,7 @@ def _symbolic_revision_id(score: AdaptiveScoreV1) -> str | None:
 
 
 def _has_symbolic_ref(score: AdaptiveScoreV1) -> bool:
-    materials = [state.material for state in score.states]
-    materials.extend(item.material for item in score.variants)
-    materials.extend(item.material for item in score.layers)
-    materials.extend(item.material for item in score.stingers)
-    return any(material.kind != "asset" for material in materials)
+    return any(material.kind != "asset" for _target, material in iter_material_refs(score))
 
 
 def _load_composition(

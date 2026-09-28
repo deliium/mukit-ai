@@ -79,6 +79,10 @@ def iter_material_refs(score: AdaptiveScoreV1) -> list[tuple[str, AdaptiveMateri
         refs.append((layer.id, layer.material))
     for stinger in score.stingers:
         refs.append((stinger.id, stinger.material))
+    for transition in score.transitions:
+        material = transition.realization.phrase_material
+        if transition.realization.kind == "phrase" and material is not None:
+            refs.append((transition.id, material))
     return refs
 
 
@@ -211,6 +215,8 @@ def _impossible_reason(transition: Any, source: Any, variants: list[Any]) -> str
                 return f"intensity_at_most {condition.value} is below intensity {floor}"
     if transition.quantization == "next_exit" and _material_cannot_name_end(source):
         return f"quantization next_exit but {source.material.kind} material has no end"
+    if transition.quantization == "loop_end" and not source.loop.enabled:
+        return f"loop on {source.id} is disabled"
     return None
 
 
@@ -619,6 +625,63 @@ def _section_loop_findings(
                 )
             )
     return findings
+
+
+def _phrase_unaligned_findings(
+    score: AdaptiveScoreV1,
+    composition: CompositionV2 | None,
+) -> list[AdaptiveScoreFindingV1]:
+    if composition is None:
+        return []
+    sections = {section.id: section for section in composition.sections if section.id}
+    states = {state.id: state for state in score.states}
+    findings: list[AdaptiveScoreFindingV1] = []
+    for transition in score.transitions:
+        if transition.quantization != "phrase":
+            continue
+        source = states.get(transition.from_state_id)
+        if source is None:
+            continue
+        span = _phrase_material_span(source.material, sections)
+        intersects = False
+        if span is not None:
+            start_bar, end_bar = span
+            for section in sections.values():
+                section_end = section.start_bar + section.bar_count - 1
+                if section_end >= start_bar and section.start_bar <= end_bar:
+                    intersects = True
+                    break
+        if intersects:
+            continue
+        finding = _finding(
+            "phrase_unaligned",
+            "warning",
+            target_id=transition.id,
+            message=f"Phrase transition {transition.id} has no intersecting section.",
+        )
+        logger.debug(
+            "Adaptive score transition finding",
+            extra={
+                "code": finding.code,
+                "target_id": finding.target_id,
+                "severity": finding.severity,
+            },
+        )
+        findings.append(finding)
+    return findings
+
+
+def _phrase_material_span(material: Any, sections: dict[str, Any]) -> tuple[int, int] | None:
+    if material.kind in {"bar_range", "revision_region"} and material.start_bar and material.end_bar:
+        return material.start_bar, material.end_bar
+    if material.kind == "section" and material.section_id:
+        section = sections.get(material.section_id)
+        if section is None:
+            return None
+        return section.start_bar, section.start_bar + section.bar_count - 1
+    if material.kind == "track_range" and material.start_bar and material.end_bar:
+        return material.start_bar, material.end_bar
+    return None
 
 
 def validate_adaptive_score_graph(
@@ -1052,6 +1115,7 @@ def bind_material_refs(
             if state.exit.kind == "bar":
                 _range_outside(state.id, state.exit.bar, None)
         findings.extend(_section_loop_findings(score, composition))
+        findings.extend(_phrase_unaligned_findings(score, composition))
 
     findings = _apply_strict(findings, strict=strict)
     _log_findings(findings, score)

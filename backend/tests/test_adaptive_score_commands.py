@@ -213,3 +213,40 @@ def test_unknown_op_is_invalid() -> None:
             {"expected_document_revision": 1, "op": "play_state", "payload": {}}
         )
     assert captured.value.code == "adaptive_score_invalid"
+
+
+def test_create_cue_and_edit_keeps_realization() -> None:
+    score = _apply(_empty(), "create_state", {"name": "Exploration", "id": "state-exploration"})
+    score = _apply(score, "create_state", {"name": "Combat", "id": "state-combat"})
+    created = _apply(
+        score,
+        "create_transition",
+        {
+            "id": "to-combat",
+            "from_state_id": "state-exploration",
+            "to_state_id": "state-combat",
+            "quantization": "cue",
+            "cue_label": "Hit",
+            "conditions": [{"kind": "manual"}],
+        },
+    )
+    assert created.transitions[0].quantization == "cue"
+    assert created.transitions[0].cue_label == "Hit"
+    realized = _apply(
+        created,
+        "edit_transition",
+        {
+            "transition_id": "to-combat",
+            "realization": {"kind": "crossfade", "crossfade_ms": 250},
+        },
+    )
+    edited = _apply(
+        realized,
+        "edit_transition",
+        {"transition_id": "to-combat", "priority": 4},
+    )
+    assert edited.transitions[0].priority == 4
+    assert edited.transitions[0].realization.kind == "crossfade"
+    assert edited.transitions[0].realization.crossfade_ms == 250
+    assert edited.transitions[0].cue_label == "Hit"
+
