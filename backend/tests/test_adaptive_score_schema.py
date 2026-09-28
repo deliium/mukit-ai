@@ -9,7 +9,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.adaptive_score_schemas import (
+    AdaptiveLayerIntensityRequest,
+    AdaptiveLayerIntensityV1,
+    AdaptiveLayerPlanPreviewRequest,
     AdaptiveScoreError,
+    AdaptiveScoreLayerV1,
     AdaptiveScoreUpdateRequest,
     AdaptiveScoreV1,
     AdaptiveTransitionRealizationV1,
@@ -282,3 +286,110 @@ def test_boolean_position_and_intensity_fail() -> None:
             aligned=True,
             realization={"kind": "cut"},
         )
+
+
+def test_stored_layers_default_role_group_priority_and_fade() -> None:
+    score = parse_adaptive_score(adventure_score())
+    layer = score.layers[0]
+    assert layer.role == "other"
+    assert layer.exclusive_group is None
+    assert layer.priority == 0
+    assert layer.fade.in_policy == "cut"
+    assert layer.fade.out_policy == "cut"
+    assert layer.fade.fade_in_ms == 0
+    assert layer.fade.fade_out_ms == 0
+    again = AdaptiveScoreV1.model_validate(score.model_dump(mode="json"))
+    assert again.layers[0].fade.in_policy == "cut"
+
+
+def test_exclusive_group_token_is_adaptive_score_invalid(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    payload = adventure_score()
+    payload["layers"][0]["exclusive_group"] = "Orchestration"
+    with pytest.raises(AdaptiveScoreError) as captured:
+        parse_adaptive_score(payload)
+    assert captured.value.code == "adaptive_score_invalid"
+    assert any(
+        getattr(record, "field", None) == "exclusive_group"
+        and getattr(record, "code", None) == "adaptive_score_invalid"
+        for record in caplog.records
+    )
+    assert "Combat bed pulse" not in " ".join(record.getMessage() for record in caplog.records)
+
+
+def test_layer_priority_and_fade_reject_booleans(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    layer = adventure_score()["layers"][0]
+    with pytest.raises(ValidationError):
+        AdaptiveScoreLayerV1.model_validate({**layer, "priority": True})
+    with pytest.raises(ValidationError):
+        AdaptiveScoreLayerV1.model_validate({**layer, "fade": {"fade_in_ms": True}})
+    with pytest.raises(ValidationError):
+        AdaptiveScoreLayerV1.model_validate({**layer, "fade": {"fade_out_ms": False}})
+    assert any(getattr(record, "field", None) == "priority" for record in caplog.records)
+    assert any(getattr(record, "field", None) == "fade_ms" for record in caplog.records)
+
+
+def test_intensity_request_rejects_boolean_and_builds_preview() -> None:
+    with pytest.raises(ValidationError):
+        AdaptiveLayerIntensityRequest(
+            expected_document_revision=1,
+            state_id="state-exploration",
+            intensity=True,
+        )
+    with pytest.raises(ValidationError):
+        AdaptiveLayerIntensityRequest(
+            expected_document_revision=1,
+            state_id="state-exploration",
+            previous_intensity=True,
+        )
+    with pytest.raises(ValidationError):
+        AdaptiveLayerIntensityRequest(
+            expected_document_revision=1,
+            state_id="state-exploration",
+            position_tick=True,
+        )
+    preview = AdaptiveLayerPlanPreviewRequest(
+        expected_document_revision=3,
+        state_id="state-exploration",
+        intensity=0.5,
+        proposals=[
+            {
+                "name": "Bass",
+                "material": {"kind": "track_range", "track_ids": ["track-bass"]},
+                "intensity_min": 0.5,
+                "intensity_max": 1,
+                "mix_hint": "bed",
+                "role": "bass",
+            }
+        ],
+    )
+    assert preview.proposals[0].role == "bass"
+    assert preview.proposals[0].fade.in_policy == "cut"
+    body = AdaptiveLayerIntensityV1(
+        project_id="proj-1",
+        score_id="ascore_0123456789abcdef",
+        document_revision=3,
+        state_id="state-exploration",
+        intensity=0.5,
+        position_tick=0,
+        layers=[
+            {
+                "layer_id": "layer-bass",
+                "role": "bass",
+                "material_kind": "track_range",
+                "track_ids": ["track-bass"],
+                "active": True,
+                "audible": True,
+                "target_gain": 1,
+                "reason": "in_window",
+                "suppressed_by": None,
+                "in_policy": "cut",
+                "out_policy": "cut",
+                "fade_ms": 0,
+                "fade_end_tick": 0,
+            }
+        ],
+    )
+    assert body.schema_version == "adaptive.layer.intensity.v1"
+    assert body.warnings == []

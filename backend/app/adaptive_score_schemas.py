@@ -55,6 +55,20 @@ ADAPTIVE_TRANSITION_SCHEDULE_SCHEMA: Literal["adaptive.transition.schedule.v1"] 
     "adaptive.transition.schedule.v1"
 )
 AdaptiveMixHint = Literal["bed", "foreground", "ornament"]
+AdaptiveLayerRole = Literal[
+    "harmony",
+    "bass",
+    "percussion",
+    "strings",
+    "brass",
+    "ambient",
+    "other",
+]
+AdaptiveLayerFadePolicy = Literal["cut", "linear", "bar"]
+AdaptiveLayerReason = Literal["in_window", "out_of_window", "out_of_state", "suppressed"]
+ADAPTIVE_LAYER_INTENSITY_SCHEMA: Literal["adaptive.layer.intensity.v1"] = (
+    "adaptive.layer.intensity.v1"
+)
 AdaptiveAssetKind = Literal["neural_stem", "neural_mix", "recovery_source", "alignment"]
 AdaptiveMaterialKind = Literal[
     "section",
@@ -540,6 +554,19 @@ class AdaptiveScoreVariantV1(_Strict):
         return self
 
 
+class AdaptiveLayerFadeV1(_Strict):
+    in_policy: AdaptiveLayerFadePolicy = "cut"
+    out_policy: AdaptiveLayerFadePolicy = "cut"
+    fade_in_ms: int = Field(default=0, ge=0, le=4000)
+    fade_out_ms: int = Field(default=0, ge=0, le=4000)
+
+    @field_validator("fade_in_ms", "fade_out_ms", mode="before")
+    @classmethod
+    def fade_ms_int(cls, value: object) -> object:
+        _reject_bool(value, model=cls.__name__, field="fade_ms")
+        return value
+
+
 class AdaptiveScoreLayerV1(_Strict):
     id: str
     name: str
@@ -549,6 +576,10 @@ class AdaptiveScoreLayerV1(_Strict):
     intensity_max: float = Field(ge=0, le=1)
     mix_hint: AdaptiveMixHint
     default_active: bool = False
+    role: AdaptiveLayerRole = "other"
+    exclusive_group: str | None = None
+    priority: int = 0
+    fade: AdaptiveLayerFadeV1 = Field(default_factory=AdaptiveLayerFadeV1)
 
     @field_validator("id")
     @classmethod
@@ -564,6 +595,22 @@ class AdaptiveScoreLayerV1(_Strict):
         if value is not None and not _ID_RE.fullmatch(value):
             log_adaptive_schema_failure(cls.__name__, "state_id", "adaptive_score_invalid")
             raise ValueError("state_id must be a short token")
+        return value
+
+    @field_validator("exclusive_group")
+    @classmethod
+    def group_token(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _FLAG_RE.fullmatch(value):
+            log_adaptive_schema_failure(cls.__name__, "exclusive_group", "adaptive_score_invalid")
+            raise ValueError("exclusive_group must match ^[a-z][a-z0-9_]{0,40}$")
+        return value
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def priority_int(cls, value: object) -> object:
+        _reject_bool(value, model=cls.__name__, field="priority")
         return value
 
     @model_validator(mode="after")
@@ -1047,6 +1094,135 @@ class AdaptiveTransitionScheduleWarningV1(_Strict):
     message: str = Field(default="", max_length=200)
 
 
+class AdaptiveLayerProposalV1(_Strict):
+    """Create-layer fields without an id. Preview and commands share this shape."""
+
+    name: str
+    material: AdaptiveMaterialRefV1
+    state_id: str | None = None
+    intensity_min: float = Field(ge=0, le=1)
+    intensity_max: float = Field(ge=0, le=1)
+    mix_hint: AdaptiveMixHint
+    default_active: bool = False
+    role: AdaptiveLayerRole = "other"
+    exclusive_group: str | None = None
+    priority: int = 0
+    fade: AdaptiveLayerFadeV1 = Field(default_factory=AdaptiveLayerFadeV1)
+
+    @field_validator("state_id")
+    @classmethod
+    def state_token(cls, value: str | None) -> str | None:
+        return _optional_entity_token(value, model=cls.__name__, field="state_id")
+
+    @field_validator("exclusive_group")
+    @classmethod
+    def group_token(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _FLAG_RE.fullmatch(value):
+            log_adaptive_schema_failure(cls.__name__, "exclusive_group", "adaptive_score_invalid")
+            raise ValueError("exclusive_group must match ^[a-z][a-z0-9_]{0,40}$")
+        return value
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def priority_int(cls, value: object) -> object:
+        _reject_bool(value, model=cls.__name__, field="priority")
+        return value
+
+    @field_validator("intensity_min", "intensity_max", mode="before")
+    @classmethod
+    def intensity_number(cls, value: object) -> object:
+        _reject_bool(value, model=cls.__name__, field="intensity")
+        return value
+
+    @model_validator(mode="after")
+    def intensity_window(self) -> AdaptiveLayerProposalV1:
+        if self.intensity_max < self.intensity_min:
+            log_adaptive_schema_failure(self.__class__.__name__, "intensity_max", "duration_bounds")
+            raise ValueError("intensity_max must be >= intensity_min")
+        return self
+
+
+class AdaptiveLayerIntensityRequest(_Strict):
+    expected_document_revision: int = Field(ge=1)
+    state_id: str
+    intensity: float | None = Field(default=None, ge=0, le=1)
+    position_tick: int | None = Field(default=None, ge=0)
+    previous_intensity: float | None = Field(default=None, ge=0, le=1)
+
+    @field_validator("expected_document_revision", "position_tick", mode="before")
+    @classmethod
+    def request_int(cls, value: object) -> object:
+        if value is not None:
+            _reject_bool(value, model=cls.__name__, field="position_tick")
+        return value
+
+    @field_validator("intensity", "previous_intensity", mode="before")
+    @classmethod
+    def intensity_number(cls, value: object) -> object:
+        if value is not None:
+            _reject_bool(value, model=cls.__name__, field="intensity")
+        return value
+
+    @field_validator("state_id")
+    @classmethod
+    def state_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="state_id")
+
+
+class AdaptiveLayerPlanPreviewRequest(AdaptiveLayerIntensityRequest):
+    proposals: list[AdaptiveLayerProposalV1] = Field(min_length=1, max_length=32)
+
+
+class AdaptiveLayerIntensityLayerV1(_Strict):
+    layer_id: str
+    role: AdaptiveLayerRole
+    material_kind: AdaptiveMaterialKind
+    track_ids: list[str] = Field(default_factory=list, max_length=16)
+    active: bool
+    audible: bool
+    target_gain: int = Field(ge=0, le=1)
+    reason: AdaptiveLayerReason
+    suppressed_by: str | None = None
+    in_policy: AdaptiveLayerFadePolicy
+    out_policy: AdaptiveLayerFadePolicy
+    fade_ms: int = Field(ge=0, le=4000)
+    fade_end_tick: int = Field(ge=0)
+
+    @field_validator("target_gain", "fade_ms", "fade_end_tick", mode="before")
+    @classmethod
+    def row_int(cls, value: object) -> object:
+        _reject_bool(value, model=cls.__name__, field="target_gain")
+        return value
+
+
+class AdaptiveLayerIntensityV1(_Strict):
+    schema_version: Literal["adaptive.layer.intensity.v1"] = ADAPTIVE_LAYER_INTENSITY_SCHEMA
+    project_id: str
+    score_id: str
+    document_revision: int = Field(ge=1)
+    state_id: str
+    intensity: float = Field(ge=0, le=1)
+    position_tick: int = Field(ge=0)
+    layers: list[AdaptiveLayerIntensityLayerV1] = Field(default_factory=list, max_length=32)
+    warnings: list[AdaptiveTransitionScheduleWarningV1] = Field(
+        default_factory=list, max_length=32
+    )
+
+    @field_validator("position_tick", mode="before")
+    @classmethod
+    def position_int(cls, value: object) -> object:
+        _reject_bool(value, model=cls.__name__, field="position_tick")
+        return value
+
+    @field_validator("intensity", mode="before")
+    @classmethod
+    def intensity_number(cls, value: object) -> object:
+        _reject_bool(value, model=cls.__name__, field="intensity")
+        return value
+
+
 class AdaptiveScheduleRealizationCutV1(_Strict):
     kind: Literal["cut"] = "cut"
 
@@ -1202,6 +1378,52 @@ def parse_adaptive_score(data: dict[str, Any]) -> AdaptiveScoreV1:
             http_status=status,
             details={"field": field},
         ) from exc
+
+
+def _parse_model(data: dict[str, Any], model: type[BaseModel], label: str) -> BaseModel:
+    if not isinstance(data, dict):
+        log_adaptive_schema_failure(label, "body", "adaptive_score_invalid")
+        raise AdaptiveScoreError(
+            "adaptive_score_invalid",
+            f"{label} must be an object",
+            http_status=422,
+        )
+    hits = _embedded_key_paths(data)
+    if hits:
+        log_adaptive_schema_failure(label, "body", "embedded_note_material")
+        raise AdaptiveScoreError(
+            "embedded_note_material",
+            ADAPTIVE_SCORE_ERROR_CODES["embedded_note_material"],
+            http_status=422,
+            details={"hit_count": len(hits)},
+        )
+    try:
+        return model.model_validate(data)
+    except ValidationError as exc:
+        field = _validation_field(exc)
+        log_adaptive_schema_failure(label, field, "adaptive_score_invalid")
+        raise AdaptiveScoreError(
+            "adaptive_score_invalid",
+            ADAPTIVE_SCORE_ERROR_CODES["adaptive_score_invalid"],
+            http_status=422,
+            details={"field": field},
+        ) from exc
+
+
+def parse_adaptive_layer_intensity_request(data: dict[str, Any]) -> AdaptiveLayerIntensityRequest:
+    """Validate a read-only intensity body. Does not log the document."""
+    parsed = _parse_model(data, AdaptiveLayerIntensityRequest, "AdaptiveLayerIntensityRequest")
+    assert isinstance(parsed, AdaptiveLayerIntensityRequest)
+    return parsed
+
+
+def parse_adaptive_layer_plan_preview_request(
+    data: dict[str, Any],
+) -> AdaptiveLayerPlanPreviewRequest:
+    """Validate a layer-plan preview body. Does not log proposals."""
+    parsed = _parse_model(data, AdaptiveLayerPlanPreviewRequest, "AdaptiveLayerPlanPreviewRequest")
+    assert isinstance(parsed, AdaptiveLayerPlanPreviewRequest)
+    return parsed
 
 
 def parse_adaptive_score_command(data: dict[str, Any]) -> AdaptiveScoreCommand:
