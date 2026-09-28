@@ -11,6 +11,9 @@ const PATHS = Object.freeze({
   get: '/projects/{project_id}/adaptive-scores/{score_id}',
   command: '/projects/{project_id}/adaptive-scores/{score_id}/commands',
   validate: '/projects/{project_id}/adaptive-scores/{score_id}/validate',
+  schedule: '/projects/{project_id}/adaptive-scores/{score_id}/transition-requests',
+  current: '/projects/{project_id}/adaptive-scores/{score_id}/transition-requests/current',
+  cancel: '/projects/{project_id}/adaptive-scores/{score_id}/transition-requests/{request_id}',
 });
 
 function projectScoresPath(projectId) {
@@ -93,4 +96,71 @@ export function commandAdaptiveScore(projectId, scoreId, command) {
 
 export function validateAdaptiveScore(projectId, scoreId) {
   return request('post', PATHS.validate, `${scorePath(projectId, scoreId)}/validate`);
+}
+
+function raiseAdaptiveError(error, pathTemplate) {
+  const status = error.response?.status ?? null;
+  const detail = error.response?.data?.detail;
+  const message = typeof detail?.message === 'string'
+    ? detail.message
+    : 'Adaptive score request failed';
+  const err = new Error(message);
+  err.status = status;
+  err.code = typeof detail?.code === 'string' ? detail.code : null;
+  err.findings = findingList(error.response?.data);
+  logger.debug('Adaptive score request failed', {
+    path: pathTemplate,
+    status,
+    code: err.code,
+  });
+  return err;
+}
+
+export async function scheduleAdaptiveTransition(projectId, scoreId, body) {
+  const endpoint = `${scorePath(projectId, scoreId)}/transition-requests`;
+  try {
+    const response = await axios({
+      method: 'post',
+      url: endpoint,
+      data: body,
+      headers: collaborationHeaders(),
+      validateStatus: (status) => status === 200 || status === 201,
+    });
+    return response.data;
+  } catch (error) {
+    throw raiseAdaptiveError(error, PATHS.schedule);
+  }
+}
+
+export async function getCurrentAdaptiveTransition(projectId, scoreId) {
+  const endpoint = `${scorePath(projectId, scoreId)}/transition-requests/current`;
+  try {
+    const response = await axios({
+      method: 'get',
+      url: endpoint,
+      headers: collaborationHeaders(),
+      validateStatus: (status) => status === 200 || status === 204,
+    });
+    if (response.status === 204) {
+      return null;
+    }
+    return response.data ?? null;
+  } catch (error) {
+    throw raiseAdaptiveError(error, PATHS.current);
+  }
+}
+
+export async function cancelAdaptiveTransition(projectId, scoreId, requestId) {
+  const endpoint = `${scorePath(projectId, scoreId)}/transition-requests/${encodeURIComponent(requestId)}`;
+  try {
+    await axios({
+      method: 'delete',
+      url: endpoint,
+      headers: collaborationHeaders(),
+      validateStatus: (status) => status === 204,
+    });
+    return null;
+  } catch (error) {
+    throw raiseAdaptiveError(error, PATHS.cancel);
+  }
 }

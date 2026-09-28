@@ -130,6 +130,9 @@ test('select changes only the selected state id', () => {
 
 test('opening another project clears the adaptive session', async () => {
   seedScore();
+  useMusicStore.setState({
+    adaptiveScheduledTransition: { request_id: 'treq_aaaaaaaa', latency_ms: 1500 },
+  });
   const restore = installAxiosStub(async () => ({
     status: 200,
     data: {
@@ -158,6 +161,59 @@ test('opening another project clears the adaptive session', async () => {
     assert.equal(state.adaptiveScoreId, null);
     assert.equal(state.adaptiveSelectedStateId, null);
     assert.deepEqual(state.adaptiveFindings, []);
+    assert.equal(state.adaptiveScheduledTransition, null);
+  } finally {
+    restore();
+  }
+});
+
+test('schedule stores latency and a conflict leaves the pending object', async () => {
+  seedScore();
+  const pending = {
+    request_id: 'treq_aaaaaaaa',
+    latency_ms: 1500,
+    boundary_tick: 3840,
+    quantization: 'bar',
+  };
+  useMusicStore.setState({ adaptiveScheduledTransition: pending });
+  const restore = installAxiosStub(async (config) => {
+    if (config.url.endsWith('/transition-requests') && config.method === 'post') {
+      const body = JSON.parse(config.data);
+      assert.equal(body.from_state_id, 'state-exploration');
+      assert.equal(body.position_tick, 2400);
+      assert.equal(body.quantization, undefined);
+      return {
+        status: 201,
+        data: {
+          request_id: 'treq_bbbbbbbb',
+          quantization: 'bar',
+          boundary_tick: 3840,
+          latency_ms: 1500,
+          realization: { kind: 'cut' },
+        },
+      };
+    }
+    const error = new Error('conflict');
+    error.response = {
+      status: 409,
+      data: { detail: { code: 'adaptive_score_conflict', message: 'stale' } },
+    };
+    throw error;
+  });
+  try {
+    await useMusicStore.getState().scheduleAdaptiveTransition('state-combat', 2400);
+    assert.equal(useMusicStore.getState().adaptiveScheduledTransition.latency_ms, 1500);
+    axios.defaults.adapter = async () => {
+      const error = new Error('conflict');
+      error.response = {
+        status: 409,
+        data: { detail: { code: 'adaptive_score_conflict', message: 'stale' } },
+      };
+      throw error;
+    };
+    await useMusicStore.getState().scheduleAdaptiveTransition('state-combat', 1);
+    assert.equal(useMusicStore.getState().adaptiveScheduledTransition.request_id, 'treq_bbbbbbbb');
+    assert.equal(useMusicStore.getState().adaptiveScheduledTransition.latency_ms, 1500);
   } finally {
     restore();
   }

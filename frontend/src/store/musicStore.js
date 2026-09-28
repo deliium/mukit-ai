@@ -1,9 +1,12 @@
 import { create } from 'zustand';
 import {
+  cancelAdaptiveTransition,
   commandAdaptiveScore,
   createAdaptiveScore,
   getAdaptiveScore,
+  getCurrentAdaptiveTransition,
   listAdaptiveScores,
+  scheduleAdaptiveTransition,
   validateAdaptiveScore,
 } from '../api/adaptiveScoreApi.js';
 import {
@@ -417,6 +420,7 @@ export const initialAdaptiveScoreState = {
   adaptiveSelectedStateId: null,
   adaptiveCommandError: '',
   adaptiveStatus: 'idle',
+  adaptiveScheduledTransition: null,
 };
 
 let adaptiveScoreRequestSeq = 0;
@@ -12529,7 +12533,19 @@ export const useMusicStore = create((set, get) => ({
         adaptiveSelectedStateId: score.initial_state_id || score.states?.[0]?.id || null,
         adaptiveCommandError: '',
         adaptiveStatus: 'ready',
+        adaptiveScheduledTransition: null,
       });
+      try {
+        const pending = await getCurrentAdaptiveTransition(projectId, score.id);
+        if (get().currentProjectId === projectId && requestId === adaptiveScoreRequestSeq) {
+          set({ adaptiveScheduledTransition: pending });
+        }
+      } catch (pendingError) {
+        console.warn('[musicStore] Adaptive transition current failed', {
+          status: pendingError.status || null,
+          code: pendingError.code || null,
+        });
+      }
       return detail;
     } catch (error) {
       if (get().currentProjectId !== projectId || requestId !== adaptiveScoreRequestSeq) {
@@ -12590,6 +12606,70 @@ export const useMusicStore = create((set, get) => ({
         adaptiveStatus: 'error',
         adaptiveCommandError: error.message || 'Could not create an adaptive score',
         adaptiveFindings: error.findings || [],
+      });
+      return null;
+    }
+  },
+
+  scheduleAdaptiveTransition: async (toStateId, positionTick) => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    const revision = get().adaptiveDocumentRevision;
+    const fromStateId = get().adaptiveSelectedStateId;
+    if (!projectId || !scoreId || !revision || !fromStateId || !toStateId) {
+      return null;
+    }
+    const position = Number.isInteger(positionTick) && positionTick >= 0 ? positionTick : 0;
+    try {
+      const schedule = await scheduleAdaptiveTransition(projectId, scoreId, {
+        expected_document_revision: revision,
+        from_state_id: fromStateId,
+        to_state_id: toStateId,
+        transition_id: null,
+        position_tick: position,
+        runtime: { intensity: 0, flags: {}, bars_in_state: 0 },
+      });
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      console.debug('[musicStore] Adaptive transition scheduled', {
+        scoreId,
+        quantization: schedule?.quantization || null,
+        latency_ms: schedule?.latency_ms ?? null,
+        boundaryTick: schedule?.boundary_tick ?? null,
+      });
+      set({ adaptiveScheduledTransition: schedule, adaptiveCommandError: '' });
+      return schedule;
+    } catch (error) {
+      console.warn('[musicStore] Adaptive transition schedule failed', {
+        status: error.status || null,
+        code: error.code || null,
+      });
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({ adaptiveCommandError: error.message || 'Could not schedule a transition' });
+      return null;
+    }
+  },
+
+  cancelAdaptiveTransition: async () => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    const pending = get().adaptiveScheduledTransition;
+    if (!projectId || !scoreId || !pending?.request_id) {
+      return null;
+    }
+    try {
+      await cancelAdaptiveTransition(projectId, scoreId, pending.request_id);
+      if (get().currentProjectId === projectId && get().adaptiveScoreId === scoreId) {
+        set({ adaptiveScheduledTransition: null });
+      }
+      return null;
+    } catch (error) {
+      console.warn('[musicStore] Adaptive transition cancel failed', {
+        status: error.status || null,
+        code: error.code || null,
       });
       return null;
     }

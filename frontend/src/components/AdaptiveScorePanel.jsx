@@ -123,6 +123,17 @@ function submitCommand(event, run, op, payload) {
   return run(op, payload);
 }
 
+const TRANSITION_QUANTIZATIONS = [
+  'immediate',
+  'beat',
+  'bar',
+  'next_exit',
+  'custom',
+  'phrase',
+  'loop_end',
+  'cue',
+];
+
 const AdaptiveScorePanel = () => {
   const currentProjectId = useMusicStore((state) => state.currentProjectId);
   const score = useMusicStore((state) => state.adaptiveScore);
@@ -137,6 +148,9 @@ const AdaptiveScorePanel = () => {
   const runAdaptiveScoreCommand = useMusicStore((state) => state.runAdaptiveScoreCommand);
   const validateLoadedAdaptiveScore = useMusicStore((state) => state.validateLoadedAdaptiveScore);
   const selectAdaptiveState = useMusicStore((state) => state.selectAdaptiveState);
+  const scheduled = useMusicStore((state) => state.adaptiveScheduledTransition);
+  const scheduleAdaptiveTransition = useMusicStore((state) => state.scheduleAdaptiveTransition);
+  const cancelAdaptiveTransition = useMusicStore((state) => state.cancelAdaptiveTransition);
 
   const [stateName, setStateName] = useState('');
   const [materialKind, setMaterialKind] = useState('section');
@@ -152,6 +166,8 @@ const AdaptiveScorePanel = () => {
   const [loopEnd, setLoopEnd] = useState('1');
   const [boundaryKind, setBoundaryKind] = useState('bar');
   const [boundaryValue, setBoundaryValue] = useState('1');
+  const [scheduleToStateId, setScheduleToStateId] = useState('');
+  const [positionTick, setPositionTick] = useState('0');
 
   useEffect(() => {
     if (!currentProjectId) {
@@ -172,6 +188,13 @@ const AdaptiveScorePanel = () => {
   const states = score?.states || [];
   const selected = states.find((state) => state.id === selectedStateId) || null;
   const sectionOptions = sections.filter((section) => section?.id);
+
+  useEffect(() => {
+    const transition = (score?.transitions || []).find((item) => item.id === transitionId);
+    if (transition?.quantization) {
+      setQuantization(transition.quantization);
+    }
+  }, [transitionId, score]);
 
   useEffect(() => {
     if (!sectionId && sectionOptions[0]?.id) {
@@ -262,6 +285,50 @@ const AdaptiveScorePanel = () => {
           ))}
         </GraphStage>
       </GraphRegion>
+      <FormStack
+        data-testid="adaptive-transition-schedule-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const tick = Number.parseInt(positionTick, 10);
+          scheduleAdaptiveTransition(scheduleToStateId, Number.isNaN(tick) ? 0 : tick);
+        }}
+      >
+        <strong>Scheduled transition</strong>
+        <Select
+          aria-label="Schedule destination"
+          data-testid="adaptive-schedule-to"
+          value={scheduleToStateId}
+          onChange={(event) => setScheduleToStateId(event.target.value)}
+        >
+          <option value="">Choose destination</option>
+          {states.filter((state) => state.id !== selectedStateId).map((state) => (
+            <option key={state.id} value={state.id}>{state.name}</option>
+          ))}
+        </Select>
+        <Control
+          aria-label="Position tick"
+          data-testid="adaptive-schedule-position"
+          value={positionTick}
+          onChange={(event) => setPositionTick(event.target.value)}
+        />
+        <Button type="submit" data-testid="adaptive-transition-schedule" disabled={!scheduleToStateId || !selected}>
+          Schedule
+        </Button>
+        {scheduled ? (
+          <div data-testid="adaptive-scheduled-status">
+            <span>{scheduled.quantization}</span>
+            <span>boundary {scheduled.boundary_tick}</span>
+            <span>bar {scheduled.boundary_bar}</span>
+            <span data-testid="adaptive-transition-latency">{scheduled.latency_ms} ms</span>
+            <span>{scheduled.tempo_bpm} bpm</span>
+            <span>{scheduled.time_signature}</span>
+            <span>{scheduled.realization?.kind}</span>
+            <Secondary type="button" data-testid="adaptive-transition-cancel" onClick={() => cancelAdaptiveTransition()}>
+              Cancel
+            </Secondary>
+          </div>
+        ) : null}
+      </FormStack>
       <FormStack
         onSubmit={(event) => {
           const name = stateName.trim();
@@ -362,9 +429,9 @@ const AdaptiveScorePanel = () => {
               ))}
             </Select>
             <Select aria-label="Quantization" value={quantization} onChange={(event) => setQuantization(event.target.value)}>
-              <option value="bar">bar</option>
-              <option value="beat">beat</option>
-              <option value="immediate">immediate</option>
+              {TRANSITION_QUANTIZATIONS.map((token) => (
+                <option key={token} value={token}>{token}</option>
+              ))}
             </Select>
             <Button type="submit" disabled={!transitionId}>Edit transition</Button>
           </FormStack>

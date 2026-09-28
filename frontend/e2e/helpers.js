@@ -265,6 +265,15 @@ export async function createProjectAndGenerate(page, {
   await page.getByTestId('llm-model-select').waitFor({ state: 'visible', timeout: 30_000 });
   await pickFakeProvider(page);
   await prepareFakeLlmPrompt(page, { durationBars, instruments, sections });
+  // Prompt edits schedule an autosave. Fake generation returns before that save,
+  // and Apply then treats the bumped working version as a stale source.
+  await page.waitForFunction(() => {
+    const status = window.__MUKIT_MUSIC_STORE__?.getState?.()?.saveStatus;
+    return status === 'unsaved' || status === 'saving';
+  }, undefined, { timeout: 5_000 }).catch(() => {});
+  await page.waitForFunction(() => (
+    window.__MUKIT_MUSIC_STORE__?.getState?.()?.saveStatus === 'saved'
+  ), undefined, { timeout: 20_000 });
   await page.getByTestId('generate-music').click();
 
   // Generation is preview-first: Apply must install the candidate into editedMusicJson.
