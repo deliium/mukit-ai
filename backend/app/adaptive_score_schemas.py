@@ -19,6 +19,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic import TypeAdapter
 
 from app.adaptive_score_settings import load_adaptive_score_settings
 
@@ -82,6 +83,10 @@ ADAPTIVE_SCORE_ERROR_CODES: dict[str, str] = {
     "fallback_transition_missing": "fallback_transition_id does not name a transition.",
     "initial_state_missing": "initial_state_id is unset while states exist.",
     "default_state_missing": "default_state_id is unset while states exist.",
+    "impossible_transition": "An eligible transition can never be satisfied.",
+    "missing_fallback_state": "A default_state policy has no default state.",
+    "transition_deadlock": "A reachable cycle cannot make musical progress.",
+    "timing_incompatible": "Entry, exit, or loop timing does not agree.",
     "adaptive_score_store_failed": "Adaptive score persistence failed.",
 }
 
@@ -135,9 +140,29 @@ def map_adaptive_score_error_to_http(exc: AdaptiveScoreError) -> tuple[int, dict
                 safe[key] = value
             elif isinstance(value, list) and all(isinstance(item, str) for item in value):
                 safe[key] = value[:16]
+            elif key == "findings" and _finding_detail_list(value):
+                safe[key] = value[:64]
         if safe:
             detail["details"] = safe
     return int(exc.http_status), detail
+
+
+_FINDING_DETAIL_KEYS = frozenset({"code", "severity", "target_id", "message"})
+
+
+def _finding_detail_list(value: object) -> bool:
+    if not isinstance(value, list) or not value:
+        return False
+    for item in value:
+        if not isinstance(item, dict):
+            return False
+        if set(item) != _FINDING_DETAIL_KEYS:
+            return False
+        if not all(isinstance(item[key], str) or item[key] is None for key in _FINDING_DETAIL_KEYS):
+            return False
+        if item["severity"] not in {"warning", "error"}:
+            return False
+    return True
 
 
 class _Strict(BaseModel):
@@ -598,6 +623,255 @@ class AdaptiveScoreUpdateRequest(_Strict):
     score: dict[str, Any]
 
 
+def _entity_token(value: str, *, model: str, field: str) -> str:
+    if not _ID_RE.fullmatch(value):
+        log_adaptive_schema_failure(model, field, "adaptive_score_invalid")
+        raise ValueError("id must be a short token")
+    return value
+
+
+def _optional_entity_token(value: str | None, *, model: str, field: str) -> str | None:
+    if value is None:
+        return None
+    return _entity_token(value, model=model, field=field)
+
+
+def _payload_name(value: str, *, model: str) -> str:
+    settings = load_adaptive_score_settings()
+    cleaned = value.strip()
+    if not cleaned or len(cleaned) > settings.max_name_length:
+        log_adaptive_schema_failure(model, "name", "adaptive_score_invalid")
+        raise ValueError("name length is invalid")
+    return cleaned
+
+
+class CreateStatePayload(_Strict):
+    name: str
+    id: str | None = None
+    material: AdaptiveMaterialRefV1 | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_text(cls, value: str) -> str:
+        return _payload_name(value, model=cls.__name__)
+
+    @field_validator("id")
+    @classmethod
+    def optional_id(cls, value: str | None) -> str | None:
+        return _optional_entity_token(value, model=cls.__name__, field="id")
+
+
+class DeleteStatePayload(_Strict):
+    state_id: str
+
+    @field_validator("state_id")
+    @classmethod
+    def state_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="state_id")
+
+
+class DuplicateStatePayload(_Strict):
+    state_id: str
+    name: str | None = None
+
+    @field_validator("state_id")
+    @classmethod
+    def state_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="state_id")
+
+    @field_validator("name")
+    @classmethod
+    def optional_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _payload_name(value, model=cls.__name__)
+
+
+class AssignMaterialPayload(_Strict):
+    state_id: str
+    material: AdaptiveMaterialRefV1
+
+    @field_validator("state_id")
+    @classmethod
+    def state_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="state_id")
+
+
+class CreateTransitionPayload(_Strict):
+    from_state_id: str
+    to_state_id: str
+    quantization: AdaptiveQuantization
+    id: str | None = None
+    priority: int = 0
+    conditions: list[AdaptiveConditionV1] = Field(default_factory=list)
+    fallback_behavior: Literal["stay", "default_state", "alternate_transition"] = "stay"
+    fallback_transition_id: str | None = None
+    custom_grid_bars: int | None = Field(default=None, ge=1, le=64)
+
+    @field_validator("from_state_id", "to_state_id")
+    @classmethod
+    def endpoint_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="id")
+
+    @field_validator("id", "fallback_transition_id")
+    @classmethod
+    def optional_transition_token(cls, value: str | None) -> str | None:
+        return _optional_entity_token(value, model=cls.__name__, field="id")
+
+    @field_validator("priority")
+    @classmethod
+    def priority_int(cls, value: int) -> int:
+        _reject_bool(value, model=cls.__name__, field="priority")
+        return value
+
+
+class EditTransitionPayload(_Strict):
+    transition_id: str
+    from_state_id: str | None = None
+    to_state_id: str | None = None
+    quantization: AdaptiveQuantization | None = None
+    priority: int | None = None
+    conditions: list[AdaptiveConditionV1] | None = None
+    fallback_behavior: Literal["stay", "default_state", "alternate_transition"] | None = None
+    fallback_transition_id: str | None = None
+    custom_grid_bars: int | None = Field(default=None, ge=1, le=64)
+
+    @field_validator("transition_id")
+    @classmethod
+    def transition_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="transition_id")
+
+    @field_validator("from_state_id", "to_state_id", "fallback_transition_id")
+    @classmethod
+    def optional_endpoint(cls, value: str | None) -> str | None:
+        return _optional_entity_token(value, model=cls.__name__, field="id")
+
+    @field_validator("priority")
+    @classmethod
+    def priority_int(cls, value: int | None) -> int | None:
+        if value is not None:
+            _reject_bool(value, model=cls.__name__, field="priority")
+        return value
+
+
+class AssignLoopPayload(_Strict):
+    state_id: str
+    enabled: bool
+    start_bar: int = Field(ge=1)
+    end_bar: int = Field(ge=1)
+
+    @field_validator("state_id")
+    @classmethod
+    def state_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="state_id")
+
+    @field_validator("start_bar", "end_bar")
+    @classmethod
+    def bar_int(cls, value: int) -> int:
+        _reject_bool(value, model=cls.__name__, field="bar")
+        return value
+
+
+class AssignIntensityPayload(_Strict):
+    state_id: str
+    intensity: float = Field(ge=0, le=1)
+
+    @field_validator("state_id")
+    @classmethod
+    def state_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="state_id")
+
+    @field_validator("intensity")
+    @classmethod
+    def intensity_number(cls, value: float) -> float:
+        _reject_bool(value, model=cls.__name__, field="intensity")
+        return value
+
+
+class AssignBoundaryPayload(_Strict):
+    state_id: str
+    which: Literal["entry", "exit"]
+    boundary: AdaptiveBoundaryV1
+
+    @field_validator("state_id")
+    @classmethod
+    def state_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="state_id")
+
+
+class _CommandEnvelope(_Strict):
+    expected_document_revision: int = Field(ge=1)
+
+
+class CreateStateCommand(_CommandEnvelope):
+    op: Literal["create_state"]
+    payload: CreateStatePayload
+
+
+class DeleteStateCommand(_CommandEnvelope):
+    op: Literal["delete_state"]
+    payload: DeleteStatePayload
+
+
+class DuplicateStateCommand(_CommandEnvelope):
+    op: Literal["duplicate_state"]
+    payload: DuplicateStatePayload
+
+
+class AssignMaterialCommand(_CommandEnvelope):
+    op: Literal["assign_material"]
+    payload: AssignMaterialPayload
+
+
+class CreateTransitionCommand(_CommandEnvelope):
+    op: Literal["create_transition"]
+    payload: CreateTransitionPayload
+
+
+class EditTransitionCommand(_CommandEnvelope):
+    op: Literal["edit_transition"]
+    payload: EditTransitionPayload
+
+
+class AssignLoopCommand(_CommandEnvelope):
+    op: Literal["assign_loop"]
+    payload: AssignLoopPayload
+
+
+class AssignIntensityCommand(_CommandEnvelope):
+    op: Literal["assign_intensity"]
+    payload: AssignIntensityPayload
+
+
+class AssignBoundaryCommand(_CommandEnvelope):
+    op: Literal["assign_boundary"]
+    payload: AssignBoundaryPayload
+
+
+AdaptiveScoreCommand = Annotated[
+    CreateStateCommand
+    | DeleteStateCommand
+    | DuplicateStateCommand
+    | AssignMaterialCommand
+    | CreateTransitionCommand
+    | EditTransitionCommand
+    | AssignLoopCommand
+    | AssignIntensityCommand
+    | AssignBoundaryCommand,
+    Field(discriminator="op"),
+]
+
+
+class AdaptiveScoreCommandResponse(_Strict):
+    score: AdaptiveScoreV1
+    document_revision: int = Field(ge=1)
+    is_default: bool
+    binding_status: AdaptiveBindingStatus
+    created_at: str
+    updated_at: str
+    findings: list[AdaptiveScoreFindingV1] = Field(default_factory=list)
+
+
 def _validation_field(exc: ValidationError) -> str:
     errors = exc.errors()
     if not errors:
@@ -668,5 +942,36 @@ def parse_adaptive_score(data: dict[str, Any]) -> AdaptiveScoreV1:
             code,
             ADAPTIVE_SCORE_ERROR_CODES.get(code, "Adaptive score failed schema validation."),
             http_status=status,
+            details={"field": field},
+        ) from exc
+
+
+def parse_adaptive_score_command(data: dict[str, Any]) -> AdaptiveScoreCommand:
+    """Validate one command envelope. Does not log the payload."""
+    if not isinstance(data, dict):
+        log_adaptive_schema_failure("AdaptiveScoreCommand", "body", "adaptive_score_invalid")
+        raise AdaptiveScoreError(
+            "adaptive_score_invalid",
+            "Adaptive score command must be an object",
+            http_status=422,
+        )
+    hits = _embedded_key_paths(data)
+    if hits:
+        log_adaptive_schema_failure("AdaptiveScoreCommand", "body", "embedded_note_material")
+        raise AdaptiveScoreError(
+            "embedded_note_material",
+            ADAPTIVE_SCORE_ERROR_CODES["embedded_note_material"],
+            http_status=422,
+            details={"hit_count": len(hits)},
+        )
+    try:
+        return TypeAdapter(AdaptiveScoreCommand).validate_python(data)
+    except ValidationError as exc:
+        field = _validation_field(exc)
+        log_adaptive_schema_failure("AdaptiveScoreCommand", field, "adaptive_score_invalid")
+        raise AdaptiveScoreError(
+            "adaptive_score_invalid",
+            ADAPTIVE_SCORE_ERROR_CODES["adaptive_score_invalid"],
+            http_status=422,
             details={"field": field},
         ) from exc

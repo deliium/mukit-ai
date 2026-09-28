@@ -220,3 +220,575 @@ def test_binding_logs_omit_note_pitch(caplog: pytest.LogCaptureFixture) -> None:
         for record in caplog.records
         if record.name.startswith("app.services.adaptive_score")
     )
+
+
+def _bars(start: int = 1, end: int = 4) -> dict:
+    return {"kind": "bar_range", "start_bar": start, "end_bar": end}
+
+
+def _minimal_score(**overrides) -> AdaptiveScoreV1:
+    payload = {
+        "schema_version": "adaptive.score.v1",
+        "name": "Cue",
+        "initial_state_id": "state-exploration",
+        "default_state_id": "state-exploration",
+        "fallback": {
+            "on_missing_material": "hold",
+            "on_invalid_transition": "stay",
+            "on_unresolved_condition": "stay",
+        },
+        "states": [
+            {
+                "id": "state-exploration",
+                "name": "Exploration",
+                "intensity": 0.2,
+                "material": _bars(),
+                "transition_ids": [],
+            }
+        ],
+    }
+    payload.update(overrides)
+    return parse_adaptive_score(payload)
+
+
+def _finding_by(score: AdaptiveScoreV1, code: str):
+    return [item for item in validate_adaptive_score_graph(score) if item.code == code]
+
+
+def test_min_time_above_max_duration_is_impossible() -> None:
+    score = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "max_duration_bars": 2,
+                "material": _bars(),
+                "transition_ids": ["to-exit"],
+            },
+            {
+                "id": "state-victory",
+                "name": "Victory",
+                "intensity": 0.2,
+                "material": _bars(),
+                "transition_ids": [],
+            },
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+        transitions=[
+            {
+                "id": "to-exit",
+                "from_state_id": "state-combat",
+                "to_state_id": "state-victory",
+                "quantization": "bar",
+                "conditions": [{"kind": "min_time_in_state_bars", "value": 5}],
+            }
+        ],
+    )
+    hits = _finding_by(score, "impossible_transition")
+    assert len(hits) == 1
+    assert hits[0].target_id == "to-exit"
+    assert "state-combat" in hits[0].message
+    assert "5" in hits[0].message
+    assert "2" in hits[0].message
+    assert len(hits[0].message) <= 200
+
+
+def test_intensity_conditions_beyond_state_and_variants() -> None:
+    score = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "material": _bars(),
+                "transition_ids": ["too-high", "too-low"],
+            },
+            {
+                "id": "state-victory",
+                "name": "Victory",
+                "intensity": 0.2,
+                "material": _bars(),
+                "transition_ids": [],
+            },
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+        variants=[
+            {
+                "id": "variant-high",
+                "state_id": "state-combat",
+                "name": "High",
+                "material": _bars(),
+                "intensity_min": 0.5,
+                "intensity_max": 0.7,
+            }
+        ],
+        transitions=[
+            {
+                "id": "too-high",
+                "from_state_id": "state-combat",
+                "to_state_id": "state-victory",
+                "quantization": "bar",
+                "conditions": [{"kind": "intensity_at_least", "value": 0.9}],
+            },
+            {
+                "id": "too-low",
+                "from_state_id": "state-combat",
+                "to_state_id": "state-victory",
+                "quantization": "bar",
+                "conditions": [{"kind": "intensity_at_most", "value": 0.1}],
+            },
+        ],
+    )
+    hits = {item.target_id: item for item in _finding_by(score, "impossible_transition")}
+    assert "0.9" in hits["too-high"].message
+    assert "0.1" in hits["too-low"].message
+    covered = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "material": _bars(),
+                "transition_ids": ["covered"],
+            },
+            {
+                "id": "state-victory",
+                "name": "Victory",
+                "intensity": 0.2,
+                "material": _bars(),
+                "transition_ids": [],
+            },
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+        variants=[
+            {
+                "id": "variant-high",
+                "state_id": "state-combat",
+                "name": "High",
+                "material": _bars(),
+                "intensity_min": 0.5,
+                "intensity_max": 0.95,
+            }
+        ],
+        transitions=[
+            {
+                "id": "covered",
+                "from_state_id": "state-combat",
+                "to_state_id": "state-victory",
+                "quantization": "bar",
+                "conditions": [{"kind": "intensity_at_least", "value": 0.9}],
+            }
+        ],
+    )
+    assert _finding_by(covered, "impossible_transition") == []
+
+
+def test_next_exit_without_an_end_is_impossible() -> None:
+    score = _minimal_score(
+        states=[
+            {
+                "id": "state-hit",
+                "name": "Hit",
+                "intensity": 0.1,
+                "material": {"kind": "asset", "asset_kind": "neural_stem", "asset_id": "stem-1"},
+                "exit": {"kind": "material_end"},
+                "transition_ids": ["to-next"],
+            },
+            {
+                "id": "state-rest",
+                "name": "Rest",
+                "intensity": 0.1,
+                "material": _bars(),
+                "transition_ids": [],
+            },
+        ],
+        initial_state_id="state-hit",
+        default_state_id="state-hit",
+        transitions=[
+            {
+                "id": "to-next",
+                "from_state_id": "state-hit",
+                "to_state_id": "state-rest",
+                "quantization": "next_exit",
+                "conditions": [],
+            }
+        ],
+    )
+    hits = _finding_by(score, "impossible_transition")
+    assert hits
+    assert "state-hit" in hits[0].message
+    assert "next_exit" in hits[0].message
+    section_score = _minimal_score(
+        states=[
+            {
+                "id": "state-hit",
+                "name": "Hit",
+                "intensity": 0.1,
+                "material": {"kind": "section", "section_id": "section-1"},
+                "exit": {"kind": "material_end"},
+                "transition_ids": ["to-next"],
+            },
+            {
+                "id": "state-rest",
+                "name": "Rest",
+                "intensity": 0.1,
+                "material": {"kind": "section", "section_id": "section-1"},
+                "transition_ids": [],
+            },
+        ],
+        initial_state_id="state-hit",
+        default_state_id="state-hit",
+        transitions=[
+            {
+                "id": "to-next",
+                "from_state_id": "state-hit",
+                "to_state_id": "state-rest",
+                "quantization": "next_exit",
+            }
+        ],
+    )
+    assert _finding_by(section_score, "impossible_transition") == []
+
+
+def test_cycle_of_manual_edges_is_not_impossible_or_deadlock() -> None:
+    score = _chain(loop_back=True)
+    codes = {item.code for item in validate_adaptive_score_graph(score)}
+    assert "impossible_transition" not in codes
+    assert "transition_deadlock" not in codes
+
+
+def test_terminal_state_is_not_a_missing_fallback() -> None:
+    score = _chain(loop_back=False)
+    findings = validate_adaptive_score_graph(score)
+    assert all(item.code != "missing_fallback_state" for item in findings)
+    assert all(item.code != "transition_deadlock" for item in findings)
+    assert any(item.code == "state_unreachable" for item in findings) is False
+
+
+def test_policy_default_state_without_a_state_is_an_error() -> None:
+    score = _minimal_score(
+        default_state_id=None,
+        fallback={
+            "on_missing_material": "default_state",
+            "on_invalid_transition": "stay",
+            "on_unresolved_condition": "stay",
+        },
+    )
+    findings = validate_adaptive_score_graph(score)
+    errors = [item for item in findings if item.code == "missing_fallback_state"]
+    assert errors
+    assert "null" in errors[0].message
+    assert all(item.code != "default_state_missing" for item in findings)
+
+
+def test_transition_fallback_without_default_suppresses_warning() -> None:
+    score = _minimal_score(
+        default_state_id=None,
+        states=[
+            {
+                "id": "state-exploration",
+                "name": "Exploration",
+                "intensity": 0.2,
+                "material": _bars(),
+                "transition_ids": ["to-combat"],
+            },
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "material": _bars(),
+                "transition_ids": [],
+            },
+        ],
+        transitions=[
+            {
+                "id": "to-combat",
+                "from_state_id": "state-exploration",
+                "to_state_id": "state-combat",
+                "quantization": "bar",
+                "fallback_behavior": "default_state",
+            }
+        ],
+    )
+    findings = validate_adaptive_score_graph(score)
+    errors = [item for item in findings if item.code == "missing_fallback_state"]
+    assert any(item.target_id == "to-combat" for item in errors)
+    assert "to-combat" in errors[0].message or any("to-combat" in item.message for item in errors)
+    assert all(item.code != "default_state_missing" for item in findings)
+
+
+def test_loop_outside_material_bars() -> None:
+    score = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "material": _bars(4, 8),
+                "loop": {"enabled": True, "start_bar": 1, "end_bar": 2},
+                "transition_ids": [],
+            }
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+    )
+    hits = _finding_by(score, "loop_bounds")
+    assert hits
+    assert hits[0].target_id == "state-combat"
+    assert "1" in hits[0].message and "2" in hits[0].message and "4" in hits[0].message
+
+
+def test_loop_outside_section_span() -> None:
+    payload = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "material": {"kind": "section", "section_id": "section-2"},
+                "loop": {"enabled": True, "start_bar": 1, "end_bar": 4},
+                "transition_ids": [],
+            }
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+    )
+    composition = CompositionV2.model_validate(
+        {
+            "schema_version": "composition.v2",
+            "tempo": 100,
+            "key": "C major",
+            "time_signature": "4/4",
+            "ticks_per_quarter": 480,
+            "duration_ticks": 7680,
+            "bar_count": 4,
+            "sections": [
+                {
+                    "id": "section-1",
+                    "type": "intro",
+                    "start_bar": 1,
+                    "bar_count": 2,
+                    "start_tick": 0,
+                    "duration_ticks": 3840,
+                },
+                {
+                    "id": "section-2",
+                    "type": "chorus",
+                    "start_bar": 3,
+                    "bar_count": 2,
+                    "start_tick": 3840,
+                    "duration_ticks": 3840,
+                },
+            ],
+            "tracks": [
+                {
+                    "id": "melody-1",
+                    "name": "Melody",
+                    "instrument": "piano",
+                    "role": "melody",
+                    "midi_program": 0,
+                    "channel": 1,
+                    "events": [
+                        {
+                            "type": "note",
+                            "pitch": "C4",
+                            "start_tick": 0,
+                            "duration_ticks": 480,
+                            "velocity": 80,
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    hits = [item for item in bind_material_refs(payload, composition) if item.code == "loop_bounds"]
+    assert hits
+    assert "section-2" in hits[0].message
+    assert "state-combat" in hits[0].message
+
+
+def test_impossible_self_loop_with_stay_is_deadlock(caplog: pytest.LogCaptureFixture) -> None:
+    score = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "max_duration_bars": 2,
+                "material": _bars(),
+                "transition_ids": ["to-self"],
+            }
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+        transitions=[
+            {
+                "id": "to-self",
+                "from_state_id": "state-combat",
+                "to_state_id": "state-combat",
+                "quantization": "bar",
+                "conditions": [{"kind": "min_time_in_state_bars", "value": 8}],
+            }
+        ],
+    )
+    caplog.set_level(logging.DEBUG)
+    findings = validate_adaptive_score_graph(score)
+    deadlocks = [item for item in findings if item.code == "transition_deadlock"]
+    assert len(deadlocks) == 1
+    assert deadlocks[0].target_id == "state-combat"
+    assert "state-combat" in deadlocks[0].message
+    assert any(
+        getattr(record, "component_size", None) == 1
+        for record in caplog.records
+        if record.name.startswith("app.services.adaptive_score")
+    )
+
+
+def test_timing_boundaries_must_agree() -> None:
+    early_exit = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "material": _bars(1, 8),
+                "entry": {"kind": "bar", "bar": 4},
+                "exit": {"kind": "bar", "bar": 2},
+                "transition_ids": [],
+            }
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+    )
+    order = _finding_by(early_exit, "timing_incompatible")
+    assert any("exit bar 2" in item.message and "entry bar 4" in item.message for item in order)
+
+    outside = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "material": {"kind": "bar_range", "start_bar": 2, "end_bar": 4, "start_tick": 10, "end_tick": 40},
+                "entry": {"kind": "tick", "tick": 0},
+                "exit": {"kind": "tick", "tick": 20},
+                "transition_ids": [],
+            }
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+    )
+    ticks = _finding_by(outside, "timing_incompatible")
+    assert any("tick 0" in item.message and "state-combat" in item.message for item in ticks)
+
+    mixed = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "material": {"kind": "bar_range", "start_bar": 1, "end_bar": 4, "start_tick": 0, "end_tick": 100},
+                "entry": {"kind": "bar", "bar": 1},
+                "exit": {"kind": "tick", "tick": 10},
+                "transition_ids": [],
+            }
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+    )
+    assert any("bar and tick" in item.message for item in _finding_by(mixed, "timing_incompatible"))
+
+    tick_only = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "material": {"kind": "track_range", "track_ids": ["melody-1"], "start_tick": 0, "end_tick": 80},
+                "entry": {"kind": "bar", "bar": 1},
+                "exit": {"kind": "material_end"},
+                "transition_ids": [],
+            }
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+    )
+    assert any("tick-only" in item.message for item in _finding_by(tick_only, "timing_incompatible"))
+
+    loop_after = _minimal_score(
+        states=[
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.4,
+                "material": _bars(1, 8),
+                "entry": {"kind": "bar", "bar": 2},
+                "exit": {"kind": "bar", "bar": 6},
+                "loop": {"enabled": True, "start_bar": 5, "end_bar": 6},
+                "transition_ids": [],
+            }
+        ],
+        initial_state_id="state-combat",
+        default_state_id="state-combat",
+    )
+    assert any("loop start bar 5" in item.message for item in _finding_by(loop_after, "timing_incompatible"))
+
+
+def _chain(*, loop_back: bool) -> AdaptiveScoreV1:
+    victory_ids = ["to-explore"] if loop_back else []
+    transitions = [
+        {
+            "id": "to-combat",
+            "from_state_id": "state-exploration",
+            "to_state_id": "state-combat",
+            "quantization": "bar",
+            "conditions": [{"kind": "manual"}],
+        },
+        {
+            "id": "to-victory",
+            "from_state_id": "state-combat",
+            "to_state_id": "state-victory",
+            "quantization": "bar",
+            "conditions": [],
+        },
+    ]
+    if loop_back:
+        transitions.append(
+            {
+                "id": "to-explore",
+                "from_state_id": "state-victory",
+                "to_state_id": "state-exploration",
+                "quantization": "bar",
+                "conditions": [{"kind": "manual"}],
+            }
+        )
+    return _minimal_score(
+        states=[
+            {
+                "id": "state-exploration",
+                "name": "Exploration",
+                "intensity": 0.2,
+                "material": _bars(),
+                "transition_ids": ["to-combat"],
+            },
+            {
+                "id": "state-combat",
+                "name": "Combat",
+                "intensity": 0.5,
+                "material": _bars(),
+                "transition_ids": ["to-victory"],
+            },
+            {
+                "id": "state-victory",
+                "name": "Victory",
+                "intensity": 0.3,
+                "material": _bars(),
+                "transition_ids": victory_ids,
+            },
+        ],
+        transitions=transitions,
+    )

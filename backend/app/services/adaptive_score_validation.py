@@ -96,7 +96,12 @@ def _kind_counts(score: AdaptiveScoreV1) -> dict[str, int]:
     }
 
 
-def _log_findings(findings: list[AdaptiveScoreFindingV1], score: AdaptiveScoreV1) -> None:
+def _log_findings(
+    findings: list[AdaptiveScoreFindingV1],
+    score: AdaptiveScoreV1,
+    *,
+    component_sizes: dict[str, int] | None = None,
+) -> None:
     errors = sum(1 for item in findings if item.severity == "error")
     warnings = sum(1 for item in findings if item.severity == "warning")
     logger.info(
@@ -113,11 +118,16 @@ def _log_findings(findings: list[AdaptiveScoreFindingV1], score: AdaptiveScoreV1
             **{f"kind_{key}": value for key, value in _kind_counts(score).items()},
         },
     )
+    sizes = component_sizes or {}
     for item in findings:
-        logger.debug(
-            "Adaptive score finding",
-            extra={"code": item.code, "target_id": item.target_id, "severity": item.severity},
-        )
+        extra: dict[str, Any] = {
+            "code": item.code,
+            "target_id": item.target_id,
+            "severity": item.severity,
+        }
+        if item.code == "transition_deadlock" and item.target_id in sizes:
+            extra["component_size"] = sizes[item.target_id]
+        logger.debug("Adaptive score finding", extra=extra)
 
 
 def _apply_strict(
@@ -134,6 +144,481 @@ def _apply_strict(
         else:
             promoted.append(item)
     return promoted
+
+
+def _eligible_transitions(
+    score: AdaptiveScoreV1,
+    transitions: dict[str, Any],
+    state_ids: set[str],
+) -> list[Any]:
+    eligible = []
+    for state in score.states:
+        for transition_id in state.transition_ids:
+            transition = transitions.get(transition_id)
+            if transition is None or transition.from_state_id != state.id:
+                continue
+            if transition.to_state_id not in state_ids:
+                continue
+            eligible.append(transition)
+    return eligible
+
+
+def _variants_for(score: AdaptiveScoreV1, state_id: str) -> list[Any]:
+    return [variant for variant in score.variants if variant.state_id == state_id]
+
+
+def _material_cannot_name_end(state: Any) -> bool:
+    if state.exit.kind != "material_end":
+        return False
+    material = state.material
+    if material.kind in {"asset", "motif"}:
+        return True
+    return material.kind == "track_range" and material.end_bar is None and material.end_tick is None
+
+
+def _impossible_reason(transition: Any, source: Any, variants: list[Any]) -> str | None:
+    """Return a short reason when an eligible transition can never fire.
+
+    Conditions are a conjunction. ``manual`` and ``flag_equals`` are always
+    treated as satisfiable. An empty condition list is satisfiable unless
+    ``next_exit`` has no end to land on.
+    """
+    for condition in transition.conditions:
+        kind = condition.kind
+        if kind in {"manual", "flag_equals"}:
+            continue
+        if kind == "min_time_in_state_bars" and source.max_duration_bars is not None:
+            if condition.value > source.max_duration_bars:
+                return (
+                    f"min_time_in_state_bars {condition.value} exceeds "
+                    f"max_duration_bars {source.max_duration_bars}"
+                )
+        if kind == "intensity_at_least":
+            if condition.value > source.intensity and all(
+                condition.value > variant.intensity_max for variant in variants
+            ):
+                ceiling = max(
+                    [source.intensity, *[variant.intensity_max for variant in variants]]
+                )
+                return f"intensity_at_least {condition.value} exceeds intensity {ceiling}"
+        if kind == "intensity_at_most":
+            if condition.value < source.intensity and all(
+                condition.value < variant.intensity_min for variant in variants
+            ):
+                floor = min(
+                    [source.intensity, *[variant.intensity_min for variant in variants]]
+                )
+                return f"intensity_at_most {condition.value} is below intensity {floor}"
+    if transition.quantization == "next_exit" and _material_cannot_name_end(source):
+        return f"quantization next_exit but {source.material.kind} material has no end"
+    return None
+
+
+def _impossible_ids(
+    score: AdaptiveScoreV1,
+    eligible: list[Any],
+    states: dict[str, Any],
+) -> dict[str, str]:
+    reasons: dict[str, str] = {}
+    for transition in eligible:
+        source = states.get(transition.from_state_id)
+        if source is None:
+            continue
+        reason = _impossible_reason(transition, source, _variants_for(score, source.id))
+        if reason is not None:
+            reasons[transition.id] = reason
+    return reasons
+
+
+def _strongly_connected(nodes: set[str], edges: list[tuple[str, str]]) -> list[set[str]]:
+    index = 0
+    indices: dict[str, int] = {}
+    low: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    components: list[set[str]] = []
+    outgoing: dict[str, list[str]] = {node: [] for node in nodes}
+    for src, dst in edges:
+        if src in outgoing and dst in nodes:
+            outgoing[src].append(dst)
+
+    def strongconnect(node: str) -> None:
+        nonlocal index
+        indices[node] = index
+        low[node] = index
+        index += 1
+        stack.append(node)
+        on_stack.add(node)
+        for nxt in outgoing[node]:
+            if nxt not in indices:
+                strongconnect(nxt)
+                low[node] = min(low[node], low[nxt])
+            elif nxt in on_stack:
+                low[node] = min(low[node], indices[nxt])
+        if low[node] == indices[node]:
+            component: set[str] = set()
+            while stack:
+                popped = stack.pop()
+                on_stack.discard(popped)
+                component.add(popped)
+                if popped == node:
+                    break
+            components.append(component)
+
+    for node in sorted(nodes):
+        if node not in indices:
+            strongconnect(node)
+    return components
+
+
+def _reachable_states(
+    score: AdaptiveScoreV1,
+    transitions: dict[str, Any],
+    state_ids: set[str],
+) -> set[str]:
+    if not score.initial_state_id or score.initial_state_id not in state_ids:
+        return set()
+    reachable: set[str] = set()
+    stack = [score.initial_state_id]
+    states = {state.id: state for state in score.states}
+    while stack:
+        current = stack.pop()
+        if current in reachable or current not in states:
+            continue
+        reachable.add(current)
+        for transition_id in states[current].transition_ids:
+            transition = transitions.get(transition_id)
+            if (
+                transition is not None
+                and transition.from_state_id == current
+                and transition.to_state_id in state_ids
+            ):
+                stack.append(transition.to_state_id)
+    return reachable
+
+
+def _authoring_graph_findings(
+    score: AdaptiveScoreV1,
+    *,
+    states: dict[str, Any],
+    transitions: dict[str, Any],
+    state_ids: set[str],
+) -> tuple[list[AdaptiveScoreFindingV1], dict[str, int]]:
+    findings: list[AdaptiveScoreFindingV1] = []
+    eligible = _eligible_transitions(score, transitions, state_ids)
+    impossible = _impossible_ids(score, eligible, states)
+    for transition in eligible:
+        reason = impossible.get(transition.id)
+        if reason is None:
+            continue
+        findings.append(
+            _finding(
+                "impossible_transition",
+                "error",
+                target_id=transition.id,
+                message=(
+                    f"Transition {transition.id} on {transition.from_state_id} "
+                    f"is impossible: {reason}."
+                ),
+            )
+        )
+
+    for state in score.states:
+        material = state.material
+        loop = state.loop
+        if (
+            loop.enabled
+            and loop.start_bar is not None
+            and loop.end_bar is not None
+            and loop.end_bar >= loop.start_bar
+            and material.start_bar is not None
+            and material.end_bar is not None
+            and (loop.start_bar < material.start_bar or loop.end_bar > material.end_bar)
+        ):
+            findings.append(
+                _finding(
+                    "loop_bounds",
+                    "error",
+                    target_id=state.id,
+                    message=(
+                        f"Loop on {state.id} spans bars {loop.start_bar}-{loop.end_bar} "
+                        f"outside material bars {material.start_bar}-{material.end_bar}."
+                    ),
+                )
+            )
+        findings.extend(_timing_findings(state))
+
+    findings.extend(_fallback_findings(score, state_ids))
+    deadlock, sizes = _deadlock_findings(
+        score,
+        eligible=eligible,
+        impossible_ids=set(impossible),
+        state_ids=state_ids,
+        transitions=transitions,
+    )
+    findings.extend(deadlock)
+    return findings, sizes
+
+
+def _fallback_findings(
+    score: AdaptiveScoreV1,
+    state_ids: set[str],
+) -> list[AdaptiveScoreFindingV1]:
+    if not score.states:
+        return []
+    default_id = score.default_state_id
+    default_missing = not default_id or default_id not in state_ids
+    if not default_missing:
+        return []
+    named = default_id or "null"
+    findings: list[AdaptiveScoreFindingV1] = []
+    for policy_name in ("on_missing_material", "on_invalid_transition", "on_unresolved_condition"):
+        if getattr(score.fallback, policy_name) == "default_state":
+            findings.append(
+                _finding(
+                    "missing_fallback_state",
+                    "error",
+                    target_id=default_id,
+                    message=(
+                        f"Policy {policy_name} is default_state but default_state_id {named} "
+                        "is not a state."
+                    ),
+                )
+            )
+    for transition in score.transitions:
+        if transition.fallback_behavior != "default_state":
+            continue
+        findings.append(
+            _finding(
+                "missing_fallback_state",
+                "error",
+                target_id=transition.id,
+                message=(
+                    f"Transition {transition.id} uses fallback default_state but "
+                    f"default_state_id {named} is not a state."
+                ),
+            )
+        )
+    return findings
+
+
+def _timing_findings(state: Any) -> list[AdaptiveScoreFindingV1]:
+    findings: list[AdaptiveScoreFindingV1] = []
+    entry = state.entry
+    exit_boundary = state.exit
+    material = state.material
+    if entry.kind == "bar" and exit_boundary.kind == "bar" and exit_boundary.bar < entry.bar:
+        findings.append(
+            _finding(
+                "timing_incompatible",
+                "error",
+                target_id=state.id,
+                message=(
+                    f"State {state.id} exit bar {exit_boundary.bar} is before entry bar {entry.bar}."
+                ),
+            )
+        )
+    if entry.kind == "tick" and exit_boundary.kind == "tick" and exit_boundary.tick < entry.tick:
+        findings.append(
+            _finding(
+                "timing_incompatible",
+                "error",
+                target_id=state.id,
+                message=(
+                    f"State {state.id} exit tick {exit_boundary.tick} is before entry tick {entry.tick}."
+                ),
+            )
+        )
+    has_bars = material.start_bar is not None and material.end_bar is not None
+    has_ticks = material.start_tick is not None and material.end_tick is not None
+    for label, boundary in (("entry", entry), ("exit", exit_boundary)):
+        if has_bars and boundary.kind == "bar" and boundary.bar is not None:
+            if boundary.bar < material.start_bar or boundary.bar > material.end_bar:
+                findings.append(
+                    _finding(
+                        "timing_incompatible",
+                        "error",
+                        target_id=state.id,
+                        message=(
+                            f"State {state.id} {label} bar {boundary.bar} is outside material "
+                            f"bars {material.start_bar}-{material.end_bar}."
+                        ),
+                    )
+                )
+        if has_ticks and boundary.kind == "tick" and boundary.tick is not None:
+            if boundary.tick < material.start_tick or boundary.tick > material.end_tick:
+                findings.append(
+                    _finding(
+                        "timing_incompatible",
+                        "error",
+                        target_id=state.id,
+                        message=(
+                            f"State {state.id} {label} tick {boundary.tick} is outside material "
+                            f"ticks {material.start_tick}-{material.end_tick}."
+                        ),
+                    )
+                )
+    unit_kinds = {entry.kind, exit_boundary.kind} - {"material_start", "material_end"}
+    if "bar" in unit_kinds and "tick" in unit_kinds:
+        findings.append(
+            _finding(
+                "timing_incompatible",
+                "error",
+                target_id=state.id,
+                message=f"State {state.id} mixes bar and tick boundaries.",
+            )
+        )
+    if has_ticks and not has_bars and ("bar" == entry.kind or exit_boundary.kind == "bar"):
+        findings.append(
+            _finding(
+                "timing_incompatible",
+                "error",
+                target_id=state.id,
+                message=f"State {state.id} uses a bar boundary on tick-only material.",
+            )
+        )
+    if has_bars and not has_ticks and ("tick" == entry.kind or exit_boundary.kind == "tick"):
+        findings.append(
+            _finding(
+                "timing_incompatible",
+                "error",
+                target_id=state.id,
+                message=f"State {state.id} uses a tick boundary on bar-only material.",
+            )
+        )
+    loop = state.loop
+    if loop.enabled and loop.start_bar is not None:
+        if entry.kind == "bar" and entry.bar is not None and loop.start_bar > entry.bar:
+            findings.append(
+                _finding(
+                    "timing_incompatible",
+                    "error",
+                    target_id=state.id,
+                    message=(
+                        f"State {state.id} loop start bar {loop.start_bar} is after "
+                        f"entry bar {entry.bar}."
+                    ),
+                )
+            )
+        if (
+            exit_boundary.kind == "bar"
+            and exit_boundary.bar is not None
+            and exit_boundary.bar < loop.start_bar
+        ):
+            findings.append(
+                _finding(
+                    "timing_incompatible",
+                    "error",
+                    target_id=state.id,
+                    message=(
+                        f"State {state.id} exit bar {exit_boundary.bar} is before "
+                        f"loop start bar {loop.start_bar}."
+                    ),
+                )
+            )
+    return findings
+
+
+def _deadlock_findings(
+    score: AdaptiveScoreV1,
+    *,
+    eligible: list[Any],
+    impossible_ids: set[str],
+    state_ids: set[str],
+    transitions: dict[str, Any],
+) -> tuple[list[AdaptiveScoreFindingV1], dict[str, int]]:
+    edges = [(item.from_state_id, item.to_state_id) for item in eligible]
+    components = _strongly_connected(state_ids, edges)
+    reachable = _reachable_states(score, transitions, state_ids)
+    findings: list[AdaptiveScoreFindingV1] = []
+    sizes: dict[str, int] = {}
+    for component in components:
+        inside = [
+            item
+            for item in eligible
+            if item.from_state_id in component and item.to_state_id in component
+        ]
+        if not inside:
+            continue
+        leaves = any(
+            item.from_state_id in component and item.to_state_id not in component
+            for item in eligible
+        )
+        if leaves:
+            continue
+        reached = bool(component & reachable) or (
+            score.initial_state_id is not None and score.initial_state_id in component
+        )
+        if not reached:
+            continue
+        if any(item.id not in impossible_ids for item in inside):
+            continue
+        policy = score.fallback.on_invalid_transition
+        if policy == "stay":
+            cannot_leave = True
+        elif policy == "default_state":
+            cannot_leave = (
+                not score.default_state_id or score.default_state_id in component
+            )
+        else:
+            cannot_leave = False
+        if not cannot_leave:
+            continue
+        ordered = sorted(component)
+        target_id = ordered[0]
+        listed = ", ".join(ordered[:3])
+        sizes[target_id] = len(component)
+        findings.append(
+            _finding(
+                "transition_deadlock",
+                "error",
+                target_id=target_id,
+                message=(
+                    f"Deadlock among {listed}: eligible exits are impossible and "
+                    "fallback cannot leave."
+                ),
+            )
+        )
+    return findings, sizes
+
+
+def _section_loop_findings(
+    score: AdaptiveScoreV1,
+    composition: CompositionV2 | None,
+) -> list[AdaptiveScoreFindingV1]:
+    if composition is None:
+        return []
+    sections = {section.id: section for section in composition.sections if section.id}
+    findings: list[AdaptiveScoreFindingV1] = []
+    for state in score.states:
+        loop = state.loop
+        material = state.material
+        if not loop.enabled or loop.start_bar is None or loop.end_bar is None:
+            continue
+        if material.kind == "section":
+            section_id = material.section_id
+        elif material.kind == "revision_region" and material.section_id:
+            section_id = material.section_id
+        else:
+            continue
+        section = sections.get(section_id) if section_id else None
+        if section is None:
+            continue
+        span_start = section.start_bar
+        span_end = section.start_bar + section.bar_count - 1
+        if loop.start_bar < span_start or loop.end_bar > span_end:
+            findings.append(
+                _finding(
+                    "loop_bounds",
+                    "error",
+                    target_id=state.id,
+                    message=(
+                        f"Loop on {state.id} spans bars {loop.start_bar}-{loop.end_bar} "
+                        f"outside section {section_id} bars {span_start}-{span_end}."
+                    ),
+                )
+            )
+    return findings
 
 
 def validate_adaptive_score_graph(
@@ -183,21 +668,24 @@ def validate_adaptive_score_graph(
                     message="initial_state_id does not name a state.",
                 )
             )
-        if not score.default_state_id:
-            findings.append(
-                _finding(
-                    "default_state_missing",
-                    "warning",
-                    message="default_state_id is unset while states exist.",
-                )
-            )
-        elif score.default_state_id not in state_ids:
+        if score.default_state_id and score.default_state_id not in state_ids:
             findings.append(
                 _finding(
                     "dangling_state_ref",
                     "error",
                     target_id=score.default_state_id,
                     message="default_state_id does not name a state.",
+                )
+            )
+        elif (
+            not score.default_state_id
+            and not _fallback_findings(score, state_ids)
+        ):
+            findings.append(
+                _finding(
+                    "default_state_missing",
+                    "warning",
+                    message="default_state_id is unset while states exist.",
                 )
             )
 
@@ -284,12 +772,20 @@ def validate_adaptive_score_graph(
                 or state.loop.end_bar is None
                 or state.loop.end_bar < state.loop.start_bar
             ):
+                end_bar = state.loop.end_bar
+                start_bar = state.loop.start_bar
+                if start_bar is None or end_bar is None:
+                    loop_message = f"Loop on {state.id} is enabled without start_bar and end_bar."
+                else:
+                    loop_message = (
+                        f"Loop on {state.id} ends at bar {end_bar} before start bar {start_bar}."
+                    )
                 findings.append(
                     _finding(
                         "loop_bounds",
                         "error",
                         target_id=state.id,
-                        message="Enabled loop requires end_bar >= start_bar.",
+                        message=loop_message,
                     )
                 )
         for transition_id in state.transition_ids:
@@ -391,8 +887,15 @@ def validate_adaptive_score_graph(
                     )
                 )
 
+    authoring, component_sizes = _authoring_graph_findings(
+        score,
+        states=states,
+        transitions=transitions,
+        state_ids=state_ids,
+    )
+    findings.extend(authoring)
     findings = _apply_strict(findings, strict=strict)
-    _log_findings(findings, score)
+    _log_findings(findings, score, component_sizes=component_sizes)
     return findings
 
 
@@ -548,6 +1051,7 @@ def bind_material_refs(
                 _range_outside(state.id, state.entry.bar, None)
             if state.exit.kind == "bar":
                 _range_outside(state.id, state.exit.bar, None)
+        findings.extend(_section_loop_findings(score, composition))
 
     findings = _apply_strict(findings, strict=strict)
     _log_findings(findings, score)

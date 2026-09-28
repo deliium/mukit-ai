@@ -42,7 +42,7 @@ def adventure_score() -> dict:
             {
                 "id": "state-suspense",
                 "name": "Suspense",
-                "intensity": 0.45,
+                "intensity": 0.6,
                 "material": _section("section-suspense"),
                 "transition_ids": ["to-combat"],
             },
