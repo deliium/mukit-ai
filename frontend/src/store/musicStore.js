@@ -1,5 +1,12 @@
 import { create } from 'zustand';
 import {
+  commandAdaptiveScore,
+  createAdaptiveScore,
+  getAdaptiveScore,
+  listAdaptiveScores,
+  validateAdaptiveScore,
+} from '../api/adaptiveScoreApi.js';
+import {
   analyzeComposition,
   AnalysisApiError,
   applyMotif,
@@ -399,6 +406,20 @@ const initialHarmonyUiState = {
   harmonySelectionEndBar: null,
   harmonySelectedSpanStartTick: null,
 };
+
+export const initialAdaptiveScoreState = {
+  adaptiveScoreId: null,
+  adaptiveDocumentRevision: null,
+  adaptiveBindingStatus: null,
+  adaptiveScore: null,
+  adaptiveScoreList: [],
+  adaptiveFindings: [],
+  adaptiveSelectedStateId: null,
+  adaptiveCommandError: '',
+  adaptiveStatus: 'idle',
+};
+
+let adaptiveScoreRequestSeq = 0;
 
 const initialReharmonizePreviewState = {
   reharmonizeStatus: 'idle',
@@ -1546,6 +1567,7 @@ export const useMusicStore = create((set, get) => ({
   critiqueStratumFilter: 'all',
 
   ...initialHarmonyUiState,
+  ...initialAdaptiveScoreState,
   ...initialReharmonizePreviewState,
   multiAgentStatus: 'idle',
   multiAgentError: '',
@@ -1973,6 +1995,7 @@ export const useMusicStore = create((set, get) => ({
           ...clearedDevelopmentPreviewState(),
           ...clearedArrangementPreviewState(),
           ...initialHarmonyUiState,
+  ...initialAdaptiveScoreState,
         },
       });
       return ok;
@@ -2213,6 +2236,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedDevelopmentPreviewState(),
       ...clearedArrangementPreviewState(),
       ...initialHarmonyUiState,
+  ...initialAdaptiveScoreState,
       ...clearedAudioTranscriptionState(),
       ...clearedAudioRecoveryState(get),
     };
@@ -2665,6 +2689,7 @@ export const useMusicStore = create((set, get) => ({
       statePatch: {
         ...clearedMotifUiState(),
         ...initialHarmonyUiState,
+  ...initialAdaptiveScoreState,
       },
     });
   },
@@ -2692,6 +2717,7 @@ export const useMusicStore = create((set, get) => ({
         ...clearedDevelopmentPreviewState(),
         ...clearedArrangementPreviewState(),
         ...initialHarmonyUiState,
+  ...initialAdaptiveScoreState,
       });
       markProjectDirty(set, get);
       return;
@@ -2712,6 +2738,7 @@ export const useMusicStore = create((set, get) => ({
         ...clearedDevelopmentPreviewState(),
         ...clearedArrangementPreviewState(),
         ...initialHarmonyUiState,
+  ...initialAdaptiveScoreState,
       },
     });
   },
@@ -5643,6 +5670,7 @@ export const useMusicStore = create((set, get) => ({
       ...clearedDevelopmentPreviewState(),
           ...clearedArrangementPreviewState(),
           ...initialHarmonyUiState,
+  ...initialAdaptiveScoreState,
           ...clearedAudioTranscriptionState(),
           ...clearedAudioRecoveryState(get),
         });
@@ -12462,6 +12490,224 @@ export const useMusicStore = create((set, get) => ({
       multiAgentAbortController: null,
     });
   },
+
+  loadAdaptiveScore: async () => {
+    const projectId = get().currentProjectId;
+    adaptiveScoreRequestSeq += 1;
+    const requestId = adaptiveScoreRequestSeq;
+    if (!projectId) {
+      set({ ...initialAdaptiveScoreState });
+      return null;
+    }
+    console.debug('[musicStore] Adaptive score load', { projectId, requestId });
+    set({ adaptiveStatus: 'loading', adaptiveCommandError: '' });
+    try {
+      const listed = await listAdaptiveScores(projectId);
+      if (get().currentProjectId !== projectId || requestId !== adaptiveScoreRequestSeq) {
+        console.debug('[musicStore] Adaptive score load ignored', { projectId, requestId });
+        return null;
+      }
+      const scores = Array.isArray(listed?.scores) ? listed.scores : [];
+      if (!scores.length) {
+        set({ ...initialAdaptiveScoreState, adaptiveStatus: 'empty', adaptiveScoreList: [] });
+        return null;
+      }
+      const chosen = scores.find((item) => item.is_default) || scores[0];
+      const detail = await getAdaptiveScore(projectId, chosen.id);
+      if (get().currentProjectId !== projectId || requestId !== adaptiveScoreRequestSeq) {
+        console.debug('[musicStore] Adaptive score load ignored', { projectId, requestId });
+        return null;
+      }
+      const score = detail.score;
+      set({
+        adaptiveScoreId: score.id,
+        adaptiveDocumentRevision: detail.document_revision,
+        adaptiveBindingStatus: detail.binding_status,
+        adaptiveScore: score,
+        adaptiveScoreList: scores,
+        adaptiveFindings: [],
+        adaptiveSelectedStateId: score.initial_state_id || score.states?.[0]?.id || null,
+        adaptiveCommandError: '',
+        adaptiveStatus: 'ready',
+      });
+      return detail;
+    } catch (error) {
+      if (get().currentProjectId !== projectId || requestId !== adaptiveScoreRequestSeq) {
+        return null;
+      }
+      console.warn('[musicStore] Adaptive score load failed', {
+        code: error.code || null,
+        status: error.status || null,
+      });
+      set({
+        adaptiveStatus: 'error',
+        adaptiveCommandError: error.message || 'Adaptive score load failed',
+        adaptiveFindings: error.findings || [],
+      });
+      return null;
+    }
+  },
+
+  createEmptyAdaptiveScore: async () => {
+    const projectId = get().currentProjectId;
+    if (!projectId) {
+      return null;
+    }
+    console.info('[musicStore] Adaptive score command', { op: 'create_score', scoreId: null });
+    set({ adaptiveStatus: 'loading', adaptiveCommandError: '' });
+    try {
+      const detail = await createAdaptiveScore(projectId, {
+        is_default: true,
+        score: {
+          schema_version: 'adaptive.score.v1',
+          name: 'Exploration cue',
+        },
+      });
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({
+        adaptiveScoreId: detail.score.id,
+        adaptiveDocumentRevision: detail.document_revision,
+        adaptiveBindingStatus: detail.binding_status,
+        adaptiveScore: detail.score,
+        adaptiveScoreList: [{ id: detail.score.id, name: detail.score.name, is_default: true }],
+        adaptiveFindings: [],
+        adaptiveSelectedStateId: null,
+        adaptiveCommandError: '',
+        adaptiveStatus: 'ready',
+      });
+      return detail;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      console.warn('[musicStore] Adaptive score create failed', {
+        code: error.code || null,
+        status: error.status || null,
+      });
+      set({
+        adaptiveStatus: 'error',
+        adaptiveCommandError: error.message || 'Could not create an adaptive score',
+        adaptiveFindings: error.findings || [],
+      });
+      return null;
+    }
+  },
+
+  runAdaptiveScoreCommand: async (op, payload) => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    const revision = get().adaptiveDocumentRevision;
+    if (!projectId || !scoreId || !revision) {
+      return null;
+    }
+    const previousScore = get().adaptiveScore;
+    console.info('[musicStore] Adaptive score command', { op, scoreId });
+    set({ adaptiveStatus: 'saving', adaptiveCommandError: '' });
+    try {
+      const detail = await commandAdaptiveScore(projectId, scoreId, {
+        expected_document_revision: revision,
+        op,
+        payload,
+      });
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      set({
+        adaptiveScore: detail.score,
+        adaptiveDocumentRevision: detail.document_revision,
+        adaptiveBindingStatus: detail.binding_status,
+        adaptiveFindings: detail.findings || [],
+        adaptiveCommandError: '',
+        adaptiveStatus: 'ready',
+      });
+      return detail;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      const codes = (error.findings || []).map((item) => item.code);
+      console.warn('[musicStore] Adaptive score command failed', {
+        code: error.code || null,
+        codes,
+        status: error.status || null,
+      });
+      if (error.status === 409 && error.code === 'adaptive_score_conflict') {
+        try {
+          const detail = await getAdaptiveScore(projectId, scoreId);
+          if (get().currentProjectId === projectId) {
+            set({
+              adaptiveScore: detail.score,
+              adaptiveDocumentRevision: detail.document_revision,
+              adaptiveBindingStatus: detail.binding_status,
+              adaptiveFindings: [],
+              adaptiveCommandError: 'The adaptive score changed. Reloaded the saved graph.',
+              adaptiveStatus: 'conflict',
+            });
+          }
+        } catch (reloadError) {
+          console.warn('[musicStore] Adaptive score conflict reload failed', {
+            code: reloadError.code || null,
+            status: reloadError.status || null,
+          });
+        }
+        return null;
+      }
+      set({
+        adaptiveScore: previousScore,
+        adaptiveFindings: error.findings || [],
+        adaptiveCommandError: error.message || 'Adaptive score command failed',
+        adaptiveStatus: 'error',
+      });
+      return null;
+    }
+  },
+
+  validateLoadedAdaptiveScore: async () => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    if (!projectId || !scoreId) {
+      return null;
+    }
+    try {
+      const detail = await validateAdaptiveScore(projectId, scoreId);
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      const findings = detail.findings || [];
+      console.debug('[musicStore] Adaptive score validated', {
+        scoreId,
+        errorCount: findings.filter((item) => item.severity === 'error').length,
+        warningCount: findings.filter((item) => item.severity === 'warning').length,
+      });
+      set({
+        adaptiveFindings: findings,
+        adaptiveBindingStatus: detail.binding_status,
+        adaptiveCommandError: '',
+        adaptiveStatus: 'ready',
+      });
+      return detail;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      console.warn('[musicStore] Adaptive score validate failed', {
+        code: error.code || null,
+        codes: (error.findings || []).map((item) => item.code),
+      });
+      set({
+        adaptiveCommandError: error.message || 'Validation failed',
+        adaptiveFindings: error.findings || get().adaptiveFindings,
+      });
+      return null;
+    }
+  },
+
+  selectAdaptiveState: (stateId) => {
+    console.debug('[musicStore] Adaptive state selected', { stateId });
+    set({ adaptiveSelectedStateId: stateId || null });
+  },
 }));
 
 // Expose store for Playwright E2E assertions (event counts, playback status).
@@ -13192,6 +13438,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
       ...clearedDevelopmentPreviewState(),
       ...clearedArrangementPreviewState(),
     ...initialHarmonyUiState,
+  ...initialAdaptiveScoreState,
     ...clearedAudioTranscriptionState(),
     ...clearedAudioRecoveryState(get),
   });
@@ -13548,6 +13795,7 @@ function installDurableHistoryResult(set, get, durable, {
       ...clearedDevelopmentPreviewState(),
       ...clearedArrangementPreviewState(),
       ...initialHarmonyUiState,
+  ...initialAdaptiveScoreState,
     });
     console.info('[musicStore] Durable history result installed', {
       action,

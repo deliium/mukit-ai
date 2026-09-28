@@ -12,6 +12,7 @@ import NeuralAudioRenderPanel from './NeuralAudioRenderPanel.jsx';
 import PianoRollEditor from './PianoRollEditor.jsx';
 import AiRegionEditPanel from './AiRegionEditPanel.jsx';
 import CompositionAnalysisPanel from './CompositionAnalysisPanel.jsx';
+import AdaptiveScorePanel from './AdaptiveScorePanel.jsx';
 import HarmonyTimelinePanel from './HarmonyTimelinePanel.jsx';
 import MotifPanel from './MotifPanel.jsx';
 import CompositionDevelopmentPanel from './CompositionDevelopmentPanel.jsx';
@@ -106,6 +107,7 @@ const TABS = [
   { id: 'plugins', label: 'Plugins' },
   { id: 'advanced', label: 'Advanced JSON' },
   { id: 'analysis', label: 'Analysis' },
+  { id: 'adaptive', label: 'Adaptive' },
 ];
 
 /**
@@ -264,6 +266,7 @@ const ComposerWorkspace = () => {
             {tab.id === 'versions' && selected ? <ProjectVersionsPanel /> : null}
             {tab.id === 'collaborate' && selected ? <CollaborationPanel /> : null}
             {tab.id === 'analysis' && selected ? <CompositionAnalysisPanel /> : null}
+            {tab.id === 'adaptive' && selected ? <AdaptiveScorePanel /> : null}
             {tab.id === 'develop' && selected ? <CompositionDevelopmentPanel /> : null}
             {tab.id === 'arrange' && selected ? <ArrangementPanel /> : null}
             {tab.id === 'agents' && selected ? <MultiAgentPanel /> : null}
