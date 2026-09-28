@@ -58,6 +58,7 @@
 - [x] **V5 Adaptive Score domain model** — Project-scoped `adaptive.score.v1` states, variants, transitions, layers, and stingers that reference `composition.v2` material without copying note events or changing playback
 - [x] **V5 Adaptive Score authoring and validation** — Closed graph commands and actionable findings on `adaptive.score.v1`, plus an Adaptive tab for states, transitions, and the selected authoring state. No playback runtime and no `composition.v5`
 - [x] **V5 Adaptive Score transition engine** — Bar-aligned `adaptive.transition.schedule.v1` timing, realization, and one in-memory pending request per score. The scheduler does not render audio, write the score, or call an LLM. No `composition.v5`
+- [x] **V5 Adaptive Score intensity layers** — Runtime intensity in `0..1` selects synchronized layers on one `adaptive.score.v1` state (`adaptive.layer.intensity.v1`). Fade and exclusive groups stay data. Session mute applies only to `track_range`. The map does not write notes or call an LLM. No `composition.v5`
 
 ## Completed
 
@@ -117,3 +118,4 @@
 | V5 Adaptive Score domain model | 2026-09-28 |
 | V5 Adaptive Score authoring and validation | 2026-09-28 |
 | V5 Adaptive Score transition engine | 2026-09-28 |
+| V5 Adaptive Score intensity layers | 2026-09-28 |
