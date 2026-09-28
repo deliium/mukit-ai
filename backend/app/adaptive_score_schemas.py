@@ -40,6 +40,20 @@ FORBIDDEN_NOTE_KEYS: frozenset[str] = frozenset(
 )
 
 AdaptiveQuantization = Literal["immediate", "beat", "bar", "next_exit", "custom"]
+AdaptiveTransitionQuantization = Literal[
+    "immediate",
+    "beat",
+    "bar",
+    "next_exit",
+    "custom",
+    "phrase",
+    "loop_end",
+    "cue",
+]
+AdaptiveRealizationKind = Literal["cut", "crossfade", "phrase", "stinger", "overlap"]
+ADAPTIVE_TRANSITION_SCHEDULE_SCHEMA: Literal["adaptive.transition.schedule.v1"] = (
+    "adaptive.transition.schedule.v1"
+)
 AdaptiveMixHint = Literal["bed", "foreground", "ornament"]
 AdaptiveAssetKind = Literal["neural_stem", "neural_mix", "recovery_source", "alignment"]
 AdaptiveMaterialKind = Literal[
@@ -88,6 +102,19 @@ ADAPTIVE_SCORE_ERROR_CODES: dict[str, str] = {
     "transition_deadlock": "A reachable cycle cannot make musical progress.",
     "timing_incompatible": "Entry, exit, or loop timing does not agree.",
     "adaptive_score_store_failed": "Adaptive score persistence failed.",
+    "transition_unsatisfied": "No eligible transition satisfies the runtime conditions.",
+    "phrase_unavailable": "Phrase quantization has no material span to align.",
+    "loop_unavailable": "loop_end requires an enabled source loop.",
+    "loop_end_passed": "position_tick is already past the authored loop end.",
+    "cue_not_found": "No on-grid rehearsal cue matches cue_label at or after position_tick.",
+    "exit_passed": "position_tick is already past the source exit.",
+    "exit_off_grid": "A tick exit is not a beat boundary.",
+    "exit_unavailable": "The source exit cannot name a tick.",
+    "boundary_unavailable": "No grid boundary remains at or after position_tick.",
+    "meter_grid_indivisible": "The active meter does not divide the bar into integer beat ticks.",
+    "position_outside": "position_tick is past the composition duration.",
+    "realization_invalid": "The transition realization cannot be scheduled.",
+    "transition_request_not_pending": "That transition request is not the current pending request.",
 }
 
 
@@ -313,16 +340,69 @@ AdaptiveConditionV1 = Annotated[
 ]
 
 
+class AdaptiveTransitionRealizationV1(_Strict):
+    """How a bed switch is realized. Omitted on a transition means kind ``cut``."""
+
+    kind: AdaptiveRealizationKind = "cut"
+    crossfade_ms: int | None = Field(default=None, ge=0, le=4000)
+    phrase_material: AdaptiveMaterialRefV1 | None = None
+    stinger_id: str | None = None
+    overlap_bars: int | None = Field(default=None, ge=1, le=16)
+
+    @field_validator("crossfade_ms", "overlap_bars", mode="before")
+    @classmethod
+    def companion_int(cls, value: int | None) -> int | None:
+        if value is not None:
+            _reject_bool(value, model=cls.__name__, field="companion")
+        return value
+
+    @field_validator("stinger_id")
+    @classmethod
+    def stinger_token(cls, value: str | None) -> str | None:
+        if value is not None and not _ID_RE.fullmatch(value):
+            log_adaptive_schema_failure(cls.__name__, "stinger_id", "adaptive_score_invalid")
+            raise ValueError("stinger_id must be a short token")
+        return value
+
+    @model_validator(mode="after")
+    def companions_match_kind(self) -> AdaptiveTransitionRealizationV1:
+        present = {
+            name
+            for name, value in (
+                ("crossfade_ms", self.crossfade_ms),
+                ("phrase_material", self.phrase_material),
+                ("stinger_id", self.stinger_id),
+                ("overlap_bars", self.overlap_bars),
+            )
+            if value is not None
+        }
+        required = {
+            "cut": set(),
+            "crossfade": {"crossfade_ms"},
+            "phrase": {"phrase_material"},
+            "stinger": {"stinger_id"},
+            "overlap": {"overlap_bars"},
+        }[self.kind]
+        if present != required:
+            log_adaptive_schema_failure(self.__class__.__name__, "kind", "adaptive_score_invalid")
+            raise ValueError("realization companions must match kind")
+        return self
+
+
 class AdaptiveScoreTransitionV1(_Strict):
     id: str
     from_state_id: str
     to_state_id: str
-    quantization: AdaptiveQuantization
+    quantization: AdaptiveTransitionQuantization
     custom_grid_bars: int | None = Field(default=None, ge=1, le=64)
     priority: int = 0
     conditions: list[AdaptiveConditionV1] = Field(default_factory=list)
     fallback_behavior: Literal["stay", "default_state", "alternate_transition"] = "stay"
     fallback_transition_id: str | None = None
+    cue_label: str | None = Field(default=None, max_length=80)
+    realization: AdaptiveTransitionRealizationV1 = Field(
+        default_factory=AdaptiveTransitionRealizationV1
+    )
 
     @field_validator("id", "from_state_id", "to_state_id")
     @classmethod
@@ -337,6 +417,27 @@ class AdaptiveScoreTransitionV1(_Strict):
     def priority_int(cls, value: int) -> int:
         _reject_bool(value, model=cls.__name__, field="priority")
         return value
+
+    @field_validator("cue_label")
+    @classmethod
+    def cue_label_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned or len(cleaned) > 80:
+            log_adaptive_schema_failure(cls.__name__, "cue_label", "adaptive_score_invalid")
+            raise ValueError("cue_label must be 1..80 characters after strip")
+        return cleaned
+
+    @model_validator(mode="after")
+    def cue_label_matches_quantization(self) -> AdaptiveScoreTransitionV1:
+        if self.quantization == "cue" and not self.cue_label:
+            log_adaptive_schema_failure(self.__class__.__name__, "cue_label", "adaptive_score_invalid")
+            raise ValueError("cue_label is required when quantization is cue")
+        if self.quantization != "cue" and self.cue_label is not None:
+            log_adaptive_schema_failure(self.__class__.__name__, "cue_label", "adaptive_score_invalid")
+            raise ValueError("cue_label is only valid when quantization is cue")
+        return self
 
     @model_validator(mode="after")
     def condition_cap_and_fallback(self) -> AdaptiveScoreTransitionV1:
@@ -700,13 +801,15 @@ class AssignMaterialPayload(_Strict):
 class CreateTransitionPayload(_Strict):
     from_state_id: str
     to_state_id: str
-    quantization: AdaptiveQuantization
+    quantization: AdaptiveTransitionQuantization
     id: str | None = None
     priority: int = 0
     conditions: list[AdaptiveConditionV1] = Field(default_factory=list)
     fallback_behavior: Literal["stay", "default_state", "alternate_transition"] = "stay"
     fallback_transition_id: str | None = None
     custom_grid_bars: int | None = Field(default=None, ge=1, le=64)
+    cue_label: str | None = Field(default=None, max_length=80)
+    realization: AdaptiveTransitionRealizationV1 | None = None
 
     @field_validator("from_state_id", "to_state_id")
     @classmethod
@@ -729,12 +832,14 @@ class EditTransitionPayload(_Strict):
     transition_id: str
     from_state_id: str | None = None
     to_state_id: str | None = None
-    quantization: AdaptiveQuantization | None = None
+    quantization: AdaptiveTransitionQuantization | None = None
     priority: int | None = None
     conditions: list[AdaptiveConditionV1] | None = None
     fallback_behavior: Literal["stay", "default_state", "alternate_transition"] | None = None
     fallback_transition_id: str | None = None
     custom_grid_bars: int | None = Field(default=None, ge=1, le=64)
+    cue_label: str | None = Field(default=None, max_length=80)
+    realization: AdaptiveTransitionRealizationV1 | None = None
 
     @field_validator("transition_id")
     @classmethod
@@ -870,6 +975,159 @@ class AdaptiveScoreCommandResponse(_Strict):
     created_at: str
     updated_at: str
     findings: list[AdaptiveScoreFindingV1] = Field(default_factory=list)
+
+
+class AdaptiveTransitionRuntimeV1(_Strict):
+    intensity: float = Field(default=0, ge=0, le=1)
+    flags: dict[str, bool] = Field(default_factory=dict)
+    bars_in_state: int = Field(default=0, ge=0)
+
+    @field_validator("intensity", mode="before")
+    @classmethod
+    def intensity_number(cls, value: float) -> float:
+        _reject_bool(value, model=cls.__name__, field="intensity")
+        return value
+
+    @field_validator("bars_in_state", mode="before")
+    @classmethod
+    def bars_int(cls, value: int) -> int:
+        _reject_bool(value, model=cls.__name__, field="bars_in_state")
+        return value
+
+    @field_validator("flags")
+    @classmethod
+    def flag_map(cls, value: dict[str, bool]) -> dict[str, bool]:
+        if len(value) > 64:
+            log_adaptive_schema_failure(cls.__name__, "flags", "adaptive_score_too_large")
+            raise ValueError("adaptive_score_too_large")
+        for key, flag_value in value.items():
+            if not isinstance(key, str) or not _FLAG_RE.fullmatch(key):
+                log_adaptive_schema_failure(cls.__name__, "flags", "adaptive_score_invalid")
+                raise ValueError("flag keys must match ^[a-z][a-z0-9_]{0,40}$")
+            if not isinstance(flag_value, bool):
+                log_adaptive_schema_failure(cls.__name__, "flags", "adaptive_score_invalid")
+                raise ValueError("flag values must be booleans")
+        return value
+
+
+class AdaptiveTransitionScheduleRequest(_Strict):
+    expected_document_revision: int = Field(ge=1)
+    from_state_id: str
+    to_state_id: str
+    transition_id: str | None = None
+    position_tick: int = Field(ge=0)
+    runtime: AdaptiveTransitionRuntimeV1 = Field(default_factory=AdaptiveTransitionRuntimeV1)
+
+    @field_validator("expected_document_revision", "position_tick", mode="before")
+    @classmethod
+    def request_int(cls, value: int) -> int:
+        _reject_bool(value, model=cls.__name__, field="position_tick")
+        return value
+
+    @field_validator("from_state_id", "to_state_id")
+    @classmethod
+    def endpoint_token(cls, value: str) -> str:
+        if not _ID_RE.fullmatch(value):
+            log_adaptive_schema_failure(cls.__name__, "from_state_id", "adaptive_score_invalid")
+            raise ValueError("state id must be a short token")
+        return value
+
+    @field_validator("transition_id")
+    @classmethod
+    def optional_transition_token(cls, value: str | None) -> str | None:
+        if value is not None and not _ID_RE.fullmatch(value):
+            log_adaptive_schema_failure(cls.__name__, "transition_id", "adaptive_score_invalid")
+            raise ValueError("transition id must be a short token")
+        return value
+
+
+class AdaptiveTransitionScheduleWarningV1(_Strict):
+    code: str = Field(min_length=1, max_length=80)
+    target_id: str | None = Field(default=None, max_length=80)
+    message: str = Field(default="", max_length=200)
+
+
+class AdaptiveScheduleRealizationCutV1(_Strict):
+    kind: Literal["cut"] = "cut"
+
+
+class AdaptiveScheduleRealizationCrossfadeV1(_Strict):
+    kind: Literal["crossfade"]
+    crossfade_ms: int = Field(ge=0, le=4000)
+    fade_start_tick: int = Field(ge=0)
+
+    @field_validator("crossfade_ms", "fade_start_tick", mode="before")
+    @classmethod
+    def timing_int(cls, value: int) -> int:
+        _reject_bool(value, model=cls.__name__, field="crossfade_ms")
+        return value
+
+
+class AdaptiveScheduleRealizationPhraseV1(_Strict):
+    kind: Literal["phrase"]
+    material_kind: AdaptiveMaterialKind
+    section_id: str | None = None
+    motif_id: str | None = None
+    revision_id: str | None = None
+    asset_id: str | None = None
+    track_ids: list[str] = Field(default_factory=list)
+
+
+class AdaptiveScheduleRealizationStingerV1(_Strict):
+    kind: Literal["stinger"]
+    stinger_id: str
+    interrupt_policy: Literal["overlay", "duck_bed", "wait_for_exit"]
+
+
+class AdaptiveScheduleRealizationOverlapV1(_Strict):
+    kind: Literal["overlap"]
+    overlap_bars: int = Field(ge=1, le=16)
+    source_release_tick: int = Field(ge=0)
+
+    @field_validator("overlap_bars", "source_release_tick", mode="before")
+    @classmethod
+    def overlap_int(cls, value: int) -> int:
+        _reject_bool(value, model=cls.__name__, field="overlap_bars")
+        return value
+
+
+AdaptiveScheduleRealizationV1 = Annotated[
+    AdaptiveScheduleRealizationCutV1
+    | AdaptiveScheduleRealizationCrossfadeV1
+    | AdaptiveScheduleRealizationPhraseV1
+    | AdaptiveScheduleRealizationStingerV1
+    | AdaptiveScheduleRealizationOverlapV1,
+    Field(discriminator="kind"),
+]
+
+
+class AdaptiveTransitionScheduleV1(_Strict):
+    schema_version: Literal["adaptive.transition.schedule.v1"] = ADAPTIVE_TRANSITION_SCHEDULE_SCHEMA
+    request_id: str = Field(pattern=r"^treq_[0-9a-f]{8}$")
+    status: Literal["pending"] = "pending"
+    project_id: str
+    score_id: str
+    document_revision: int = Field(ge=1)
+    transition_id: str
+    from_state_id: str
+    to_state_id: str
+    quantization: AdaptiveTransitionQuantization
+    boundary_tick: int = Field(ge=0)
+    boundary_bar: int = Field(ge=1)
+    latency_ticks: int = Field(ge=0)
+    latency_ms: int = Field(ge=0)
+    tempo_bpm: int = Field(ge=1)
+    time_signature: str = Field(min_length=3, max_length=16)
+    aligned: bool
+    realization: AdaptiveScheduleRealizationV1
+    replaced_request_id: str | None = None
+    warnings: list[AdaptiveTransitionScheduleWarningV1] = Field(default_factory=list, max_length=8)
+
+    @field_validator("latency_ticks", "latency_ms", "boundary_tick", "tempo_bpm", mode="before")
+    @classmethod
+    def schedule_int(cls, value: int) -> int:
+        _reject_bool(value, model=cls.__name__, field="latency_ms")
+        return value
 
 
 def _validation_field(exc: ValidationError) -> str:

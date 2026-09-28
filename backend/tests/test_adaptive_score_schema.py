@@ -6,10 +6,15 @@ import logging
 
 import pytest
 
+from pydantic import ValidationError
+
 from app.adaptive_score_schemas import (
     AdaptiveScoreError,
     AdaptiveScoreUpdateRequest,
     AdaptiveScoreV1,
+    AdaptiveTransitionRealizationV1,
+    AdaptiveTransitionScheduleRequest,
+    AdaptiveTransitionScheduleV1,
     parse_adaptive_score,
 )
 from app.services.adaptive_score_validation import reject_embedded_note_material
@@ -207,3 +212,73 @@ def test_schema_failure_log_omits_rejected_body(caplog: pytest.LogCaptureFixture
     assert any(
         getattr(record, "code", None) == "unsupported_schema_version" for record in caplog.records
     )
+
+
+def test_old_transition_and_stinger_default_without_new_fields() -> None:
+    score = parse_adaptive_score(adventure_score())
+    edge = next(item for item in score.transitions if item.id == "to-combat")
+    assert edge.realization.kind == "cut"
+    assert edge.cue_label is None
+    assert score.stingers[0].quantization == "bar"
+    assert "phrase_material" not in edge.realization.model_dump(exclude_none=True)
+
+
+def test_stinger_rejects_phrase_quantization() -> None:
+    payload = adventure_score()
+    payload["stingers"][0]["quantization"] = "phrase"
+    with pytest.raises(AdaptiveScoreError) as captured:
+        parse_adaptive_score(payload)
+    assert captured.value.code == "adaptive_score_invalid"
+
+
+def test_cue_without_label_and_crossfade_without_ms_fail() -> None:
+    cue = adventure_score()
+    cue["transitions"][0]["quantization"] = "cue"
+    with pytest.raises(AdaptiveScoreError) as captured:
+        parse_adaptive_score(cue)
+    assert captured.value.code == "adaptive_score_invalid"
+
+    fade = adventure_score()
+    fade["transitions"][0]["realization"] = {"kind": "crossfade"}
+    with pytest.raises(AdaptiveScoreError) as faded:
+        parse_adaptive_score(fade)
+    assert faded.value.code == "adaptive_score_invalid"
+
+
+def test_boolean_position_and_intensity_fail() -> None:
+    with pytest.raises(ValidationError):
+        AdaptiveTransitionScheduleRequest(
+            expected_document_revision=1,
+            from_state_id="state-exploration",
+            to_state_id="state-combat",
+            position_tick=True,
+        )
+    with pytest.raises(ValidationError):
+        AdaptiveTransitionScheduleRequest(
+            expected_document_revision=1,
+            from_state_id="state-exploration",
+            to_state_id="state-combat",
+            position_tick=0,
+            runtime={"intensity": True, "flags": {}, "bars_in_state": 0},
+        )
+    with pytest.raises(ValidationError):
+        AdaptiveTransitionRealizationV1(kind="crossfade", crossfade_ms=True)
+    with pytest.raises(ValidationError):
+        AdaptiveTransitionScheduleV1(
+            request_id="treq_0123abcd",
+            project_id="project-1",
+            score_id="ascore_0123456789abcdef",
+            document_revision=1,
+            transition_id="to-combat",
+            from_state_id="state-exploration",
+            to_state_id="state-combat",
+            quantization="bar",
+            boundary_tick=3840,
+            boundary_bar=3,
+            latency_ticks=1440,
+            latency_ms=True,
+            tempo_bpm=120,
+            time_signature="4/4",
+            aligned=True,
+            realization={"kind": "cut"},
+        )
