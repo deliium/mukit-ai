@@ -55,6 +55,9 @@
 - [x] **V4 collaborative project foundations** — Optional local actors and project roles, anchored comments, revision review, and an activity feed on the existing history graph. Collaboration stays off unless `COLLABORATION_ENABLED` is on
 - [x] **V4 musical workflow evaluation** — Versioned `workflow.benchmark.v1` suite scored through V3 generate, the V4 spine, and the V4 revision loop, with hard-metric regression against a stored baseline
 - [x] **V4 studio acceptance and production hardening** — Fake-mode studio scenarios, an Alembic upgrade that still opens a `composition.v1` project, and an offline SQLite backup CLI
+- [x] **V5 Adaptive Score domain model** — Project-scoped `adaptive.score.v1` states, variants, transitions, layers, and stingers that reference `composition.v2` material without copying note events or changing playback
+- [x] **V5 Adaptive Score authoring and validation** — Closed graph commands and actionable findings on `adaptive.score.v1`, plus an Adaptive tab for states, transitions, and the selected authoring state. No playback runtime and no `composition.v5`
+- [x] **V5 Adaptive Score transition engine** — Bar-aligned `adaptive.transition.schedule.v1` timing, realization, and one in-memory pending request per score. The scheduler does not render audio, write the score, or call an LLM. No `composition.v5`
 
 ## Completed
 
@@ -111,3 +114,6 @@
 | V4 collaborative project foundations | 2026-09-26 |
 | V4 musical workflow evaluation | 2026-09-27 |
 | V4 studio acceptance and production hardening | 2026-09-27 |
+| V5 Adaptive Score domain model | 2026-09-28 |
+| V5 Adaptive Score authoring and validation | 2026-09-28 |
+| V5 Adaptive Score transition engine | 2026-09-28 |
