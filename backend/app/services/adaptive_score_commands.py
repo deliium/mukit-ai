@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from app.adaptive_score_schemas import (
     AdaptiveScoreCommand,
     AdaptiveScoreError,
+    AdaptiveScoreLayerV1,
     AdaptiveScoreTransitionV1,
     AdaptiveScoreV1,
     parse_adaptive_score,
@@ -48,6 +49,7 @@ def apply_adaptive_score_command(
             "op": op,
             "state_count": len(updated.states),
             "transition_count": len(updated.transitions),
+            "layer_count": len(updated.layers),
         },
     )
     return updated
@@ -64,6 +66,9 @@ def _handlers() -> dict[str, Any]:
         "assign_loop": _assign_loop,
         "assign_intensity": _assign_intensity,
         "assign_boundary": _assign_boundary,
+        "create_layer": _create_layer,
+        "edit_layer": _edit_layer,
+        "delete_layer": _delete_layer,
     }
 
 
@@ -396,6 +401,105 @@ def _assign_intensity(score: AdaptiveScoreV1, payload: Any) -> AdaptiveScoreV1:
         extra={"op": "assign_intensity", "entity_id": payload.state_id},
     )
     return _commit(raw)
+
+
+def _layer_invalid(layer_id: str) -> AdaptiveScoreError:
+    return AdaptiveScoreError(
+        "adaptive_score_invalid",
+        f"Layer {layer_id} does not exist.",
+        http_status=422,
+        details={"target_id": layer_id},
+    )
+
+
+def _layer_dump(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return AdaptiveScoreLayerV1.model_validate(body).model_dump(mode="json")
+    except ValidationError as exc:
+        raise _reject_model(exc) from exc
+
+
+def _create_layer(score: AdaptiveScoreV1, payload: Any) -> AdaptiveScoreV1:
+    raw = score.model_dump(mode="json")
+    if payload.state_id:
+        _require_states(raw, payload.state_id)
+    settings = load_adaptive_score_settings()
+    if len(raw.get("layers") or []) >= settings.max_layers:
+        raise _too_large("layers")
+    taken = _taken_ids(raw)
+    new_id = _fresh_id("layer_", taken)
+    body = {
+        "id": new_id,
+        "name": payload.name,
+        "state_id": payload.state_id,
+        "material": payload.material.model_dump(mode="json"),
+        "intensity_min": payload.intensity_min,
+        "intensity_max": payload.intensity_max,
+        "mix_hint": payload.mix_hint,
+        "default_active": payload.default_active,
+        "role": payload.role,
+        "exclusive_group": payload.exclusive_group,
+        "priority": payload.priority,
+        "fade": payload.fade.model_dump(mode="json"),
+    }
+    raw.setdefault("layers", []).append(_layer_dump(body))
+    updated = _commit(raw)
+    logger.debug(
+        "Adaptive score entity created",
+        extra={"op": "create_layer", "entity_id": new_id, "layer_count": len(updated.layers)},
+    )
+    return updated
+
+
+def _edit_layer(score: AdaptiveScoreV1, payload: Any) -> AdaptiveScoreV1:
+    raw = score.model_dump(mode="json")
+    matches = [item for item in raw.get("layers") or [] if item.get("id") == payload.layer_id]
+    if not matches:
+        raise _layer_invalid(payload.layer_id)
+    current = dict(matches[0])
+    fields = payload.model_fields_set
+    if "state_id" in fields and payload.state_id:
+        _require_states(raw, payload.state_id)
+    for key in (
+        "name",
+        "state_id",
+        "intensity_min",
+        "intensity_max",
+        "mix_hint",
+        "default_active",
+        "role",
+        "exclusive_group",
+        "priority",
+    ):
+        if key in fields:
+            current[key] = getattr(payload, key)
+    if "material" in fields:
+        current["material"] = payload.material.model_dump(mode="json")
+    if "fade" in fields:
+        current["fade"] = payload.fade.model_dump(mode="json")
+    validated = _layer_dump(current)
+    raw["layers"] = [
+        validated if item.get("id") == payload.layer_id else item for item in raw["layers"]
+    ]
+    logger.debug(
+        "Adaptive score layer edited",
+        extra={"op": "edit_layer", "entity_id": payload.layer_id},
+    )
+    return _commit(raw)
+
+
+def _delete_layer(score: AdaptiveScoreV1, payload: Any) -> AdaptiveScoreV1:
+    raw = score.model_dump(mode="json")
+    layers = raw.get("layers") or []
+    if not any(item.get("id") == payload.layer_id for item in layers):
+        raise _layer_invalid(payload.layer_id)
+    raw["layers"] = [item for item in layers if item.get("id") != payload.layer_id]
+    updated = _commit(raw)
+    logger.debug(
+        "Adaptive score layer deleted",
+        extra={"op": "delete_layer", "entity_id": payload.layer_id, "layer_count": len(updated.layers)},
+    )
+    return updated
 
 
 def _assign_boundary(score: AdaptiveScoreV1, payload: Any) -> AdaptiveScoreV1:

@@ -548,3 +548,191 @@ def test_viewer_can_schedule_and_asset_only_uses_the_working_clock(
     assert asset_schedule.json()["quantization"] == "bar"
     client.close()
 
+
+def _intensity_score() -> dict:
+    window = json.loads('{"open": 0.8}')
+    rows = [
+        ("layer-pad", "ambient", 0, 1, None, 0, "cut"),
+        ("layer-piano", "harmony", 0, 1, None, 0, "cut"),
+        ("layer-bass", "bass", 0.5, 1, None, 0, "cut"),
+        ("layer-strings", "strings", 0.5, 1, None, 0, "cut"),
+        ("layer-perc", "percussion", window["open"], 1, None, 0, "cut"),
+        ("layer-brass-hint", "brass", 0.9, 1, "orchestration", 0, "cut"),
+        ("layer-orch", "brass", 1, 1, "orchestration", 1, "bar"),
+    ]
+    layers = []
+    for layer_id, role, low, high, group, priority, policy in rows:
+        layers.append(
+            {
+                "id": layer_id,
+                "name": layer_id,
+                "state_id": "state-exploration",
+                "material": {"kind": "track_range", "track_ids": ["piano-1"]},
+                "intensity_min": low,
+                "intensity_max": high,
+                "mix_hint": "bed",
+                "role": role,
+                "exclusive_group": group,
+                "priority": priority,
+                "fade": {"in_policy": policy, "out_policy": "cut"},
+            }
+        )
+    return {
+        "schema_version": "adaptive.score.v1",
+        "name": "Intensity cue",
+        "initial_state_id": "state-exploration",
+        "default_state_id": "state-exploration",
+        "states": [
+            {
+                "id": "state-exploration",
+                "name": "Exploration",
+                "intensity": 0,
+                "material": {"kind": "section", "section_id": "section-explore"},
+            }
+        ],
+        "layers": layers,
+    }
+
+
+def test_layer_intensity_is_read_only_and_preview_does_not_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, db_path = _client(tmp_path, monkeypatch, collab=False)
+    created = client.post("/projects", json={"name": "Layers", "composition": _clock_composition()})
+    assert created.status_code == 201, created.text
+    project_id = created.json()["id"]
+    before = _composition_text(db_path, project_id)
+    posted = client.post(
+        f"/projects/{project_id}/adaptive-scores",
+        json={"score": _intensity_score()},
+    )
+    assert posted.status_code == 201, posted.text
+    score_id = posted.json()["score"]["id"]
+    revision = posted.json()["document_revision"]
+    path = f"/projects/{project_id}/adaptive-scores/{score_id}/layer-intensity"
+    window = json.loads('{"open": 0.8}')
+    expected = {
+        0: ["layer-pad", "layer-piano"],
+        0.5: ["layer-pad", "layer-piano", "layer-bass", "layer-strings"],
+        window["open"]: [
+            "layer-pad",
+            "layer-piano",
+            "layer-bass",
+            "layer-strings",
+            "layer-perc",
+        ],
+        0.9: [
+            "layer-pad",
+            "layer-piano",
+            "layer-bass",
+            "layer-strings",
+            "layer-perc",
+            "layer-brass-hint",
+        ],
+        1: [
+            "layer-pad",
+            "layer-piano",
+            "layer-bass",
+            "layer-strings",
+            "layer-perc",
+            "layer-orch",
+        ],
+    }
+    bodies = []
+    for intensity, active_ids in expected.items():
+        response = client.post(
+            path,
+            json={
+                "expected_document_revision": revision,
+                "state_id": "state-exploration",
+                "intensity": intensity,
+                "position_tick": 2400,
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        bodies.append(body)
+        assert body["schema_version"] == "adaptive.layer.intensity.v1"
+        assert [row["layer_id"] for row in body["layers"] if row["active"]] == active_ids
+        assert all(row["material_kind"] == "track_range" for row in body["layers"])
+        assert all(row["track_ids"] == ["piano-1"] for row in body["layers"])
+    full = bodies[-1]
+    orch = next(row for row in full["layers"] if row["layer_id"] == "layer-orch")
+    assert orch["fade_end_tick"] == 3840
+    brass = next(row for row in full["layers"] if row["layer_id"] == "layer-brass-hint")
+    assert brass["reason"] == "suppressed"
+    again = client.post(
+        path,
+        json={
+            "expected_document_revision": revision,
+            "state_id": "state-exploration",
+            "intensity": 1,
+            "position_tick": 2400,
+        },
+    )
+    assert again.status_code == 200, again.text
+    assert again.json() == full
+    outside = client.post(
+        path,
+        json={
+            "expected_document_revision": revision,
+            "state_id": "state-exploration",
+            "intensity": 1,
+            "position_tick": 7681,
+        },
+    )
+    assert outside.status_code == 422
+    assert outside.json()["detail"]["code"] == "position_outside"
+    stored = client.get(f"/projects/{project_id}/adaptive-scores/{score_id}")
+    assert stored.json()["document_revision"] == revision
+    assert len(stored.json()["score"]["layers"]) == 7
+    assert _composition_text(db_path, project_id) == before
+    mismatch = client.post(
+        path,
+        json={
+            "expected_document_revision": revision + 9,
+            "state_id": "state-exploration",
+            "intensity": 0.5,
+        },
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.json()["detail"]["code"] == "adaptive_score_conflict"
+    preview = client.post(
+        f"/projects/{project_id}/adaptive-scores/{score_id}/layer-plans/preview",
+        json={
+            "expected_document_revision": revision,
+            "state_id": "state-exploration",
+            "intensity": 1,
+            "proposals": [
+                {
+                    "name": "Extra pad",
+                    "material": {"kind": "track_range", "track_ids": ["piano-1"]},
+                    "intensity_min": 0,
+                    "intensity_max": 1,
+                    "mix_hint": "bed",
+                    "role": "ambient",
+                },
+                {
+                    "name": "Extra orch",
+                    "material": {"kind": "track_range", "track_ids": ["piano-1"]},
+                    "intensity_min": 1,
+                    "intensity_max": 1,
+                    "mix_hint": "bed",
+                    "role": "brass",
+                    "exclusive_group": "orchestration",
+                    "priority": 1,
+                    "fade": {"in_policy": "bar", "out_policy": "cut"},
+                },
+            ],
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    assert [row["layer_id"] for row in preview.json()["layers"]] == ["preview-00", "preview-01"]
+    assert preview.json()["layers"][1]["fade_end_tick"] == 0
+    stored_after = client.get(f"/projects/{project_id}/adaptive-scores/{score_id}")
+    assert len(stored_after.json()["score"]["layers"]) == 7
+    assert stored_after.json()["document_revision"] == revision
+    assert _composition_text(db_path, project_id) == before
+    client.close()
+

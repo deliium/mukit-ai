@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import re
+
 import pytest
 
 from app.adaptive_score_schemas import (
@@ -249,4 +252,87 @@ def test_create_cue_and_edit_keeps_realization() -> None:
     assert edited.transitions[0].realization.kind == "crossfade"
     assert edited.transitions[0].realization.crossfade_ms == 250
     assert edited.transitions[0].cue_label == "Hit"
+
+
+_LAYER = {
+    "name": "Pad bed",
+    "material": {"kind": "section", "section_id": "section-pad"},
+    "state_id": "state-exploration",
+    "intensity_min": 0,
+    "intensity_max": 1,
+    "mix_hint": "bed",
+    "role": "ambient",
+}
+
+
+def test_layer_create_edit_and_delete(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+    score = _apply(_empty(), "create_state", {"name": "Exploration", "id": "state-exploration"})
+    created = _apply(score, "create_layer", _LAYER)
+    assert len(created.layers) == 1
+    layer_id = created.layers[0].id
+    assert re.fullmatch(r"layer_[0-9a-f]{8}", layer_id)
+    assert created.layers[0].material.section_id == "section-pad"
+    assert any(getattr(record, "layer_count", None) == 1 for record in caplog.records)
+    assert "Pad bed" not in " ".join(record.getMessage() for record in caplog.records)
+
+    edited = _apply(created, "edit_layer", {"layer_id": layer_id, "intensity_min": 0.2})
+    assert edited.layers[0].intensity_min == 0.2
+    assert edited.layers[0].material.section_id == "section-pad"
+
+    grouped = _apply(
+        edited, "edit_layer", {"layer_id": layer_id, "exclusive_group": "orchestration"}
+    )
+    assert grouped.layers[0].exclusive_group == "orchestration"
+    cleared = _apply(grouped, "edit_layer", {"layer_id": layer_id, "exclusive_group": None})
+    assert cleared.layers[0].exclusive_group is None
+
+    faded = _apply(
+        cleared,
+        "edit_layer",
+        {"layer_id": layer_id, "fade": {"in_policy": "linear", "fade_in_ms": 400}},
+    )
+    assert faded.layers[0].fade.in_policy == "linear"
+    assert faded.layers[0].fade.fade_in_ms == 400
+    kept = _apply(faded, "edit_layer", {"layer_id": layer_id, "priority": 2})
+    assert kept.layers[0].priority == 2
+    assert kept.layers[0].fade.in_policy == "linear"
+    assert kept.layers[0].fade.fade_in_ms == 400
+
+    with pytest.raises(AdaptiveScoreError) as invalid:
+        _apply(kept, "edit_layer", {"layer_id": layer_id, "intensity_max": 0.1})
+    assert invalid.value.code == "adaptive_score_invalid"
+    assert kept.layers[0].intensity_max == 1
+    assert kept.layers[0].fade.in_policy == "linear"
+
+    removed = _apply(kept, "delete_layer", {"layer_id": layer_id})
+    assert removed.layers == []
+    assert removed.states[0].id == "state-exploration"
+
+
+def test_layer_command_rejections_do_not_write() -> None:
+    score = _apply(_empty(), "create_state", {"name": "Exploration", "id": "state-exploration"})
+    with pytest.raises(AdaptiveScoreError) as dangling:
+        _apply(score, "create_layer", {**_LAYER, "state_id": "state-missing"})
+    assert dangling.value.code == "dangling_state_ref"
+    assert score.layers == []
+
+    created = _apply(score, "create_layer", _LAYER)
+    layer_id = created.layers[0].id
+    with pytest.raises(AdaptiveScoreError) as missing:
+        _apply(created, "delete_layer", {"layer_id": "layer_missing"})
+    assert missing.value.code == "adaptive_score_invalid"
+    assert missing.value.details["target_id"] == "layer_missing"
+    assert created.layers[0].id == layer_id
+
+    with pytest.raises(AdaptiveScoreError) as embedded:
+        parse_adaptive_score_command(
+            {
+                "expected_document_revision": 1,
+                "op": "create_layer",
+                "payload": {**_LAYER, "events": [{"pitch": 60}]},
+            }
+        )
+    assert embedded.value.code == "embedded_note_material"
+    assert created.layers[0].id == layer_id
 

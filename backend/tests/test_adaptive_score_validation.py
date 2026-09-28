@@ -855,3 +855,90 @@ def test_phrase_material_on_a_second_revision_is_mixed() -> None:
     codes = {item.code for item in validate_adaptive_score_graph(score)}
     assert "mixed_revision_targets" in codes
 
+
+def _locked_intensity_layers() -> list[dict]:
+    rows = [
+        ("layer-pad", "ambient", 0, 1, None, 0),
+        ("layer-piano", "harmony", 0, 1, None, 0),
+        ("layer-bass", "bass", 0.5, 1, None, 0),
+        ("layer-strings", "strings", 0.5, 1, None, 0),
+        ("layer-perc", "percussion", 0.8, 1, None, 0),
+        ("layer-brass-hint", "brass", 0.9, 1, "orchestration", 0),
+        ("layer-orch", "brass", 1, 1, "orchestration", 1),
+    ]
+    layers = []
+    for layer_id, role, low, high, group, priority in rows:
+        layers.append(
+            {
+                "id": layer_id,
+                "name": layer_id,
+                "state_id": "state-exploration",
+                "material": {"kind": "section", "section_id": "section-explore"},
+                "intensity_min": low,
+                "intensity_max": high,
+                "mix_hint": "bed",
+                "role": role,
+                "exclusive_group": group,
+                "priority": priority,
+                "fade": (
+                    {"in_policy": "bar", "out_policy": "cut"}
+                    if layer_id == "layer-orch"
+                    else {"in_policy": "cut", "out_policy": "cut"}
+                ),
+            }
+        )
+    return layers
+
+
+def test_locked_layer_fixture_validates_and_reports_layer_count(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    payload = {
+        "schema_version": "adaptive.score.v1",
+        "name": "Intensity cue",
+        "initial_state_id": "state-exploration",
+        "default_state_id": "state-exploration",
+        "states": [
+            {
+                "id": "state-exploration",
+                "name": "Exploration",
+                "intensity": 0,
+                "material": {"kind": "section", "section_id": "section-explore"},
+            }
+        ],
+        "layers": _locked_intensity_layers(),
+    }
+    score = parse_adaptive_score(payload)
+    findings = validate_adaptive_score_graph(score)
+    assert [item for item in findings if item.severity == "error"] == []
+    assert len(score.layers) == 7
+    assert any(getattr(record, "layer_count", None) == 7 for record in caplog.records)
+    assert "layer-orch" not in " ".join(record.getMessage() for record in caplog.records)
+
+
+def test_bypassed_exclusive_group_is_invalid() -> None:
+    payload = {
+        "schema_version": "adaptive.score.v1",
+        "name": "Intensity cue",
+        "states": [
+            {
+                "id": "state-exploration",
+                "name": "Exploration",
+                "intensity": 0,
+                "material": {"kind": "section", "section_id": "section-explore"},
+            }
+        ],
+        "layers": [_locked_intensity_layers()[0]],
+    }
+    score = parse_adaptive_score(payload)
+    layer = score.layers[0].model_copy(deep=True)
+    object.__setattr__(layer, "exclusive_group", "Orchestration")
+    bypassed = score.model_copy(update={"layers": [layer]})
+    codes = {
+        item.code
+        for item in validate_adaptive_score_graph(bypassed)
+        if item.target_id == "layer-pad"
+    }
+    assert "adaptive_score_invalid" in codes
+

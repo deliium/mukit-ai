@@ -6,6 +6,7 @@ No SQLite. No FastAPI. Does not mutate Composition or the score model.
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
 from typing import Any
 
@@ -20,6 +21,8 @@ from app.adaptive_score_schemas import (
 from app.composition_schemas import CompositionV2
 
 logger = logging.getLogger(__name__)
+
+_EXCLUSIVE_GROUP_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
 
 
 def _finding(
@@ -881,6 +884,17 @@ def validate_adaptive_score_graph(
                     "error",
                     target_id=layer.state_id,
                     message="Layer state_id does not name a state.",
+                )
+            )
+        if layer.exclusive_group is not None and not _EXCLUSIVE_GROUP_RE.fullmatch(
+            layer.exclusive_group
+        ):
+            findings.append(
+                _finding(
+                    "adaptive_score_invalid",
+                    "error",
+                    target_id=layer.id,
+                    message="Layer exclusive_group must be a lowercase token.",
                 )
             )
     for stinger in score.stingers:

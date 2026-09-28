@@ -1000,20 +1000,6 @@ class AssignBoundaryCommand(_CommandEnvelope):
     payload: AssignBoundaryPayload
 
 
-AdaptiveScoreCommand = Annotated[
-    CreateStateCommand
-    | DeleteStateCommand
-    | DuplicateStateCommand
-    | AssignMaterialCommand
-    | CreateTransitionCommand
-    | EditTransitionCommand
-    | AssignLoopCommand
-    | AssignIntensityCommand
-    | AssignBoundaryCommand,
-    Field(discriminator="op"),
-]
-
-
 class AdaptiveScoreCommandResponse(_Strict):
     score: AdaptiveScoreV1
     document_revision: int = Field(ge=1)
@@ -1221,6 +1207,96 @@ class AdaptiveLayerIntensityV1(_Strict):
     def intensity_number(cls, value: object) -> object:
         _reject_bool(value, model=cls.__name__, field="intensity")
         return value
+
+
+class EditLayerPayload(_Strict):
+    layer_id: str
+    name: str | None = None
+    material: AdaptiveMaterialRefV1 | None = None
+    state_id: str | None = None
+    intensity_min: float | None = Field(default=None, ge=0, le=1)
+    intensity_max: float | None = Field(default=None, ge=0, le=1)
+    mix_hint: AdaptiveMixHint | None = None
+    default_active: bool | None = None
+    role: AdaptiveLayerRole | None = None
+    exclusive_group: str | None = None
+    priority: int | None = None
+    fade: AdaptiveLayerFadeV1 | None = None
+
+    @field_validator("layer_id")
+    @classmethod
+    def layer_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="layer_id")
+
+    @field_validator("state_id")
+    @classmethod
+    def state_token(cls, value: str | None) -> str | None:
+        return _optional_entity_token(value, model=cls.__name__, field="state_id")
+
+    @field_validator("exclusive_group")
+    @classmethod
+    def group_token(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _FLAG_RE.fullmatch(value):
+            log_adaptive_schema_failure(cls.__name__, "exclusive_group", "adaptive_score_invalid")
+            raise ValueError("exclusive_group must match ^[a-z][a-z0-9_]{0,40}$")
+        return value
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def priority_int(cls, value: object) -> object:
+        if value is not None:
+            _reject_bool(value, model=cls.__name__, field="priority")
+        return value
+
+    @field_validator("intensity_min", "intensity_max", mode="before")
+    @classmethod
+    def window_number(cls, value: object) -> object:
+        if value is not None:
+            _reject_bool(value, model=cls.__name__, field="intensity")
+        return value
+
+
+class DeleteLayerPayload(_Strict):
+    layer_id: str
+
+    @field_validator("layer_id")
+    @classmethod
+    def layer_token(cls, value: str) -> str:
+        return _entity_token(value, model=cls.__name__, field="layer_id")
+
+
+class CreateLayerCommand(_CommandEnvelope):
+    op: Literal["create_layer"]
+    payload: AdaptiveLayerProposalV1
+
+
+class EditLayerCommand(_CommandEnvelope):
+    op: Literal["edit_layer"]
+    payload: EditLayerPayload
+
+
+class DeleteLayerCommand(_CommandEnvelope):
+    op: Literal["delete_layer"]
+    payload: DeleteLayerPayload
+
+
+AdaptiveScoreCommand = Annotated[
+    CreateStateCommand
+    | DeleteStateCommand
+    | DuplicateStateCommand
+    | AssignMaterialCommand
+    | CreateTransitionCommand
+    | EditTransitionCommand
+    | AssignLoopCommand
+    | AssignIntensityCommand
+    | AssignBoundaryCommand
+    | CreateLayerCommand
+    | EditLayerCommand
+    | DeleteLayerCommand,
+    Field(discriminator="op"),
+]
 
 
 class AdaptiveScheduleRealizationCutV1(_Strict):

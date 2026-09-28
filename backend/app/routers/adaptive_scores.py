@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
 from app.adaptive_score_schemas import (
+    AdaptiveLayerIntensityV1,
     AdaptiveScoreCommandResponse,
     AdaptiveScoreCreateRequest,
     AdaptiveScoreError,
@@ -19,9 +20,15 @@ from app.adaptive_score_schemas import (
     AdaptiveTransitionScheduleRequest,
     AdaptiveTransitionScheduleV1,
     map_adaptive_score_error_to_http,
+    parse_adaptive_layer_intensity_request,
+    parse_adaptive_layer_plan_preview_request,
     parse_adaptive_score_command,
 )
 from app.routers.collaboration_guard import enforce_current
+from app.services.adaptive_score_layer_service import (
+    preview_adaptive_layer_plan,
+    resolve_adaptive_layer_intensity,
+)
 from app.services.adaptive_score_service import (
     apply_adaptive_score_command,
     create_adaptive_score,
@@ -402,4 +409,34 @@ async def cancel_project_transition_request(
         started=started,
     )
     return Response(status_code=204)
+
+
+@router.post("/{score_id}/layer-intensity", response_model=AdaptiveLayerIntensityV1)
+async def map_project_layer_intensity(
+    project_id: str,
+    score_id: str,
+    body: dict = Body(...),
+) -> AdaptiveLayerIntensityV1:
+    enforce_current(project_id, "read")
+    try:
+        request = parse_adaptive_layer_intensity_request(body)
+        return resolve_adaptive_layer_intensity(project_id, score_id, request)
+    except AdaptiveScoreError as exc:
+        _raise(exc)
+    raise AssertionError("adaptive layer intensity")
+
+
+@router.post("/{score_id}/layer-plans/preview", response_model=AdaptiveLayerIntensityV1)
+async def preview_project_layer_plan(
+    project_id: str,
+    score_id: str,
+    body: dict = Body(...),
+) -> AdaptiveLayerIntensityV1:
+    enforce_current(project_id, "read")
+    try:
+        request = parse_adaptive_layer_plan_preview_request(body)
+        return preview_adaptive_layer_plan(project_id, score_id, request)
+    except AdaptiveScoreError as exc:
+        _raise(exc)
+    raise AssertionError("adaptive layer plan preview")
 
