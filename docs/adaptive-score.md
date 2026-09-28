@@ -4,7 +4,7 @@ An **adaptive score** describes non-linear music for a project: states, variants
 
 Product generation for this surface is V5. The document schema is `adaptive.score.v1`. There is no `composition.v5`.
 
-Playback that switches music at runtime is out of scope. The Adaptive tab is an authoring graph: it draws states and transitions and selects a current state. That selection is not a playback cursor.
+Playback switching is not a Tone.js runtime. The scheduler below returns a bar-aligned boundary and a latency estimate. It does not render audio, does not write the score, and does not call an LLM. The Adaptive tab is an authoring graph: it draws states and transitions and selects a current state. That selection is not a playback cursor. A pending schedule is a different object, labeled **Scheduled transition**.
 
 ## Authority
 
@@ -19,7 +19,40 @@ Writes go to the `adaptive_scores` table. They do not update `projects.compositi
 
 ## Two axes
 
-**Horizontal resequencing** is the state graph plus transitions. A transition names `from_state_id`, `to_state_id`, a closed quantization (`immediate`, `beat`, `bar`, `next_exit`, `custom`), a priority, closed conditions, and a fallback. Self-transitions and cycles are valid (victory may return to exploration).
+**Horizontal resequencing** is the state graph plus transitions. A transition names `from_state_id`, `to_state_id`, a quantization, a priority, closed conditions, an optional realization, and a fallback. Self-transitions and cycles are valid (victory may return to exploration).
+
+Stingers keep the five original quantization tokens: `immediate`, `beat`, `bar`, `next_exit`, `custom`. A stinger JSON body that uses `phrase`, `loop_end`, or `cue` is `adaptive_score_invalid`.
+
+Transitions use `AdaptiveTransitionQuantization`:
+
+| Token | Boundary |
+|-------|----------|
+| `immediate` | `position_tick`, including a tick inside a beat. `aligned` is true only when that tick is already a beat |
+| `beat` | Next beat, or the same tick when it is already a beat. Beat length is the bar duration divided by the meter numerator |
+| `bar` | Next bar line, including `duration_ticks` when that tick is a bar boundary |
+| `next_exit` | The source state's exit. An off-grid tick exit is `exit_off_grid` and is not snapped |
+| `custom` | Material start bar, then every `custom_grid_bars` bars. A playhead before the anchor lands on the anchor |
+| `phrase` | Next section start whose bars intersect the source material. The tick is `bar_start_tick(start_bar)` |
+| `loop_end` | End of the authored loop when the loop is enabled. The engine schedules that end once and does not wrap |
+| `cue` | Next `rehearsal` marker whose label equals `cue_label` and whose tick is already a beat. Off-grid cues are skipped. `text` markers are not cues |
+
+`cue_label` is required for `cue` and forbidden otherwise.
+
+Omitted `realization` means kind `cut`.
+
+| Kind | Companion | Boundary |
+|------|-----------|----------|
+| `cut` | none | Switch tick is the boundary |
+| `crossfade` | `crossfade_ms` 0..4000 | Boundary stays. `fade_start_tick` is the boundary minus the lead at the boundary tempo, clamped so it is not before `position_tick` |
+| `phrase` | `phrase_material` | Phrase starts at the boundary. The response includes material kind and ids only. Binding errors reject the schedule |
+| `stinger` | `stinger_id` | Bed stays on the boundary. The stinger's own quantization does not move the bed. A missing id is `422 realization_invalid` |
+| `overlap` | `overlap_bars` 1..16 | Legal only on a bar line. Off a bar line the schedule is `realization_invalid` and the boundary does not move |
+
+Locked example, tempo 120, `4/4`, `ticks_per_quarter` 480, `position_tick` 2400, quantization `bar`: `boundary_tick` 3840, `latency_ticks` 1440, `latency_ms` 1500. The same inputs return the same integers.
+
+One pending request is held in memory per score. A later successful schedule replaces it and returns `200` with `replaced_request_id`. A failed schedule leaves the current slot. `DELETE .../transition-requests/{request_id}` clears the current id (`204`, no body). A replaced or unknown id is `409 transition_request_not_pending`. `GET .../transition-requests/current` is `200` or `204` with no body when empty. Restart drops the slot. The response schema is `adaptive.transition.schedule.v1`. It is not stored in `body_json`.
+
+The request does not send a quantization. Timing comes from the authored edge. Collaboration permission is `read`.
 
 **Vertical layering** is simultaneous material inside one state, or in any state when `state_id` is null. `mix_hint` is a label (`bed`, `foreground`, `ornament`), not a gain curve and not `mix.plan.v1`.
 
@@ -124,10 +157,13 @@ Prefix: `/projects/{project_id}/adaptive-scores`.
 | `DELETE` | `/{score_id}` | `204` |
 | `POST` | `/{score_id}/validate` | Read-only findings. Query `strict` defaults to false |
 | `POST` | `/{score_id}/commands` | One graph edit. `write_score`. See Commands |
+| `POST` | `/{score_id}/transition-requests` | Read-only schedule. `201` or `200` when replacing. Does not write the score |
+| `GET` | `/{score_id}/transition-requests/current` | Pending schedule, or `204` with no body |
+| `DELETE` | `/{score_id}/transition-requests/{request_id}` | Cancel the current id. `204` with no body |
 
 Unknown project: `404 project_not_found`. Unknown score: `404 adaptive_score_not_found`. CAS mismatch: `409 adaptive_score_conflict`. One default score per project; setting `is_default` clears the previous default in the same transaction.
 
-Collaboration uses `read` for GET and validate, and `write_score` for POST, PUT, DELETE, and commands. When `COLLABORATION_ENABLED` is off, those routes stay open.
+Collaboration uses `read` for GET, validate, and transition schedule/current/cancel, and `write_score` for POST, PUT, DELETE, and commands. When `COLLABORATION_ENABLED` is off, those routes stay open.
 
 Deleting a project cascades `adaptive_scores` via the foreign key on `project_id`.
 
@@ -143,11 +179,15 @@ INFO may include `schema_version`, `project_id`, `score_id`, `op`, entity counts
 
 DEBUG may include finding codes, `target_id`, `severity`, `component_size` for a deadlock, state ids, material kinds, section ids, revision ids, and a fingerprint **prefix**.
 
-INFO and DEBUG must not include `body_json`, command payloads, `composition_json`, event arrays, note pitches, prompts, or secret values.
+INFO on a transition route may include `method`, `project_id`, `score_id`, `http_status`, `quantization`, `boundary_tick`, `latency_ms`, `latency_ticks`, `realization_kind`, `request_id`, `duration_ms`, and `replaced`.
+
+DEBUG in the resolver may include `transition_id`, `position_tick`, `boundary_tick`, `latency_ticks`, `latency_ms`, warning codes, `realization_kind`, and `flag_count`.
+
+INFO and DEBUG must not include `body_json`, command payloads, `composition_json`, event arrays, note pitches, prompts, secret values, marker or section labels, `cue_label`, flag values, or the runtime dict.
 
 ## Non-goals
 
-- No adaptive playback runtime and no Tone.js state machine.
+- The transition scheduler does not render audio, does not write the score, and does not call an LLM. It does not start Tone.js, FluidSynth, or a neural render.
 - No embedded note events and no `composition.v5`.
 - No agent authoring and no `multi-agent-apply` of adaptive scores.
 - No resolution of neural stems, recovery WAVs, or `DATASET_ROOT`.

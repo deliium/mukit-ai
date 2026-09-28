@@ -147,10 +147,13 @@ mukit-ai/
 | `backend/app/services/composition_revision_preserve.py` | Preserve-outside-targets event fingerprint helper |
 | `backend/app/routers/critique.py` | `POST /critique/evaluate` (session-only) |
 | `backend/app/adaptive_score_schemas.py` | `adaptive.score.v1` graph DTOs (references only; no note events) |
-| `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD, `POST .../commands`, and read-only validate |
+| `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD, `POST .../commands`, read-only validate, and transition schedule/current/cancel |
 | `backend/app/services/adaptive_score_commands.py` | Pure graph edits for the nine authoring operations; no SQLite |
 | `backend/app/services/adaptive_score_store.py` | SQLite `adaptive_scores` CAS; does not load Composition |
 | `backend/app/services/adaptive_score_service.py` | Bind, then store writes for PUT and commands |
+| `backend/app/services/adaptive_score_transition_service.py` | Load score and timeline, schedule, then hold the pending slot; no score write |
+| `backend/app/services/adaptive_score_transitions.py` | Pure grid resolver; no SQLite, FastAPI, or LLM |
+| `backend/app/services/adaptive_score_transition_pending.py` | In-memory one-slot pending registry |
 | `frontend/src/components/AdaptiveScorePanel.jsx` | Adaptive tab: state cards, transitions, authoring selection, findings |
 | `backend/app/motif_schemas.py` | Motif apply request/response DTOs |
 | `backend/app/routers/analysis.py` | `POST /analysis/composition` |
