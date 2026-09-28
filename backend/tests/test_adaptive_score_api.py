@@ -211,3 +211,178 @@ def test_collaboration_viewer_denied_editor_allowed(
     )
     assert allowed.status_code == 201, allowed.text
     client.close()
+
+
+def _empty_score() -> dict:
+    return {"schema_version": "adaptive.score.v1", "name": "Exploration cue"}
+
+
+def _command(client: TestClient, project_id: str, score_id: str, revision: int, op: str, payload: dict, **kwargs):
+    return client.post(
+        f"/projects/{project_id}/adaptive-scores/{score_id}/commands",
+        json={"expected_document_revision": revision, "op": op, "payload": payload},
+        **kwargs,
+    )
+
+
+def _document_revision(db_path: Path, score_id: str) -> int:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT document_revision FROM adaptive_scores WHERE id = ?",
+            (score_id,),
+        ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def test_commands_build_exploration_combat_victory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, db_path = _client(tmp_path, monkeypatch, collab=False)
+    composition = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    created = client.post("/projects", json={"name": "Adaptive cues", "composition": composition})
+    assert created.status_code == 201, created.text
+    project_id = created.json()["id"]
+    before = _composition_text(db_path, project_id)
+    posted = client.post(
+        f"/projects/{project_id}/adaptive-scores",
+        json={"is_default": True, "score": _empty_score()},
+    )
+    assert posted.status_code == 201, posted.text
+    score_id = posted.json()["score"]["id"]
+    revision = 1
+    for name, state_id in (
+        ("Exploration", "state-exploration"),
+        ("Combat", "state-combat"),
+        ("Victory", "state-victory"),
+    ):
+        response = _command(
+            client,
+            project_id,
+            score_id,
+            revision,
+            "create_state",
+            {"name": name, "id": state_id},
+        )
+        assert response.status_code == 200, response.text
+        revision = response.json()["document_revision"]
+    for transition_id, source, destination in (
+        ("to-combat", "state-exploration", "state-combat"),
+        ("to-victory", "state-combat", "state-victory"),
+    ):
+        response = _command(
+            client,
+            project_id,
+            score_id,
+            revision,
+            "create_transition",
+            {
+                "id": transition_id,
+                "from_state_id": source,
+                "to_state_id": destination,
+                "quantization": "bar",
+                "conditions": [{"kind": "manual"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        revision = response.json()["document_revision"]
+    body = response.json()
+    names = [state["name"] for state in body["score"]["states"]]
+    assert names == ["Exploration", "Combat", "Victory"]
+    assert body["score"]["initial_state_id"] == "state-exploration"
+    assert body["score"]["default_state_id"] == "state-exploration"
+    validated = client.post(f"/projects/{project_id}/adaptive-scores/{score_id}/validate")
+    assert validated.status_code == 200, validated.text
+    assert validated.json()["error_count"] == 0
+    assert validated.json()["ready"] is True
+    assert _composition_text(db_path, project_id) == before
+    conflict = _command(
+        client,
+        project_id,
+        score_id,
+        1,
+        "create_state",
+        {"name": "Extra"},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "adaptive_score_conflict"
+    assert _document_revision(db_path, score_id) == revision
+    assert len(client.get(f"/projects/{project_id}/adaptive-scores/{score_id}").json()["score"]["states"]) == 3
+    client.close()
+
+
+def test_bad_loop_command_returns_findings_and_does_not_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, db_path = _client(tmp_path, monkeypatch, collab=False)
+    composition = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    created = client.post("/projects", json={"name": "Loop", "composition": composition})
+    project_id = created.json()["id"]
+    before = _composition_text(db_path, project_id)
+    posted = client.post(
+        f"/projects/{project_id}/adaptive-scores",
+        json={"score": _empty_score()},
+    )
+    score_id = posted.json()["score"]["id"]
+    created_state = _command(
+        client,
+        project_id,
+        score_id,
+        1,
+        "create_state",
+        {"name": "Combat", "id": "state-combat"},
+    )
+    assert created_state.status_code == 200, created_state.text
+    rejected = _command(
+        client,
+        project_id,
+        score_id,
+        2,
+        "assign_loop",
+        {"state_id": "state-combat", "enabled": True, "start_bar": 4, "end_bar": 2},
+    )
+    assert rejected.status_code == 422, rejected.text
+    detail = rejected.json()["detail"]
+    assert detail["code"] == "loop_bounds"
+    findings = detail["details"]["findings"]
+    assert findings
+    assert findings[0]["code"] == "loop_bounds"
+    assert "state-combat" in findings[0]["message"]
+    assert "2" in findings[0]["message"]
+    assert _document_revision(db_path, score_id) == 2
+    assert _composition_text(db_path, project_id) == before
+    client.close()
+
+
+def test_command_viewer_denied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, db_path = _client(tmp_path, monkeypatch, collab=True)
+    composition = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    created = client.post("/projects", json={"name": "Roles", "composition": composition})
+    project_id = created.json()["id"]
+    editor = create_actor("Editor", db_path=db_path)
+    viewer = create_actor("Viewer", db_path=db_path)
+    grant_member(project_id, editor.id, "editor", db_path=db_path)
+    grant_member(project_id, viewer.id, "viewer", db_path=db_path)
+    posted = client.post(
+        f"/projects/{project_id}/adaptive-scores",
+        headers={"X-Mukit-Actor": editor.id},
+        json={"score": _empty_score()},
+    )
+    assert posted.status_code == 201, posted.text
+    score_id = posted.json()["score"]["id"]
+    denied = _command(
+        client,
+        project_id,
+        score_id,
+        1,
+        "create_state",
+        {"name": "Exploration"},
+        headers={"X-Mukit-Actor": viewer.id},
+    )
+    assert denied.status_code == 403
+    client.close()

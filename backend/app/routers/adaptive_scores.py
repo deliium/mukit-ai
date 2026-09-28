@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Body, HTTPException, Query, Response
 
 from app.adaptive_score_schemas import (
+    AdaptiveScoreCommandResponse,
     AdaptiveScoreCreateRequest,
     AdaptiveScoreError,
     AdaptiveScoreGetResponse,
@@ -15,9 +16,11 @@ from app.adaptive_score_schemas import (
     AdaptiveScoreUpdateRequest,
     AdaptiveScoreValidateResponse,
     map_adaptive_score_error_to_http,
+    parse_adaptive_score_command,
 )
 from app.routers.collaboration_guard import enforce_current
 from app.services.adaptive_score_service import (
+    apply_adaptive_score_command,
     create_adaptive_score,
     delete_adaptive_score,
     get_adaptive_score,
@@ -190,3 +193,62 @@ async def validate_project_adaptive_score(
         },
     )
     return body
+
+
+@router.post("/{score_id}/commands", response_model=AdaptiveScoreCommandResponse)
+async def command_project_adaptive_score(
+    project_id: str,
+    score_id: str,
+    body: dict = Body(...),
+) -> AdaptiveScoreCommandResponse:
+    started = time.perf_counter()
+    enforce_current(project_id, "write_score")
+    op = body.get("op") if isinstance(body, dict) else None
+    op_label = op if isinstance(op, str) and len(op) <= 40 else None
+    try:
+        command = parse_adaptive_score_command(body)
+        result = apply_adaptive_score_command(project_id, score_id, command)
+    except AdaptiveScoreError as exc:
+        findings = exc.details.get("findings") if isinstance(exc.details, dict) else None
+        codes = [
+            item.get("code")
+            for item in findings
+            if isinstance(item, dict)
+        ] if isinstance(findings, list) else []
+        logger.debug(
+            "Adaptive score command rejected",
+            extra={
+                "project_id": project_id,
+                "score_id": score_id,
+                "op": op_label,
+                "codes": codes[:16],
+            },
+        )
+        logger.info(
+            "POST adaptive score command",
+            extra={
+                "method": "POST",
+                "project_id": project_id,
+                "score_id": score_id,
+                "op": op_label,
+                "http_status": exc.http_status,
+                "document_revision": None,
+                "duration_ms": int((time.perf_counter() - started) * 1000),
+                "state_count": None,
+            },
+        )
+        _raise(exc)
+    logger.info(
+        "POST adaptive score command",
+        extra={
+            "method": "POST",
+            "project_id": project_id,
+            "score_id": score_id,
+            "op": command.op,
+            "http_status": 200,
+            "document_revision": result.document_revision,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "state_count": len(result.score.states),
+        },
+    )
+    return result

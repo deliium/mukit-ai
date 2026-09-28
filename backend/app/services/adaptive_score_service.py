@@ -11,6 +11,8 @@ from pathlib import Path
 
 from app.adaptive_score_schemas import (
     AdaptiveBindingStatus,
+    AdaptiveScoreCommand,
+    AdaptiveScoreCommandResponse,
     AdaptiveScoreCreateRequest,
     AdaptiveScoreError,
     AdaptiveScoreFindingV1,
@@ -22,6 +24,9 @@ from app.adaptive_score_schemas import (
     parse_adaptive_score,
 )
 from app.composition_schemas import CompositionV2
+from app.services.adaptive_score_commands import (
+    apply_adaptive_score_command as apply_graph_command,
+)
 from app.services.adaptive_score_store import (
     create_score,
     delete_score,
@@ -376,4 +381,73 @@ def validate_adaptive_score(
         findings=findings,
         error_count=errors,
         warning_count=warnings,
+    )
+
+
+def _error_finding_details(findings: list[AdaptiveScoreFindingV1]) -> list[dict[str, str | None]]:
+    errors = [item for item in findings if item.severity == "error"][:64]
+    return [
+        {
+            "code": item.code,
+            "severity": item.severity,
+            "target_id": item.target_id,
+            "message": item.message,
+        }
+        for item in errors
+    ]
+
+
+def apply_adaptive_score_command(
+    project_id: str,
+    score_id: str,
+    command: AdaptiveScoreCommand,
+    *,
+    db_path: Path | None = None,
+) -> AdaptiveScoreCommandResponse:
+    """Apply one command, then bind and CAS-write only when findings have no errors."""
+    _require_project(project_id, db_path)
+    reject_embedded_note_material(command.payload.model_dump(mode="json"))
+    record = get_score(project_id, score_id, db_path=db_path)
+    updated = apply_graph_command(record.score, command)
+    findings, status = _checked_findings(
+        updated,
+        project_id=project_id,
+        db_path=db_path,
+        strict=False,
+        enforce_errors=False,
+    )
+    errors = [item for item in findings if item.severity == "error"]
+    if errors:
+        codes = [item.code for item in errors[:64]]
+        logger.debug(
+            "Adaptive score command findings rejected",
+            extra={"project_id": project_id, "score_id": score_id, "op": command.op, "codes": codes},
+        )
+        first = errors[0]
+        raise AdaptiveScoreError(
+            first.code,
+            first.message or first.code,
+            http_status=422,
+            details={"findings": _error_finding_details(findings), "target_id": first.target_id},
+        )
+    saved = replace_score(
+        project_id,
+        score_id,
+        updated,
+        expected_document_revision=command.expected_document_revision,
+        db_path=db_path,
+    )
+    warnings = [item for item in findings if item.severity == "warning"]
+    logger.debug(
+        "Adaptive score command warnings kept",
+        extra={"score_id": score_id, "op": command.op, "warning_count": len(warnings)},
+    )
+    return AdaptiveScoreCommandResponse(
+        score=saved.score,
+        document_revision=saved.document_revision,
+        is_default=saved.is_default,
+        binding_status=status,
+        created_at=saved.created_at,
+        updated_at=saved.updated_at,
+        findings=warnings,
     )
