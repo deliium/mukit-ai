@@ -62,6 +62,7 @@
 - [x] **V5 Adaptive Score playback runtime** — Session clock `adaptive.playback.runtime.v1` advances bar and beat on one `adaptive.score.v1` graph, queues state changes, and applies loops, phrases, stingers, and layer fades through the existing scheduler and layer map. Tone.js only seeks, loops, and ramps session gain. The session stays in memory, so the score row and `composition.v2` notes stay unchanged. An invalid state request leaves transport playing. No `composition.v5`
 - [x] **V5 Runtime musical context** — A flat external sample maps onto a closed `adaptive.musical_context.v1` session. Smoothing and hysteresis emit existing playback commands without writing `adaptive.score.v1` or calling an LLM. No `composition.v5`
 - [x] **V5 Runtime symbolic continuation** — A session buffer fills bars ahead of Adaptive Score playback. Deterministic fallbacks return before the symbolic model, and a late result is discarded. The score stays `adaptive.score.v1` and playback stays `adaptive.playback.runtime.v1`. No `composition.v5`
+- [x] **V5 Adaptive Music Engine API** — A game or installation drives one stored `adaptive.score.v1` through `/adaptive/*` (`adaptive.engine.session.v1`) without the studio. The session starts or binds playback, accepts state, intensity, stinger, and context commands, and publishes acknowledgements and throttled status. Bearer-or-loopback auth and a one-slot context coalescer stay in process memory. The score and `composition.v2` notes stay unchanged. No `composition.v5`
 
 ## Completed
 
@@ -125,3 +126,4 @@
 | V5 Adaptive Score playback runtime | 2026-09-29 |
 | V5 Runtime musical context | 2026-09-29 |
 | V5 Runtime symbolic continuation | 2026-09-29 |
+| V5 Adaptive Music Engine API | 2026-09-29 |
