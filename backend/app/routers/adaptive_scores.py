@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -17,6 +18,11 @@ from app.adaptive_playback_schemas import (
     AdaptivePlaybackRuntimeV1,
     parse_adaptive_playback_command,
     parse_adaptive_playback_start,
+)
+from app.adaptive_runtime_continuation_schemas import (
+    AdaptiveRuntimeBufferV1,
+    AdaptiveRuntimeContinuationV1,
+    parse_adaptive_runtime_continuation_start,
 )
 from app.adaptive_score_schemas import (
     AdaptiveLayerIntensityV1,
@@ -46,6 +52,13 @@ from app.services.adaptive_playback_service import (
     get_adaptive_playback,
     start_adaptive_playback,
     stop_adaptive_playback,
+)
+from app.services.adaptive_runtime_continuation_service import (
+    get_adaptive_runtime_buffer,
+    get_adaptive_runtime_continuation,
+    maintain_adaptive_runtime_continuation,
+    start_adaptive_runtime_continuation,
+    stop_adaptive_runtime_continuation,
 )
 from app.services.adaptive_score_layer_service import (
     preview_adaptive_layer_plan,
@@ -589,6 +602,96 @@ async def stop_project_musical_context(project_id: str, score_id: str) -> Respon
     except AdaptiveScoreError as exc:
         logger.debug(
             "Adaptive musical context rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    return Response(status_code=204)
+
+
+def _schedule_continuation(coro):
+    return asyncio.get_running_loop().create_task(coro)
+
+
+@router.post("/{score_id}/continuation", response_model=AdaptiveRuntimeContinuationV1)
+async def start_project_continuation(
+    project_id: str,
+    score_id: str,
+    body: dict = Body(...),
+) -> AdaptiveRuntimeContinuationV1:
+    enforce_current(project_id, "read")
+    try:
+        request = parse_adaptive_runtime_continuation_start(body)
+        return start_adaptive_runtime_continuation(project_id, score_id, request)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive runtime continuation rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    raise AssertionError("adaptive runtime continuation start")
+
+
+@router.get("/{score_id}/continuation", response_model=AdaptiveRuntimeContinuationV1)
+async def get_project_continuation(project_id: str, score_id: str) -> Response:
+    enforce_current(project_id, "read")
+    try:
+        snapshot = get_adaptive_runtime_continuation(project_id, score_id)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive runtime continuation rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    if snapshot is None:
+        return Response(status_code=204)
+    return JSONResponse(status_code=200, content=snapshot.model_dump(mode="json"))
+
+
+@router.post("/{score_id}/continuation/maintain", response_model=AdaptiveRuntimeContinuationV1)
+async def maintain_project_continuation(
+    project_id: str,
+    score_id: str,
+) -> AdaptiveRuntimeContinuationV1:
+    enforce_current(project_id, "read")
+    try:
+        return maintain_adaptive_runtime_continuation(
+            project_id,
+            score_id,
+            scheduler=_schedule_continuation,
+        )
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive runtime continuation rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    raise AssertionError("adaptive runtime continuation maintain")
+
+
+@router.get("/{score_id}/continuation/buffer", response_model=AdaptiveRuntimeBufferV1)
+async def get_project_continuation_buffer(project_id: str, score_id: str) -> Response:
+    enforce_current(project_id, "read")
+    try:
+        buffer = get_adaptive_runtime_buffer(project_id, score_id)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive runtime continuation rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    if buffer is None:
+        return Response(status_code=204)
+    return JSONResponse(status_code=200, content=buffer.model_dump(mode="json"))
+
+
+@router.delete("/{score_id}/continuation", status_code=204)
+async def stop_project_continuation(project_id: str, score_id: str) -> Response:
+    enforce_current(project_id, "read")
+    try:
+        stop_adaptive_runtime_continuation(project_id, score_id)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive runtime continuation rejected",
             extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
         )
         _raise(exc)
