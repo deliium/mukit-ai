@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import uvicorn
@@ -37,6 +38,8 @@ from .routers.composer_profiles import router as composer_profiles_router
 from .routers.reference_features import router as reference_features_router
 from .routers.live_performance import router as live_performance_router
 from .routers.adaptive_scores import router as adaptive_scores_router
+from .routers.adaptive_engine import adaptive_engine_validation_handler
+from .routers.adaptive_engine import router as adaptive_engine_router
 from .reference_feature_schemas import (
     ReferenceFeatureError,
     map_reference_feature_error_to_http,
@@ -123,6 +126,9 @@ async def lifespan(_app: FastAPI):
             extra={"error_type": type(exc).__name__},
         )
     yield
+    from .services.adaptive_engine_service import cancel_adaptive_engine_tasks
+
+    cancel_adaptive_engine_tasks()
     logger.info("Application shutdown")
 
 
@@ -172,6 +178,8 @@ app.include_router(composer_profiles_router)
 app.include_router(reference_features_router)
 app.include_router(live_performance_router)
 app.include_router(adaptive_scores_router)
+app.include_router(adaptive_engine_router)
+app.add_exception_handler(RequestValidationError, adaptive_engine_validation_handler)
 
 _mt_settings = load_music_transformer_settings()
 if _mt_settings.api_enabled:
