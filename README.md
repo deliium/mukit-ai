@@ -353,6 +353,7 @@ mukit-ai/
 | [Reference features](docs/reference-features.md) | Dimension masks + preserve/borrow/regenerate policy for generate/develop/edit |
 | [Composition Arrangement](docs/composition-arrangement.md) | Instrumentation / texture redistribution; catalog + preview + Apply |
 | [Composition Critique](docs/composition-critique.md) | Evaluation engine, strata policy, climax AC, evaluate API |
+| [Adaptive musical context](docs/adaptive-musical-context.md) | Flat external samples, hysteresis, and playback commands from the Adaptive tab |
 | [Composition Analysis](docs/composition-analysis.md) | Deterministic sidecar, scopes, warnings, Analysis tab |
 | [MIDI / MusicXML import](docs/import.md) | Ingestion mappings, limits, issue codes, security |
 | [Symbolic datasets](docs/datasets.md) | Offline licensed corpus pipeline (`DATASET_ROOT`, CLI build/verify) |

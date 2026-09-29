@@ -18,6 +18,8 @@ const PATHS = Object.freeze({
   preview: '/projects/{project_id}/adaptive-scores/{score_id}/layer-plans/preview',
   playback: '/projects/{project_id}/adaptive-scores/{score_id}/playback',
   playbackCommand: '/projects/{project_id}/adaptive-scores/{score_id}/playback/commands',
+  context: '/projects/{project_id}/adaptive-scores/{score_id}/context',
+  contextSample: '/projects/{project_id}/adaptive-scores/{score_id}/context/samples',
 });
 
 function projectScoresPath(projectId) {
@@ -121,6 +123,23 @@ export function commandAdaptivePlayback(projectId, scoreId, command) {
 
 export function deleteAdaptivePlayback(projectId, scoreId) {
   return request('delete', PATHS.playback, `${scorePath(projectId, scoreId)}/playback`);
+}
+
+export function startAdaptiveMusicalContext(projectId, scoreId, payload) {
+  return request('post', PATHS.context, `${scorePath(projectId, scoreId)}/context`, payload);
+}
+
+export function deleteAdaptiveMusicalContext(projectId, scoreId) {
+  return request('delete', PATHS.context, `${scorePath(projectId, scoreId)}/context`);
+}
+
+export function sendAdaptiveContextSample(projectId, scoreId, sample) {
+  return request(
+    'post',
+    PATHS.contextSample,
+    `${scorePath(projectId, scoreId)}/context/samples`,
+    sample,
+  );
 }
 
 function raiseAdaptiveError(error, pathTemplate) {

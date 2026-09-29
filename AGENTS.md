@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders; mix analysis (`mix.analysis.v1`) measures completed neural stem/mix WAVs without mutating audio or V2. Projects persist in SQLite. A project may also store `adaptive.score.v1` graphs that reference V2 sections, bars, tracks, motifs, or revisions without copying note events. Runtime intensity returns `adaptive.layer.intensity.v1` and does not rewrite those note events. A session playback clock returns `adaptive.playback.runtime.v1` without writing the score or the composition. V1 remains migration/parser input.
+Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders; mix analysis (`mix.analysis.v1`) measures completed neural stem/mix WAVs without mutating audio or V2. Projects persist in SQLite. A project may also store `adaptive.score.v1` graphs that reference V2 sections, bars, tracks, motifs, or revisions without copying note events. Runtime intensity returns `adaptive.layer.intensity.v1` and does not rewrite those note events. A session playback clock returns `adaptive.playback.runtime.v1` without writing the score or the composition. A musical-context session accepts a flat external sample, holds musical state across a hysteresis band, and emits existing playback commands only when that clock is already running. V1 remains migration/parser input.
 
 ## Tech Stack
 
@@ -147,11 +147,14 @@ mukit-ai/
 | `backend/app/services/composition_revision_preserve.py` | Preserve-outside-targets event fingerprint helper |
 | `backend/app/routers/critique.py` | `POST /critique/evaluate` (session-only) |
 | `backend/app/adaptive_score_schemas.py` | `adaptive.score.v1` graph DTOs plus `adaptive.layer.intensity.v1` (references only; no note events) |
-| `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD, `POST .../commands`, read-only validate, transition schedule/current/cancel, read-only layer intensity / plan preview, and playback start/status/commands/stop |
+| `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD, commands, validate, transitions, layer intensity, playback, and musical-context start/status/samples/stop |
 | `backend/app/adaptive_playback_schemas.py` | `adaptive.playback.runtime.v1` snapshot and commands; not stored on the score |
 | `backend/app/services/adaptive_playback.py` | Pure session clock; calls the scheduler and layer map; no SQLite, FastAPI, or LLM |
 | `backend/app/services/adaptive_playback_service.py` | Load score and timeline projections, then step the clock; no score write |
 | `backend/app/services/adaptive_playback_runtime.py` | In-memory one-session playback registry; restart drops it |
+| `backend/app/adaptive_musical_context_schemas.py` | `adaptive.context.external.v1`, `adaptive.context.mapping.v1`, and `adaptive.musical_context.v1` |
+| `backend/app/services/adaptive_musical_context.py` | Pure bind, EMA, and Schmitt dwell; no playback, SQLite, or LLM |
+| `backend/app/services/adaptive_musical_context_service.py` | In-memory context session; emits playback commands only when a clock is running |
 | `backend/app/services/adaptive_score_commands.py` | Pure graph edits, including `create_layer`, `edit_layer`, and `delete_layer`; no SQLite |
 | `backend/app/services/adaptive_score_layers.py` | Pure runtime-intensity map; no SQLite, FastAPI, or LLM |
 | `backend/app/services/adaptive_score_layer_service.py` | Load score and span projections, then return `adaptive.layer.intensity.v1`; no score write |
@@ -296,7 +299,8 @@ mukit-ai/
 | Composition Development | `docs/composition-development.md` | Continue / add section / vary; multi-candidate preview |
 | Composition Arrangement | `docs/composition-arrangement.md` | Instrumentation / texture redistribution; catalog + preview |
 | Composition Critique | `docs/composition-critique.md` | Evaluation engine, strata, climax AC, `/critique/evaluate` |
-| Adaptive score | `docs/adaptive-score.md` | `adaptive.score.v1` state graph over V2 references; `adaptive.layer.intensity.v1` selects layers; `adaptive.playback.runtime.v1` is a session clock. `ai_agents/` does not import `adaptive_playback.py`, `adaptive_playback_service.py`, or `adaptive_playback_runtime.py` |
+| Adaptive score | `docs/adaptive-score.md` | `adaptive.score.v1` state graph over V2 references; `adaptive.layer.intensity.v1` selects layers; `adaptive.playback.runtime.v1` is a session clock. `ai_agents/` does not import `adaptive_playback.py`, `adaptive_playback_service.py`, `adaptive_playback_runtime.py`, `adaptive_musical_context_schemas`, `adaptive_musical_context_settings`, `adaptive_musical_context`, `adaptive_musical_context_service`, or `adaptive_musical_context_runtime` |
+| Adaptive musical context | `docs/adaptive-musical-context.md` | Flat external samples mapped onto a closed context; hysteresis emits existing playback commands |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |
 | MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
 | Symbolic datasets | `docs/datasets.md` | Offline `DATASET_ROOT` corpus pipeline, provenance, CLI |

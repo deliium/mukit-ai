@@ -177,7 +177,9 @@ The playback runtime is a session clock for one `adaptive.score.v1` graph. Autho
 
 The locked Exploration → Suspense → Combat → Victory simulation uses these boundary ticks: `7680` (Suspense), `15360` (Combat phrase), `17280` (Combat), `23040` (Victory stinger), and `24960` (stinger cleared). The same script returns the same ticks. `projects.composition_json`, the score row, and `document_revision` stay unchanged.
 
-`ai_agents/` does not import `adaptive_playback.py`, `adaptive_playback_service.py`, or `adaptive_playback_runtime.py`.
+`ai_agents/` does not import `adaptive_playback.py`, `adaptive_playback_service.py`, `adaptive_playback_runtime.py`, `adaptive_musical_context_schemas`, `adaptive_musical_context_settings`, `adaptive_musical_context`, `adaptive_musical_context_service`, or `adaptive_musical_context_runtime`.
+
+A musical-context session can drive that clock from a flat external sample. See [adaptive-musical-context.md](adaptive-musical-context.md).
 
 ## HTTP
 

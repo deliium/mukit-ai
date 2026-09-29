@@ -430,3 +430,57 @@ test('playback snapshot stays on the session and a rejected state leaves the com
     restore();
   }
 });
+
+test('context sample does not select a card or post playback commands', async () => {
+  seedScore();
+  const calls = [];
+  let selections = 0;
+  const originalSelect = useMusicStore.getState().selectAdaptiveState;
+  useMusicStore.setState({
+    selectAdaptiveState: (...args) => {
+      selections += 1;
+      return originalSelect(...args);
+    },
+  });
+  const restore = installAxiosStub(async (config) => {
+    calls.push(`${config.method} ${config.url}`);
+    if (String(config.url).endsWith('/context/samples') && config.method === 'post') {
+      return {
+        status: 200,
+        data: {
+          schema_version: 'adaptive.musical_context.v1',
+          context_id: 'actx_0123abcd',
+          sample_index: 1,
+          musical_state_id: 'state-exploration',
+          intensity: null,
+          dwell_count: 0,
+          emitted: [],
+          warnings: [],
+          telemetry: {
+            sample_count: 1,
+            state_change_count: 0,
+            intensity_emit_count: 0,
+            rejected_sample_count: 0,
+          },
+          document_revision: 2,
+        },
+      };
+    }
+    return { status: 200, data: null };
+  });
+  try {
+    const selected = useMusicStore.getState().adaptiveSelectedStateId;
+    const snapshot = await useMusicStore.getState().sendAdaptiveContextSample({
+      schema_version: 'adaptive.context.external.v1',
+      values: { danger: 0.49 },
+    });
+    assert.equal(snapshot.musical_state_id, 'state-exploration');
+    assert.equal(selections, 0);
+    assert.equal(useMusicStore.getState().adaptiveSelectedStateId, selected);
+    assert.equal(calls.some((entry) => entry.includes('/playback/commands')), false);
+    assert.equal(useMusicStore.getState().adaptiveMusicalContextError, '');
+  } finally {
+    useMusicStore.setState({ selectAdaptiveState: originalSelect });
+    restore();
+  }
+});

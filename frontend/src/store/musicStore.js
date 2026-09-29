@@ -5,6 +5,7 @@ import {
   commandAdaptiveScore,
   createAdaptiveScore,
   deleteAdaptivePlayback,
+  deleteAdaptiveMusicalContext,
   getAdaptiveScore,
   getCurrentAdaptiveTransition,
   listAdaptiveScores,
@@ -12,6 +13,8 @@ import {
   previewAdaptiveLayerPlan,
   scheduleAdaptiveTransition,
   startAdaptivePlayback as startAdaptivePlaybackRequest,
+  startAdaptiveMusicalContext as startAdaptiveMusicalContextRequest,
+  sendAdaptiveContextSample as sendAdaptiveContextSampleRequest,
   validateAdaptiveScore,
 } from '../api/adaptiveScoreApi.js';
 import {
@@ -125,6 +128,7 @@ import {
 import { extractLivePerformanceFeatures } from '../utils/livePerformanceFeatures.js';
 import { getLivePlaybackEngine, requireLivePlaybackEngine } from '../utils/livePlaybackEngineAccess.js';
 import { applyAdaptivePlaybackInstructions, noteAdaptivePlayback } from '../utils/adaptivePlayback.js';
+import { dangerSample, lockedContextStartBody } from '../utils/adaptiveMusicalContext.js';
 import {
   applyAiJamTakeToComposition,
   applyCoPerformanceTakeToComposition,
@@ -433,6 +437,8 @@ export const initialAdaptiveScoreState = {
   adaptiveLayerMuteSnapshot: null,
   adaptivePlayback: null,
   adaptivePlaybackError: '',
+  adaptiveMusicalContext: null,
+  adaptiveMusicalContextError: '',
 };
 
 let adaptiveScoreRequestSeq = 0;
@@ -13018,6 +13024,87 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
+  startAdaptiveMusicalContext: async () => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    const revision = get().adaptiveDocumentRevision;
+    if (!projectId || !scoreId || !revision) {
+      set({ adaptiveMusicalContextError: 'adaptive_score_invalid' });
+      return null;
+    }
+    try {
+      const snapshot = await startAdaptiveMusicalContextRequest(
+        projectId,
+        scoreId,
+        lockedContextStartBody(revision),
+      );
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      set({ adaptiveMusicalContext: snapshot, adaptiveMusicalContextError: '' });
+      return snapshot;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({ adaptiveMusicalContextError: error.code || '' });
+      return null;
+    }
+  },
+
+  stopAdaptiveMusicalContext: async () => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    set({ adaptiveMusicalContext: null, adaptiveMusicalContextError: '' });
+    if (!projectId || !scoreId) {
+      return null;
+    }
+    try {
+      await deleteAdaptiveMusicalContext(projectId, scoreId);
+      return null;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({ adaptiveMusicalContextError: error.code || '' });
+      return null;
+    }
+  },
+
+  sendAdaptiveContextSample: async (sample) => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    if (!projectId || !scoreId) {
+      set({ adaptiveMusicalContextError: 'context_not_running' });
+      return null;
+    }
+    try {
+      const snapshot = await sendAdaptiveContextSampleRequest(projectId, scoreId, sample);
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      set({ adaptiveMusicalContext: snapshot, adaptiveMusicalContextError: '' });
+      return snapshot;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({ adaptiveMusicalContextError: error.code || '' });
+      return null;
+    }
+  },
+
+  sendAdaptiveContextSeries: async (values) => {
+    let last = null;
+    for (const value of values) {
+      last = await get().sendAdaptiveContextSample(dangerSample(value));
+      if (!last) {
+        return null;
+      }
+    }
+    return last;
+  },
+
   validateLoadedAdaptiveScore: async () => {
     const projectId = get().currentProjectId;
     const scoreId = get().adaptiveScoreId;
@@ -14838,6 +14925,9 @@ useMusicStore.subscribe((state) => {
   ) {
     deleteAdaptivePlayback(previous.currentProjectId, previous.adaptiveScoreId).catch(() => {
       // leaving the project drops the local clock; a missing session is already quiet
+    });
+    deleteAdaptiveMusicalContext(previous.currentProjectId, previous.adaptiveScoreId).catch(() => {
+      // a missing context session stays quiet, matching playback
     });
   }
 });
