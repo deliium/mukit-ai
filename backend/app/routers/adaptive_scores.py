@@ -8,6 +8,11 @@ import time
 from fastapi import APIRouter, Body, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
+from app.adaptive_musical_context_schemas import (
+    AdaptiveMusicalContextV1,
+    parse_adaptive_context_external,
+    parse_adaptive_context_start,
+)
 from app.adaptive_playback_schemas import (
     AdaptivePlaybackRuntimeV1,
     parse_adaptive_playback_command,
@@ -30,6 +35,12 @@ from app.adaptive_score_schemas import (
     parse_adaptive_score_command,
 )
 from app.routers.collaboration_guard import enforce_current
+from app.services.adaptive_musical_context_service import (
+    get_adaptive_musical_context,
+    sample_adaptive_musical_context,
+    start_adaptive_musical_context,
+    stop_adaptive_musical_context,
+)
 from app.services.adaptive_playback_service import (
     command_adaptive_playback,
     get_adaptive_playback,
@@ -514,4 +525,72 @@ async def preview_project_layer_plan(
     except AdaptiveScoreError as exc:
         _raise(exc)
     raise AssertionError("adaptive layer plan preview")
+
+
+@router.post("/{score_id}/context", response_model=AdaptiveMusicalContextV1)
+async def start_project_musical_context(
+    project_id: str,
+    score_id: str,
+    body: dict = Body(...),
+) -> AdaptiveMusicalContextV1:
+    enforce_current(project_id, "read")
+    try:
+        request = parse_adaptive_context_start(body)
+        return start_adaptive_musical_context(project_id, score_id, request)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive musical context rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    raise AssertionError("adaptive musical context start")
+
+
+@router.get("/{score_id}/context", response_model=AdaptiveMusicalContextV1)
+async def get_project_musical_context(project_id: str, score_id: str) -> Response:
+    enforce_current(project_id, "read")
+    try:
+        snapshot = get_adaptive_musical_context(project_id, score_id)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive musical context rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    if snapshot is None:
+        return Response(status_code=204)
+    return JSONResponse(status_code=200, content=snapshot.model_dump(mode="json"))
+
+
+@router.post("/{score_id}/context/samples", response_model=AdaptiveMusicalContextV1)
+async def sample_project_musical_context(
+    project_id: str,
+    score_id: str,
+    body: dict = Body(...),
+) -> AdaptiveMusicalContextV1:
+    enforce_current(project_id, "read")
+    try:
+        sample = parse_adaptive_context_external(body)
+        return sample_adaptive_musical_context(project_id, score_id, sample)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive musical context rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    raise AssertionError("adaptive musical context sample")
+
+
+@router.delete("/{score_id}/context", status_code=204)
+async def stop_project_musical_context(project_id: str, score_id: str) -> Response:
+    enforce_current(project_id, "read")
+    try:
+        stop_adaptive_musical_context(project_id, score_id)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive musical context rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    return Response(status_code=204)
 
