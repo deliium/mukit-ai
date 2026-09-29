@@ -28,7 +28,7 @@ mukit-ai/
 │   │   ├── plugin_host/     # PLUGIN_PATHS discovery, import guard, catalog, host dispatch
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
-│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents + plugins + collaboration + adaptive_scores HTTP API
+│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + ai_models + ai_agents + plugins + collaboration + adaptive_scores + adaptive_engine HTTP API
 │   │   ├── services/        # Domain + orchestration (incl. composition_critique, adaptive_score_*, adaptive_playback*, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
@@ -148,6 +148,11 @@ mukit-ai/
 | `backend/app/routers/critique.py` | `POST /critique/evaluate` (session-only) |
 | `backend/app/adaptive_score_schemas.py` | `adaptive.score.v1` graph DTOs plus `adaptive.layer.intensity.v1` (references only; no note events) |
 | `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD, commands, validate, transitions, layer intensity, playback, and musical-context start/status/samples/stop |
+| `backend/app/routers/adaptive_engine.py` | External `/adaptive/*` session for one stored score: HTTP commands plus events and status sockets. Does not write the score |
+| `backend/app/adaptive_engine_schemas.py` | `adaptive.engine.session.v1`, command result, ack, and error documents |
+| `backend/app/services/adaptive_engine_service.py` | In-memory engine session. Starts or binds playback and context. Does not write the score |
+| `backend/app/services/adaptive_engine_auth.py` | Bearer-or-loopback compare. No FastAPI import. Never logs the token |
+| `backend/app/services/adaptive_engine_backpressure.py` | Per-session token bucket and one context slot |
 | `backend/app/adaptive_playback_schemas.py` | `adaptive.playback.runtime.v1` snapshot and commands; not stored on the score |
 | `backend/app/services/adaptive_playback.py` | Pure session clock; calls the scheduler and layer map; no SQLite, FastAPI, or LLM |
 | `backend/app/adaptive_runtime_continuation_schemas.py` | `adaptive.runtime.continuation.v1`, context memory, and the session buffer; no events on the snapshot |
@@ -305,6 +310,7 @@ mukit-ai/
 | Adaptive score | `docs/adaptive-score.md` | `adaptive.score.v1` state graph over V2 references; `adaptive.layer.intensity.v1` selects layers; `adaptive.playback.runtime.v1` is a session clock. `ai_agents/` does not import `adaptive_playback.py`, `adaptive_playback_service.py`, `adaptive_playback_runtime.py`, `adaptive_musical_context_schemas`, `adaptive_musical_context_settings`, `adaptive_musical_context`, `adaptive_musical_context_service`, `adaptive_musical_context_runtime`, `adaptive_runtime_continuation_schemas`, `adaptive_runtime_continuation_settings`, `adaptive_runtime_continuation`, `adaptive_runtime_continuation_fallback`, `adaptive_runtime_continuation_service`, or `adaptive_runtime_continuation_runtime` |
 | Adaptive musical context | `docs/adaptive-musical-context.md` | Flat external samples mapped onto a closed context; hysteresis emits existing playback commands |
 | Adaptive runtime continuation | `docs/adaptive-runtime-continuation.md` | Session buffer ahead of playback; the clock does not await the model |
+| Adaptive music engine | `docs/adaptive-music-engine.md` | External `/adaptive/*` session, bearer-or-loopback auth, and context backpressure. `ai_agents/` does not import the engine modules |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |
 | MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
 | Symbolic datasets | `docs/datasets.md` | Offline `DATASET_ROOT` corpus pipeline, provenance, CLI |
