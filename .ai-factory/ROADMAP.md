@@ -60,6 +60,7 @@
 - [x] **V5 Adaptive Score transition engine** — Bar-aligned `adaptive.transition.schedule.v1` timing, realization, and one in-memory pending request per score. The scheduler does not render audio, write the score, or call an LLM. No `composition.v5`
 - [x] **V5 Adaptive Score intensity layers** — Runtime intensity in `0..1` selects synchronized layers on one `adaptive.score.v1` state (`adaptive.layer.intensity.v1`). Fade and exclusive groups stay data. Session mute applies only to `track_range`. The map does not write notes or call an LLM. No `composition.v5`
 - [x] **V5 Adaptive Score playback runtime** — Session clock `adaptive.playback.runtime.v1` advances bar and beat on one `adaptive.score.v1` graph, queues state changes, and applies loops, phrases, stingers, and layer fades through the existing scheduler and layer map. Tone.js only seeks, loops, and ramps session gain. The session stays in memory, so the score row and `composition.v2` notes stay unchanged. An invalid state request leaves transport playing. No `composition.v5`
+- [x] **V5 Runtime musical context** — A flat external sample maps onto a closed `adaptive.musical_context.v1` session. Smoothing and hysteresis emit existing playback commands without writing `adaptive.score.v1` or calling an LLM. No `composition.v5`
 
 ## Completed
 
@@ -121,3 +122,4 @@
 | V5 Adaptive Score transition engine | 2026-09-28 |
 | V5 Adaptive Score intensity layers | 2026-09-28 |
 | V5 Adaptive Score playback runtime | 2026-09-29 |
+| V5 Runtime musical context | 2026-09-29 |
