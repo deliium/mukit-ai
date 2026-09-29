@@ -8,6 +8,11 @@ import time
 from fastapi import APIRouter, Body, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
+from app.adaptive_playback_schemas import (
+    AdaptivePlaybackRuntimeV1,
+    parse_adaptive_playback_command,
+    parse_adaptive_playback_start,
+)
 from app.adaptive_score_schemas import (
     AdaptiveLayerIntensityV1,
     AdaptiveScoreCommandResponse,
@@ -25,6 +30,12 @@ from app.adaptive_score_schemas import (
     parse_adaptive_score_command,
 )
 from app.routers.collaboration_guard import enforce_current
+from app.services.adaptive_playback_service import (
+    command_adaptive_playback,
+    get_adaptive_playback,
+    start_adaptive_playback,
+    stop_adaptive_playback,
+)
 from app.services.adaptive_score_layer_service import (
     preview_adaptive_layer_plan,
     resolve_adaptive_layer_intensity,
@@ -408,6 +419,70 @@ async def cancel_project_transition_request(
         http_status=204,
         started=started,
     )
+    return Response(status_code=204)
+
+
+@router.post("/{score_id}/playback", response_model=AdaptivePlaybackRuntimeV1)
+async def start_project_playback(project_id: str, score_id: str, body: dict = Body(...)) -> AdaptivePlaybackRuntimeV1:
+    enforce_current(project_id, "read")
+    try:
+        request = parse_adaptive_playback_start(body)
+        return start_adaptive_playback(project_id, score_id, request)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive playback rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    raise AssertionError("adaptive playback start")
+
+
+@router.get("/{score_id}/playback", response_model=AdaptivePlaybackRuntimeV1)
+async def get_project_playback(project_id: str, score_id: str) -> Response:
+    enforce_current(project_id, "read")
+    try:
+        snapshot = get_adaptive_playback(project_id, score_id)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive playback rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    if snapshot is None:
+        return Response(status_code=204)
+    return JSONResponse(status_code=200, content=snapshot.model_dump(mode="json"))
+
+
+@router.post("/{score_id}/playback/commands", response_model=AdaptivePlaybackRuntimeV1)
+async def command_project_playback(
+    project_id: str,
+    score_id: str,
+    body: dict = Body(...),
+) -> AdaptivePlaybackRuntimeV1:
+    enforce_current(project_id, "read")
+    try:
+        command = parse_adaptive_playback_command(body)
+        return command_adaptive_playback(project_id, score_id, command)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive playback rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
+    raise AssertionError("adaptive playback command")
+
+
+@router.delete("/{score_id}/playback", status_code=204)
+async def stop_project_playback(project_id: str, score_id: str) -> Response:
+    enforce_current(project_id, "read")
+    try:
+        stop_adaptive_playback(project_id, score_id)
+    except AdaptiveScoreError as exc:
+        logger.debug(
+            "Adaptive playback rejected",
+            extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
+        )
+        _raise(exc)
     return Response(status_code=204)
 
 
