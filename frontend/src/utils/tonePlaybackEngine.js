@@ -63,6 +63,10 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
   let liveScheduledEventIds = [];
   /** @type {Array<{ id: number, when: number }>} */
   let liveScheduledMeta = [];
+  /** Adaptive continuation lookahead owned IDs. Jam never clears this list. */
+  let continuationScheduledEventIds = [];
+  /** @type {Array<{ id: number, when: number }>} */
+  let continuationScheduledMeta = [];
   let endEventId = null;
   let activeNotes = new Map();
   let currentSchedule = null;
@@ -448,6 +452,48 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
 
   function getLiveScheduledEventCount() {
     return liveScheduledEventIds.length;
+  }
+
+  function clearContinuationScheduled() {
+    const toClear = continuationScheduledMeta;
+    toClear.forEach((entry) => {
+      try {
+        if (typeof Tone.Transport.clear === 'function') {
+          Tone.Transport.clear(entry.id);
+        } else if (typeof Tone.Transport.cancel === 'function') {
+          Tone.Transport.cancel(entry.id);
+        }
+      } catch (error) {
+        log('warn', 'Failed to clear continuation transport event', {
+          message: error?.message,
+        });
+      }
+    });
+    continuationScheduledMeta = [];
+    continuationScheduledEventIds = [];
+    return toClear.length;
+  }
+
+  function scheduleContinuationAt(callback, whenSeconds) {
+    if (disposed || typeof callback !== 'function') {
+      return null;
+    }
+    const when = Math.max(0, Number(whenSeconds) || 0);
+    try {
+      const eventId = Tone.Transport.schedule((time) => {
+        try {
+          callback(time);
+        } catch (error) {
+          log('error', 'Continuation schedule callback failed', { message: error?.message });
+        }
+      }, when);
+      continuationScheduledEventIds.push(eventId);
+      continuationScheduledMeta.push({ id: eventId, when });
+      return eventId;
+    } catch (error) {
+      log('error', 'Continuation schedule failed', { message: error?.message });
+      return null;
+    }
   }
 
   function clearScheduledEvents() {
@@ -1266,6 +1312,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     releaseActiveNotes(Tone.now?.() ?? 0);
     const cleared = clearScheduledEvents();
     const clearedLive = clearLiveScheduledEvents();
+    clearContinuationScheduled();
     try {
       Tone.Transport.stop();
     } catch (error) {
@@ -1510,6 +1557,8 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     getLiveScheduledEventCount,
     scheduleLiveAt,
     clearLiveScheduledEvents,
+    scheduleContinuationAt,
+    clearContinuationScheduled,
     getTrackNodeCount,
     getEndPositionSeconds,
     getTrackEffectiveGain,

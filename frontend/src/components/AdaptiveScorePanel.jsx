@@ -4,6 +4,7 @@ import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
 import { formatAdaptiveLayerStatus } from '../utils/adaptiveLayerIntensity.js';
 import { layoutAdaptiveScoreGraph } from '../utils/adaptiveScoreGraph.js';
+import AdaptiveContinuationPanel from './AdaptiveContinuationPanel.jsx';
 import AdaptiveMusicalContextPanel from './AdaptiveMusicalContextPanel.jsx';
 
 const Panel = styled.section`
@@ -348,6 +349,7 @@ const AdaptiveScorePanel = () => {
         </Row>
         {playbackError ? <p>{playbackError}</p> : null}
       </section>
+      <AdaptiveContinuationPanel />
       <AdaptiveMusicalContextPanel />
       <section>
         <strong>Runtime intensity</strong>

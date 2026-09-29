@@ -177,9 +177,9 @@ The playback runtime is a session clock for one `adaptive.score.v1` graph. Autho
 
 The locked Exploration → Suspense → Combat → Victory simulation uses these boundary ticks: `7680` (Suspense), `15360` (Combat phrase), `17280` (Combat), `23040` (Victory stinger), and `24960` (stinger cleared). The same script returns the same ticks. `projects.composition_json`, the score row, and `document_revision` stay unchanged.
 
-`ai_agents/` does not import `adaptive_playback.py`, `adaptive_playback_service.py`, `adaptive_playback_runtime.py`, `adaptive_musical_context_schemas`, `adaptive_musical_context_settings`, `adaptive_musical_context`, `adaptive_musical_context_service`, or `adaptive_musical_context_runtime`.
+`ai_agents/` does not import `adaptive_playback.py`, `adaptive_playback_service.py`, `adaptive_playback_runtime.py`, `adaptive_musical_context_schemas`, `adaptive_musical_context_settings`, `adaptive_musical_context`, `adaptive_musical_context_service`, `adaptive_musical_context_runtime`, `adaptive_runtime_continuation_schemas`, `adaptive_runtime_continuation_settings`, `adaptive_runtime_continuation`, `adaptive_runtime_continuation_fallback`, `adaptive_runtime_continuation_service`, or `adaptive_runtime_continuation_runtime`.
 
-A musical-context session can drive that clock from a flat external sample. See [adaptive-musical-context.md](adaptive-musical-context.md).
+A musical-context session can drive that clock from a flat external sample. See [adaptive-musical-context.md](adaptive-musical-context.md). A continuation session fills a bar window ahead of that clock. See [adaptive-runtime-continuation.md](adaptive-runtime-continuation.md). The playback clock does not await it.
 
 ## HTTP
 

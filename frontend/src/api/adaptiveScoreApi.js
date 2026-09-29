@@ -20,6 +20,9 @@ const PATHS = Object.freeze({
   playbackCommand: '/projects/{project_id}/adaptive-scores/{score_id}/playback/commands',
   context: '/projects/{project_id}/adaptive-scores/{score_id}/context',
   contextSample: '/projects/{project_id}/adaptive-scores/{score_id}/context/samples',
+  continuation: '/projects/{project_id}/adaptive-scores/{score_id}/continuation',
+  continuationMaintain: '/projects/{project_id}/adaptive-scores/{score_id}/continuation/maintain',
+  continuationBuffer: '/projects/{project_id}/adaptive-scores/{score_id}/continuation/buffer',
 });
 
 function projectScoresPath(projectId) {
@@ -125,12 +128,36 @@ export function deleteAdaptivePlayback(projectId, scoreId) {
   return request('delete', PATHS.playback, `${scorePath(projectId, scoreId)}/playback`);
 }
 
+export function deleteAdaptiveMusicalContext(projectId, scoreId) {
+  return request('delete', PATHS.context, `${scorePath(projectId, scoreId)}/context`);
+}
+
 export function startAdaptiveMusicalContext(projectId, scoreId, payload) {
   return request('post', PATHS.context, `${scorePath(projectId, scoreId)}/context`, payload);
 }
 
-export function deleteAdaptiveMusicalContext(projectId, scoreId) {
-  return request('delete', PATHS.context, `${scorePath(projectId, scoreId)}/context`);
+export function startAdaptiveContinuation(projectId, scoreId, payload) {
+  return request('post', PATHS.continuation, `${scorePath(projectId, scoreId)}/continuation`, payload);
+}
+
+export function maintainAdaptiveContinuation(projectId, scoreId) {
+  return request(
+    'post',
+    PATHS.continuationMaintain,
+    `${scorePath(projectId, scoreId)}/continuation/maintain`,
+  );
+}
+
+export function getAdaptiveContinuationBuffer(projectId, scoreId) {
+  return request(
+    'get',
+    PATHS.continuationBuffer,
+    `${scorePath(projectId, scoreId)}/continuation/buffer`,
+  );
+}
+
+export function deleteAdaptiveContinuation(projectId, scoreId) {
+  return request('delete', PATHS.continuation, `${scorePath(projectId, scoreId)}/continuation`);
 }
 
 export function sendAdaptiveContextSample(projectId, scoreId, sample) {

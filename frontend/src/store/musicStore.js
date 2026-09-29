@@ -6,6 +6,8 @@ import {
   createAdaptiveScore,
   deleteAdaptivePlayback,
   deleteAdaptiveMusicalContext,
+  deleteAdaptiveContinuation,
+  getAdaptiveContinuationBuffer,
   getAdaptiveScore,
   getCurrentAdaptiveTransition,
   listAdaptiveScores,
@@ -14,6 +16,8 @@ import {
   scheduleAdaptiveTransition,
   startAdaptivePlayback as startAdaptivePlaybackRequest,
   startAdaptiveMusicalContext as startAdaptiveMusicalContextRequest,
+  startAdaptiveContinuation as startAdaptiveContinuationRequest,
+  maintainAdaptiveContinuation as maintainAdaptiveContinuationRequest,
   sendAdaptiveContextSample as sendAdaptiveContextSampleRequest,
   validateAdaptiveScore,
 } from '../api/adaptiveScoreApi.js';
@@ -128,6 +132,7 @@ import {
 import { extractLivePerformanceFeatures } from '../utils/livePerformanceFeatures.js';
 import { getLivePlaybackEngine, requireLivePlaybackEngine } from '../utils/livePlaybackEngineAccess.js';
 import { applyAdaptivePlaybackInstructions, noteAdaptivePlayback } from '../utils/adaptivePlayback.js';
+import { continuationEventsToSchedule } from '../utils/adaptiveContinuation.js';
 import { dangerSample, lockedContextStartBody } from '../utils/adaptiveMusicalContext.js';
 import {
   applyAiJamTakeToComposition,
@@ -439,6 +444,9 @@ export const initialAdaptiveScoreState = {
   adaptivePlaybackError: '',
   adaptiveMusicalContext: null,
   adaptiveMusicalContextError: '',
+  adaptiveContinuation: null,
+  adaptiveContinuationBuffer: null,
+  adaptiveContinuationError: '',
 };
 
 let adaptiveScoreRequestSeq = 0;
@@ -13003,25 +13011,113 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
+  fillAdaptiveContinuation: async () => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    const revision = get().adaptiveDocumentRevision;
+    if (!projectId || !scoreId || !revision) {
+      set({ adaptiveContinuationError: 'adaptive_score_invalid' });
+      return null;
+    }
+    try {
+      if (!get().adaptiveContinuation?.continuation_id) {
+        const started = await startAdaptiveContinuationRequest(projectId, scoreId, {
+          expected_document_revision: revision,
+          mode: 'continuation',
+        });
+        if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+          return null;
+        }
+        set({ adaptiveContinuation: started, adaptiveContinuationError: '' });
+      }
+      return await get().maintainAdaptiveContinuation();
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({ adaptiveContinuationError: error.code || 'adaptive_score_invalid' });
+      return null;
+    }
+  },
+
+  maintainAdaptiveContinuation: async () => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    if (!projectId || !scoreId || !get().adaptiveContinuation?.continuation_id) {
+      set({ adaptiveContinuationError: 'continuation_not_running' });
+      return null;
+    }
+    try {
+      const snapshot = await maintainAdaptiveContinuationRequest(projectId, scoreId);
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      let buffer = null;
+      if (snapshot?.audible) {
+        buffer = await getAdaptiveContinuationBuffer(projectId, scoreId);
+      }
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      const engine = getLivePlaybackEngine();
+      const events = continuationEventsToSchedule(
+        snapshot,
+        buffer,
+        get().adaptivePlayback?.position_tick ?? 0,
+      );
+      engine?.clearContinuationScheduled?.();
+      events.forEach((event) => {
+        const when = engine?.secondsBetweenTicks?.(0, event.start_tick) ?? 0;
+        try {
+          // Records the ahead tick. Does not attack a synth.
+          engine?.scheduleContinuationAt?.(() => {}, when);
+        } catch {
+          // A schedule throw leaves the playback loop in place.
+        }
+      });
+      set({
+        adaptiveContinuation: snapshot,
+        adaptiveContinuationBuffer: buffer,
+        adaptiveContinuationError: '',
+      });
+      return snapshot;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({ adaptiveContinuationError: error.code || 'adaptive_score_invalid' });
+      return null;
+    }
+  },
+
   stopAdaptivePlayback: async () => {
     const projectId = get().currentProjectId;
     const scoreId = get().adaptiveScoreId;
     stopAdaptiveObserveLoop();
     releaseAdaptivePlaybackEngine();
-    set({ adaptivePlayback: null, adaptivePlaybackError: '' });
+    getLivePlaybackEngine()?.clearContinuationScheduled?.();
+    set({
+      adaptivePlayback: null,
+      adaptivePlaybackError: '',
+      adaptiveContinuation: null,
+      adaptiveContinuationBuffer: null,
+    });
     if (!projectId || !scoreId) {
       return null;
     }
     try {
       await deleteAdaptivePlayback(projectId, scoreId);
-      return null;
     } catch (error) {
-      if (get().currentProjectId !== projectId) {
-        return null;
+      if (get().currentProjectId === projectId) {
+        set({ adaptivePlaybackError: error.message || 'Adaptive playback failed' });
       }
-      set({ adaptivePlaybackError: error.message || 'Adaptive playback failed' });
-      return null;
     }
+    try {
+      await deleteAdaptiveContinuation(projectId, scoreId);
+    } catch {
+      // a missing continuation session stays quiet
+    }
+    return null;
   },
 
   startAdaptiveMusicalContext: async () => {
@@ -14813,7 +14909,12 @@ function acceptAdaptivePlayback(set, snapshot) {
   if (!snapshot) {
     return;
   }
+  const previousStateId = useMusicStore.getState().adaptivePlayback?.runtime_state_id;
   const engine = getLivePlaybackEngine();
+  if (previousStateId && snapshot.runtime_state_id !== previousStateId) {
+    engine?.clearContinuationScheduled?.();
+    useMusicStore.setState({ adaptiveContinuationBuffer: null });
+  }
   if (engine) {
     adaptivePlaybackMemory = applyAdaptivePlaybackInstructions(
       engine,
@@ -14928,6 +15029,9 @@ useMusicStore.subscribe((state) => {
     });
     deleteAdaptiveMusicalContext(previous.currentProjectId, previous.adaptiveScoreId).catch(() => {
       // a missing context session stays quiet, matching playback
+    });
+    deleteAdaptiveContinuation(previous.currentProjectId, previous.adaptiveScoreId).catch(() => {
+      // a missing continuation session stays quiet
     });
   }
 });

@@ -484,3 +484,100 @@ test('context sample does not select a card or post playback commands', async ()
     restore();
   }
 });
+
+function continuationSnapshot(overrides = {}) {
+  return {
+    schema_version: 'adaptive.runtime.continuation.v1',
+    continuation_id: 'arcn_0123abcd',
+    job_id: 'arcj_0123abcd',
+    mode: 'continuation',
+    anchor_bar: 1,
+    reserved_start_bar: 1,
+    reserved_end_bar: 5,
+    target_start_bar: 6,
+    target_end_bar: 13,
+    deadline_tick: 9600,
+    fallback_kind: 'reuse_loop',
+    source: 'fallback',
+    job_status: 'pending',
+    applicable: true,
+    audible: false,
+    runtime_state_id: 'state-exploration',
+    intensity: 0.2,
+    context: {
+      schema_version: 'adaptive.runtime.context.v1',
+      theme_ids: [],
+      harmony_tail: null,
+      harmony_chord_count: 0,
+      recent_start_bar: 1,
+      recent_end_bar: 1,
+      repetition_count: 0,
+      energy: [0.2],
+    },
+    warnings: [],
+    telemetry: {
+      arm_count: 1,
+      model_apply_count: 0,
+      late_discard_count: 0,
+      failure_count: 0,
+      fallback_count: 1,
+    },
+    document_revision: 2,
+    ...overrides,
+  };
+}
+
+test('a rejected maintain leaves playback playing', async () => {
+  seedScore();
+  useMusicStore.setState({
+    adaptivePlayback: playbackSnapshot(),
+    adaptiveContinuation: continuationSnapshot(),
+  });
+  const restore = installAxiosStub(async () => {
+    const error = new Error('late');
+    error.response = {
+      status: 404,
+      data: { detail: { code: 'continuation_not_running', message: 'not running' } },
+    };
+    throw error;
+  });
+  try {
+    await useMusicStore.getState().maintainAdaptiveContinuation();
+    const state = useMusicStore.getState();
+    assert.equal(state.adaptivePlayback.transport, 'playing');
+    assert.equal(state.adaptiveContinuationError, 'continuation_not_running');
+  } finally {
+    restore();
+    useMusicStore.setState({ adaptivePlayback: null, adaptiveContinuation: null, adaptiveContinuationError: '' });
+  }
+});
+
+test('a repeated maintain at the same bar keeps the job id', async () => {
+  seedScore();
+  useMusicStore.setState({
+    adaptivePlayback: playbackSnapshot(),
+    adaptiveContinuation: continuationSnapshot({ job_id: null, job_status: 'idle' }),
+  });
+  let maintains = 0;
+  const restore = installAxiosStub(async (config) => {
+    if (String(config.url).endsWith('/continuation') && config.method === 'post') {
+      return { status: 200, data: continuationSnapshot({ job_id: null, job_status: 'idle' }) };
+    }
+    if (String(config.url).endsWith('/continuation/maintain')) {
+      maintains += 1;
+      return { status: 200, data: continuationSnapshot() };
+    }
+    return { status: 204, data: null };
+  });
+  try {
+    const first = await useMusicStore.getState().maintainAdaptiveContinuation();
+    const second = await useMusicStore.getState().maintainAdaptiveContinuation();
+    assert.equal(maintains, 2);
+    assert.equal(first.job_id, 'arcj_0123abcd');
+    assert.equal(second.job_id, first.job_id);
+    assert.equal(useMusicStore.getState().adaptivePlayback.transport, 'playing');
+  } finally {
+    restore();
+    useMusicStore.setState({ adaptivePlayback: null, adaptiveContinuation: null });
+  }
+});
