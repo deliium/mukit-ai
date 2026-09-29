@@ -16,6 +16,8 @@ const PATHS = Object.freeze({
   cancel: '/projects/{project_id}/adaptive-scores/{score_id}/transition-requests/{request_id}',
   intensity: '/projects/{project_id}/adaptive-scores/{score_id}/layer-intensity',
   preview: '/projects/{project_id}/adaptive-scores/{score_id}/layer-plans/preview',
+  playback: '/projects/{project_id}/adaptive-scores/{score_id}/playback',
+  playbackCommand: '/projects/{project_id}/adaptive-scores/{score_id}/playback/commands',
 });
 
 function projectScoresPath(projectId) {
@@ -98,6 +100,27 @@ export function commandAdaptiveScore(projectId, scoreId, command) {
 
 export function validateAdaptiveScore(projectId, scoreId) {
   return request('post', PATHS.validate, `${scorePath(projectId, scoreId)}/validate`);
+}
+
+export function startAdaptivePlayback(projectId, scoreId, payload) {
+  return request('post', PATHS.playback, `${scorePath(projectId, scoreId)}/playback`, payload);
+}
+
+export function getAdaptivePlayback(projectId, scoreId) {
+  return request('get', PATHS.playback, `${scorePath(projectId, scoreId)}/playback`);
+}
+
+export function commandAdaptivePlayback(projectId, scoreId, command) {
+  return request(
+    'post',
+    PATHS.playbackCommand,
+    `${scorePath(projectId, scoreId)}/playback/commands`,
+    command,
+  );
+}
+
+export function deleteAdaptivePlayback(projectId, scoreId) {
+  return request('delete', PATHS.playback, `${scorePath(projectId, scoreId)}/playback`);
 }
 
 function raiseAdaptiveError(error, pathTemplate) {

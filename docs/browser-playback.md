@@ -21,6 +21,10 @@ Only `tracks[].events[]` are scheduled. Controllers, sustain, dynamics, and temp
 
 Mutual-exclusive audition sources (`working` / development / arrangement / version / AI preview) share one transport owner. Switching source or audible revision stops playback.
 
+## Adaptive playback
+
+Adaptive playback is session control of the working transport (seek, loop, and session gain). The loop instruction is applied before the seek so a cut at the loop end is not clamped back into the loop. It does not add a playback source kind. FluidSynth export is unchanged.
+
 ## Instrument mapping and fallback
 
 1. Resolve a browser profile from instrument name → GM program → role.

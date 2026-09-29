@@ -4,7 +4,9 @@ An **adaptive score** describes non-linear music for a project: states, variants
 
 Product generation for this surface is V5. The document schema is `adaptive.score.v1`. There is no `composition.v5`.
 
-Playback switching is not a Tone.js runtime. The scheduler below returns a bar-aligned boundary and a latency estimate. It does not render audio, does not write the score, and does not call an LLM. The Adaptive tab is an authoring graph: it draws states and transitions and selects a current state. That selection is not a playback cursor. A pending schedule is a different object, labeled **Scheduled transition**.
+The transition scheduler returns a bar-aligned boundary and a latency estimate. It does not render audio, does not write the score, and does not call an LLM. The Adaptive tab is an authoring graph: it draws states and transitions and selects a current state. That selection is not a playback cursor. A pending schedule is a different object, labeled **Scheduled transition**.
+
+A separate session clock can play one loaded graph continuously. It calls the same scheduler and layer map, then tells the working Tone transport to seek, loop, and fade. Restart drops the session. The score row is unchanged.
 
 ## Authority
 
@@ -165,7 +167,17 @@ Messages are at most 200 characters and name the entity id and the numbers that 
 
 The workspace tab id is `adaptive`. It loads the default score, or offers **New adaptive score** for an empty draft named `Exploration cue`. State cards, transition edges, a material summary, and the finding list come from the saved document. The header `Current state:` is the selected card, seeded from `initial_state_id`. Selecting a card does not call the server and does not edit `composition.v2`. The initial state has a separate badge.
 
-**Runtime intensity** is a separate control. Releasing the slider, or pressing **Map layers**, posts `layer-intensity` for the selected state. Rows show id, role, window, active, audible, reason, and fade end tick. **Session mute** is enabled only when every row is `track_range`. A named track stays unmuted when any active row names it, and is muted when only inactive rows name it. Tracks the response does not name stay as they were. **Restore mute** writes the remembered flags back. Session mute does not rewrite note events. A plan disclosure can preview proposals and Apply them as `create_layer` commands, threading `document_revision` from each success.
+**Playback** sits beside that graph. Play starts a live session. The runtime state, `bar:beat`, transport, queue depth, and pending boundary come from the playback snapshot. Request buttons queue a state on that session. They do not move the selected card. While the session transport is `playing`, the intensity slider calls `set_intensity`. When playback is stopped, releasing the slider, or pressing **Map layers**, still posts `layer-intensity` for the selected state.
+
+**Runtime intensity** is a separate control. Rows show id, role, window, active, audible, reason, and fade end tick. **Session mute** is enabled only when every row is `track_range`. A named track stays unmuted when any active row names it, and is muted when only inactive rows name it. Tracks the response does not name stay as they were. **Restore mute** writes the remembered flags back. Session mute does not rewrite note events. A plan disclosure can preview proposals and Apply them as `create_layer` commands, threading `document_revision` from each success.
+
+## Playback runtime
+
+The playback runtime is a session clock for one `adaptive.score.v1` graph. Authoring current state stays the selected card. The Scheduled transition slot stays the one in-memory authoring request. Neither field is the playhead. `runtime_state_id` on the snapshot is the clock's state. The status schema is `adaptive.playback.runtime.v1` and is not stored in `body_json`. An invalid state request returns `200`, keeps `transport` as `playing`, and sets `instructions.stop` to false. Restart drops the session.
+
+The locked Exploration → Suspense → Combat → Victory simulation uses these boundary ticks: `7680` (Suspense), `15360` (Combat phrase), `17280` (Combat), `23040` (Victory stinger), and `24960` (stinger cleared). The same script returns the same ticks. `projects.composition_json`, the score row, and `document_revision` stay unchanged.
+
+`ai_agents/` does not import `adaptive_playback.py`, `adaptive_playback_service.py`, or `adaptive_playback_runtime.py`.
 
 ## HTTP
 
@@ -185,10 +197,14 @@ Prefix: `/projects/{project_id}/adaptive-scores`.
 | `DELETE` | `/{score_id}/transition-requests/{request_id}` | Cancel the current id. `204` with no body |
 | `POST` | `/{score_id}/layer-intensity` | Read-only `adaptive.layer.intensity.v1`. Does not write the score or the composition |
 | `POST` | `/{score_id}/layer-plans/preview` | Same response for a proposal list. Assigns `preview-00` ids and does not store them |
+| `POST` | `/{score_id}/playback` | Start. Body: `expected_document_revision`, `mode` (`simulation` or `live`). Returns `adaptive.playback.runtime.v1`. Read permission. Does not write the score |
+| `GET` | `/{score_id}/playback` | Current snapshot, or `204` when no session is running |
+| `POST` | `/{score_id}/playback/commands` | One command: `advance`, `observe`, `request_state`, `set_intensity`, `set_flags`, or `stop`. A missing session is `404 playback_not_running`. A schema failure is `422` and does not move the playhead |
+| `DELETE` | `/{score_id}/playback` | Stop. `204` when the session was running or already absent |
 
 Unknown project: `404 project_not_found`. Unknown score: `404 adaptive_score_not_found`. CAS mismatch: `409 adaptive_score_conflict`. One default score per project; setting `is_default` clears the previous default in the same transaction.
 
-Collaboration uses `read` for GET, validate, transition schedule/current/cancel, layer intensity, and layer-plan preview, and `write_score` for POST, PUT, DELETE, and commands. When `COLLABORATION_ENABLED` is off, those routes stay open.
+Collaboration uses `read` for GET, validate, transition schedule/current/cancel, layer intensity, layer-plan preview, and playback start/status/commands/stop, and `write_score` for POST, PUT, DELETE, and commands. When `COLLABORATION_ENABLED` is off, those routes stay open.
 
 Deleting a project cascades `adaptive_scores` via the foreign key on `project_id`.
 

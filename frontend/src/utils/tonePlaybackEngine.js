@@ -268,6 +268,39 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     setMasterGainImmediate(value);
   }
 
+  const playbackGainMemory = new Map();
+
+  function restorePlaybackGains() {
+    playbackGainMemory.forEach((value, trackId) => {
+      const node = trackNodes.get(trackId);
+      if (node?.uiGain?.gain) {
+        rampParam(node.uiGain.gain, value, 0);
+      }
+    });
+    playbackGainMemory.clear();
+  }
+
+  function rampTrackUiGain(trackId, targetGain, durationSeconds = 0) {
+    const node = trackNodes.get(String(trackId));
+    if (!node?.uiGain?.gain) {
+      return false;
+    }
+    const key = String(trackId);
+    if (!playbackGainMemory.has(key)) {
+      playbackGainMemory.set(key, Number(node.uiGain.gain.value) || 0);
+    }
+    const numeric = Number(targetGain);
+    const gain = Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric)) : 0;
+    rampParam(node.uiGain.gain, gain, Math.max(0, Number(durationSeconds) || 0));
+    return true;
+  }
+
+  function secondsBetweenTicks(startTick, endTick) {
+    const start = Number(resolveSecondsFromTick(startTick)) || 0;
+    const end = Number(resolveSecondsFromTick(endTick)) || 0;
+    return Math.max(0, end - start);
+  }
+
   function rampParam(param, value, durationSeconds = 0.03) {
     if (!param) {
       return;
@@ -1431,6 +1464,7 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
   }
 
   function dispose() {
+    restorePlaybackGains();
     stop({ seekToStart: true });
     currentLoop = null;
     currentLoopSeconds = null;
@@ -1479,6 +1513,10 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     getTrackNodeCount,
     getEndPositionSeconds,
     getTrackEffectiveGain,
+    rampTrackUiGain,
+    rampMasterGain,
+    secondsBetweenTicks,
+    restorePlaybackGains,
     getTrackSendGain,
     getSessionId,
     getOperationEpoch,

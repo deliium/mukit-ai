@@ -173,6 +173,12 @@ const AdaptiveScorePanel = () => {
   const applyLayerPlan = useMusicStore((state) => state.applyAdaptiveLayerPlan);
   const applySessionMute = useMusicStore((state) => state.applyAdaptiveLayerSessionMute);
   const restoreSessionMute = useMusicStore((state) => state.restoreAdaptiveLayerMute);
+  const playback = useMusicStore((state) => state.adaptivePlayback);
+  const playbackError = useMusicStore((state) => state.adaptivePlaybackError);
+  const startAdaptivePlayback = useMusicStore((state) => state.startAdaptivePlayback);
+  const stopAdaptivePlayback = useMusicStore((state) => state.stopAdaptivePlayback);
+  const requestAdaptivePlaybackState = useMusicStore((state) => state.requestAdaptivePlaybackState);
+  const setAdaptivePlaybackIntensity = useMusicStore((state) => state.setAdaptivePlaybackIntensity);
 
   const [stateName, setStateName] = useState('');
   const [materialKind, setMaterialKind] = useState('section');
@@ -238,6 +244,15 @@ const AdaptiveScorePanel = () => {
 
   const run = (op, payload) => runAdaptiveScoreCommand(op, payload);
 
+  const commitRuntimeIntensity = (value) => {
+    const playing = useMusicStore.getState().adaptivePlayback?.transport === 'playing';
+    if (playing) {
+      setAdaptivePlaybackIntensity(Number(value));
+      return;
+    }
+    mapAdaptiveLayers(Number(value), parsedPlayhead(playheadTick));
+  };
+
   const onValidate = async () => {
     const detail = await validateLoadedAdaptiveScore();
     const nextFindings = detail?.findings || useMusicStore.getState().adaptiveFindings || [];
@@ -271,6 +286,9 @@ const AdaptiveScorePanel = () => {
         <Button type="button" data-testid="adaptive-new-score" onClick={() => createEmptyAdaptiveScore()}>
           New adaptive score
         </Button>
+        <Button type="button" data-testid="adaptive-playback-play" disabled>
+          Play
+        </Button>
         {commandError ? <p>{commandError}</p> : null}
       </Panel>
     );
@@ -288,6 +306,47 @@ const AdaptiveScorePanel = () => {
           {score.variants?.length || 0} variants, {score.layers?.length || 0} layers, {score.stingers?.length || 0} stingers
         </span>
       </Header>
+      <section data-testid="adaptive-playback">
+        <strong>Playback</strong>
+        <Row>
+          <Button
+            type="button"
+            data-testid="adaptive-playback-play"
+            disabled={!score}
+            onClick={() => startAdaptivePlayback('live')}
+          >
+            Play
+          </Button>
+          <Secondary type="button" data-testid="adaptive-playback-stop" onClick={() => stopAdaptivePlayback()}>
+            Stop
+          </Secondary>
+        </Row>
+        <span data-testid="adaptive-playback-runtime-state">
+          Runtime state: {states.find((state) => state.id === playback?.runtime_state_id)?.name || 'None'}
+        </span>
+        <span data-testid="adaptive-playback-position">
+          {playback ? `${playback.bar}:${playback.beat}` : '—'}
+        </span>
+        <span data-testid="adaptive-playback-transport">{playback?.transport || 'stopped'}</span>
+        <span data-testid="adaptive-playback-queue">{playback?.queue?.length || 0}</span>
+        <span data-testid="adaptive-playback-pending">
+          {playback?.pending_transition ? `boundary ${playback.pending_transition.boundary_tick}` : 'boundary none'}
+        </span>
+        <Row>
+          {states.map((state) => (
+            <Secondary
+              key={state.id}
+              type="button"
+              data-testid={`adaptive-playback-request-${state.id}`}
+              disabled={!playback || playback.transport === 'stopped'}
+              onClick={() => requestAdaptivePlaybackState(state.id)}
+            >
+              {state.name}
+            </Secondary>
+          ))}
+        </Row>
+        {playbackError ? <p>{playbackError}</p> : null}
+      </section>
       <section>
         <strong>Runtime intensity</strong>
         <Row>
@@ -303,8 +362,8 @@ const AdaptiveScorePanel = () => {
               setRuntimeIntensity(event.target.value);
               useMusicStore.setState({ adaptiveLayerIntensity: null });
             }}
-            onMouseUp={(event) => mapAdaptiveLayers(Number(event.currentTarget.value), parsedPlayhead(playheadTick))}
-            onKeyUp={(event) => mapAdaptiveLayers(Number(event.currentTarget.value), parsedPlayhead(playheadTick))}
+            onMouseUp={(event) => commitRuntimeIntensity(event.currentTarget.value)}
+            onKeyUp={(event) => commitRuntimeIntensity(event.currentTarget.value)}
           />
           <Control
             aria-label="Playhead tick"

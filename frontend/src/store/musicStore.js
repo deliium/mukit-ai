@@ -1,14 +1,17 @@
 import { create } from 'zustand';
 import {
   cancelAdaptiveTransition,
+  commandAdaptivePlayback,
   commandAdaptiveScore,
   createAdaptiveScore,
+  deleteAdaptivePlayback,
   getAdaptiveScore,
   getCurrentAdaptiveTransition,
   listAdaptiveScores,
   mapAdaptiveLayerIntensity,
   previewAdaptiveLayerPlan,
   scheduleAdaptiveTransition,
+  startAdaptivePlayback as startAdaptivePlaybackRequest,
   validateAdaptiveScore,
 } from '../api/adaptiveScoreApi.js';
 import {
@@ -120,7 +123,8 @@ import {
   updateHarmonyBelief,
 } from '../utils/liveHarmonyBelief.js';
 import { extractLivePerformanceFeatures } from '../utils/livePerformanceFeatures.js';
-import { requireLivePlaybackEngine } from '../utils/livePlaybackEngineAccess.js';
+import { getLivePlaybackEngine, requireLivePlaybackEngine } from '../utils/livePlaybackEngineAccess.js';
+import { applyAdaptivePlaybackInstructions, noteAdaptivePlayback } from '../utils/adaptivePlayback.js';
 import {
   applyAiJamTakeToComposition,
   applyCoPerformanceTakeToComposition,
@@ -427,9 +431,15 @@ export const initialAdaptiveScoreState = {
   adaptiveLayerIntensityError: '',
   adaptiveLayerPlanPreview: null,
   adaptiveLayerMuteSnapshot: null,
+  adaptivePlayback: null,
+  adaptivePlaybackError: '',
 };
 
 let adaptiveScoreRequestSeq = 0;
+let adaptivePlaybackMemory = null;
+let adaptiveObserveTimer = null;
+let adaptiveObserveInFlight = false;
+let adaptivePendingSeekTick = null;
 
 const initialReharmonizePreviewState = {
   reharmonizeStatus: 'idle',
@@ -12908,6 +12918,106 @@ export const useMusicStore = create((set, get) => ({
     return null;
   },
 
+  startAdaptivePlayback: async (mode = 'live') => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    const revision = get().adaptiveDocumentRevision;
+    if (!projectId || !scoreId || !revision) {
+      set({ adaptivePlaybackError: 'No adaptive score is loaded' });
+      return null;
+    }
+    stopAdaptiveObserveLoop();
+    try {
+      const snapshot = await startAdaptivePlaybackRequest(projectId, scoreId, {
+        expected_document_revision: revision,
+        mode,
+      });
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      if (mode === 'live') {
+        const engine = getLivePlaybackEngine();
+        if (engine && engine.getTransportState() !== 'started') {
+          try {
+            await engine.start();
+          } catch (error) {
+            set({ adaptivePlaybackError: error.message || 'Playback start failed' });
+          }
+        }
+      }
+      acceptAdaptivePlayback(set, snapshot);
+      if (mode === 'live' && snapshot?.mode === 'live' && snapshot.transport === 'playing') {
+        startAdaptiveObserveLoop(set, get);
+      }
+      return snapshot;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({ adaptivePlaybackError: error.message || 'Adaptive playback failed' });
+      return null;
+    }
+  },
+
+  requestAdaptivePlaybackState: async (toStateId) => get().commandAdaptivePlayback({
+    op: 'request_state',
+    to_state_id: toStateId,
+  }),
+
+  setAdaptivePlaybackIntensity: async (intensity) => get().commandAdaptivePlayback({
+    op: 'set_intensity',
+    intensity,
+  }),
+
+  advanceAdaptivePlayback: async (advanceTicks) => get().commandAdaptivePlayback({
+    op: 'advance',
+    advance_ticks: advanceTicks,
+  }),
+
+  commandAdaptivePlayback: async (command) => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    if (!projectId || !scoreId || !get().adaptivePlayback) {
+      set({ adaptivePlaybackError: 'Adaptive playback is not running' });
+      return null;
+    }
+    try {
+      const snapshot = await commandAdaptivePlayback(projectId, scoreId, command);
+      if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
+        return null;
+      }
+      acceptAdaptivePlayback(set, snapshot);
+      return snapshot;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({ adaptivePlaybackError: error.message || 'Adaptive playback failed' });
+      return null;
+    }
+  },
+
+  stopAdaptivePlayback: async () => {
+    const projectId = get().currentProjectId;
+    const scoreId = get().adaptiveScoreId;
+    stopAdaptiveObserveLoop();
+    releaseAdaptivePlaybackEngine();
+    set({ adaptivePlayback: null, adaptivePlaybackError: '' });
+    if (!projectId || !scoreId) {
+      return null;
+    }
+    try {
+      await deleteAdaptivePlayback(projectId, scoreId);
+      return null;
+    } catch (error) {
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({ adaptivePlaybackError: error.message || 'Adaptive playback failed' });
+      return null;
+    }
+  },
+
   validateLoadedAdaptiveScore: async () => {
     const projectId = get().currentProjectId;
     const scoreId = get().adaptiveScoreId;
@@ -14597,3 +14707,137 @@ async function runAnalysisRequest(set, get, { force = false, reason = 'request' 
     return null;
   }
 }
+
+function adaptivePlaybackMixer(engine) {
+  return {
+    getTrackGain(trackId) {
+      return engine.getTrackEffectiveGain?.(trackId);
+    },
+    rampTrack(trackId, target, seconds) {
+      engine.rampTrackUiGain?.(trackId, target, seconds);
+    },
+    rampMaster(target, seconds) {
+      engine.rampMasterGain?.(target, seconds);
+    },
+  };
+}
+
+function acceptAdaptivePlayback(set, snapshot) {
+  if (!snapshot) {
+    return;
+  }
+  const engine = getLivePlaybackEngine();
+  if (engine) {
+    adaptivePlaybackMemory = applyAdaptivePlaybackInstructions(
+      engine,
+      adaptivePlaybackMixer(engine),
+      adaptivePlaybackMemory,
+      snapshot,
+    );
+  }
+  if (snapshot.instructions?.seek_tick != null) {
+    adaptivePendingSeekTick = snapshot.instructions.seek_tick;
+  }
+  noteAdaptivePlayback(snapshot);
+  set({ adaptivePlayback: snapshot, adaptivePlaybackError: '' });
+}
+
+function releaseAdaptivePlaybackEngine() {
+  const engine = getLivePlaybackEngine();
+  if (engine && adaptivePlaybackMemory) {
+    applyAdaptivePlaybackInstructions(
+      engine,
+      adaptivePlaybackMixer(engine),
+      adaptivePlaybackMemory,
+      { instructions: { stop: true } },
+    );
+  }
+  adaptivePlaybackMemory = null;
+  adaptivePendingSeekTick = null;
+}
+
+function stopAdaptiveObserveLoop() {
+  if (adaptiveObserveTimer != null) {
+    globalThis.clearInterval(adaptiveObserveTimer);
+    adaptiveObserveTimer = null;
+  }
+  adaptiveObserveInFlight = false;
+}
+
+function startAdaptiveObserveLoop(set, get) {
+  stopAdaptiveObserveLoop();
+  adaptiveObserveTimer = globalThis.setInterval(() => {
+    observeAdaptivePlayback(set, get).catch(() => {
+      // observeAdaptivePlayback records playback errors on the session
+    });
+  }, 400);
+}
+
+async function observeAdaptivePlayback(set, get) {
+  if (adaptiveObserveInFlight) {
+    return;
+  }
+  const playback = get().adaptivePlayback;
+  if (!playback || playback.mode !== 'live' || playback.transport !== 'playing') {
+    return;
+  }
+  const projectId = get().currentProjectId;
+  const scoreId = get().adaptiveScoreId;
+  if (!projectId || !scoreId) {
+    return;
+  }
+  let tick = playback.position_tick;
+  if (adaptivePendingSeekTick != null) {
+    tick = adaptivePendingSeekTick;
+    adaptivePendingSeekTick = null;
+  } else {
+    const engine = getLivePlaybackEngine();
+    const observed = Number(engine?.getPlaybackPosition?.().tick);
+    if (Number.isFinite(observed) && observed >= 0) {
+      tick = Math.floor(observed);
+    }
+  }
+  adaptiveObserveInFlight = true;
+  try {
+    const snapshot = await commandAdaptivePlayback(projectId, scoreId, {
+      op: 'observe',
+      position_tick: tick,
+    });
+    if (
+      get().currentProjectId !== projectId
+      || get().adaptiveScoreId !== scoreId
+      || !get().adaptivePlayback
+    ) {
+      return;
+    }
+    acceptAdaptivePlayback(set, snapshot);
+  } catch (error) {
+    if (error.code === 'playback_not_running') {
+      stopAdaptiveObserveLoop();
+      releaseAdaptivePlaybackEngine();
+      set({ adaptivePlayback: null });
+    }
+  } finally {
+    adaptiveObserveInFlight = false;
+  }
+}
+
+let adaptivePlaybackPrevious = null;
+useMusicStore.subscribe((state) => {
+  const previous = adaptivePlaybackPrevious;
+  adaptivePlaybackPrevious = state;
+  if (!previous?.adaptivePlayback || state.adaptivePlayback) {
+    return;
+  }
+  stopAdaptiveObserveLoop();
+  releaseAdaptivePlaybackEngine();
+  if (
+    previous.currentProjectId
+    && previous.adaptiveScoreId
+    && state.currentProjectId !== previous.currentProjectId
+  ) {
+    deleteAdaptivePlayback(previous.currentProjectId, previous.adaptiveScoreId).catch(() => {
+      // leaving the project drops the local clock; a missing session is already quiet
+    });
+  }
+});

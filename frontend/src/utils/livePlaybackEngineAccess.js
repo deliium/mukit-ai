@@ -21,6 +21,9 @@ const listeners = new Set();
  */
 export function registerLivePlaybackEngine(engine) {
   sharedEngine = engine || null;
+  if (typeof window !== 'undefined') {
+    window.__MUKIT_PLAYBACK_ENGINE__ = sharedEngine;
+  }
   log.info('engine attach', {
     hasEngine: Boolean(sharedEngine),
     sessionId: sharedEngine?.getSessionId?.() ?? null,
@@ -37,6 +40,9 @@ export function clearLivePlaybackEngine({ reason = 'dispose', clearLive = true }
     log.debug('owned live ID clear', { reason, clearedCount: cleared });
   }
   sharedEngine = null;
+  if (typeof window !== 'undefined') {
+    window.__MUKIT_PLAYBACK_ENGINE__ = null;
+  }
   log.info('engine detach', { reason });
   notify({ type: 'detach', reason });
 }

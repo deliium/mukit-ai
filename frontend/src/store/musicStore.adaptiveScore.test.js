@@ -348,3 +348,85 @@ test('apply plan threads document revision from the first command', async () => 
     restore();
   }
 });
+
+function playbackSnapshot(overrides = {}) {
+  return {
+    schema_version: 'adaptive.playback.runtime.v1',
+    playback_id: 'pbr_0123abcd',
+    mode: 'simulation',
+    transport: 'playing',
+    runtime_state_id: 'state-exploration',
+    position_tick: 0,
+    bar: 1,
+    beat: 1,
+    queue: [],
+    pending_transition: null,
+    instructions: {
+      stop: false,
+      seek_tick: null,
+      loop: { enabled: false, start_tick: 0, end_tick: 0 },
+      track_gains: [],
+    },
+    telemetry: { last_event: 'started', step_count: 1, rejected_request_count: 0 },
+    warnings: [],
+    ...overrides,
+  };
+}
+
+test('playback snapshot stays on the session and a rejected state leaves the composition', async () => {
+  seedScore();
+  const composition = useMusicStore.getState().editedMusicJson;
+  const started = playbackSnapshot();
+  const rejected = playbackSnapshot({
+    warnings: [{ code: 'dangling_state_ref', severity: 'warning', target_id: null, message: 'missing' }],
+    telemetry: { last_event: 'request_rejected', step_count: 2, rejected_request_count: 1 },
+  });
+  const restore = installAxiosStub(async (config) => {
+    if (String(config.url).endsWith('/playback') && config.method === 'post') {
+      const body = JSON.parse(config.data);
+      assert.equal(body.mode, 'simulation');
+      assert.equal(body.expected_document_revision, 2);
+      return { status: 200, data: started };
+    }
+    if (String(config.url).endsWith('/playback/commands')) {
+      const body = JSON.parse(config.data);
+      assert.equal(body.to_state_id, 'state-missing');
+      return { status: 200, data: rejected };
+    }
+    return {
+      status: 200,
+      data: {
+        id: 'p2',
+        name: 'Next',
+        composition: {
+          schema_version: 'composition.v2',
+          tempo: 100,
+          key: 'C major',
+          time_signature: '4/4',
+          ticks_per_quarter: 480,
+          duration_ticks: 1920,
+          bar_count: 1,
+          sections: [],
+          tracks: [],
+        },
+        active_branch_id: null,
+        working_version: 0,
+      },
+    };
+  });
+  try {
+    await useMusicStore.getState().startAdaptivePlayback('simulation');
+    assert.equal(useMusicStore.getState().adaptivePlayback.playback_id, 'pbr_0123abcd');
+    assert.equal(useMusicStore.getState().adaptiveSelectedStateId, 'state-exploration');
+    await useMusicStore.getState().requestAdaptivePlaybackState('state-missing');
+    const state = useMusicStore.getState();
+    assert.equal(state.adaptivePlayback.transport, 'playing');
+    assert.equal(state.adaptivePlayback.instructions.stop, false);
+    assert.equal(state.editedMusicJson, composition);
+    await useMusicStore.getState().openProject('p2');
+    assert.equal(useMusicStore.getState().adaptivePlayback, null);
+    assert.equal(useMusicStore.getState().adaptiveSelectedStateId, null);
+  } finally {
+    restore();
+  }
+});
