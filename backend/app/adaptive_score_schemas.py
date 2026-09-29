@@ -129,6 +129,7 @@ ADAPTIVE_SCORE_ERROR_CODES: dict[str, str] = {
     "position_outside": "position_tick is past the composition duration.",
     "realization_invalid": "The transition realization cannot be scheduled.",
     "transition_request_not_pending": "That transition request is not the current pending request.",
+    "playback_not_running": "Adaptive playback is not running for this score.",
 }
 
 
