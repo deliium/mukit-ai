@@ -73,13 +73,33 @@ Mounted under `/projects` (the Vite dev server already proxies that prefix). Col
 | `GET /projects/{id}/video-scoring` | 200 document, revision 0 when no row |
 | `PUT /projects/{id}/video-scoring` | CAS update |
 | `GET /projects/{id}/video-scoring/map` | one selector |
+| `POST /projects/{id}/video-scoring/spotting/verify` | `read`. Optional `cue_id`. Returns `video.spotting.verification.v1`. Does not write |
+| `POST /projects/{id}/video-scoring/spotting/suggest` | `write_score`. Body `{brief}` up to 500 characters. Returns `video.spotting.suggestion.v1` with `persisted: false`. Does not write |
 
-Other codes: `video_scoring_invalid`, `video_frame_rate_unsupported`, `video_frame_rate_incomplete`, `video_timecode_invalid`, `video_composition_missing`, `video_musical_origin_outside`.
+Suggest requires a picture (`video_asset_missing`) and a closed scoring rate (`video_frame_rate_required`). A brief longer than 500 characters is `video_spotting_brief_invalid`. A provider failure is `video_spotting_model_unavailable` (503). Unusable model text is 200 with `suggestions: []` and warning `video_spotting_unparsed`.
+
+## Spotting cues
+
+A cue is one `hit_points` row on `video.scoring.v1`. It is not a `CompositionV2Marker` and it is not a note. Kinds are `music_start`, `music_stop`, `hit_point`, `reveal`, `cut`, `action`, `dialogue`, `emotional_cue`, and `user_defined`. A row saved before these fields loads as kind `hit_point`, tolerance `0`, importance `medium`, an empty instruction, and a null timecode.
+
+`tolerance_frames` is an integer from 0 to 240. `importance` is `low`, `medium`, `high`, or `critical`. It does not change velocity, the mixer, or generation constraints. `instruction` is composer text, at most 240 characters. It does not run by itself. `music_start` and `music_stop` do not start or stop playback.
+
+When a PUT sends `timecode`, the server stores unclamped `video_seconds` from `parse_timecode(cue) - parse_timecode(start)` and sets `musical_tick` from `score_seconds_from_video` plus `seconds_to_tick` while that score time is inside the composition. Below 0 the tick is `0`. Above the composition duration the tick is `duration_ticks`. A null or omitted timecode keeps the submitted seconds and tick. A closed rate then fills a display timecode with `format_timecode`. The stored tick does not come from `map_video_to_music`, which clamps first.
+
+At frame rate `24/1` and start timecode `00:00:00:00`, timecode `00:03:42:12` is `222.5` seconds (`frames_from_zero` 5340), even when the picture or the score is shorter.
+
+## Landing check
+
+`verify_cue_landings` compares note attacks with cue frames. `cue_frame` for an authored timecode is `frames_from_zero` from `parse_timecode`, not a floor of the float seconds. A null timecode, including a legacy row, uses `floor(video_seconds * numerator / denominator + 1e-9)`. A note lands when `abs(event_frame - cue_frame) <= tolerance_frames`. Only `type == "note"` counts. `duration_ticks` does not widen the window, so a sustain that covers the frame without an attack there is `missed`. An attack whose video time is outside the asset duration is not clamped into a match. Status is `landed`, `missed`, or `empty` when the composition has no note attacks. The Picture tab can run the same check on the working composition. The HTTP route checks the stored score. Neither path writes notes.
+
+## Suggestions
+
+`POST .../spotting/suggest` runs only after the Suggest control. Upload, open, and playback do not call it. `LLM_FAKE_MODE` returns one draft, kind `hit_point`, timecode `00:00:01:00`, tolerance `2`, importance `high`, and does not open a socket. Accept copies that draft into `hit_points` through the existing scoring PUT and assigns a `hit_` id. Dismiss drops the session list. Suggestions live in `pictureSpottingSuggestions`, which is not project autosave. The model context is the brief, the asset duration, the closed rate, the start timecode, and the current cue fields. It does not include note pitches or video bytes. `ai_agents/` does not import `video_scoring_schemas`, `video_scoring_settings`, `video_scoring_store`, `video_container_probe`, `video_scoring_map`, `video_spotting`, or `llm_video_spotting`.
 
 ## Picture clock
 
-The Picture tab shows the video element, a timecode readout, a bar ruler, composition markers, and hit points. One leader may write `playbackSeconds`, which stores score seconds. Picture play pauses Tone and writes the cursor from `timeupdate`. Tone play pauses the video and seeks it to the mapped time. They do not run together. The piano-roll playback cursor stays visible while `pictureSyncStatus` is `playing`, including when Tone status is idle.
+The Picture tab shows the video element, a timecode readout, a video-time cue ruler, a musical bar ruler, composition markers, and the same cue ids on both rulers. One leader may write `playbackSeconds`, which stores score seconds. Picture play pauses Tone and writes the cursor from `timeupdate`. Tone play pauses the video and seeks it to the mapped time. They do not run together. The piano-roll playback cursor stays visible while `pictureSyncStatus` is `playing`, including when Tone status is idle. A cue past the asset sits on the end of the video ruler and reads as past the picture. A cue whose unclamped score seconds fall outside the composition reads as past the score on the bar ruler, even when the stored tick is the end tick.
 
-`pictureScoring`, `pictureSyncStatus`, and `pictureSeekRequest` are a session slice. They are not project autosave.
+`pictureScoring`, `pictureSpottingSuggestions`, `pictureSyncStatus`, and `pictureSeekRequest` are a session slice. They are not project autosave.
 
-`ai_agents/` must not import `video_scoring_schemas`, `video_scoring_settings`, `video_scoring_store`, `video_container_probe`, or `video_scoring_map`.
+`ai_agents/` must not import `video_scoring_schemas`, `video_scoring_settings`, `video_scoring_store`, `video_container_probe`, `video_scoring_map`, `video_spotting`, or `llm_video_spotting`.

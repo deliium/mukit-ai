@@ -113,6 +113,8 @@ mukit-ai/
 | `backend/app/services/video_scoring_store.py` | One immutable video file per project; replace-then-delete; project-delete GC |
 | `backend/app/services/video_container_probe.py` | Read-only ISO-BMFF duration, frame rate, audio, and resolution |
 | `backend/app/services/video_scoring_map.py` | Pure video time ↔ tick map and SMPTE timecode |
+| `backend/app/services/video_spotting.py` | Pure cue landing check against note attacks |
+| `backend/app/services/llm_video_spotting.py` | Explicit spotting suggestion preview; does not write cues |
 | `frontend/src/components/VideoScoringPanel.jsx` | Picture tab: player, timecode, bar ruler, markers, hit points |
 | `frontend/src/api/videoScoringApi.js` | Picture asset and scoring HTTP client |
 | `frontend/src/utils/videoScoringMap.js` | Frontend twin of the video ↔ tick map |
@@ -318,7 +320,7 @@ mukit-ai/
 | Audio transcription | `docs/audio-transcription.md` | Monophonic mic/file → preview → Apply into V2 |
 | Audio recovery | `docs/audio-recovery.md` | V4 mixed audio → optional stems/scaffolding → Apply→Bind overlay |
 | Audio↔symbolic alignment | `docs/audio-symbolic-alignment.md` | Bind-time map, bar↔source seek, waveform sync, soft-stale neural renders |
-| Video scoring | `docs/video-scoring.md` | One immutable MP4/MOV (`video.asset.v1`) and `video.scoring.v1` sync. Picture play and Tone share one cursor leader. `ai_agents/` does not import `video_scoring_schemas`, `video_scoring_settings`, `video_scoring_store`, `video_container_probe`, or `video_scoring_map` |
+| Video scoring | `docs/video-scoring.md` | One immutable MP4/MOV (`video.asset.v1`) and `video.scoring.v1` sync. Picture play and Tone share one cursor leader. Spotting cues stay on `hit_points`. `ai_agents/` does not import `video_scoring_schemas`, `video_scoring_settings`, `video_scoring_store`, `video_container_probe`, `video_scoring_map`, `video_spotting`, or `llm_video_spotting` |
 | Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument mix + stem-set egress; licenses; Compose profile |
 | Mix analysis | `docs/mix-analysis.md` | DSP measurements + observations over neural stem/mix WAVs; soft-stale; never mutates audio/V2 |
 | AI-assisted mixing | `docs/ai-assisted-mixing.md` | Non-destructive mix plans, preview/apply/undo, new mix revisions; stems unchanged |

@@ -51,6 +51,7 @@ creative motif — not multiple primary capabilities.
 | `development_preview` | `AI_OP_DEVELOPMENT_PREVIEW` | `symbolic_editor` |
 | `reharmonize_ai` | `AI_OP_REHARMONIZE_AI` | `symbolic_editor` |
 | `creative_motif` | `AI_OP_CREATIVE_MOTIF` | `symbolic_editor` |
+| `spotting_suggest` | `AI_OP_SPOTTING_SUGGEST` | `language_planner` |
 | `transcribe` | `AI_OP_TRANSCRIBE` | `audio_transcription` (local mono engines or stub; not LLM generate) |
 | `embed` | `AI_OP_EMBED` | `embedding` (default: `local:symbolic-features-v1`) |
 | `audio_render` | `AI_OP_AUDIO_RENDER` | `audio_generation` (`fake:neural-audio`, `sidecar:musicgen`, optional `local:midi-ddsp`; stub → 503) |
