@@ -64,6 +64,7 @@
 - [x] **V5 Runtime symbolic continuation** — A session buffer fills bars ahead of Adaptive Score playback. Deterministic fallbacks return before the symbolic model, and a late result is discarded. The score stays `adaptive.score.v1` and playback stays `adaptive.playback.runtime.v1`. No `composition.v5`
 - [x] **V5 Adaptive Music Engine API** — A game or installation drives one stored `adaptive.score.v1` through `/adaptive/*` (`adaptive.engine.session.v1`) without the studio. The session starts or binds playback, accepts state, intensity, stinger, and context commands, and publishes acknowledgements and throttled status. Bearer-or-loopback auth and a one-slot context coalescer stay in process memory. The score and `composition.v2` notes stay unchanged. No `composition.v5`
 - [x] **V5 Adaptive Music Client SDKs** — Python `mukit-adaptive` and TypeScript `@mukit/adaptive-music` drive one stored score over the published `/adaptive/*` HTTP and WebSocket surface, including reconnect and a terminal exploration, danger, combat, and victory demo. They do not author the score, open the studio, or add a server route. No `composition.v5`
+- [x] **V5 Video scoring timeline** — One immutable MP4/MOV per project (`video.asset.v1`) and a `video.scoring.v1` sync document. A read-only container probe supplies duration, frame rate, audio presence, and resolution. The Picture tab keeps the composition cursor on the same instant as video timecode and musical bars, including tempo changes. Stored bytes and `composition.v2` note events stay unchanged. No `composition.v5`
 
 ## Completed
 
@@ -129,3 +130,4 @@
 | V5 Runtime symbolic continuation | 2026-09-29 |
 | V5 Adaptive Music Engine API | 2026-09-29 |
 | V5 Adaptive Music Client SDKs | 2026-09-30 |
+| V5 Video scoring timeline | 2026-09-30 |
