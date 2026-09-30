@@ -178,6 +178,7 @@ function PianoRollOverlayLayer({
   rowHeight = 16,
 }) {
   const playbackStatus = useMusicStore((state) => state.playbackStatus);
+  const pictureSyncStatus = useMusicStore((state) => state.pictureSyncStatus);
   const playbackSeconds = useMusicStore((state) => state.playbackSeconds);
   const playbackLoop = useMusicStore((state) => state.playbackLoop);
   const audioPhase = useMusicStore((state) => state.audioPhase);
@@ -195,7 +196,7 @@ function PianoRollOverlayLayer({
   const lastCursorLogRef = useRef(0);
 
   const cursorTick = useMemo(() => {
-    if (!composition || playbackStatus === 'idle') {
+    if (!composition || (playbackStatus === 'idle' && pictureSyncStatus !== 'playing')) {
       return null;
     }
     const position = secondsToPlaybackPosition(playbackSeconds, {
@@ -205,7 +206,7 @@ function PianoRollOverlayLayer({
       composition,
     });
     return position.tick;
-  }, [composition, playbackStatus, playbackSeconds]);
+  }, [composition, playbackStatus, pictureSyncStatus, playbackSeconds]);
 
   const loopRect = useMemo(() => {
     if (!playbackLoop?.enabled || !Number.isFinite(pixelsPerTick) || pixelsPerTick <= 0) {
@@ -350,12 +351,12 @@ function PianoRollOverlayLayer({
   }, [cursorTick, pixelsPerTick, playbackStatus]);
 
   useEffect(() => {
-    if (playbackStatus === 'playing') {
+    if (playbackStatus === 'playing' || pictureSyncStatus === 'playing') {
       logger.info('Playback cursor activated');
     } else if (playbackStatus === 'idle' || playbackStatus === 'paused') {
       logger.info('Playback cursor deactivated/paused', { playbackStatus });
     }
-  }, [playbackStatus]);
+  }, [playbackStatus, pictureSyncStatus]);
 
   return (
     <div data-testid="piano-roll-overlay-layer" aria-hidden="true">

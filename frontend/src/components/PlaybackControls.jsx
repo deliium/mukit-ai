@@ -13,6 +13,8 @@ import { audibleRevisionKey } from '../utils/compositionCanonical.js';
 import { findDevelopmentCandidateById } from '../utils/compositionCandidates.js';
 import { findArrangementCandidateById } from '../utils/compositionArrangementCandidates.js';
 import { secondsToPlaybackPosition, ticksToPlaybackSeconds } from '../utils/playbackPosition.js';
+import { compileTimeline, tickToSeconds } from '../utils/compositionTimeline.js';
+import { registerPictureToneRelease } from '../utils/pictureToneRelease.js';
 import { createPlaybackEngine } from '../utils/tonePlaybackEngine.js';
 import { createAppLogger } from '../utils/appLogger.js';
 import {
@@ -213,6 +215,23 @@ const PlaybackControls = () => {
   const lastTransportSeqRef = useRef(0);
   const playbackStatusRef = useRef(playbackStatus);
   playbackStatusRef.current = playbackStatus;
+
+  useEffect(() => {
+    registerPictureToneRelease(() => {
+      const status = playbackStatusRef.current;
+      if (status === 'playing' || status === 'paused') {
+        if (isCanonicalComposition(playbackComposition) && engineRef.current) {
+          engineRef.current.pause();
+        } else {
+          Tone.Transport.pause();
+        }
+      }
+      clearPositionTimer(positionTimerRef);
+      setPlaybackStatus('idle');
+    });
+    return () => registerPictureToneRelease(null);
+  }, [playbackComposition, setPlaybackStatus]);
+
   const [instrumentStatuses, setInstrumentStatuses] = useState({});
   const [mixerCollapsed, setMixerCollapsed] = useState(false);
 
@@ -405,6 +424,11 @@ const PlaybackControls = () => {
         setPlaybackPosition,
         preserveStatus: true,
       });
+      const toneStart = scoreSecondsForPicture(playbackComposition, startTick);
+      const handoff = useMusicStore.getState().handPictureToTone(toneStart);
+      if (handoff.wasPicture) {
+        console.info('[VideoScoring] leader', { leader: 'tone' });
+      }
 
       if (isCanonicalComposition(playbackComposition)) {
         await startCanonicalPlayback({
@@ -466,6 +490,12 @@ const PlaybackControls = () => {
       return;
     }
     logger.info('User resume action');
+    const handoff = useMusicStore.getState().handPictureToTone(
+      useMusicStore.getState().playbackSeconds,
+    );
+    if (handoff.wasPicture) {
+      console.info('[VideoScoring] leader', { leader: 'tone' });
+    }
     await Tone.start();
     if (isCanonicalComposition(playbackComposition) && engineRef.current) {
       engineRef.current.resume();
@@ -890,6 +920,18 @@ async function startLegacyPlayback({
   setPlaybackStatus('playing');
 }
 
+function scoreSecondsForPicture(composition, startTick) {
+  if (startTick == null) {
+    return 0;
+  }
+  const timeline = compileTimeline(composition);
+  if (!timeline) {
+    return 0;
+  }
+  const seconds = tickToSeconds(timeline, startTick);
+  return seconds == null ? 0 : seconds;
+}
+
 function stopEverything({
   engineRef,
   legacySynthRef,
@@ -943,7 +985,10 @@ function startPositionTimer({
 }) {
   clearPositionTimer(positionTimerRef);
   let lastLoggedSecond = -1;
-  positionTimerRef.current = setInterval(() => {
+    positionTimerRef.current = setInterval(() => {
+      if (useMusicStore.getState().pictureSyncStatus === 'playing') {
+        return;
+      }
     let position;
     if (isCanonical && engineRef.current?.getPlaybackPosition) {
       position = engineRef.current.getPlaybackPosition();

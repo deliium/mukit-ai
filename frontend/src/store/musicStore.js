@@ -359,7 +359,14 @@ import {
   normalizeBarRange,
   selectedTickBoundaries,
 } from '../utils/pianoRollSelection.js';
-import { barDurationTicks, barStartTick, compileTimeline } from '../utils/compositionTimeline.js';
+import {
+  barAtTick,
+  barDurationTicks,
+  barStartTick,
+  compileTimeline,
+  secondsToTick,
+} from '../utils/compositionTimeline.js';
+import { scoreSecondsFromVideo, videoSecondsFromScore } from '../utils/videoScoringMap.js';
 import {
   DEFAULT_NAV_MAX_ZOOM,
   DEFAULT_NAV_MIN_ZOOM,
@@ -527,6 +534,7 @@ const audioRecoveryLogger = createAppLogger('audioRecovery');
 const audioAlignmentLogger = createAppLogger('audioAlignment');
 const collaborationLogger = createAppLogger('collaboration');
 let sourceSeekRequestSeq = 0;
+let pictureSeekRequestSeq = 0;
 let lastSourceSeekDebugAt = 0;
 
 export const AUDIO_PHASES = Object.freeze({
@@ -1475,6 +1483,10 @@ export const useMusicStore = create((set, get) => ({
   playbackStatus: 'idle',
   playbackSeconds: 0,
   playbackBar: 1,
+  // Picture leader is session-only. It is not written into project autosave or composition.v2.
+  pictureSyncStatus: 'idle',
+  pictureSeekRequest: null,
+  pictureScoring: null,
   /**
    * Ephemeral loop bounds for transport. Not a Composition V2 field.
    * Shape: { startTick, endTick, enabled } | null
@@ -5080,6 +5092,92 @@ export const useMusicStore = create((set, get) => ({
       playbackSeconds: Number(seconds) || 0,
       playbackBar: Number(bar) || 1,
     });
+  },
+
+  /**
+   * Session picture clock. picture may write playbackSeconds. tone may not.
+   * pictureScoring is the last GET. This slice is not part of project autosave.
+   */
+  setPictureLeader: (leader) => {
+    set({ pictureSyncStatus: leader === 'picture' ? 'playing' : 'idle' });
+  },
+
+  setPictureScoring: (pictureScoring) => {
+    set({ pictureScoring: pictureScoring || null });
+  },
+
+  clearPicture: () => {
+    set({
+      pictureSyncStatus: 'idle',
+      pictureSeekRequest: null,
+      pictureScoring: null,
+    });
+  },
+
+  applyPictureTime: (videoSeconds) => {
+    const state = get();
+    if (state.pictureSyncStatus !== 'playing' || !state.editedMusicJson) {
+      return null;
+    }
+    const timeline = compileTimeline(state.editedMusicJson);
+    if (!timeline) {
+      return null;
+    }
+    const scoring = state.pictureScoring;
+    const scoreSeconds = scoreSecondsFromVideo(Number(videoSeconds) || 0, {
+      timeline,
+      videoOriginSeconds: Number(scoring?.video_origin_seconds) || 0,
+      musicalOriginTick: Number(scoring?.musical_origin_tick) || 0,
+    });
+    if (scoreSeconds == null) {
+      return null;
+    }
+    const rawTick = secondsToTick(timeline, Math.max(0, scoreSeconds));
+    const tick = rawTick == null
+      ? 0
+      : Math.min(timeline.durationTicks, Math.max(0, Math.trunc(rawTick + 0.5)));
+    const bar = barAtTick(timeline, tick) || 1;
+    set({
+      playbackSeconds: scoreSeconds,
+      playbackBar: bar,
+    });
+    return { scoreSeconds, bar };
+  },
+
+  requestPictureSeek: (seconds, reason = 'seek') => {
+    pictureSeekRequestSeq += 1;
+    const request = {
+      id: pictureSeekRequestSeq,
+      seconds: Number(seconds) || 0,
+      reason,
+    };
+    set({ pictureSeekRequest: request });
+    return request;
+  },
+
+  handPictureToTone: (scoreSeconds) => {
+    const state = get();
+    const wasPicture = state.pictureSyncStatus === 'playing';
+    const timeline = state.editedMusicJson ? compileTimeline(state.editedMusicJson) : null;
+    const scoring = state.pictureScoring;
+    let videoSeconds = Math.max(0, Number(scoreSeconds) || 0);
+    if (timeline) {
+      const mapped = videoSecondsFromScore(Number(scoreSeconds) || 0, {
+        timeline,
+        videoOriginSeconds: Number(scoring?.video_origin_seconds) || 0,
+        musicalOriginTick: Number(scoring?.musical_origin_tick) || 0,
+      });
+      if (Number.isFinite(mapped)) {
+        videoSeconds = Math.max(0, mapped);
+      }
+    }
+    pictureSeekRequestSeq += 1;
+    const request = { id: pictureSeekRequestSeq, seconds: videoSeconds, reason: 'tone-play' };
+    set({
+      pictureSyncStatus: 'idle',
+      pictureSeekRequest: request,
+    });
+    return { wasPicture, request };
   },
 
   setPlaybackAutoFollow: (enabled) => {
