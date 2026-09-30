@@ -19,6 +19,8 @@ from app.routers.collaboration_guard import enforce_current
 from app.services.composition_timeline import compile_timeline
 from app.services.project_store import ProjectNotFoundError, get_project
 from app.services.video_scoring_map import map_bar_to_video, map_tick_to_video, map_video_to_music
+from app.services.llm_video_spotting import suggest_spotting_cues
+from app.services.video_spotting import verify_cue_landings
 from app.services.video_scoring_store import (
     delete_video_asset,
     get_video_asset,
@@ -35,6 +37,11 @@ from app.video_scoring_schemas import (
     VideoScoringMapResponseV1,
     VideoScoringUpdateV1,
     VideoScoringV1,
+    VideoSpottingSuggestionV1,
+    VideoSpottingSuggestRequestV1,
+    VideoSpottingVerificationV1,
+    VideoSpottingVerifyRequestV1,
+    is_closed_frame_rate,
 )
 from app.video_scoring_settings import load_video_scoring_settings
 
@@ -46,6 +53,8 @@ _PATH_ASSET = "/projects/{project_id}/video-asset"
 _PATH_MEDIA = "/projects/{project_id}/video-asset/media"
 _PATH_SCORING = "/projects/{project_id}/video-scoring"
 _PATH_MAP = "/projects/{project_id}/video-scoring/map"
+_PATH_VERIFY = "/projects/{project_id}/video-scoring/spotting/verify"
+_PATH_SUGGEST = "/projects/{project_id}/video-scoring/spotting/suggest"
 
 
 def _require_project(project_id: str):
@@ -236,7 +245,12 @@ def write_video_scoring(project_id: str, body: VideoScoringUpdateV1) -> VideoSco
             path=_PATH_SCORING,
         )
     try:
-        document = put_video_scoring(project_id, body, db_path=get_project_db_path())
+        document = put_video_scoring(
+            project_id,
+            body,
+            db_path=get_project_db_path(),
+            timeline=timeline,
+        )
     except VideoScoringError as exc:
         raise _reject(exc, project_id=project_id, method="PUT", path=_PATH_SCORING) from exc
     _done("PUT", _PATH_SCORING, project_id, 200, document.asset_id)
@@ -287,4 +301,155 @@ def read_video_map(
         bar=mapped.bar,
         timecode=mapped.timecode,
         warnings=list(mapped.warnings),
+    )
+
+
+@router.post(_PATH_VERIFY, response_model=VideoSpottingVerificationV1)
+def verify_spotting_cues(
+    project_id: str,
+    body: VideoSpottingVerifyRequestV1 | None = None,
+) -> VideoSpottingVerificationV1:
+    """Compare stored note attacks with stored cues. Does not write."""
+    enforce_current(project_id, "read")
+    _require_project(project_id)
+    request = body or VideoSpottingVerifyRequestV1()
+    logger.info(
+        "spotting verify started",
+        extra={"method": "POST", "path": _PATH_VERIFY, "project_id": project_id},
+    )
+    try:
+        asset, scoring, timeline = _map_inputs(project_id)
+        if scoring.frame_rate_numerator is None or scoring.frame_rate_denominator is None:
+            raise VideoScoringError("video_frame_rate_required")
+        if not is_closed_frame_rate(scoring.frame_rate_numerator, scoring.frame_rate_denominator):
+            raise VideoScoringError("video_frame_rate_required")
+        cues = list(scoring.hit_points)
+        if request.cue_id is not None:
+            cues = [cue for cue in cues if cue.id == request.cue_id]
+            if not cues:
+                raise VideoScoringError("video_scoring_invalid")
+        record = _require_project(project_id)
+        composition = json.loads(record.composition_json or "{}")
+        landings = verify_cue_landings(
+            cues,
+            composition,
+            timeline=timeline,
+            duration_seconds=asset.duration_seconds,
+            frame_rate_numerator=int(scoring.frame_rate_numerator),
+            frame_rate_denominator=int(scoring.frame_rate_denominator),
+            timecode_mode=scoring.timecode_mode,
+            start_timecode=scoring.start_timecode,
+            video_origin_seconds=scoring.video_origin_seconds,
+            musical_origin_tick=scoring.musical_origin_tick,
+        )
+    except VideoScoringError as exc:
+        raise _reject(exc, project_id=project_id, method="POST", path=_PATH_VERIFY) from exc
+    except Exception as exc:
+        logger.error(
+            "spotting verify failed",
+            extra={"project_id": project_id, "error_code": "video_scoring_invalid", "error_type": type(exc).__name__},
+        )
+        raise
+    counts = {"landed": 0, "missed": 0, "empty": 0}
+    for landing in landings:
+        counts[landing.status] += 1
+    logger.info(
+        "spotting verify finished",
+        extra={
+            "project_id": project_id,
+            "document_revision": scoring.document_revision,
+            "cue_count": len(landings),
+            "landed": counts["landed"],
+            "missed": counts["missed"],
+            "empty": counts["empty"],
+        },
+    )
+    return VideoSpottingVerificationV1(
+        project_id=project_id,
+        document_revision=scoring.document_revision,
+        cues=[
+            {
+                "id": landing.id,
+                "kind": landing.kind,
+                "timecode": landing.timecode,
+                "tolerance_frames": landing.tolerance_frames,
+                "status": landing.status,
+                "delta_frames": landing.delta_frames,
+                "match_count": landing.match_count,
+                "matches": [
+                    {
+                        "track_index": match.track_index,
+                        "event_index": match.event_index,
+                        "start_tick": match.start_tick,
+                        "pitch": match.pitch,
+                    }
+                    for match in landing.matches
+                ],
+            }
+            for landing in landings
+        ],
+    )
+
+
+@router.post(_PATH_SUGGEST, response_model=VideoSpottingSuggestionV1)
+async def suggest_spotting(
+    project_id: str,
+    body: VideoSpottingSuggestRequestV1,
+) -> VideoSpottingSuggestionV1:
+    """Return cue drafts. Does not write the scoring document or the composition."""
+    enforce_current(project_id, "write_score")
+    _require_project(project_id)
+    if len(body.brief) > 500:
+        raise _reject(
+            VideoScoringError("video_spotting_brief_invalid"),
+            project_id=project_id,
+            method="POST",
+            path=_PATH_SUGGEST,
+        )
+    logger.info(
+        "spotting suggest request",
+        extra={"method": "POST", "path": _PATH_SUGGEST, "project_id": project_id, "brief_length": len(body.brief)},
+    )
+    try:
+        asset = get_video_asset(project_id, db_path=get_project_db_path())
+        scoring = get_video_scoring(project_id, db_path=get_project_db_path())
+        if (
+            scoring.frame_rate_numerator is None
+            or scoring.frame_rate_denominator is None
+            or not is_closed_frame_rate(scoring.frame_rate_numerator, scoring.frame_rate_denominator)
+        ):
+            raise VideoScoringError("video_frame_rate_required")
+        drafts, warning = await suggest_spotting_cues(
+            project_id=project_id,
+            brief=body.brief,
+            duration_seconds=asset.duration_seconds,
+            frame_rate_numerator=int(scoring.frame_rate_numerator),
+            frame_rate_denominator=int(scoring.frame_rate_denominator),
+            timecode_mode=scoring.timecode_mode,
+            start_timecode=scoring.start_timecode,
+            cues=list(scoring.hit_points),
+        )
+    except VideoScoringError as exc:
+        raise _reject(exc, project_id=project_id, method="POST", path=_PATH_SUGGEST) from exc
+    except Exception as exc:
+        logger.error(
+            "spotting suggest failed",
+            extra={"project_id": project_id, "error_code": "video_spotting_model_unavailable", "error_type": type(exc).__name__},
+        )
+        raise
+    logger.info(
+        "spotting suggest response",
+        extra={
+            "project_id": project_id,
+            "brief_length": len(body.brief),
+            "suggestion_count": len(drafts),
+            "warning_code": warning,
+            "persisted": False,
+        },
+    )
+    return VideoSpottingSuggestionV1(
+        project_id=project_id,
+        persisted=False,
+        suggestions=drafts,
+        warning=warning,
     )

@@ -31,6 +31,7 @@ OPERATION_DEFAULT_CAPABILITY: dict[AiOperation, ModelCapability] = {
     AiOperation.DEVELOPMENT_PREVIEW: ModelCapability.SYMBOLIC_EDITOR,
     AiOperation.REHARMONIZE_AI: ModelCapability.SYMBOLIC_EDITOR,
     AiOperation.CREATIVE_MOTIF: ModelCapability.SYMBOLIC_EDITOR,
+    AiOperation.SPOTTING_SUGGEST: ModelCapability.LANGUAGE_PLANNER,
     AiOperation.TRANSCRIBE: ModelCapability.AUDIO_TRANSCRIPTION,
     AiOperation.EMBED: ModelCapability.EMBEDDING,
     AiOperation.AUDIO_RENDER: ModelCapability.AUDIO_GENERATION,

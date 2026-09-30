@@ -19,6 +19,7 @@ class AiOperation(StrEnum):
     DEVELOPMENT_PREVIEW = "development_preview"
     REHARMONIZE_AI = "reharmonize_ai"
     CREATIVE_MOTIF = "creative_motif"
+    SPOTTING_SUGGEST = "spotting_suggest"
     TRANSCRIBE = "transcribe"
     EMBED = "embed"
     AUDIO_RENDER = "audio_render"
@@ -34,6 +35,7 @@ _OP_ENV_KEYS: dict[AiOperation, str] = {
     AiOperation.DEVELOPMENT_PREVIEW: "AI_OP_DEVELOPMENT_PREVIEW",
     AiOperation.REHARMONIZE_AI: "AI_OP_REHARMONIZE_AI",
     AiOperation.CREATIVE_MOTIF: "AI_OP_CREATIVE_MOTIF",
+    AiOperation.SPOTTING_SUGGEST: "AI_OP_SPOTTING_SUGGEST",
     AiOperation.TRANSCRIBE: "AI_OP_TRANSCRIBE",
     AiOperation.EMBED: "AI_OP_EMBED",
     AiOperation.AUDIO_RENDER: "AI_OP_AUDIO_RENDER",
@@ -62,6 +64,7 @@ def creative_chat_operations() -> tuple[AiOperation, ...]:
         AiOperation.DEVELOPMENT_PREVIEW,
         AiOperation.REHARMONIZE_AI,
         AiOperation.CREATIVE_MOTIF,
+        AiOperation.SPOTTING_SUGGEST,
     )
 
 

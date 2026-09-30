@@ -10,6 +10,7 @@ import pytest
 from app.db.connection import get_connection, reset_database_initialization_cache
 from app.services import project_store as project_store_mod
 from app.services import video_scoring_store as store
+from app.services.composition_timeline import compile_timeline
 from app.storage_root_policy import StorageRootError
 from app.video_scoring_schemas import VideoScoringError, VideoScoringUpdateV1
 from app.video_scoring_settings import load_video_scoring_settings
@@ -24,6 +25,19 @@ def video_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.delenv("DATASET_ROOT", raising=False)
     reset_database_initialization_cache()
     return tmp_path
+
+
+def _store_timeline():
+    return compile_timeline(
+        {
+            "ticks_per_quarter": 480,
+            "duration_ticks": 7680,
+            "bar_count": 4,
+            "tempo": 120,
+            "time_signature": "4/4",
+            "key": "C major",
+        }
+    )
 
 
 def _clip(path: Path, **video) -> bytes:
@@ -131,8 +145,11 @@ def test_replace_keeps_explicit_rate_and_hash(video_env: Path) -> None:
             }
         ),
         db_path=db_path,
+        timeline=_store_timeline(),
     )
     assert hashlib.sha256(stored.read_bytes()).hexdigest() == digest
+    assert updated.hit_points[0].video_seconds == 1.0
+    assert updated.hit_points[0].musical_tick == 960
     with pytest.raises(VideoScoringError) as conflict:
         store.put_video_scoring(
             project.id,
@@ -145,6 +162,7 @@ def test_replace_keeps_explicit_rate_and_hash(video_env: Path) -> None:
                 }
             ),
             db_path=db_path,
+            timeline=_store_timeline(),
         )
     assert conflict.value.code == "video_scoring_conflict"
 

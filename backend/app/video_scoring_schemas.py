@@ -413,6 +413,103 @@ class VideoAssetUploadResponseV1(BaseModel):
     scoring: VideoScoringV1
 
 
+class SpottingMatchV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    track_index: int = Field(ge=0)
+    event_index: int = Field(ge=0)
+    start_tick: int = Field(ge=0)
+    pitch: int
+
+
+class SpottingCueVerificationV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^hit_[0-9a-f]{8}$")
+    kind: CueKind
+    timecode: str | None = None
+    tolerance_frames: int = Field(ge=0, le=240)
+    status: Literal["landed", "missed", "empty"]
+    delta_frames: int | None = None
+    match_count: int = Field(ge=0)
+    matches: list[SpottingMatchV1] = Field(default_factory=list, max_length=8)
+
+
+class VideoSpottingVerificationV1(BaseModel):
+    """Read-only landing report. It does not store cues or note events."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["video.spotting.verification.v1"] = "video.spotting.verification.v1"
+    project_id: str = Field(min_length=1, max_length=128)
+    document_revision: int = Field(ge=0)
+    cues: list[SpottingCueVerificationV1] = Field(default_factory=list)
+
+
+class VideoSpottingVerifyRequestV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cue_id: str | None = None
+
+
+class SpottingSuggestionDraftV1(BaseModel):
+    """A cue draft with no id. Accept assigns ``hit_`` ids through scoring PUT."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: CueKind
+    label: str = Field(min_length=1, max_length=80)
+    timecode: str
+    tolerance_frames: int = 0
+    importance: CueImportance = "medium"
+    instruction: str = ""
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _known_kind(cls, value: object) -> object:
+        return HitPointV1._known_kind(value)
+
+    @field_validator("importance", mode="before")
+    @classmethod
+    def _known_importance(cls, value: object) -> object:
+        return HitPointV1._known_importance(value)
+
+    @field_validator("tolerance_frames")
+    @classmethod
+    def _tolerance_range(cls, value: int) -> int:
+        return HitPointV1._tolerance_range(value)
+
+    @field_validator("instruction")
+    @classmethod
+    def _instruction_length(cls, value: str) -> str:
+        return HitPointV1._instruction_length(value)
+
+    @field_validator("timecode")
+    @classmethod
+    def _timecode_shape(cls, value: str) -> str:
+        if _TIMECODE_RE.fullmatch(value) is None:
+            _reject(cls.__name__, "video_timecode_invalid")
+        return value
+
+
+class VideoSpottingSuggestionV1(BaseModel):
+    """Session preview. ``persisted`` is always false."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["video.spotting.suggestion.v1"] = "video.spotting.suggestion.v1"
+    project_id: str = Field(min_length=1, max_length=128)
+    persisted: Literal[False] = False
+    suggestions: list[SpottingSuggestionDraftV1] = Field(default_factory=list)
+    warning: str | None = None
+
+
+class VideoSpottingSuggestRequestV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    brief: str = ""
+
+
 class VideoScoringMapResponseV1(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -482,12 +579,83 @@ def default_video_scoring(project_id: str) -> VideoScoringV1:
     )
 
 
+def derive_hit_points_for_update(update: VideoScoringUpdateV1, timeline: Any) -> list[dict[str, Any]]:
+    """Replace seconds and tick only when the request authored a timecode."""
+    from app.services.video_scoring_map import (
+        cue_video_seconds,
+        format_timecode,
+        musical_tick_for_score_seconds,
+        score_seconds_from_video,
+    )
+
+    rate_ready = (
+        update.frame_rate_numerator is not None
+        and update.frame_rate_denominator is not None
+        and is_closed_frame_rate(int(update.frame_rate_numerator), int(update.frame_rate_denominator))
+    )
+    derived: list[dict[str, Any]] = []
+    for point in update.hit_points:
+        payload = point.model_dump()
+        if point.timecode is not None:
+            if not rate_ready:
+                logger.warning(
+                    "video_frame_rate_required",
+                    extra={"error_code": "video_frame_rate_required", "cue_id": point.id},
+                )
+                raise VideoScoringError("video_frame_rate_required")
+            seconds = cue_video_seconds(
+                point.timecode,
+                frame_rate_numerator=int(update.frame_rate_numerator or 0),
+                frame_rate_denominator=int(update.frame_rate_denominator or 0),
+                timecode_mode=update.timecode_mode,
+                start_timecode=update.start_timecode,
+            )
+            score_seconds = score_seconds_from_video(
+                seconds,
+                timeline=timeline,
+                video_origin_seconds=update.video_origin_seconds,
+                musical_origin_tick=update.musical_origin_tick,
+            )
+            payload["video_seconds"] = seconds
+            payload["musical_tick"] = musical_tick_for_score_seconds(score_seconds, timeline)
+            logger.debug(
+                "spotting cue derived",
+                extra={
+                    "cue_id": point.id,
+                    "kind": point.kind,
+                    "timecode": point.timecode,
+                    "video_seconds": seconds,
+                    "musical_tick": payload["musical_tick"],
+                },
+            )
+        elif rate_ready:
+            payload["timecode"] = format_timecode(
+                point.video_seconds,
+                frame_rate_numerator=int(update.frame_rate_numerator or 0),
+                frame_rate_denominator=int(update.frame_rate_denominator or 0),
+                timecode_mode=update.timecode_mode,
+                start_timecode=update.start_timecode,
+            )
+            logger.debug(
+                "spotting cue timecode filled",
+                extra={
+                    "cue_id": point.id,
+                    "kind": point.kind,
+                    "timecode": payload["timecode"],
+                    "musical_tick": point.musical_tick,
+                },
+            )
+        derived.append(payload)
+    return derived
+
+
 def scoring_from_update(
     project_id: str,
     update: VideoScoringUpdateV1,
     *,
     asset_id: str | None,
     document_revision: int,
+    timeline: Any,
 ) -> VideoScoringV1:
     return VideoScoringV1.model_validate(
         {
@@ -500,7 +668,7 @@ def scoring_from_update(
             "start_timecode": update.start_timecode,
             "video_origin_seconds": update.video_origin_seconds,
             "musical_origin_tick": update.musical_origin_tick,
-            "hit_points": [point.model_dump() for point in update.hit_points],
+            "hit_points": derive_hit_points_for_update(update, timeline),
             "document_revision": document_revision,
         }
     )

@@ -62,6 +62,20 @@ def is_fake_provider(provider: LLMProviderSettings | str | None) -> bool:
     return name.strip().lower() == FAKE_PROVIDER
 
 
+def fake_spotting_suggestion_draft() -> dict[str, Any]:
+    """One fixed cue draft. The brief text is ignored and no socket is opened."""
+    draft = {
+        "kind": "hit_point",
+        "label": "Suggested hit",
+        "timecode": "00:00:01:00",
+        "tolerance_frames": 2,
+        "importance": "high",
+        "instruction": "",
+    }
+    logger.info("fake spotting suggestion", extra={"suggestion_count": 1, "timecode": draft["timecode"]})
+    return draft
+
+
 def _pitch_cycle(seed: int) -> list[str]:
     cycles = (
         ["C4", "E4", "G4", "E4"],

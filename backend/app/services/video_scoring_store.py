@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.db.connection import get_connection
+from app.services.composition_timeline import CompiledTimeline
 from app.services.video_container_probe import VideoAssetProbe, probe_iso_bmff
 from app.video_scoring_schemas import (
     VideoAssetV1,
@@ -193,6 +194,7 @@ def put_video_scoring(
     update: VideoScoringUpdateV1,
     *,
     db_path: Path | str,
+    timeline: CompiledTimeline,
 ) -> VideoScoringV1:
     with get_connection(db_path) as conn:
         current = _scoring_revision(conn, project_id)
@@ -213,6 +215,7 @@ def put_video_scoring(
             update,
             asset_id=asset_id,
             document_revision=current + 1,
+            timeline=timeline,
         )
         VideoScoringPersistedV1.model_validate(document.model_dump())
         _upsert_scoring(conn, document, inserting=current == 0)
