@@ -69,6 +69,10 @@ mukit-ai/
 │       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, AudioRecoveryPanel, NeuralAudioRenderPanel (incl. Mix Analysis + Mix assist), …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI/audio sessions)
 │       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture, mixAnalysisUi, mixPlanUi helpers
+├── clients/                 # Adaptive music engine clients. They do not import backend/app or frontend/src
+│   ├── fixtures/            # Shared public session, command, ack, error, and phase JSON
+│   ├── python/              # Package mukit-adaptive, import mukit_adaptive
+│   └── typescript/          # Private package @mukit/adaptive-music
 ├── scripts/                 # run_tests.sh, v1/v2/v3_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
 ├── docs/                    # composition.v2/v1, ai-runtime, plugin-sdk, multi-agent, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, audio-recovery, neural-audio-rendering, mix-analysis, analysis, arrangement, import, datasets, persistence, testing, codebase map
@@ -149,6 +153,10 @@ mukit-ai/
 | `backend/app/adaptive_score_schemas.py` | `adaptive.score.v1` graph DTOs plus `adaptive.layer.intensity.v1` (references only; no note events) |
 | `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD, commands, validate, transitions, layer intensity, playback, and musical-context start/status/samples/stop |
 | `backend/app/routers/adaptive_engine.py` | External `/adaptive/*` session for one stored score: HTTP commands plus events and status sockets. Does not write the score |
+| `clients/python/src/mukit_adaptive/client.py` | Synchronous client for that public surface. Does not import `backend/app` or `frontend/src` |
+| `clients/python/src/mukit_adaptive/demo.py` | `python -m mukit_adaptive.demo` terminal phase loop |
+| `clients/typescript/src/client.ts` | Async client with the same method names |
+| `clients/typescript/src/demo.ts` | `node dist/demo.js` after `npm run build` in `clients/typescript` |
 | `backend/app/adaptive_engine_schemas.py` | `adaptive.engine.session.v1`, command result, ack, and error documents |
 | `backend/app/services/adaptive_engine_service.py` | In-memory engine session. Starts or binds playback and context. Does not write the score |
 | `backend/app/services/adaptive_engine_auth.py` | Bearer-or-loopback compare. No FastAPI import. Never logs the token |
@@ -311,6 +319,7 @@ mukit-ai/
 | Adaptive musical context | `docs/adaptive-musical-context.md` | Flat external samples mapped onto a closed context; hysteresis emits existing playback commands |
 | Adaptive runtime continuation | `docs/adaptive-runtime-continuation.md` | Session buffer ahead of playback; the clock does not await the model |
 | Adaptive music engine | `docs/adaptive-music-engine.md` | External `/adaptive/*` session, bearer-or-loopback auth, and context backpressure. `ai_agents/` does not import the engine modules |
+| Adaptive music client | `docs/adaptive-music-client.md` | Python `mukit_adaptive` and TypeScript `@mukit/adaptive-music`. Client packages must not import `app`. `app` must not import `mukit_adaptive` |
 | Composition Analysis | `docs/composition-analysis.md` | Deterministic sidecar, scopes, warnings, Analysis tab |
 | MIDI / MusicXML import | `docs/import.md` | Ingestion mappings, limits, issue codes |
 | Symbolic datasets | `docs/datasets.md` | Offline `DATASET_ROOT` corpus pipeline, provenance, CLI |

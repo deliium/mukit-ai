@@ -21,6 +21,12 @@ Optional extras (`--e2e` still needs a running stack with `LLM_FAKE_MODE=1`):
 
 The script does not start servers, spend API credits, or run Docker/FluidSynth smokes. Those stay opt-in via the env flags below. Backend has no separate linter; pytest is the backend gate. Frontend lint is ESLint (`npm run lint`).
 
+## Adaptive music clients
+
+`./scripts/run_tests.sh` runs `clients/python` pytest with the backend step and `npm test` in `clients/typescript` with the frontend step. `--backend-only` includes the Python client and skips TypeScript. `--frontend-only` includes TypeScript and skips the Python client. `--skip-backend` and `--lint-only` skip the Python client. `--skip-frontend` skips TypeScript. Arguments after `--` go only to backend pytest.
+
+The TypeScript suite needs `npm install` in `clients/typescript` first. The script does not install it. A missing `node_modules` fails that step with the command and points at `clients/typescript/README.md`. Contract: [adaptive-music-client.md](adaptive-music-client.md).
+
 ## Backend
 
 Run backend unit tests from the `backend/` directory:

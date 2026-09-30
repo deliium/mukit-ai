@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local quality gate: frontend ESLint plus backend/frontend unit tests.
+# Local quality gate: frontend ESLint, backend pytest, the adaptive clients, and frontend unit tests.
 #
 #   ./scripts/run_tests.sh
 #   ./scripts/run_tests.sh --build
@@ -8,6 +8,7 @@
 #
 # Default does not start servers, spend API credits, or run Docker/FluidSynth smokes.
 # Playwright (--e2e) still needs a running stack with LLM_FAKE_MODE=1.
+# Pytest args after -- go only to backend pytest. The Python adaptive client suite is its own command.
 
 set -euo pipefail
 
@@ -29,18 +30,20 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/run_tests.sh [options] [-- pytest-args...]
 
-Default: frontend ESLint, backend pytest, frontend unit tests.
+Default: frontend ESLint, backend pytest, the Python adaptive client, frontend unit tests, and the TypeScript adaptive client.
 
 Options:
   --lint-only         Run ESLint only
-  --backend-only      Run backend pytest only
-  --frontend-only     Run frontend unit tests only
+  --backend-only      Run backend pytest and the Python adaptive client
+  --frontend-only     Run frontend unit tests and the TypeScript adaptive client
   --build             Also run frontend production build
   --e2e               Also run Playwright (requires running stack)
   --skip-lint         Skip ESLint
-  --skip-backend      Skip pytest
-  --skip-frontend     Skip frontend unit tests
+  --skip-backend      Skip backend pytest and the Python adaptive client
+  --skip-frontend     Skip frontend unit tests and the TypeScript adaptive client
   -h, --help          Show this help
+
+Pytest arguments apply only to backend pytest. They are not forwarded to clients/python.
 
 Examples:
   ./scripts/run_tests.sh
@@ -169,6 +172,12 @@ require_frontend_npm() {
   fi
 }
 
+require_adaptive_typescript() {
+  if [[ ! -d "${ROOT}/clients/typescript/node_modules" ]]; then
+    fail "adaptive client dependencies are missing. Run: cd clients/typescript && npm install (see clients/typescript/README.md)"
+  fi
+}
+
 GATE_STARTED="$(date +%s)"
 log "Repository root ${ROOT}"
 
@@ -192,11 +201,22 @@ if [[ "${RUN_BACKEND}" -eq 1 ]]; then
   )
   elapsed=$(( $(date +%s) - started ))
   log "OK    backend pytest (${elapsed}s)"
+
+  started="$(date +%s)"
+  log "START python adaptive client pytest"
+  (
+    cd "${ROOT}/clients/python"
+    "${PYTHON_BIN}" -m pytest
+  )
+  elapsed=$(( $(date +%s) - started ))
+  log "OK    python adaptive client pytest (${elapsed}s)"
 fi
 
 if [[ "${RUN_FRONTEND}" -eq 1 ]]; then
   require_frontend_npm
   run_step "frontend unit tests" npm --prefix "${ROOT}/frontend" test
+  require_adaptive_typescript
+  run_step "typescript adaptive client tests" npm --prefix "${ROOT}/clients/typescript" test
 fi
 
 if [[ "${RUN_BUILD}" -eq 1 ]]; then
