@@ -182,6 +182,10 @@ RUN_DOCKER_ACCEPTANCE=1 ../.venv/bin/python -m pytest tests/test_docker_persiste
 
 Uses Compose project names `mukit-v1-accept` / `mukit-v2-accept` / `mukit-v3-accept` / `mukit-v4-accept` by default and removes the volume on exit unless `KEEP_VOLUME=1`. V2 script covers V1→V2 migration on reopen, expressive fake generate, and multipart MIDI import through Nginx with save/reopen/re-export. V3 adds fake audio/neural modes, hybrid seeded generate, development preview, revision provenance, MIDI/MusicXML export smoke, restart reopen, and seeded fingerprint reproduce — no paid APIs or weight downloads. V4 starts one autonomous run, restarts the backend, and compares the event fingerprint. `./scripts/run_tests.sh` does not call it. Fake-mode studio pytest and the operations split (default tests, Docker, `RUN_LLM_SMOKE=1`, `RUN_WAV_RENDERER_SMOKE=1`) are in [v4-studio-operations.md](v4-studio-operations.md).
 
+### Video scoring
+
+Fixture MP4/MOV bytes are built in process by `backend/tests/fixtures/video/iso_bmff.py` and probed by `tests/test_video_container_probe.py`. They are not a checked-in playable sample and do not use ffmpeg. `tests/test_video_scoring_routes.py` uploads that fixture, checks a byte range, and maps a tempo-change composition. Frontend twins: `npm test` covers `src/utils/videoScoringMap.test.js` and `src/utils/videoScoringClock.test.js`.
+
 ## Frontend Tests
 
 Run from `frontend/`:
