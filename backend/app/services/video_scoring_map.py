@@ -229,6 +229,77 @@ def format_timecode(
     return text
 
 
+def cue_video_seconds(
+    timecode: str,
+    *,
+    frame_rate_numerator: int,
+    frame_rate_denominator: int,
+    timecode_mode: str,
+    start_timecode: str,
+) -> float:
+    """Unclamped picture seconds for an authored ``HH:MM:SS:FF`` address.
+
+    A short asset does not change the result. Negative offsets from the start
+    timecode are ``video_timecode_invalid``.
+    """
+    logger.debug(
+        "cue_video_seconds start",
+        extra={"timecode": timecode, "start_timecode": start_timecode, "timecode_mode": timecode_mode},
+    )
+    if not is_closed_frame_rate(frame_rate_numerator, frame_rate_denominator):
+        raise VideoScoringError("video_frame_rate_required")
+    frames_from_zero = parse_timecode(
+        timecode,
+        frame_rate_numerator=frame_rate_numerator,
+        frame_rate_denominator=frame_rate_denominator,
+        timecode_mode=timecode_mode,
+    ) - parse_timecode(
+        start_timecode,
+        frame_rate_numerator=frame_rate_numerator,
+        frame_rate_denominator=frame_rate_denominator,
+        timecode_mode=timecode_mode,
+    )
+    if frames_from_zero < 0:
+        logger.warning(
+            "video_timecode_invalid",
+            extra={"error_code": "video_timecode_invalid", "frames_from_zero": frames_from_zero},
+        )
+        raise VideoScoringError("video_timecode_invalid")
+    seconds = frames_from_zero * frame_rate_denominator / frame_rate_numerator
+    logger.debug(
+        "cue_video_seconds",
+        extra={"frames_from_zero": frames_from_zero, "video_seconds": seconds},
+    )
+    return seconds
+
+
+def musical_tick_for_score_seconds(score_seconds: float, timeline: CompiledTimeline) -> int:
+    """Tick for unclamped score seconds. Past the composition, the end tick."""
+    if score_seconds < 0:
+        logger.debug(
+            "musical_tick_for_score_seconds",
+            extra={"score_seconds": score_seconds, "musical_tick": 0, "outside": "before"},
+        )
+        return 0
+    total = timeline.total_duration_seconds()
+    if score_seconds >= total:
+        logger.debug(
+            "musical_tick_for_score_seconds",
+            extra={
+                "score_seconds": score_seconds,
+                "musical_tick": timeline.duration_ticks,
+                "outside": "after",
+            },
+        )
+        return int(timeline.duration_ticks)
+    tick = round_half_away_from_zero(timeline.seconds_to_tick(score_seconds))
+    logger.debug(
+        "musical_tick_for_score_seconds",
+        extra={"score_seconds": score_seconds, "musical_tick": tick, "outside": None},
+    )
+    return tick
+
+
 def parse_timecode(
     text: str,
     *,

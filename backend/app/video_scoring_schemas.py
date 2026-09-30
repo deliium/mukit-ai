@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -46,6 +46,18 @@ VideoContainer = Literal["mp4", "mov"]
 VideoContentType = Literal["video/mp4", "video/quicktime"]
 FrameRateSource = Literal["probed", "explicit"]
 TimecodeMode = Literal["non_drop", "drop_frame"]
+CueKind = Literal[
+    "music_start",
+    "music_stop",
+    "hit_point",
+    "reveal",
+    "cut",
+    "action",
+    "dialogue",
+    "emotional_cue",
+    "user_defined",
+]
+CueImportance = Literal["low", "medium", "high", "critical"]
 
 VideoScoringErrorCode = Literal[
     "video_scoring_invalid",
@@ -67,6 +79,9 @@ VideoScoringErrorCode = Literal[
     "video_musical_origin_outside",
     "video_time_clamped",
     "musical_time_clamped",
+    "video_spotting_unparsed",
+    "video_spotting_model_unavailable",
+    "video_spotting_brief_invalid",
 ]
 
 VIDEO_SCORING_ERROR_MESSAGES: dict[str, str] = {
@@ -89,12 +104,16 @@ VIDEO_SCORING_ERROR_MESSAGES: dict[str, str] = {
     "video_musical_origin_outside": "Musical origin tick is outside the composition.",
     "video_time_clamped": "Video time was clamped to the asset duration.",
     "musical_time_clamped": "Musical time was clamped to the composition.",
+    "video_spotting_unparsed": "Spotting suggestion text did not yield a usable cue.",
+    "video_spotting_model_unavailable": "Spotting suggestion model is unavailable.",
+    "video_spotting_brief_invalid": "Spotting brief must be 500 characters or fewer.",
 }
 
 _HTTP_STATUS: dict[str, int] = {
     "video_asset_missing": 404,
     "video_scoring_conflict": 409,
     "video_upload_too_large": 413,
+    "video_spotting_model_unavailable": 503,
 }
 
 
@@ -124,7 +143,7 @@ def is_closed_frame_rate(numerator: int, denominator: int) -> bool:
     return (numerator, denominator) in CLOSED_FRAME_RATES
 
 
-def _reject(model: str, code: str) -> None:
+def _reject(model: str, code: str) -> NoReturn:
     log_video_schema_rejection(model, code)
     raise ValueError(code)
 
@@ -134,14 +153,57 @@ def _finite(value: float) -> bool:
 
 
 class HitPointV1(BaseModel):
-    """A labeled video-time and musical-tick pair. It is not a composition marker."""
+    """One spotting cue on the picture. It is not a composition marker or a note."""
 
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(pattern=r"^hit_[0-9a-f]{8}$")
+    kind: CueKind = "hit_point"
     label: str = Field(min_length=1, max_length=80)
+    timecode: str | None = None
     video_seconds: float = Field(ge=0)
     musical_tick: int = Field(ge=0)
+    tolerance_frames: int = 0
+    importance: CueImportance = "medium"
+    instruction: str = ""
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _known_kind(cls, value: object) -> object:
+        if value not in (
+            "music_start",
+            "music_stop",
+            "hit_point",
+            "reveal",
+            "cut",
+            "action",
+            "dialogue",
+            "emotional_cue",
+            "user_defined",
+        ):
+            _reject(cls.__name__, "video_scoring_invalid")
+        return value
+
+    @field_validator("importance", mode="before")
+    @classmethod
+    def _known_importance(cls, value: object) -> object:
+        if value not in ("low", "medium", "high", "critical"):
+            _reject(cls.__name__, "video_scoring_invalid")
+        return value
+
+    @field_validator("tolerance_frames")
+    @classmethod
+    def _tolerance_range(cls, value: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 240:
+            _reject(cls.__name__, "video_scoring_invalid")
+        return value
+
+    @field_validator("instruction")
+    @classmethod
+    def _instruction_length(cls, value: str) -> str:
+        if not isinstance(value, str) or len(value) > 240:
+            _reject(cls.__name__, "video_scoring_invalid")
+        return value
 
     @field_validator("video_seconds")
     @classmethod
@@ -149,6 +211,19 @@ class HitPointV1(BaseModel):
         if not _finite(value):
             _reject(cls.__name__, "video_scoring_invalid")
         return float(value)
+
+    @field_validator("timecode")
+    @classmethod
+    def _timecode_shape(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if _TIMECODE_RE.fullmatch(value) is None:
+            logger.debug(
+                "video scoring cue timecode rejected",
+                extra={"model": cls.__name__, "error_code": "video_timecode_invalid"},
+            )
+            _reject(cls.__name__, "video_timecode_invalid")
+        return value
 
 
 class VideoAssetV1(BaseModel):
@@ -234,6 +309,7 @@ class VideoScoringV1(BaseModel):
         if rate == (None, None, None):
             if self.timecode_mode == "drop_frame":
                 _reject(self.__class__.__name__, "video_drop_frame_unsupported")
+            _assert_cue_addresses(self.__class__.__name__, self)
             return self
         if any(part is None for part in rate):
             _reject(self.__class__.__name__, "video_frame_rate_incomplete")
@@ -253,6 +329,7 @@ class VideoScoringV1(BaseModel):
         hours = int(match.group("hours"))
         if hours > 23:
             _reject(self.__class__.__name__, "video_timecode_invalid")
+        _assert_cue_addresses(self.__class__.__name__, self)
         return self
 
 
@@ -307,6 +384,7 @@ class VideoScoringUpdateV1(BaseModel):
         if rate == (None, None, None):
             if self.timecode_mode == "drop_frame":
                 _reject(self.__class__.__name__, "video_drop_frame_unsupported")
+            _assert_cue_addresses(self.__class__.__name__, self)
             return self
         if any(part is None for part in rate):
             _reject(self.__class__.__name__, "video_frame_rate_incomplete")
@@ -321,6 +399,10 @@ class VideoScoringUpdateV1(BaseModel):
             _reject(self.__class__.__name__, "video_timecode_invalid")
         if int(match.group("frames")) >= (nominal_frames_for(numerator, denominator) or 0):
             _reject(self.__class__.__name__, "video_timecode_invalid")
+        hours = int(match.group("hours"))
+        if hours > 23:
+            _reject(self.__class__.__name__, "video_timecode_invalid")
+        _assert_cue_addresses(self.__class__.__name__, self)
         return self
 
 
@@ -339,6 +421,48 @@ class VideoScoringMapResponseV1(BaseModel):
     bar: int = Field(ge=1)
     timecode: str
     warnings: list[str] = Field(default_factory=list)
+
+
+def _assert_cue_addresses(model_name: str, document: VideoScoringV1 | VideoScoringUpdateV1) -> None:
+    """Reject a cue frame past the nominal rate, past hour 23, or before start."""
+    authored = [point for point in document.hit_points if point.timecode is not None]
+    if not authored:
+        return
+    numerator = document.frame_rate_numerator
+    denominator = document.frame_rate_denominator
+    if (
+        numerator is None
+        or denominator is None
+        or not is_closed_frame_rate(int(numerator), int(denominator))
+    ):
+        _reject(model_name, "video_frame_rate_required")
+    from app.services.video_scoring_map import parse_timecode
+
+    try:
+        start_frames = parse_timecode(
+            document.start_timecode,
+            frame_rate_numerator=int(numerator),
+            frame_rate_denominator=int(denominator),
+            timecode_mode=document.timecode_mode,
+        )
+    except VideoScoringError as exc:
+        _reject(model_name, exc.code)
+    for point in authored:
+        try:
+            cue_frames = parse_timecode(
+                str(point.timecode),
+                frame_rate_numerator=int(numerator),
+                frame_rate_denominator=int(denominator),
+                timecode_mode=document.timecode_mode,
+            )
+        except VideoScoringError as exc:
+            _reject(model_name, exc.code)
+        if cue_frames - start_frames < 0:
+            logger.debug(
+                "video scoring cue timecode rejected",
+                extra={"model": model_name, "error_code": "video_timecode_invalid", "cue_id": point.id},
+            )
+            _reject(model_name, "video_timecode_invalid")
 
 
 def default_video_scoring(project_id: str) -> VideoScoringV1:

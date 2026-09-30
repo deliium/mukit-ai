@@ -8,9 +8,11 @@ import pytest
 
 from app.services.composition_timeline import compile_timeline
 from app.services.video_scoring_map import (
+    cue_video_seconds,
     format_timecode,
     map_tick_to_video,
     map_video_to_music,
+    musical_tick_for_score_seconds,
     score_seconds_from_video,
     video_seconds_from_score,
 )
@@ -117,6 +119,41 @@ def test_nondrop_does_not_raise_drop_frame_error() -> None:
         timecode_mode="non_drop",
         start_timecode="00:00:00:00",
     )
+
+
+def test_cue_timecode_00374212_is_unclamped_seconds() -> None:
+    seconds = cue_video_seconds(
+        "00:03:42:12",
+        frame_rate_numerator=24,
+        frame_rate_denominator=1,
+        timecode_mode="non_drop",
+        start_timecode="00:00:00:00",
+    )
+    assert seconds == 222.5
+
+
+def test_negative_frame_offset_is_invalid() -> None:
+    with pytest.raises(VideoScoringError) as exc:
+        cue_video_seconds(
+            "00:00:00:00",
+            frame_rate_numerator=24,
+            frame_rate_denominator=1,
+            timecode_mode="non_drop",
+            start_timecode="00:00:10:00",
+        )
+    assert exc.value.code == "video_timecode_invalid"
+
+
+def test_tick_past_composition_is_duration_ticks() -> None:
+    timeline = _timeline()
+    score = score_seconds_from_video(
+        222.5,
+        timeline=timeline,
+        video_origin_seconds=0.0,
+        musical_origin_tick=0,
+    )
+    assert score == 222.5
+    assert musical_tick_for_score_seconds(score, timeline) == timeline.duration_ticks
 
 
 def test_missing_rate_is_required() -> None:

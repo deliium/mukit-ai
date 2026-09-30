@@ -164,6 +164,99 @@ def test_extra_key_is_rejected() -> None:
         VideoScoringV1.model_validate(payload)
 
 
+def test_golden_hit_defaults_spotting_fields() -> None:
+    scoring = VideoScoringV1.model_validate(_scoring())
+    cue = scoring.hit_points[0]
+    assert cue.kind == "hit_point"
+    assert cue.tolerance_frames == 0
+    assert cue.importance == "medium"
+    assert cue.instruction == ""
+    assert cue.timecode is None
+
+
+def test_explicit_null_timecode_stays_null() -> None:
+    payload = _scoring()
+    payload["hit_points"][0]["timecode"] = None
+    cue = VideoScoringV1.model_validate(payload).hit_points[0]
+    assert cue.timecode is None
+    assert cue.video_seconds == 1.5
+    assert cue.musical_tick == 480
+
+
+def test_each_cue_kind_is_accepted() -> None:
+    kinds = (
+        "music_start",
+        "music_stop",
+        "hit_point",
+        "reveal",
+        "cut",
+        "action",
+        "dialogue",
+        "emotional_cue",
+        "user_defined",
+    )
+    points = []
+    for index, kind in enumerate(kinds):
+        points.append(
+            {
+                "id": f"hit_{index:08x}",
+                "kind": kind,
+                "label": "Street reveal" if kind == "user_defined" else kind,
+                "timecode": "00:00:01:00",
+                "video_seconds": 1.0,
+                "musical_tick": 480,
+            }
+        )
+    scoring = VideoScoringV1.model_validate(_scoring(hit_points=points))
+    assert [point.kind for point in scoring.hit_points] == list(kinds)
+    assert scoring.hit_points[-1].label == "Street reveal"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("kind", "scene"),
+        ("tolerance_frames", -1),
+        ("tolerance_frames", 241),
+        ("importance", "urgent"),
+        ("instruction", "x" * 241),
+    ],
+)
+def test_spotting_field_outside_set_is_video_scoring_invalid(field: str, value: object) -> None:
+    payload = _scoring()
+    payload["hit_points"][0][field] = value
+    with pytest.raises(ValidationError) as exc:
+        VideoScoringV1.model_validate(payload)
+    assert "video_scoring_invalid" in str(exc.value)
+
+
+def test_duplicate_hit_id_is_rejected() -> None:
+    payload = _scoring()
+    payload["hit_points"] = [
+        payload["hit_points"][0],
+        {**payload["hit_points"][0], "label": "Again"},
+    ]
+    with pytest.raises(ValidationError) as exc:
+        VideoScoringV1.model_validate(payload)
+    assert "video_scoring_invalid" in str(exc.value)
+
+
+def test_cue_frame_at_nominal_rate_is_rejected() -> None:
+    payload = _scoring()
+    payload["hit_points"][0]["timecode"] = "00:00:00:24"
+    with pytest.raises(ValidationError) as exc:
+        VideoScoringV1.model_validate(payload)
+    assert "video_timecode_invalid" in str(exc.value)
+
+
+def test_cue_before_start_timecode_is_rejected() -> None:
+    payload = _scoring(start_timecode="00:00:10:00")
+    payload["hit_points"][0]["timecode"] = "00:00:00:00"
+    with pytest.raises(ValidationError) as exc:
+        VideoScoringV1.model_validate(payload)
+    assert "video_timecode_invalid" in str(exc.value)
+
+
 def test_drop_frame_2997_is_accepted() -> None:
     doc = VideoScoringV1.model_validate(
         _scoring(
