@@ -1,0 +1,8 @@
+{
+  "schema_version": "adaptive.engine.error.v1",
+  "code": "engine_session_missing",
+  "message": "No engine session exists for that id.",
+  "session_id": null,
+  "retry_after_ms": null,
+  "details": null
+}

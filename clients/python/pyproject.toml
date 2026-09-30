@@ -1,0 +1,21 @@
+[project]
+name = "mukit-adaptive"
+version = "0.1.0"
+description = "Synchronous client for the Mukit adaptive music engine"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["websockets>=13"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]

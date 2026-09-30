@@ -1,0 +1,26 @@
+{
+  "schema_version": "adaptive.engine.session.v1",
+  "session_id": "aeng_0123abcd",
+  "project_id": "3f1c0a2e-7b14-4d0a-9c11-6b0e2a9d4f10",
+  "score_id": "ascore_0123abcd4567ef90",
+  "clock_owner": "engine",
+  "transport": "playing",
+  "runtime_state_id": "explore",
+  "bar": 1,
+  "beat": 1,
+  "intensity": 0.2,
+  "phase": "bed",
+  "active_stinger_id": null,
+  "pending_transition_id": null,
+  "pending_to_state_id": null,
+  "warnings": [],
+  "document_revision": 1,
+  "context_attached": true,
+  "telemetry": {
+    "command_count": 0,
+    "rejected_count": 0,
+    "coalesced_count": 0,
+    "dropped_context_count": 0,
+    "ack_count": 0
+  }
+}

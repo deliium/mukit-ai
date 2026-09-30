@@ -1,0 +1,9 @@
+{
+  "schema_version": "adaptive.engine.ack.v1",
+  "session_id": "aeng_0123abcd",
+  "request_id": "req_bar01",
+  "kind": "state",
+  "disposition": "finished",
+  "runtime_state_id": "explore",
+  "detail_code": null
+}

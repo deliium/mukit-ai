@@ -1,0 +1,20 @@
+{
+  "schema_version": "adaptive.client.phases.v1",
+  "start": {
+    "mapping": {
+      "schema_version": "adaptive.context.mapping.v1",
+      "baseline_state_id": "explore",
+      "bindings": [],
+      "state_rules": []
+    },
+    "cues": [
+      {"name": "combat", "to_state_id": "combat_state"}
+    ]
+  },
+  "phases": {
+    "exploration": {"state_id": "explore", "intensity": 0.2, "threat": 0.1},
+    "danger": {"state_id": "danger", "intensity": 0.55, "threat": 0.6},
+    "combat": {"cue": "combat", "intensity": 0.9, "threat": 0.95},
+    "victory": {"state_id": "victory", "intensity": 0.35, "threat": 0}
+  }
+}
