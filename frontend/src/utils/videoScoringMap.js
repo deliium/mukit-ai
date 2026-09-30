@@ -189,6 +189,141 @@ export function hitPointOffMap(hitPoint, options) {
   return Math.abs(Number(hitPoint.musical_tick) - mapped.tick) > 1;
 }
 
+export function cueRulerFraction(videoSeconds, durationSeconds) {
+  const duration = Number(durationSeconds);
+  const seconds = Number(videoSeconds);
+  if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(seconds) || seconds <= 0) {
+    return 0;
+  }
+  if (seconds >= duration) {
+    return 1;
+  }
+  return seconds / duration;
+}
+
+export function cueVideoSeconds(timecode, {
+  frameRateNumerator,
+  frameRateDenominator,
+  timecodeMode = 'non_drop',
+  startTimecode = '00:00:00:00',
+} = {}) {
+  const rate = { frameRateNumerator, frameRateDenominator, timecodeMode };
+  const frames = parseTimecode(timecode, rate) - parseTimecode(startTimecode, rate);
+  if (frames < 0) {
+    throw new VideoScoringMapError('video_timecode_invalid');
+  }
+  return (frames * frameRateDenominator) / frameRateNumerator;
+}
+
+export function cueFrameIndex(cue, {
+  frameRateNumerator,
+  frameRateDenominator,
+  timecodeMode = 'non_drop',
+  startTimecode = '00:00:00:00',
+} = {}) {
+  if (!isClosedFrameRate(frameRateNumerator, frameRateDenominator)) {
+    throw new VideoScoringMapError('video_frame_rate_required');
+  }
+  if (cue.timecode) {
+    const rate = { frameRateNumerator, frameRateDenominator, timecodeMode };
+    const frames = parseTimecode(cue.timecode, rate) - parseTimecode(startTimecode, rate);
+    if (frames < 0) {
+      throw new VideoScoringMapError('video_timecode_invalid');
+    }
+    return frames;
+  }
+  return Math.floor((Number(cue.video_seconds) * frameRateNumerator) / frameRateDenominator + 1e-9);
+}
+
+export function scoreSecondsOutsideComposition(videoSeconds, options) {
+  const score = scoreSecondsFromVideo(videoSeconds, options);
+  const total = totalDurationSeconds(options.timeline);
+  if (score == null || total == null) {
+    return false;
+  }
+  return score < 0 || score > total;
+}
+
+export function verifyCueLandings(cues, composition, options) {
+  if (!isClosedFrameRate(options.frameRateNumerator, options.frameRateDenominator)) {
+    throw new VideoScoringMapError('video_frame_rate_required');
+  }
+  const attacks = noteAttacks(composition, options);
+  return (cues || []).map((cue) => landOne(cue, attacks, options));
+}
+
+function landOne(cue, attacks, options) {
+  const cueFrame = cueFrameIndex(cue, options);
+  if (attacks.length === 0) {
+    return {
+      id: cue.id,
+      kind: cue.kind,
+      timecode: cue.timecode ?? null,
+      tolerance_frames: cue.tolerance_frames ?? 0,
+      status: 'empty',
+      delta_frames: null,
+      match_count: 0,
+      matches: [],
+    };
+  }
+  const ranked = [...attacks].sort((left, right) => {
+    const delta = Math.abs(left.eventFrame - cueFrame) - Math.abs(right.eventFrame - cueFrame);
+    if (delta !== 0) return delta;
+    if (left.startTick !== right.startTick) return left.startTick - right.startTick;
+    return left.trackIndex - right.trackIndex;
+  });
+  const closest = ranked[0];
+  const tolerance = cue.tolerance_frames ?? 0;
+  const matched = ranked.filter(
+    (attack) => attack.inPicture && Math.abs(attack.eventFrame - cueFrame) <= tolerance,
+  );
+  return {
+    id: cue.id,
+    kind: cue.kind,
+    timecode: cue.timecode ?? null,
+    tolerance_frames: tolerance,
+    status: matched.length > 0 ? 'landed' : 'missed',
+    delta_frames: closest.eventFrame - cueFrame,
+    match_count: matched.length,
+    matches: matched.slice(0, 8).map((attack) => ({
+      track_index: attack.trackIndex,
+      event_index: attack.eventIndex,
+      start_tick: attack.startTick,
+      pitch: attack.pitch,
+    })),
+  };
+}
+
+function noteAttacks(composition, options) {
+  const attacks = [];
+  const tracks = composition?.tracks || [];
+  tracks.forEach((track, trackIndex) => {
+    (track.events || []).forEach((event, eventIndex) => {
+      if (event?.type !== 'note') return;
+      const startTick = Number(event.start_tick);
+      if (!Number.isFinite(startTick) || startTick < 0 || startTick > options.timeline.durationTicks) {
+        return;
+      }
+      const score = tickToSeconds(options.timeline, startTick);
+      const eventVideo = videoSecondsFromScore(score, options);
+      if (eventVideo == null) return;
+      const eventFrame = Math.floor(
+        (eventVideo * options.frameRateNumerator) / options.frameRateDenominator + 1e-9,
+      );
+      attacks.push({
+        trackIndex,
+        eventIndex,
+        startTick,
+        pitch: event.pitch,
+        eventVideo,
+        eventFrame,
+        inPicture: eventVideo >= 0 && eventVideo <= Number(options.durationSeconds),
+      });
+    });
+  });
+  return attacks;
+}
+
 function requireRate(options) {
   if (!isClosedFrameRate(options.frameRateNumerator, options.frameRateDenominator)) {
     throw new VideoScoringMapError('video_frame_rate_required');

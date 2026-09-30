@@ -1487,6 +1487,7 @@ export const useMusicStore = create((set, get) => ({
   pictureSyncStatus: 'idle',
   pictureSeekRequest: null,
   pictureScoring: null,
+  pictureSpottingSuggestions: [],
   /**
    * Ephemeral loop bounds for transport. Not a Composition V2 field.
    * Shape: { startTick, endTick, enabled } | null
@@ -5106,11 +5107,16 @@ export const useMusicStore = create((set, get) => ({
     set({ pictureScoring: pictureScoring || null });
   },
 
+  setPictureSpottingSuggestions: (pictureSpottingSuggestions) => {
+    set({ pictureSpottingSuggestions: Array.isArray(pictureSpottingSuggestions) ? pictureSpottingSuggestions : [] });
+  },
+
   clearPicture: () => {
     set({
       pictureSyncStatus: 'idle',
       pictureSeekRequest: null,
       pictureScoring: null,
+      pictureSpottingSuggestions: [],
     });
   },
 

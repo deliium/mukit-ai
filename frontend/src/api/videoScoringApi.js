@@ -41,6 +41,18 @@ export async function putVideoScoring(projectId, payload) {
   return request('put', projectPath(projectId, '/video-scoring'), payload);
 }
 
+export async function verifyVideoSpotting(projectId, cueId) {
+  return request('post', projectPath(projectId, '/video-scoring/spotting/verify'), {
+    cue_id: cueId || null,
+  });
+}
+
+export async function suggestVideoSpotting(projectId, brief) {
+  return request('post', projectPath(projectId, '/video-scoring/spotting/suggest'), {
+    brief: brief || '',
+  });
+}
+
 export async function getVideoScoringMap(projectId, params) {
   const search = new URLSearchParams();
   if (params.videoSeconds != null) {

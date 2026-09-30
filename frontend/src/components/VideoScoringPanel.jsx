@@ -6,7 +6,9 @@ import {
   getVideoAsset,
   getVideoScoring,
   putVideoScoring,
+  suggestVideoSpotting,
   uploadVideoAsset,
+  verifyVideoSpotting,
   videoAssetMediaUrl,
   VideoScoringApiError,
 } from '../api/videoScoringApi.js';
@@ -15,8 +17,12 @@ import { compileTimeline } from '../utils/compositionTimeline.js';
 import { releaseToneForPicture } from '../utils/pictureToneRelease.js';
 import {
   CLOSED_FRAME_RATES,
+  cueRulerFraction,
+  formatTimecode,
   hitPointOffMap,
   mapVideoToMusic,
+  scoreSecondsOutsideComposition,
+  verifyCueLandings,
 } from '../utils/videoScoringMap.js';
 
 const Panel = styled.section`
@@ -67,6 +73,20 @@ const Mark = styled.span`
 
 let hitCounter = 0;
 
+const CUE_KINDS = [
+  'music_start',
+  'music_stop',
+  'hit_point',
+  'reveal',
+  'cut',
+  'action',
+  'dialogue',
+  'emotional_cue',
+  'user_defined',
+];
+
+const CUE_IMPORTANCE = ['low', 'medium', 'high', 'critical'];
+
 function nextHitId() {
   const cryptoApi = globalThis.crypto;
   if (cryptoApi && typeof cryptoApi.getRandomValues === 'function') {
@@ -86,6 +106,15 @@ function rateKey(numerator, denominator) {
   return `${numerator}/${denominator}`;
 }
 
+function statusText(rows, cueId) {
+  const row = (rows || []).find((item) => item.id === cueId);
+  if (!row) {
+    return '—';
+  }
+  const delta = row.delta_frames == null ? '' : ` ${row.delta_frames}`;
+  return `${row.status}${delta}`;
+}
+
 function emptyForm(scoring) {
   return {
     rate: rateKey(scoring?.frame_rate_numerator, scoring?.frame_rate_denominator),
@@ -101,16 +130,24 @@ const VideoScoringPanel = () => {
   const projectId = useMusicStore((state) => state.currentProjectId);
   const composition = useMusicStore((state) => state.editedMusicJson);
   const pictureScoring = useMusicStore((state) => state.pictureScoring);
+  const pictureSpottingSuggestions = useMusicStore((state) => state.pictureSpottingSuggestions);
   const pictureSeekRequest = useMusicStore((state) => state.pictureSeekRequest);
   const setPictureLeader = useMusicStore((state) => state.setPictureLeader);
   const setPictureScoring = useMusicStore((state) => state.setPictureScoring);
+  const setPictureSpottingSuggestions = useMusicStore((state) => state.setPictureSpottingSuggestions);
   const clearPicture = useMusicStore((state) => state.clearPicture);
   const applyPictureTime = useMusicStore((state) => state.applyPictureTime);
   const videoRef = useRef(null);
+  const cueRulerRef = useRef(null);
   const [asset, setAsset] = useState(null);
   const [form, setForm] = useState(() => emptyForm(null));
   const [videoSeconds, setVideoSeconds] = useState(0);
   const [status, setStatus] = useState('');
+  const [selectedCueId, setSelectedCueId] = useState(null);
+  const [cueDraft, setCueDraft] = useState(null);
+  const [brief, setBrief] = useState('');
+  const [workingLandings, setWorkingLandings] = useState([]);
+  const [storedLandings, setStoredLandings] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -218,6 +255,35 @@ const VideoScoringPanel = () => {
     setStatus(code);
   }
 
+  function timecodeForSeconds(seconds) {
+    if (!mapOptions) {
+      return null;
+    }
+    return formatTimecode(seconds, {
+      frameRateNumerator: mapOptions.frameRateNumerator,
+      frameRateDenominator: mapOptions.frameRateDenominator,
+      timecodeMode: mapOptions.timecodeMode,
+      startTimecode: mapOptions.startTimecode,
+    });
+  }
+
+  function selectCue(hit) {
+    setSelectedCueId(hit.id);
+    setCueDraft({
+      kind: hit.kind || 'hit_point',
+      label: hit.label,
+      timecode: hit.timecode || timecodeForSeconds(hit.video_seconds) || '',
+      tolerance_frames: hit.tolerance_frames ?? 0,
+      importance: hit.importance || 'medium',
+      instruction: hit.instruction || '',
+    });
+  }
+
+  function replaceCue(id, next) {
+    const hits = pictureScoring?.hit_points || [];
+    void save(hits.map((hit) => (hit.id === id ? { ...hit, ...next } : hit)));
+  }
+
   async function onUpload(event) {
     const file = event.target.files && event.target.files[0];
     if (!file || !projectId) {
@@ -303,14 +369,165 @@ const VideoScoringPanel = () => {
       console.warn('[VideoScoring] request failed', { code: 'video_scoring_invalid' });
       return;
     }
-    const mapped = mapVideoToMusic(element.currentTime || 0, mapOptions);
+    const seconds = element.currentTime || 0;
     const hit = {
       id: nextHitId(),
+      kind: 'hit_point',
       label: `Hit ${pictureScoring.hit_points.length + 1}`,
-      video_seconds: element.currentTime || 0,
-      musical_tick: mapped.tick,
+      timecode: timecodeForSeconds(seconds),
+      video_seconds: seconds,
+      musical_tick: 0,
+      tolerance_frames: 0,
+      importance: 'medium',
+      instruction: '',
     };
     void save([...(pictureScoring.hit_points || []), hit]);
+  }
+
+  function saveCueDraft() {
+    if (!selectedCueId || !cueDraft || !/^\d{2}:[0-5]\d:[0-5]\d:\d{2}$/.test(cueDraft.timecode || '')) {
+      console.warn('[VideoScoring] request failed', { code: 'video_timecode_invalid' });
+      setStatus('video_timecode_invalid');
+      return;
+    }
+    replaceCue(selectedCueId, {
+      kind: cueDraft.kind,
+      label: cueDraft.label,
+      timecode: cueDraft.timecode,
+      tolerance_frames: Number(cueDraft.tolerance_frames) || 0,
+      importance: cueDraft.importance,
+      instruction: cueDraft.instruction || '',
+    });
+  }
+
+  function onCuePointerDown(event, hit) {
+    if (!asset || !mapOptions || !cueRulerRef.current) {
+      selectCue(hit);
+      return;
+    }
+    selectCue(hit);
+    const ruler = cueRulerRef.current;
+    const pointerId = event.pointerId;
+    let moved = false;
+    function secondsFromEvent(pointerEvent) {
+      const rect = ruler.getBoundingClientRect();
+      const ratio = rect.width <= 0 ? 0 : (pointerEvent.clientX - rect.left) / rect.width;
+      const clamped = Math.min(1, Math.max(0, ratio));
+      return clamped * Number(asset.duration_seconds);
+    }
+    function move(pointerEvent) {
+      if (pointerEvent.pointerId !== pointerId) {
+        return;
+      }
+      moved = true;
+      const seconds = secondsFromEvent(pointerEvent);
+      const timecode = timecodeForSeconds(seconds);
+      setCueDraft((current) => (current ? { ...current, timecode: timecode || current.timecode } : current));
+    }
+    function up(pointerEvent) {
+      if (pointerEvent.pointerId !== pointerId) {
+        return;
+      }
+      ruler.removeEventListener('pointermove', move);
+      ruler.removeEventListener('pointerup', up);
+      if (!moved) {
+        return;
+      }
+      const seconds = secondsFromEvent(pointerEvent);
+      const timecode = timecodeForSeconds(seconds);
+      if (timecode) {
+        replaceCue(hit.id, { timecode, video_seconds: seconds });
+      }
+    }
+    ruler.addEventListener('pointermove', move);
+    ruler.addEventListener('pointerup', up);
+  }
+
+  async function onSuggest() {
+    if (!projectId || !asset || !mapOptions) {
+      return;
+    }
+    try {
+      const result = await suggestVideoSpotting(projectId, brief);
+      const suggestions = result?.suggestions || [];
+      setPictureSpottingSuggestions(suggestions);
+      console.info('[VideoScoring] suggest', {
+        cueCount: (pictureScoring?.hit_points || []).length,
+        suggestionCount: suggestions.length,
+      });
+      setStatus(result?.warning || '');
+    } catch (error) {
+      warn(error);
+    }
+  }
+
+  function acceptSuggestion(draft) {
+    const hits = pictureScoring?.hit_points || [];
+    if (hits.length >= 64) {
+      console.warn('[VideoScoring] request failed', { code: 'video_scoring_invalid' });
+      setStatus('video_scoring_invalid');
+      return;
+    }
+    const hit = {
+      id: nextHitId(),
+      kind: draft.kind,
+      label: draft.label,
+      timecode: draft.timecode,
+      video_seconds: 0,
+      musical_tick: 0,
+      tolerance_frames: draft.tolerance_frames ?? 0,
+      importance: draft.importance || 'medium',
+      instruction: draft.instruction || '',
+    };
+    console.info('[VideoScoring] accept', { cueCount: hits.length + 1 });
+    void save([...hits, hit]);
+  }
+
+  function dismissSuggestions() {
+    setPictureSpottingSuggestions([]);
+  }
+
+  function landingCounts(rows) {
+    return rows.reduce((counts, row) => {
+      counts[row.status] = (counts[row.status] || 0) + 1;
+      return counts;
+    }, { landed: 0, missed: 0, empty: 0 });
+  }
+
+  function verifyWorking() {
+    if (!mapOptions || !composition) {
+      return;
+    }
+    const rows = verifyCueLandings(pictureScoring?.hit_points || [], composition, mapOptions);
+    setWorkingLandings(rows);
+    rows.forEach((row) => {
+      console.debug('[VideoScoring] verify cue', {
+        cueId: row.id,
+        status: row.status,
+        deltaFrames: row.delta_frames,
+      });
+    });
+    console.info('[VideoScoring] verify', {
+      cueCount: rows.length,
+      ...landingCounts(rows),
+    });
+  }
+
+  async function verifyStored() {
+    if (!projectId) {
+      return;
+    }
+    try {
+      const result = await verifyVideoSpotting(projectId, selectedCueId);
+      const rows = result?.cues || [];
+      setStoredLandings(rows);
+      console.info('[VideoScoring] verify', {
+        cueCount: rows.length,
+        ...landingCounts(rows),
+      });
+    } catch (error) {
+      warn(error);
+    }
   }
 
   function removeHit(id) {
@@ -363,17 +580,25 @@ const VideoScoringPanel = () => {
   if (timeline && mapOptions && timeline.durationTicks > 0) {
     for (const hit of pictureScoring?.hit_points || []) {
       let offMap = false;
+      let pastScore = false;
       try {
         offMap = hitPointOffMap(hit, mapOptions);
+        pastScore = scoreSecondsOutsideComposition(hit.video_seconds, mapOptions);
       } catch {
         offMap = false;
+      }
+      let label = hit.label;
+      if (pastScore) {
+        label = `${hit.label} (past the score)`;
+      } else if (offMap) {
+        label = `${hit.label} (off map)`;
       }
       marks.push({
         key: hit.id,
         left: (hit.musical_tick / timeline.durationTicks) * 100,
         top: 28,
-        color: offMap ? '#b45309' : '#0f766e',
-        label: offMap ? `${hit.label} (off map)` : hit.label,
+        color: pastScore || offMap ? '#b45309' : '#0f766e',
+        label,
         id: hit.id,
       });
     }
@@ -408,6 +633,84 @@ const VideoScoringPanel = () => {
             onPause={onPause}
             onEnded={onPause}
           />
+          <Ruler ref={cueRulerRef} aria-label="Cue ruler">
+            {(pictureScoring?.hit_points || []).map((hit) => {
+              const fraction = cueRulerFraction(hit.video_seconds, asset.duration_seconds);
+              const pastPicture = Number(hit.video_seconds) > Number(asset.duration_seconds);
+              return (
+                <Mark
+                  key={hit.id}
+                  $left={fraction * 100}
+                  $top={8}
+                  $color={pastPicture ? '#b45309' : '#0f766e'}
+                  onPointerDown={(event) => onCuePointerDown(event, hit)}
+                >
+                  <button type="button" onClick={() => selectCue(hit)}>
+                    {pastPicture ? `${hit.label} (past the picture)` : hit.label}
+                  </button>
+                </Mark>
+              );
+            })}
+          </Ruler>
+          {cueDraft && selectedCueId ? (
+            <FormGrid>
+              <Field>
+                Kind
+                <select
+                  value={cueDraft.kind}
+                  onChange={(event) => setCueDraft((current) => ({ ...current, kind: event.target.value }))}
+                >
+                  {CUE_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
+                </select>
+              </Field>
+              <Field>
+                Label
+                <input
+                  value={cueDraft.label}
+                  onChange={(event) => setCueDraft((current) => ({ ...current, label: event.target.value }))}
+                />
+              </Field>
+              <Field>
+                Timecode
+                <input
+                  value={cueDraft.timecode}
+                  onChange={(event) => setCueDraft((current) => ({ ...current, timecode: event.target.value }))}
+                />
+              </Field>
+              <Field>
+                Tolerance frames
+                <input
+                  type="number"
+                  min="0"
+                  max="240"
+                  value={cueDraft.tolerance_frames}
+                  onChange={(event) => setCueDraft((current) => ({
+                    ...current,
+                    tolerance_frames: event.target.value,
+                  }))}
+                />
+              </Field>
+              <Field>
+                Importance
+                <select
+                  value={cueDraft.importance}
+                  onChange={(event) => setCueDraft((current) => ({ ...current, importance: event.target.value }))}
+                >
+                  {CUE_IMPORTANCE.map((level) => <option key={level} value={level}>{level}</option>)}
+                </select>
+              </Field>
+              <Field>
+                Instruction
+                <input
+                  value={cueDraft.instruction}
+                  maxLength={240}
+                  onChange={(event) => setCueDraft((current) => ({ ...current, instruction: event.target.value }))}
+                />
+              </Field>
+              <button type="button" onClick={saveCueDraft}>Save cue</button>
+              <button type="button" onClick={() => removeHit(selectedCueId)}>Remove</button>
+            </FormGrid>
+          ) : null}
           <output aria-label="Timecode">{timecode}</output>
           <button type="button" onClick={removeAsset}>Remove picture</button>
         </>
@@ -480,7 +783,17 @@ const VideoScoringPanel = () => {
           <Ruler aria-label="Bar ruler">
             {marks.map((mark) => (
               <Mark key={mark.key} $left={mark.left} $top={mark.top} $color={mark.color}>
-                {mark.label}
+                {mark.id ? (
+                  <button type="button" onClick={() => {
+                    const hit = (pictureScoring?.hit_points || []).find((item) => item.id === mark.id);
+                    if (hit) {
+                      selectCue(hit);
+                    }
+                  }}
+                  >
+                    {mark.label}
+                  </button>
+                ) : mark.label}
                 {mark.id ? (
                   <button type="button" onClick={() => removeHit(mark.id)}>Remove</button>
                 ) : null}
@@ -488,6 +801,33 @@ const VideoScoringPanel = () => {
             ))}
           </Ruler>
           {asset ? <button type="button" onClick={addHit}>Add hit point</button> : null}
+          <button type="button" onClick={verifyWorking}>Verify working score</button>
+          <button type="button" onClick={verifyStored}>Verify stored score</button>
+          {selectedCueId ? (
+            <Meta>
+              Working {statusText(workingLandings, selectedCueId)}
+              {' · '}
+              Stored {statusText(storedLandings, selectedCueId)}
+            </Meta>
+          ) : null}
+          <Field>
+            Spotting brief
+            <input
+              value={brief}
+              maxLength={500}
+              onChange={(event) => setBrief(event.target.value)}
+            />
+          </Field>
+          <button type="button" onClick={onSuggest} disabled={!asset}>Suggest cues</button>
+          {(pictureSpottingSuggestions || []).map((draft) => (
+            <Meta key={`${draft.timecode}-${draft.label}`}>
+              {draft.kind} {draft.timecode}
+              <button type="button" onClick={() => acceptSuggestion(draft)}>Accept</button>
+            </Meta>
+          ))}
+          {(pictureSpottingSuggestions || []).length > 0 ? (
+            <button type="button" onClick={dismissSuggestions}>Dismiss</button>
+          ) : null}
         </>
       ) : null}
       {status ? <Meta>{status}</Meta> : null}
