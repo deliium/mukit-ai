@@ -7,6 +7,7 @@ import { createAppLogger } from '../utils/appLogger.js';
 import { normalizeRevisionMode } from '../utils/revisionLoopModes.js';
 import { operationSummaryText } from '../utils/operationSummaryText.js';
 import AutonomousComposerPanel from './AutonomousComposerPanel.jsx';
+import FilmScorePanel from './FilmScorePanel.jsx';
 
 const WorkflowListeningPanel = lazy(() => import('./WorkflowListeningPanel.jsx'));
 
@@ -168,6 +169,7 @@ const MultiAgentPanel = () => {
   return (
     <Panel data-testid="multi-agent-panel">
       <AutonomousComposerPanel />
+      <FilmScorePanel />
       <Suspense fallback={null}>
         <WorkflowListeningPanel />
       </Suspense>

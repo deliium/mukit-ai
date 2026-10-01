@@ -212,6 +212,9 @@ import {
   decideProjectReview,
   listProjectActivity,
 } from '../api/projectApi.js';
+import { commitFilmScore as commitFilmScoreRequest, previewFilmScore as previewFilmScoreRequest } from '../api/filmScoreApi.js';
+import { scoringRevisionForCommit } from '../utils/filmScorePlan.js';
+import { getVideoScoring } from '../api/videoScoringApi.js';
 import {
   PLAYBACK_MIXER_SCOPE_ARRANGEMENT,
   PLAYBACK_MIXER_SCOPE_DEVELOPMENT,
@@ -1639,6 +1642,9 @@ export const useMusicStore = create((set, get) => ({
   autonomousAbortController: null,
   autonomousPreview: null,
   autonomousPreviewFingerprint: null,
+  filmScorePreview: null,
+  filmScoreStatus: 'idle',
+  filmScoreError: '',
   ...initialDevelopmentPreviewState,
   ...initialMusicalReferenceSessionState,
   ...initialArrangementPreviewState,
@@ -12607,6 +12613,88 @@ export const useMusicStore = create((set, get) => ({
       set({
         multiAgentStatus: 'error',
         multiAgentError: error?.message || 'Multi-agent apply failed',
+      });
+      return false;
+    }
+  },
+
+  previewFilmScore: async (request) => {
+    const projectId = get().currentProjectId;
+    if (!projectId) {
+      set({ filmScoreStatus: 'error', filmScoreError: 'film_asset_missing' });
+      return null;
+    }
+    set({ filmScoreStatus: 'loading', filmScoreError: '' });
+    try {
+      const preview = await previewFilmScoreRequest(projectId, request);
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({ filmScorePreview: preview, filmScoreStatus: 'ready', filmScoreError: '' });
+      return preview;
+    } catch (error) {
+      set({
+        filmScoreStatus: 'error',
+        filmScoreError: error?.code || 'film_score_invalid',
+      });
+      return null;
+    }
+  },
+
+  commitFilmScore: async ({ replaceExisting = false } = {}) => {
+    const state = get();
+    const preview = state.filmScorePreview;
+    const projectId = state.currentProjectId;
+    if (!preview?.candidate || !preview.candidate_fingerprint || !projectId) {
+      set({ filmScoreStatus: 'error', filmScoreError: 'film_score_conflict' });
+      return false;
+    }
+    if (
+      !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+      || !state.workingFingerprint
+    ) {
+      set({ filmScoreStatus: 'error', filmScoreError: 'film_score_conflict' });
+      return false;
+    }
+    const documentRevision = scoringRevisionForCommit(preview);
+    if (documentRevision == null) {
+      console.debug('[FIX] film score commit missing preview scoring revision', { projectId });
+      set({ filmScoreStatus: 'error', filmScoreError: 'film_score_conflict' });
+      return false;
+    }
+    console.debug('[FIX] film score commit scoring revision', { projectId, documentRevision });
+    set({ filmScoreStatus: 'loading', filmScoreError: '' });
+    try {
+      await commitFilmScoreRequest(projectId, {
+        candidate: preview.candidate,
+        candidate_fingerprint: preview.candidate_fingerprint,
+        replace_existing: Boolean(replaceExisting),
+        expected_document_revision: documentRevision,
+        artifact_log: preview.artifact_log || [],
+        artifact_role_map: preview.artifact_role_map,
+        branch_id: state.activeBranchId,
+        expected_active_branch_id: state.activeBranchId,
+        expected_working_version: state.workingVersion,
+        expected_head_revision_id: state.currentRevisionId,
+        expected_source_fingerprint: state.workingFingerprint,
+      });
+      set({ filmScorePreview: null, filmScoreStatus: 'idle', filmScoreError: '' });
+      await get().openProject(projectId);
+      try {
+        const scoring = await getVideoScoring(projectId);
+        if (get().currentProjectId === projectId) {
+          set({ pictureScoring: scoring });
+        }
+      } catch {
+        set({ filmScoreError: 'film_origin_not_updated' });
+      }
+      return true;
+    } catch (error) {
+      set({
+        filmScoreStatus: 'error',
+        filmScoreError: error?.code || 'film_score_conflict',
       });
       return false;
     }
