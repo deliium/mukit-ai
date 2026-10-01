@@ -30,9 +30,10 @@ mukit-ai/
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
 │   │   ├── video_scoring_schemas.py   # video.asset.v1 + video.scoring.v1
 │   │   ├── film_score_schemas.py      # film.score.plan.v1 + preview/commit DTOs
+│   │   ├── film_score_adapt_schemas.py  # film.score.adaptation.v1 + preview/commit DTOs
 │   │   ├── video_scoring_settings.py  # VIDEO_ASSET_ROOT / VIDEO_ASSET_MAX_UPLOAD_BYTES
 │   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + video_scoring + film_score + ai_models + ai_agents + plugins + collaboration + adaptive_scores + adaptive_engine HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. composition_critique, adaptive_score_*, adaptive_playback*, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, video_scoring_store, video_container_probe, video_scoring_map, film_score_tempo, film_score_accents, film_score_workflow, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
+│   │   ├── services/        # Domain + orchestration (incl. composition_critique, adaptive_score_*, adaptive_playback*, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, video_scoring_store, video_container_probe, video_scoring_map, film_score_tempo, film_score_accents, film_score_workflow, film_score_adapt, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
@@ -111,10 +112,11 @@ mukit-ai/
 | `backend/app/services/audio_recovery/` | Separation, scaffolding, transcription, pipeline |
 | `backend/app/services/audio_recovery_store.py` | Job/asset FS + SQLite metadata; project-delete GC |
 | `backend/app/routers/video_scoring.py` | Project picture upload, media, scoring CAS, and time map |
-| `backend/app/routers/film_score.py` | Picture film-score preview and explicit commit; the only video reader on this path |
+| `backend/app/routers/film_score.py` | Picture film-score preview and explicit commit; adaptation preview and commit; the only video reader on these paths |
 | `backend/app/services/film_score_tempo.py` | Deterministic section, tempo, and dialogue compiler |
 | `backend/app/services/film_score_workflow.py` | Existing-agent sequence and candidate; does not write the score |
 | `backend/app/services/film_score_accents.py` | Accent repair for aligned sync cues |
+| `backend/app/services/film_score_adapt.py` | Local picture-edit repair; does not import accents or video modules |
 | `backend/app/services/video_scoring_store.py` | One immutable video file per project; replace-then-delete; project-delete GC |
 | `backend/app/services/video_container_probe.py` | Read-only ISO-BMFF duration, frame rate, audio, and resolution |
 | `backend/app/services/video_scoring_map.py` | Pure video time ↔ tick map and SMPTE timecode |
@@ -122,7 +124,9 @@ mukit-ai/
 | `backend/app/services/llm_video_spotting.py` | Explicit spotting suggestion preview; does not write cues |
 | `frontend/src/components/VideoScoringPanel.jsx` | Picture tab: player, timecode, bar ruler, markers, hit points |
 | `frontend/src/components/FilmScorePanel.jsx` | Agents tab: inspect `film.score.plan.v1` and commit |
+| `frontend/src/components/FilmScoreAdaptPanel.jsx` | Agents tab: inspect `film.score.adaptation.v1` and commit |
 | `frontend/src/api/filmScoreApi.js` | Film-score preview and commit HTTP client |
+| `frontend/src/api/filmScoreAdaptApi.js` | Film-score adaptation preview and commit HTTP client |
 | `frontend/src/api/videoScoringApi.js` | Picture asset and scoring HTTP client |
 | `frontend/src/utils/videoScoringMap.js` | Frontend twin of the video ↔ tick map |
 | `frontend/src/components/NeuralAudioRenderPanel.jsx` | Render with AI jobs / download (egress only) |
@@ -329,6 +333,7 @@ mukit-ai/
 | Audio↔symbolic alignment | `docs/audio-symbolic-alignment.md` | Bind-time map, bar↔source seek, waveform sync, soft-stale neural renders |
 | Video scoring | `docs/video-scoring.md` | One immutable MP4/MOV (`video.asset.v1`) and `video.scoring.v1` sync. Picture play and Tone share one cursor leader. Spotting cues stay on `hit_points`. `ai_agents/` does not import `video_scoring_schemas`, `video_scoring_settings`, `video_scoring_store`, `video_container_probe`, `video_scoring_map`, `video_spotting`, or `llm_video_spotting` |
 | Film scoring | `docs/film-scoring.md` | Explicit `film.score.plan.v1` preview from stored cues, then commit of `composition.v2`. `ai_agents/` does not import film-score or video modules |
+| Film score adaptation | `docs/film-score-adaptation.md` | Explicit `film.score.adaptation.v1` for one declared picture edit. Commit writes `composition.v2` only. `ai_agents/` does not import `film_score_adapt` |
 | Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument mix + stem-set egress; licenses; Compose profile |
 | Mix analysis | `docs/mix-analysis.md` | DSP measurements + observations over neural stem/mix WAVs; soft-stale; never mutates audio/V2 |
 | AI-assisted mixing | `docs/ai-assisted-mixing.md` | Non-destructive mix plans, preview/apply/undo, new mix revisions; stems unchanged |

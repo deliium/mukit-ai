@@ -30,3 +30,4 @@ The Agents tab `FilmScorePanel` takes a brief, an optional profile id and streng
 
 - [Multi-agent](./multi-agent.md)
 - [Video scoring](./video-scoring.md)
+- [Film score adaptation](./film-score-adaptation.md) — local repair after a declared picture edit; it does not replace this generation preview
