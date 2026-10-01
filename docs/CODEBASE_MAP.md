@@ -401,6 +401,7 @@ flowchart TD
 
 - [Composition V2](composition-v2.md) — operational canonical contract
 - [Adaptive score](adaptive-score.md) — non-linear state graph, authoring commands, session playback clock, and the Adaptive tab
+- [Musical universe](musical-universe.md) — shared character themes that reference motif occurrences and reuse them into member projects
 - [Adaptive music engine](adaptive-music-engine.md) — external session a game calls without the studio
 - [Adaptive music client](adaptive-music-client.md) — Python and TypeScript callers of that session, plus the terminal phase demo
 - [Composition Analysis](composition-analysis.md) — deterministic sidecar and Analysis tab
