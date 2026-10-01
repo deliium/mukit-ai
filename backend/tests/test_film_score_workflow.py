@@ -320,7 +320,7 @@ def test_profile_off_keeps_compiled_duration(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_ai_agents_do_not_import_film_or_video_modules() -> None:
     root = Path(__file__).resolve().parents[1] / "app" / "ai_agents"
-    banned = ("video_scoring", "video_spotting", "llm_video_spotting", "film_score_")
+    banned = ("video_scoring", "video_spotting", "llm_video_spotting", "film_score_", "film_score_adapt")
     for path in root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
