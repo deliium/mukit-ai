@@ -16,6 +16,7 @@ import AdaptiveScorePanel from './AdaptiveScorePanel.jsx';
 import VideoScoringPanel from './VideoScoringPanel.jsx';
 import HarmonyTimelinePanel from './HarmonyTimelinePanel.jsx';
 import MotifPanel from './MotifPanel.jsx';
+import MusicalUniversePanel from './MusicalUniversePanel.jsx';
 import CompositionDevelopmentPanel from './CompositionDevelopmentPanel.jsx';
 import ArrangementPanel from './ArrangementPanel.jsx';
 import MultiAgentPanel from './MultiAgentPanel.jsx';
@@ -103,6 +104,7 @@ const TABS = [
   { id: 'arrange', label: 'Arrange' },
   { id: 'agents', label: 'Agents' },
   { id: 'motifs', label: 'Motifs' },
+  { id: 'universe', label: 'Universe' },
   { id: 'harmony', label: 'Harmony' },
   { id: 'profiles', label: 'Profiles' },
   { id: 'plugins', label: 'Plugins' },
@@ -276,6 +278,7 @@ const ComposerWorkspace = () => {
             {tab.id === 'motifs' && selected ? (
               <MotifPanel onOpenPianoTab={() => onTabChange('piano')} />
             ) : null}
+            {tab.id === 'universe' && selected ? <MusicalUniversePanel /> : null}
             {tab.id === 'harmony' && selected ? <HarmonyTimelinePanel /> : null}
             {tab.id === 'profiles' && selected ? <ComposerProfilesPanel /> : null}
             {tab.id === 'plugins' && selected ? (
