@@ -103,3 +103,5 @@ The Picture tab shows the video element, a timecode readout, a video-time cue ru
 `pictureScoring`, `pictureSpottingSuggestions`, `pictureSyncStatus`, and `pictureSeekRequest` are a session slice. They are not project autosave.
 
 `ai_agents/` must not import `video_scoring_schemas`, `video_scoring_settings`, `video_scoring_store`, `video_container_probe`, `video_scoring_map`, `video_spotting`, or `llm_video_spotting`.
+
+Film scoring is a separate explicit preview. See [film-scoring.md](./film-scoring.md). It reads these cues and does not rewrite them.

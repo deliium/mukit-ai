@@ -242,3 +242,4 @@ Setting a multi-agent candidate discards competing arrangement / development / r
 - [Composition Arrangement](./composition-arrangement.md)
 - [Project persistence](./project-persistence.md)
 - [Musical workflow evaluation](./workflow-evaluation.md) — offline comparison of V3 generate, the spine, and the revision loop
+- [Film scoring](./film-scoring.md) — picture preview using the same agents, then an explicit commit

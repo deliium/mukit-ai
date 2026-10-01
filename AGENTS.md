@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders; mix analysis (`mix.analysis.v1`) measures completed neural stem/mix WAVs without mutating audio or V2. A project may store one immutable MP4/MOV as `video.asset.v1` plus a `video.scoring.v1` sync document; the Picture tab keeps the composition cursor on that picture without rewriting note events. Projects persist in SQLite. A project may also store `adaptive.score.v1` graphs that reference V2 sections, bars, tracks, motifs, or revisions without copying note events. Runtime intensity returns `adaptive.layer.intensity.v1` and does not rewrite those note events. A session playback clock returns `adaptive.playback.runtime.v1` without writing the score or the composition. A continuation session fills bars ahead of that clock into `adaptive.runtime.buffer.v1` and does not write the score or the composition. A musical-context session accepts a flat external sample, holds musical state across a hysteresis band, and emits existing playback commands only when that clock is already running. V1 remains migration/parser input.
+Full-stack LLM music composer: FastAPI generates/edits canonical `composition.v2` JSON; MIDI/MusicXML import converts uploads into the same V2; deterministic `composition.analysis.v1` analyzes current V2 without mutating it; arrangement/development/harmony previews are session-only until Apply; durable Composer Profiles soft-condition generate without overriding prompt/hard constraints; React/Vite edits on piano roll/JSON, shows OSMD notation, Analysis/Arrange/Develop/Profiles tabs, and plays note events with Tone.js; AI Jam co-composition (`user_melody` / `user_chords`) rides the co-performance engine with multi-track Commit; recovery Bind adds `audio.alignment.v1` for bar↔source seek and soft-stale neural renders; mix analysis (`mix.analysis.v1`) measures completed neural stem/mix WAVs without mutating audio or V2. A project may store one immutable MP4/MOV as `video.asset.v1` plus a `video.scoring.v1` sync document; the Picture tab keeps the composition cursor on that picture without rewriting note events. An Agents-tab film-score preview returns non-playable `film.score.plan.v1` and writes `composition.v2` only on an explicit Commit. Projects persist in SQLite. A project may also store `adaptive.score.v1` graphs that reference V2 sections, bars, tracks, motifs, or revisions without copying note events. Runtime intensity returns `adaptive.layer.intensity.v1` and does not rewrite those note events. A session playback clock returns `adaptive.playback.runtime.v1` without writing the score or the composition. A continuation session fills bars ahead of that clock into `adaptive.runtime.buffer.v1` and does not write the score or the composition. A musical-context session accepts a flat external sample, holds musical state across a hysteresis band, and emits existing playback commands only when that clock is already running. V1 remains migration/parser input.
 
 ## Tech Stack
 
@@ -29,9 +29,10 @@ mukit-ai/
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
 │   │   ├── video_scoring_schemas.py   # video.asset.v1 + video.scoring.v1
+│   │   ├── film_score_schemas.py      # film.score.plan.v1 + preview/commit DTOs
 │   │   ├── video_scoring_settings.py  # VIDEO_ASSET_ROOT / VIDEO_ASSET_MAX_UPLOAD_BYTES
-│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + video_scoring + ai_models + ai_agents + plugins + collaboration + adaptive_scores + adaptive_engine HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. composition_critique, adaptive_score_*, adaptive_playback*, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, video_scoring_store, video_container_probe, video_scoring_map, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
+│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + video_scoring + film_score + ai_models + ai_agents + plugins + collaboration + adaptive_scores + adaptive_engine HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. composition_critique, adaptive_score_*, adaptive_playback*, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, video_scoring_store, video_container_probe, video_scoring_map, film_score_tempo, film_score_accents, film_score_workflow, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
@@ -68,7 +69,7 @@ mukit-ai/
 │   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement/editor/neural-audio acceptance journeys
 │   └── src/
 │       ├── api/             # musicApi, projectApi
-│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, AudioRecoveryPanel, VideoScoringPanel (Picture tab), NeuralAudioRenderPanel (incl. Mix Analysis + Mix assist), …
+│       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, AudioRecoveryPanel, VideoScoringPanel (Picture tab), FilmScorePanel (Agents tab), NeuralAudioRenderPanel (incl. Mix Analysis + Mix assist), …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI/audio sessions)
 │       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture, mixAnalysisUi, mixPlanUi helpers
 ├── clients/                 # Adaptive music engine clients. They do not import backend/app or frontend/src
@@ -110,12 +111,18 @@ mukit-ai/
 | `backend/app/services/audio_recovery/` | Separation, scaffolding, transcription, pipeline |
 | `backend/app/services/audio_recovery_store.py` | Job/asset FS + SQLite metadata; project-delete GC |
 | `backend/app/routers/video_scoring.py` | Project picture upload, media, scoring CAS, and time map |
+| `backend/app/routers/film_score.py` | Picture film-score preview and explicit commit; the only video reader on this path |
+| `backend/app/services/film_score_tempo.py` | Deterministic section, tempo, and dialogue compiler |
+| `backend/app/services/film_score_workflow.py` | Existing-agent sequence and candidate; does not write the score |
+| `backend/app/services/film_score_accents.py` | Accent repair for aligned sync cues |
 | `backend/app/services/video_scoring_store.py` | One immutable video file per project; replace-then-delete; project-delete GC |
 | `backend/app/services/video_container_probe.py` | Read-only ISO-BMFF duration, frame rate, audio, and resolution |
 | `backend/app/services/video_scoring_map.py` | Pure video time ↔ tick map and SMPTE timecode |
 | `backend/app/services/video_spotting.py` | Pure cue landing check against note attacks |
 | `backend/app/services/llm_video_spotting.py` | Explicit spotting suggestion preview; does not write cues |
 | `frontend/src/components/VideoScoringPanel.jsx` | Picture tab: player, timecode, bar ruler, markers, hit points |
+| `frontend/src/components/FilmScorePanel.jsx` | Agents tab: inspect `film.score.plan.v1` and commit |
+| `frontend/src/api/filmScoreApi.js` | Film-score preview and commit HTTP client |
 | `frontend/src/api/videoScoringApi.js` | Picture asset and scoring HTTP client |
 | `frontend/src/utils/videoScoringMap.js` | Frontend twin of the video ↔ tick map |
 | `frontend/src/components/NeuralAudioRenderPanel.jsx` | Render with AI jobs / download (egress only) |
@@ -321,6 +328,7 @@ mukit-ai/
 | Audio recovery | `docs/audio-recovery.md` | V4 mixed audio → optional stems/scaffolding → Apply→Bind overlay |
 | Audio↔symbolic alignment | `docs/audio-symbolic-alignment.md` | Bind-time map, bar↔source seek, waveform sync, soft-stale neural renders |
 | Video scoring | `docs/video-scoring.md` | One immutable MP4/MOV (`video.asset.v1`) and `video.scoring.v1` sync. Picture play and Tone share one cursor leader. Spotting cues stay on `hit_points`. `ai_agents/` does not import `video_scoring_schemas`, `video_scoring_settings`, `video_scoring_store`, `video_container_probe`, `video_scoring_map`, `video_spotting`, or `llm_video_spotting` |
+| Film scoring | `docs/film-scoring.md` | Explicit `film.score.plan.v1` preview from stored cues, then commit of `composition.v2`. `ai_agents/` does not import film-score or video modules |
 | Neural audio rendering | `docs/neural-audio-rendering.md` | Optional generative/neural instrument mix + stem-set egress; licenses; Compose profile |
 | Mix analysis | `docs/mix-analysis.md` | DSP measurements + observations over neural stem/mix WAVs; soft-stale; never mutates audio/V2 |
 | AI-assisted mixing | `docs/ai-assisted-mixing.md` | Non-destructive mix plans, preview/apply/undo, new mix revisions; stems unchanged |
