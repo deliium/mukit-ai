@@ -8,6 +8,7 @@ import { normalizeRevisionMode } from '../utils/revisionLoopModes.js';
 import { operationSummaryText } from '../utils/operationSummaryText.js';
 import AutonomousComposerPanel from './AutonomousComposerPanel.jsx';
 import FilmScorePanel from './FilmScorePanel.jsx';
+import FilmScoreAdaptPanel from './FilmScoreAdaptPanel.jsx';
 
 const WorkflowListeningPanel = lazy(() => import('./WorkflowListeningPanel.jsx'));
 
@@ -170,6 +171,7 @@ const MultiAgentPanel = () => {
     <Panel data-testid="multi-agent-panel">
       <AutonomousComposerPanel />
       <FilmScorePanel />
+      <FilmScoreAdaptPanel />
       <Suspense fallback={null}>
         <WorkflowListeningPanel />
       </Suspense>

@@ -53,6 +53,7 @@ AI_ORIGIN_OPERATIONS: frozenset[str] = frozenset(
         "development-apply",
         "arrangement-apply",
         "multi-agent-apply",
+        "film-score-adapt-apply",
         "autonomous-stage",
     }
 )

@@ -39,6 +39,7 @@ class RevisionOperationType(StrEnum):
     DEVELOPMENT_APPLY = "development-apply"
     ARRANGEMENT_APPLY = "arrangement-apply"
     MULTI_AGENT_APPLY = "multi-agent-apply"
+    FILM_SCORE_ADAPT_APPLY = "film-score-adapt-apply"
     AUTONOMOUS_STAGE = "autonomous-stage"
     REVISION_RESTORE = "revision-restore"
     IMPORT = "import"

@@ -212,9 +212,11 @@ import {
   decideProjectReview,
   listProjectActivity,
 } from '../api/projectApi.js';
+import { baselineFromPicture } from '../utils/filmScoreAdapt.js';
 import { commitFilmScore as commitFilmScoreRequest, previewFilmScore as previewFilmScoreRequest } from '../api/filmScoreApi.js';
+import { commitFilmScoreAdapt as commitFilmScoreAdaptRequest, previewFilmScoreAdapt as previewFilmScoreAdaptRequest } from '../api/filmScoreAdaptApi.js';
 import { scoringRevisionForCommit } from '../utils/filmScorePlan.js';
-import { getVideoScoring } from '../api/videoScoringApi.js';
+import { getVideoAsset, getVideoScoring } from '../api/videoScoringApi.js';
 import {
   PLAYBACK_MIXER_SCOPE_ARRANGEMENT,
   PLAYBACK_MIXER_SCOPE_DEVELOPMENT,
@@ -1645,6 +1647,11 @@ export const useMusicStore = create((set, get) => ({
   filmScorePreview: null,
   filmScoreStatus: 'idle',
   filmScoreError: '',
+  filmAdaptBaseline: null,
+  filmAdaptPreview: null,
+  filmAdaptInputs: null,
+  filmAdaptStatus: 'idle',
+  filmAdaptError: '',
   ...initialDevelopmentPreviewState,
   ...initialMusicalReferenceSessionState,
   ...initialArrangementPreviewState,
@@ -12695,6 +12702,123 @@ export const useMusicStore = create((set, get) => ({
       set({
         filmScoreStatus: 'error',
         filmScoreError: error?.code || 'film_score_conflict',
+      });
+      return false;
+    }
+  },
+
+  rememberFilmAdaptBaseline: async () => {
+    const state = get();
+    const projectId = state.currentProjectId;
+    const scoring = state.pictureScoring;
+    if (!projectId || scoring == null) {
+      set({ filmAdaptStatus: 'error', filmAdaptError: 'film_adapt_asset_missing' });
+      return null;
+    }
+    set({ filmAdaptStatus: 'loading', filmAdaptError: '' });
+    try {
+      const asset = await getVideoAsset(projectId);
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      const baseline = baselineFromPicture(asset, scoring);
+      if (!baseline) {
+        set({ filmAdaptStatus: 'error', filmAdaptError: 'film_adapt_asset_missing' });
+        return null;
+      }
+      set({ filmAdaptBaseline: baseline, filmAdaptStatus: 'idle', filmAdaptError: '' });
+      return baseline;
+    } catch (error) {
+      set({
+        filmAdaptStatus: 'error',
+        filmAdaptError: error?.code || 'film_adapt_asset_missing',
+      });
+      return null;
+    }
+  },
+
+  previewFilmAdapt: async ({ previous, edits }) => {
+    const projectId = get().currentProjectId;
+    const fingerprint = get().workingFingerprint;
+    if (!projectId || !previous || !fingerprint) {
+      set({ filmAdaptStatus: 'error', filmAdaptError: 'film_adapt_conflict' });
+      return null;
+    }
+    set({ filmAdaptStatus: 'loading', filmAdaptError: '' });
+    try {
+      const preview = await previewFilmScoreAdaptRequest(projectId, {
+        previous,
+        edits,
+        expected_source_fingerprint: fingerprint,
+      });
+      if (get().currentProjectId !== projectId) {
+        return null;
+      }
+      set({
+        filmAdaptPreview: preview,
+        filmAdaptInputs: { previous, edits },
+        filmAdaptStatus: 'ready',
+        filmAdaptError: '',
+      });
+      return preview;
+    } catch (error) {
+      set({
+        filmAdaptStatus: 'error',
+        filmAdaptError: error?.code || 'film_adapt_invalid',
+      });
+      return null;
+    }
+  },
+
+  commitFilmAdapt: async () => {
+    const state = get();
+    const preview = state.filmAdaptPreview;
+    const inputs = state.filmAdaptInputs;
+    const projectId = state.currentProjectId;
+    if (!preview?.candidate_fingerprint || !inputs || !projectId) {
+      set({ filmAdaptStatus: 'error', filmAdaptError: 'film_adapt_conflict' });
+      return false;
+    }
+    if (
+      !state.activeBranchId
+      || state.workingVersion == null
+      || !state.currentRevisionId
+      || !state.workingFingerprint
+    ) {
+      set({ filmAdaptStatus: 'error', filmAdaptError: 'film_adapt_conflict' });
+      return false;
+    }
+    const documentRevision = preview.proposal?.scoring_document_revision;
+    if (documentRevision == null) {
+      set({ filmAdaptStatus: 'error', filmAdaptError: 'film_adapt_conflict' });
+      return false;
+    }
+    set({ filmAdaptStatus: 'loading', filmAdaptError: '' });
+    try {
+      await commitFilmScoreAdaptRequest(projectId, {
+        previous: inputs.previous,
+        edits: inputs.edits,
+        candidate: preview.candidate,
+        candidate_fingerprint: preview.candidate_fingerprint,
+        expected_source_fingerprint: state.workingFingerprint,
+        expected_document_revision: documentRevision,
+        branch_id: state.activeBranchId,
+        expected_active_branch_id: state.activeBranchId,
+        expected_working_version: state.workingVersion,
+        expected_head_revision_id: state.currentRevisionId,
+      });
+      set({
+        filmAdaptPreview: null,
+        filmAdaptInputs: null,
+        filmAdaptStatus: 'idle',
+        filmAdaptError: '',
+      });
+      await get().openProject(projectId);
+      return true;
+    } catch (error) {
+      set({
+        filmAdaptStatus: 'error',
+        filmAdaptError: error?.code || 'film_adapt_conflict',
       });
       return false;
     }

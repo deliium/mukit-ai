@@ -16,6 +16,12 @@ from app.ai_agents.errors import AgentError
 from app.ai_agents.registry import ensure_registry
 from app.composition_schemas import CompositionV2
 from app.db.connection import get_project_db_path
+from app.film_score_adapt_schemas import (
+    FilmAdaptError,
+    FilmScoreAdaptCommitRequest,
+    FilmScoreAdaptPreviewRequest,
+    FilmTimelineSnapshot,
+)
 from app.film_score_schemas import (
     FilmCueSnapshot,
     FilmScoreCommitRequest,
@@ -26,7 +32,9 @@ from app.project_history_schemas import AiProvenance, DurableCommitRequest, Revi
 from app.routers.collaboration_guard import enforce_current
 from app.services.artifact_role_map import validate_artifact_role_map
 from app.services.composition_edit_fingerprint import composition_edit_fingerprint
+from app.services.composition_snapshot_encoding import composition_snapshot_fingerprint
 from app.services.composition_timeline import compile_timeline
+from app.services.film_score_adapt import compile_film_score_adaptation
 from app.services.film_score_tempo import music_window_start
 from app.services.film_score_workflow import run_film_score_preview
 from app.services.project_history import (
@@ -44,6 +52,8 @@ router = APIRouter(tags=["film-score"])
 
 _PATH_PREVIEW = "/projects/{project_id}/film-score/preview"
 _PATH_COMMIT = "/projects/{project_id}/film-score/commit"
+_PATH_ADAPT_PREVIEW = "/projects/{project_id}/film-score/adapt/preview"
+_PATH_ADAPT_COMMIT = "/projects/{project_id}/film-score/adapt/commit"
 
 
 def _http(exc: FilmScoreError) -> HTTPException:
@@ -214,3 +224,138 @@ def commit_film_score(project_id: str, body: FilmScoreCommitRequest):
         "musical_origin_tick": 0,
         "composition": json.loads(updated.composition_json) if updated.composition_json else None,
     }
+
+
+def _adapt_http(exc: FilmAdaptError, *, project_id: str) -> HTTPException:
+    if exc.code in {"film_adapt_conflict", "film_adapt_timeline_mismatch", "film_adapt_span_too_large"}:
+        logger.warning("%s project_id=%s", exc.code, project_id)
+    return HTTPException(
+        status_code=exc.http_status,
+        detail={"code": exc.code, "message": exc.message},
+    )
+
+
+def _adapt_picture(project_id: str):
+    """Load the score and the stored picture. Cue rows are not rewritten."""
+    record = _project(project_id)
+    db_path = get_project_db_path()
+    try:
+        asset = get_video_asset(project_id, db_path=db_path)
+    except VideoScoringError as exc:
+        if exc.code == "video_asset_missing":
+            raise FilmAdaptError("film_adapt_asset_missing") from exc
+        raise FilmAdaptError("film_adapt_invalid") from exc
+    scoring = get_video_scoring(project_id, db_path=db_path)
+    if (
+        scoring.frame_rate_numerator is None
+        or scoring.frame_rate_denominator is None
+        or not is_closed_frame_rate(scoring.frame_rate_numerator, scoring.frame_rate_denominator)
+    ):
+        raise FilmAdaptError("film_adapt_frame_rate_required")
+    try:
+        composition = _composition(record)
+    except FilmScoreError as exc:
+        raise FilmAdaptError("film_adapt_invalid") from exc
+    stored = FilmTimelineSnapshot(
+        duration_seconds=float(asset.duration_seconds),
+        frame_rate_numerator=int(scoring.frame_rate_numerator),
+        frame_rate_denominator=int(scoring.frame_rate_denominator),
+        video_origin_seconds=float(scoring.video_origin_seconds),
+        musical_origin_tick=int(scoring.musical_origin_tick),
+        cues=_snapshots(scoring.hit_points),
+    )
+    return record, db_path, scoring, composition, stored
+
+
+@router.post(_PATH_ADAPT_PREVIEW)
+def preview_film_score_adapt(project_id: str, body: FilmScoreAdaptPreviewRequest):
+    enforce_current(project_id, "write_score")
+    try:
+        _record, _db_path, scoring, composition, stored = _adapt_picture(project_id)
+        source_fingerprint = composition_snapshot_fingerprint(composition)
+        if source_fingerprint != body.expected_source_fingerprint:
+            raise FilmAdaptError("film_adapt_conflict")
+        preview = compile_film_score_adaptation(
+            project_id=project_id,
+            composition=composition,
+            source_fingerprint=source_fingerprint,
+            scoring_document_revision=scoring.document_revision,
+            previous=body.previous,
+            edits=body.edits,
+            next_timeline=stored,
+        )
+    except FilmAdaptError as exc:
+        raise _adapt_http(exc, project_id=project_id) from exc
+    strategies = [operation.strategy for operation in preview.proposal.operations]
+    logger.info(
+        "film adapt preview finished project_id=%s edit_count=%s strategies=%s "
+        "events_unchanged=%s events_shifted=%s events_removed=%s events_added=%s warnings=%s",
+        project_id,
+        len(body.edits),
+        ",".join(strategies),
+        preview.proposal.counts.events_unchanged,
+        preview.proposal.counts.events_shifted,
+        preview.proposal.counts.events_removed,
+        preview.proposal.counts.events_added,
+        ",".join(preview.proposal.warnings),
+    )
+    return preview.model_dump(mode="json")
+
+
+@router.post(_PATH_ADAPT_COMMIT)
+def commit_film_score_adapt(project_id: str, body: FilmScoreAdaptCommitRequest):
+    enforce_current(project_id, "write_score")
+    try:
+        _record, db_path, scoring, composition, stored = _adapt_picture(project_id)
+        source_fingerprint = composition_snapshot_fingerprint(composition)
+        if (
+            source_fingerprint != body.expected_source_fingerprint
+            or scoring.document_revision != body.expected_document_revision
+        ):
+            raise FilmAdaptError("film_adapt_conflict")
+        preview = compile_film_score_adaptation(
+            project_id=project_id,
+            composition=composition,
+            source_fingerprint=source_fingerprint,
+            scoring_document_revision=scoring.document_revision,
+            previous=body.previous,
+            edits=body.edits,
+            next_timeline=stored,
+        )
+        if preview.candidate_fingerprint != body.candidate_fingerprint or preview.candidate is None:
+            raise FilmAdaptError("film_adapt_conflict")
+        candidate = CompositionV2.model_validate(preview.candidate)
+        strategies = [operation.strategy for operation in preview.proposal.operations]
+        commit = DurableCommitRequest(
+            branch_id=body.branch_id,
+            expected_active_branch_id=body.expected_active_branch_id,
+            expected_working_version=body.expected_working_version,
+            expected_head_revision_id=body.expected_head_revision_id,
+            expected_source_fingerprint=body.expected_source_fingerprint,
+            composition=candidate,
+            operation_type=RevisionOperationType.FILM_SCORE_ADAPT_APPLY,
+            ai=AiProvenance(
+                provider="film-score",
+                operation="film-score-adapt-apply",
+                candidate_fingerprint=preview.candidate_fingerprint,
+                generation_parameters={
+                    "strategies": strategies,
+                    "warning_codes": list(preview.proposal.warnings),
+                },
+                warning_codes=list(preview.proposal.warnings),
+            ),
+        )
+        commit_revision(project_id, commit, db_path=db_path)
+    except FilmAdaptError as exc:
+        raise _adapt_http(exc, project_id=project_id) from exc
+    except (ProjectRevisionConflictError, ProjectHistoryValidationError) as exc:
+        raise _adapt_http(FilmAdaptError("film_adapt_conflict"), project_id=project_id) from exc
+    logger.info(
+        "film adapt commit finished project_id=%s fingerprint_prefix=%s",
+        project_id,
+        (preview.candidate_fingerprint or "")[:12],
+    )
+    warnings = list(preview.proposal.warnings)
+    if "film_origin_unchanged" not in warnings:
+        warnings.append("film_origin_unchanged")
+    return {"committed": True, "warnings": warnings}
