@@ -54,6 +54,7 @@ AI_ORIGIN_OPERATIONS: frozenset[str] = frozenset(
         "arrangement-apply",
         "multi-agent-apply",
         "film-score-adapt-apply",
+        "musical-universe-theme-apply",
         "autonomous-stage",
     }
 )

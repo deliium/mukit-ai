@@ -40,6 +40,7 @@ class RevisionOperationType(StrEnum):
     ARRANGEMENT_APPLY = "arrangement-apply"
     MULTI_AGENT_APPLY = "multi-agent-apply"
     FILM_SCORE_ADAPT_APPLY = "film-score-adapt-apply"
+    MUSICAL_UNIVERSE_THEME_APPLY = "musical-universe-theme-apply"
     AUTONOMOUS_STAGE = "autonomous-stage"
     REVISION_RESTORE = "revision-restore"
     IMPORT = "import"
