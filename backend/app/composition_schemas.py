@@ -1025,6 +1025,11 @@ class CompositionV2MotifOccurrence(BaseModel):
         return self
 
 
+_UNIVERSE_PIN_RE = re.compile(r"^muniv_[0-9a-f]{16}$")
+_THEME_PIN_RE = re.compile(r"^theme_[0-9a-f]{8}$")
+_VARIANT_PIN_RE = re.compile(r"^var_[0-9a-f]{8}$")
+
+
 class CompositionV2MotifDefinition(BaseModel):
     """Authored motif identity — playable pitches remain only in tracks[].events[]."""
 
@@ -1033,6 +1038,9 @@ class CompositionV2MotifDefinition(BaseModel):
     id: str = Field(..., min_length=1, max_length=120)
     label: str = Field(..., min_length=1, max_length=120)
     occurrences: list[CompositionV2MotifOccurrence] = Field(..., min_length=1)
+    musical_universe_id: str | None = None
+    theme_id: str | None = None
+    variant_id: str | None = None
 
     @field_validator("id", "label")
     @classmethod
@@ -1042,6 +1050,36 @@ class CompositionV2MotifDefinition(BaseModel):
             raise ValueError("Motif id and label must not be empty")
         return normalized
 
+    @field_validator("musical_universe_id")
+    @classmethod
+    def validate_universe_pin(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _UNIVERSE_PIN_RE.fullmatch(value):
+            log_validation_failure(cls.__name__, "musical_universe_id", value, "universe pin pattern")
+            raise ValueError("musical_universe_id must match muniv_ plus 16 hex characters")
+        return value
+
+    @field_validator("theme_id")
+    @classmethod
+    def validate_theme_pin(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _THEME_PIN_RE.fullmatch(value):
+            log_validation_failure(cls.__name__, "theme_id", value, "theme pin pattern")
+            raise ValueError("theme_id must match theme_ plus 8 hex characters")
+        return value
+
+    @field_validator("variant_id")
+    @classmethod
+    def validate_variant_pin(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _VARIANT_PIN_RE.fullmatch(value):
+            log_validation_failure(cls.__name__, "variant_id", value, "variant pin pattern")
+            raise ValueError("variant_id must match var_ plus 8 hex characters")
+        return value
+
     @model_validator(mode="after")
     def validate_one_original(self) -> CompositionV2MotifDefinition:
         originals = [occ for occ in self.occurrences if occ.relationship == "original"]
@@ -1050,6 +1088,17 @@ class CompositionV2MotifDefinition(BaseModel):
         occurrence_ids = [occ.id for occ in self.occurrences]
         if len(occurrence_ids) != len(set(occurrence_ids)):
             raise ValueError("Motif occurrence ids must be unique within a definition")
+        pins = (self.musical_universe_id, self.theme_id, self.variant_id)
+        if any(pin is not None for pin in pins) and not all(pin is not None for pin in pins):
+            log_validation_failure(
+                self.__class__.__name__,
+                "musical_universe_id",
+                None,
+                "partial motif pin",
+            )
+            raise ValueError(
+                "musical_universe_id, theme_id, and variant_id must all be set or all be omitted"
+            )
         return self
 
 
