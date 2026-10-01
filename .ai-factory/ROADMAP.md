@@ -68,6 +68,7 @@
 - [x] **V5 Film scoring spotting cues** — Authored cues on `video.scoring.v1` `hit_points` with kind, `HH:MM:SS:FF` timecode, frame tolerance, importance, and instruction. A landing check compares note attacks with the cue frame. Suggestions stay an explicit preview and do not write notes. Cues are not markers. No `composition.v5`
 - [x] **V5 Film scoring agent** — Explicit `film.score.plan.v1` preview from stored spotting cues, the existing V4 agents, and a deterministic section and tempo compiler. Commit writes an editable `composition.v2` and the sync origin. Cue rows and video bytes stay unchanged. No new agent id and no `composition.v5`
 - [x] **V5 Film score adaptation** — An explicit `film.score.adaptation.v1` preview chooses one local repair for a declared picture edit and keeps music outside that edit identical. Commit writes the repaired `composition.v2` through `film-score-adapt-apply`. Cue rows, video bytes, and the sync origin stay stored. A span that covers the whole score is refused and does not generate a replacement. No `composition.v5`
+- [x] **V5 Musical Universe** — A project group shares `musical.universe.v1` entities, themes, variants, and usage. Themes reference motif occurrences. An explicit mechanical reuse writes transformed notes into a member `composition.v2`. The universe row stores no pitches. No `composition.v5`
 
 ## Completed
 
@@ -137,3 +138,4 @@
 | V5 Film scoring spotting cues | 2026-09-30 |
 | V5 Film scoring agent | 2026-10-01 |
 | V5 Film score adaptation | 2026-10-01 |
+| V5 Musical Universe | 2026-10-01 |
