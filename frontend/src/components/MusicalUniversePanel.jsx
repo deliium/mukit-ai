@@ -2,11 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import styled from 'styled-components';
 
 import {
+  acceptDependencyCurrent,
   addMusicalUniverseMember,
   createMusicalUniverse,
   getProjectMusicalUniverse,
+  getUniverseDependencyGraph,
   reuseMusicalUniverseTheme,
 } from '../api/musicalUniverseApi.js';
+import DependencyGraph from './DependencyGraph.jsx';
 import { getProject } from '../api/projectApi.js';
 import { useMusicStore } from '../store/musicStore.js';
 import {
@@ -80,6 +83,8 @@ const MusicalUniversePanel = () => {
   const [interval, setInterval] = useState(2);
   const [stepTicks, setStepTicks] = useState(1920);
   const [errorCode, setErrorCode] = useState('');
+  const [dependencyGraph, setDependencyGraph] = useState(null);
+  const [graphToken, setGraphToken] = useState(0);
   const [remoteTracks, setRemoteTracks] = useState([]);
   const [remoteBranch, setRemoteBranch] = useState(null);
 
@@ -145,8 +150,61 @@ const MusicalUniversePanel = () => {
   }, [destinationId, projectId]);
 
   const universe = loaded?.universe;
+  const universeId = universe?.id || '';
+
+  useEffect(() => {
+    if (!universeId) {
+      setDependencyGraph(null);
+      return undefined;
+    }
+    let cancelled = false;
+    getUniverseDependencyGraph(universeId)
+      .then((graph) => {
+        if (!cancelled) {
+          setDependencyGraph(graph);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorCode(error.code || 'dependency_invalid');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [universeId, graphToken]);
+
   const themes = universe?.themes || [];
   const selectedTheme = themes.find((theme) => theme.id === selectedThemeId) || themes[0] || null;
+
+  function reviewDependency(edgeId) {
+    if (!edgeId || !selectedTheme) {
+      return;
+    }
+    const edge = (dependencyGraph?.edges || []).find((item) => item.edge_id === edgeId);
+    const node = (dependencyGraph?.nodes || []).find((item) => item.node_key === edge?.downstream_node_key);
+    const variant = (selectedTheme.variants || []).find((item) => item.id === node?.variant_id);
+    if (!variant) {
+      return;
+    }
+    setOperation(variant.operation || 'transpose');
+    if (variant.parameters?.transpose_semitones != null) {
+      setSemitones(variant.parameters.transpose_semitones);
+    }
+  }
+
+  async function acceptDependency(edgeId) {
+    if (!edgeId || !universeId) {
+      return;
+    }
+    try {
+      await acceptDependencyCurrent(edgeId);
+      setGraphToken((token) => token + 1);
+      setErrorCode('');
+    } catch (error) {
+      setErrorCode(error.code || 'dependency_invalid');
+    }
+  }
   const openTracks = Array.isArray(editedMusicJson?.tracks) ? editedMusicJson.tracks : [];
   const tracks = destinationId && destinationId !== projectId ? remoteTracks : openTracks;
 
@@ -273,6 +331,14 @@ const MusicalUniversePanel = () => {
             </li>
           ))}
         </ul>
+        {selectedTheme ? (
+          <DependencyGraph
+            graph={dependencyGraph}
+            rootKey={`theme:${universe.id}:${selectedTheme.id}`}
+            onReview={reviewDependency}
+            onAccept={acceptDependency}
+          />
+        ) : null}
         {selectedTheme ? (
           <div>
             <p>

@@ -43,6 +43,7 @@ from .routers.adaptive_scores import router as adaptive_scores_router
 from .routers.adaptive_engine import adaptive_engine_validation_handler
 from .routers.adaptive_engine import router as adaptive_engine_router
 from .routers.musical_universe import router as musical_universe_router
+from .routers.musical_dependency import router as musical_dependency_router
 from .reference_feature_schemas import (
     ReferenceFeatureError,
     map_reference_feature_error_to_http,
@@ -185,6 +186,7 @@ app.include_router(film_score_router)
 app.include_router(adaptive_scores_router)
 app.include_router(adaptive_engine_router)
 app.include_router(musical_universe_router)
+app.include_router(musical_dependency_router)
 app.add_exception_handler(RequestValidationError, adaptive_engine_validation_handler)
 
 _mt_settings = load_music_transformer_settings()

@@ -29,6 +29,14 @@ export async function addMusicalUniverseMember(universeId, projectId) {
   });
 }
 
+export async function getUniverseDependencyGraph(universeId) {
+  return request('get', `/musical-universes/${encodeURIComponent(universeId)}/dependency-graph`);
+}
+
+export async function acceptDependencyCurrent(edgeId) {
+  return request('post', `/musical-dependency/edges/${encodeURIComponent(edgeId)}/accept-current`);
+}
+
 export async function reuseMusicalUniverseTheme(universeId, themeId, payload) {
   return request(
     'post',
