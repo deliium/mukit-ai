@@ -175,6 +175,7 @@ mukit-ai/
 | `backend/app/adaptive_score_schemas.py` | `adaptive.score.v1` graph DTOs plus `adaptive.layer.intensity.v1` (references only; no note events) |
 | `backend/app/routers/adaptive_scores.py` | Project adaptive-score CRUD, commands, validate, transitions, layer intensity, playback, and musical-context start/status/samples/stop |
 | `backend/app/routers/musical_universe.py` | Universe membership, commands, validate, and explicit theme reuse. Reuse is the only route that writes destination notes |
+| `backend/app/routers/musical_dependency.py` | Theme impact, dependency graph, and edge-only fingerprint refresh. These routes do not write notes |
 | `backend/app/routers/adaptive_engine.py` | External `/adaptive/*` session for one stored score: HTTP commands plus events and status sockets. Does not write the score |
 | `clients/python/src/mukit_adaptive/client.py` | Synchronous client for that public surface. Does not import `backend/app` or `frontend/src` |
 | `clients/python/src/mukit_adaptive/demo.py` | `python -m mukit_adaptive.demo` terminal phase loop |
@@ -344,6 +345,7 @@ mukit-ai/
 | Composition Critique | `docs/composition-critique.md` | Evaluation engine, strata, climax AC, `/critique/evaluate` |
 | Adaptive score | `docs/adaptive-score.md` | `adaptive.score.v1` state graph over V2 references; `adaptive.layer.intensity.v1` selects layers; `adaptive.playback.runtime.v1` is a session clock. `ai_agents/` does not import `adaptive_playback.py`, `adaptive_playback_service.py`, `adaptive_playback_runtime.py`, `adaptive_musical_context_schemas`, `adaptive_musical_context_settings`, `adaptive_musical_context`, `adaptive_musical_context_service`, `adaptive_musical_context_runtime`, `adaptive_runtime_continuation_schemas`, `adaptive_runtime_continuation_settings`, `adaptive_runtime_continuation`, `adaptive_runtime_continuation_fallback`, `adaptive_runtime_continuation_service`, or `adaptive_runtime_continuation_runtime` |
 | Musical universe | `docs/musical-universe.md` | `musical.universe.v1` shared by member projects. Themes reference motif occurrences. Explicit reuse writes destination `composition.v2` notes. `ai_agents/` does not import `musical_universe_store` |
+| Derived material graph | `docs/derived-material-graph.md` | `musical.dependency.edge.v1` rows for motifs, themes, arrangements, variations, renders, transcriptions, and reference conditioning. Impact lists stale dependents and does not rewrite them. `ai_agents/` does not import `musical_dependency_store` |
 | Adaptive musical context | `docs/adaptive-musical-context.md` | Flat external samples mapped onto a closed context; hysteresis emits existing playback commands |
 | Adaptive runtime continuation | `docs/adaptive-runtime-continuation.md` | Session buffer ahead of playback; the clock does not await the model |
 | Adaptive music engine | `docs/adaptive-music-engine.md` | External `/adaptive/*` session, bearer-or-loopback auth, and context backpressure. `ai_agents/` does not import the engine modules |
