@@ -498,6 +498,16 @@ def run_neural_audio_job(
                 (str(result["model_version"]), render_id),
             )
             updated = get_job_row(conn, render_id)
+        if updated and str(updated.get("error_code") or "") != "operation_cancelled":
+            from app.services.musical_dependency_capture import capture_rendered_edge
+
+            capture_rendered_edge(
+                conn,
+                project_id=str(updated.get("project_id") or "") or None,
+                asset_id=render_id,
+                downstream_kind="neural_render",
+                source_fingerprint=str(updated.get("source_fingerprint") or ""),
+            )
     emit_render_span(
         job_id=render_id,
         operation_run_id=operation_run_id,

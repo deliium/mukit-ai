@@ -204,6 +204,19 @@ def reuse_theme(
                 ai_model=ai_fields["ai_model"],
                 revision_created=committed.revision_created,
             )
+            from app.services.musical_dependency_capture import capture_theme_reuse_edge
+
+            capture_theme_reuse_edge(
+                conn,
+                universe_id=universe_id,
+                theme_id=theme.id,
+                variant_id=variant_id,
+                source_project_id=source_project_id,
+                upstream_fingerprint=live_fingerprint,
+                destination_project_id=request.destination_project_id,
+                motif_id=realized.motif_id,
+                occurrence_id=realized.occurrence_id,
+            )
     except (ProjectRevisionConflictError, ProjectHistoryValidationError) as exc:
         logger.warning(
             "Musical universe destination conflict",

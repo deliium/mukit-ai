@@ -640,6 +640,20 @@ def commit_revision(
             ai_model=ai_fields["ai_model"],
             revision_created=result.revision_created,
         )
+        from app.services.musical_dependency_capture import capture_revision_dependencies
+
+        capture_revision_dependencies(
+            conn,
+            project_id=project_id,
+            operation_type=request.operation_type.value,
+            composition=target_composition,
+            expected_source_fingerprint=request.expected_source_fingerprint,
+            expected_head_revision_id=request.expected_head_revision_id,
+            head_revision_id=result.head_revision_id,
+            ai_operation=None if request.ai is None else request.ai.operation,
+            generation_parameters=None if request.ai is None else request.ai.generation_parameters,
+            db_path=path,
+        )
         branch_name = _load_active_branch_name(conn, project_id, result.branch_id)
         composition = (
             None
@@ -1049,6 +1063,20 @@ def apply_as_branch_command(
             ai_provider=ai_fields["ai_provider"],
             ai_model=ai_fields["ai_model"],
             revision_created=True,
+        )
+        from app.services.musical_dependency_capture import capture_revision_dependencies
+
+        capture_revision_dependencies(
+            conn,
+            project_id=project_id,
+            operation_type=request.operation_type.value,
+            composition=target_composition,
+            expected_source_fingerprint=request.expected_source_fingerprint,
+            expected_head_revision_id=request.expected_head_revision_id,
+            head_revision_id=result.head_revision_id,
+            ai_operation=None if request.ai is None else request.ai.operation,
+            generation_parameters=None if request.ai is None else request.ai.generation_parameters,
+            db_path=path,
         )
         composition = (
             None

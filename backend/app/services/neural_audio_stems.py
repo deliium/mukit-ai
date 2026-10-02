@@ -445,6 +445,17 @@ def run_stem_set(
         if not any_failed:
             with get_connection(path) as conn:
                 update_stem_set_status(conn, stem_set_id, status="complete")
+                set_row = get_stem_set_row(conn, stem_set_id)
+                if set_row is not None:
+                    from app.services.musical_dependency_capture import capture_rendered_edge
+
+                    capture_rendered_edge(
+                        conn,
+                        project_id=str(set_row.get("project_id") or "") or None,
+                        asset_id=stem_set_id,
+                        downstream_kind="neural_stem_set",
+                        source_fingerprint=str(set_row.get("source_fingerprint") or ""),
+                    )
             emit_render_span(
                 job_id=stem_set_id,
                 operation_run_id=operation_run_id,
@@ -680,6 +691,18 @@ def rerender_stem(
                 error_code=None if ok else "neural_audio_internal_error",
                 error_message=None if ok else "Stem rerender failed",
             )
+            if ok:
+                set_row = get_stem_set_row(conn, stem_set_id)
+                if set_row is not None:
+                    from app.services.musical_dependency_capture import capture_rendered_edge
+
+                    capture_rendered_edge(
+                        conn,
+                        project_id=str(set_row.get("project_id") or "") or None,
+                        asset_id=stem_set_id,
+                        downstream_kind="neural_stem_set",
+                        source_fingerprint=str(set_row.get("source_fingerprint") or ""),
+                    )
     return get_stem_set(stem_set_id, db_path=path)
 
 

@@ -9045,6 +9045,7 @@ export const useMusicStore = create((set, get) => ({
     const aiPayload = {
       provider: normalizeAiProvider(state.developmentProvider || state.selectedProvider),
       model: state.developmentModel || state.selectedModel || null,
+      operation: state.developmentOperation,
       user_instruction: state.developmentInstruction || undefined,
       candidate_id: candidate.candidate_id,
       candidate_fingerprint: candidate.candidate_fingerprint,

@@ -202,3 +202,110 @@ test('development selection and discard do not dirty history', () => {
   assert.equal(useMusicStore.getState().developmentCandidates.length, 0);
   assert.equal(useMusicStore.getState().developmentAuditionActive, false);
 });
+
+test('durable development apply sends ai.operation from developmentOperation', async (t) => {
+  const { compositionEditFingerprint } = await import('../utils/compositionCandidates.js');
+  const base = sixteenBarComposition();
+  const sourceFp = await compositionEditFingerprint(base);
+  const variedComposition = structuredClone(base);
+  variedComposition.tracks[0].events[0].pitch = 'E4';
+  const varied = {
+    ...candidateFrom(base, { candidateId: 'dev-cand-vary01' }),
+    operation: 'vary_section',
+    composition: variedComposition,
+    output_range: {
+      start_bar: 1,
+      end_bar: 16,
+      start_tick: 0,
+      end_tick: base.duration_ticks,
+    },
+  };
+  varied.edit_source_fingerprint = sourceFp;
+  varied.candidate_fingerprint = await compositionEditFingerprint(varied.composition);
+
+  let applyBody = null;
+  const restore = installAxiosStub(async (config) => {
+    const url = String(config.url || '');
+    const method = String(config.method || '').toLowerCase();
+    if ((url.includes('/revisions') || url.includes('/branches')) && method === 'post') {
+      applyBody = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+      return {
+        data: {
+          project_id: 'proj-dev',
+          active_branch_id: url.includes('/branches') ? 'branch-2' : 'branch-1',
+          active_branch_name: applyBody.name || 'Original',
+          current_revision_id: 'rev-2',
+          current_revision_sequence: 2,
+          working_version: 2,
+          working_fingerprint: 'c'.repeat(64),
+          composition: applyBody.composition,
+          revision_created: true,
+          created_revision_ids: ['rev-2'],
+          operation_type: 'development-apply',
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    throw new Error(`unexpected request ${method} ${url}`);
+  });
+  t.after(restore);
+
+  useMusicStore.setState({
+    editedMusicJson: structuredClone(base),
+    compositionRevision: 'rev-base',
+    developmentBaseRevision: 'rev-base',
+    editCursorTick: 0,
+    compositionEditUndoStack: [],
+    compositionEditRedoStack: [],
+    developmentOperation: 'vary_section',
+    developmentIntent: 'continue',
+    developmentStrength: 'balanced',
+    developmentStatus: 'ready',
+    developmentCandidates: [varied],
+    developmentSelectedCandidateId: varied.candidate_id,
+    developmentEditSourceFingerprint: sourceFp,
+    developmentAuditionActive: false,
+    selectedProvider: 'fake',
+    selectedModel: 'fake-deterministic',
+    currentProjectId: 'proj-dev',
+    activeBranchId: 'branch-1',
+    workingVersion: 1,
+    currentRevisionId: 'rev-1',
+    workingFingerprint: 'd'.repeat(64),
+  });
+
+  const applied = await useMusicStore.getState().applySelectedDevelopmentCandidate();
+  assert.equal(applied, true);
+  assert.equal(applyBody.operation_type, 'development-apply');
+  assert.equal(applyBody.ai.operation, 'vary_section');
+
+  applyBody = null;
+  const continued = candidateFrom(base, { candidateId: 'dev-cand-cont01' });
+  continued.edit_source_fingerprint = sourceFp;
+  continued.candidate_fingerprint = await compositionEditFingerprint(continued.composition);
+  continued.operation = 'continue';
+  useMusicStore.setState({
+    editedMusicJson: structuredClone(base),
+    compositionRevision: 'rev-base',
+    developmentBaseRevision: 'rev-base',
+    developmentOperation: 'continue',
+    developmentCandidates: [continued],
+    developmentSelectedCandidateId: continued.candidate_id,
+    developmentEditSourceFingerprint: sourceFp,
+    developmentStatus: 'ready',
+    currentProjectId: 'proj-dev',
+    activeBranchId: 'branch-1',
+    workingVersion: 1,
+    currentRevisionId: 'rev-1',
+    workingFingerprint: 'd'.repeat(64),
+  });
+  const branched = await useMusicStore.getState().applySelectedDevelopmentCandidate({
+    asNewBranch: true,
+    branchName: 'Continued',
+  });
+  assert.equal(branched, true);
+  assert.equal(applyBody.ai.operation, 'continue');
+});

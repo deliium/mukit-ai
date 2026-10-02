@@ -83,6 +83,7 @@ def test_forbidden_persistence_imports_in_ai_agents():
         "from app.services.project_history import",
         "from app.services.adaptive_score_store",
         "from app.services.musical_universe_store",
+        "from app.services.musical_dependency_store",
         "from app.services.adaptive_score_transition_pending",
         "from app.services.adaptive_score_transitions",
         "from app.services.adaptive_score_transition_service",

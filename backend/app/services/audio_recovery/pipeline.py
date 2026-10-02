@@ -714,6 +714,14 @@ def bind_audio_recovery_job(
             sha256_prefix=alignment_write.sha256_prefix,
             relpath=alignment_write.relpath,
         )
+        from app.services.musical_dependency_capture import capture_transcribed_edge
+
+        capture_transcribed_edge(
+            conn,
+            project_id=body.project_id,
+            asset_id=source_write.asset_id,
+            payload=source_bytes,
+        )
         logger.info(
             "Bind alignment asset written",
             extra={
