@@ -599,6 +599,9 @@ def delete_project(project_id: str, *, db_path: Path | str | None = None) -> Non
     logger.info("Deleting project", extra={"project_id": project_id})
     try:
         with get_connection(path) as conn:
+            from app.services.musical_dependency_store import delete_edges_for_downstream_project
+
+            delete_edges_for_downstream_project(conn, project_id)
             conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         try:
             from app.services.neural_audio_render import cleanup_project_neural_audio

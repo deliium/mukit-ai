@@ -440,6 +440,9 @@ def delete_universe(universe_id: str, *, db_path: Path | str | None = None) -> N
     """Delete the document and its memberships. Project rows stay."""
     path = Path(db_path) if db_path is not None else get_project_db_path()
     with get_connection(path) as conn:
+        from app.services.musical_dependency_store import delete_edges_for_universe
+
+        delete_edges_for_universe(conn, universe_id)
         deleted = conn.execute(
             "DELETE FROM musical_universes WHERE id = ?",
             (universe_id,),

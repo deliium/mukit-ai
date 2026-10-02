@@ -16,6 +16,7 @@ from app.composition_schemas import CompositionV2
 logger = logging.getLogger(__name__)
 
 SNAPSHOT_ENCODING_PROFILE = "composition.snapshot.v1"
+MOTIF_OCCURRENCE_PROFILE = "motif.occurrence.v1"
 SNAPSHOT_COMPRESSION_PROFILE = "zlib"
 NULL_SNAPSHOT_FINGERPRINT = f"{SNAPSHOT_ENCODING_PROFILE}:null"
 SNAPSHOT_FINGERPRINT_LOG_PREFIX_LEN = 12
@@ -198,3 +199,34 @@ def decode_composition_snapshot(
 def composition_snapshot_fingerprint(composition: CompositionV2 | None) -> str:
     """Return the content-addressed fingerprint without requiring storage."""
     return encode_composition_snapshot(composition).fingerprint
+
+
+def motif_occurrence_fingerprint(events: list[Any] | tuple[Any, ...]) -> str:
+    """SHA-256 of ``motif.occurrence.v1``, a NUL, and canonical event JSON.
+
+    ``events`` are already ordered by occurrence event id. Other notes on the
+    score do not enter the digest, so an unrelated edit stays fresh.
+    """
+    serializable: list[Any] = []
+    for event in events:
+        if hasattr(event, "model_dump"):
+            serializable.append(event.model_dump(mode="json"))
+        elif isinstance(event, dict):
+            serializable.append(event)
+        else:
+            raise TypeError("Motif occurrence events must be mappings or models")
+    canonical_bytes = canonical_snapshot_json_dumps(serializable).encode("utf-8")
+    digest = hashlib.sha256()
+    digest.update(MOTIF_OCCURRENCE_PROFILE.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(canonical_bytes)
+    fingerprint = digest.hexdigest()
+    logger.debug(
+        "Hashed motif occurrence",
+        extra={
+            "fingerprint_prefix": snapshot_fingerprint_log_prefix(fingerprint),
+            "event_count": len(serializable),
+            "profile": MOTIF_OCCURRENCE_PROFILE,
+        },
+    )
+    return fingerprint
