@@ -70,6 +70,7 @@
 - [x] **V5 Film score adaptation** — An explicit `film.score.adaptation.v1` preview chooses one local repair for a declared picture edit and keeps music outside that edit identical. Commit writes the repaired `composition.v2` through `film-score-adapt-apply`. Cue rows, video bytes, and the sync origin stay stored. A span that covers the whole score is refused and does not generate a replacement. No `composition.v5`
 - [x] **V5 Musical Universe** — A project group shares `musical.universe.v1` entities, themes, variants, and usage. Themes reference motif occurrences. An explicit mechanical reuse writes transformed notes into a member `composition.v2`. The universe row stores no pitches. No `composition.v5`
 - [x] **V5 Derived material dependency graph** — Explicit edges name which motifs, arrangements, variations, renders, transcriptions, and reference-conditioned revisions came from Theme A. An upstream change lists stale dependents and leaves their notes and audio unchanged. No `composition.v5`
+- [ ] **V5 Explicit preference learning** — Opt-in records of which generated alternative the user chose among a development or arrangement ballot. A lightweight ranker orders later ballots from those choices, and the user can still select any candidate. Inspect and reset stay available. The score stays `composition.v2`. A choice is not a genre label and not a `composer.profile.v1`. No `composition.v5`
 
 ## Completed
 
