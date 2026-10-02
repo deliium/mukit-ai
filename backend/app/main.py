@@ -35,6 +35,7 @@ from .routers.plugins import router as plugins_router
 from .routers.ai_agents import router as ai_agents_router
 from .routers.embeddings import router as embeddings_router
 from .routers.composer_profiles import router as composer_profiles_router
+from .routers.preferences import router as preferences_router
 from .routers.reference_features import router as reference_features_router
 from .routers.live_performance import router as live_performance_router
 from .routers.film_score import router as film_score_router
@@ -193,6 +194,7 @@ app.include_router(plugins_router)
 app.include_router(ai_agents_router)
 app.include_router(embeddings_router)
 app.include_router(composer_profiles_router)
+app.include_router(preferences_router)
 app.include_router(reference_features_router)
 app.include_router(live_performance_router)
 app.include_router(video_scoring_router)
