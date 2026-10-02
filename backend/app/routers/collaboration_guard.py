@@ -9,8 +9,8 @@ from fastapi import Depends, Header, HTTPException
 from app.collaboration_schemas import CollaborationError, map_collaboration_error_to_http
 from app.collaboration_settings import collaboration_enabled
 from app.services.collaboration_access import (
+    authorize_current,
     authorize_project,
-    request_actor_header,
     resolve_request_actor,
 )
 
@@ -61,4 +61,7 @@ def enforce_header(header: str | None, project_id: str | None, action: str) -> s
 
 def enforce_current(project_id: str | None, action: str) -> str | None:
     """Authorize using the actor header captured for this request."""
-    return enforce_header(request_actor_header(), project_id, action)
+    try:
+        return authorize_current(project_id, action)
+    except CollaborationError as exc:
+        raise raise_collaboration(exc) from exc

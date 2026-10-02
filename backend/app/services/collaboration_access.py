@@ -62,6 +62,24 @@ def resolve_request_actor(header_value: str | None) -> str | None:
     return actor_id
 
 
+def authorize_current(project_id: str | None, action: str) -> str | None:
+    """Authorize the captured actor header without importing FastAPI.
+
+    Returns the actor id when the action is allowed. Returns ``None``
+    before any membership lookup when collaboration is off or the project
+    id is missing. A denied role raises ``CollaborationError``.
+    """
+    if not collaboration_enabled() or not project_id:
+        return None
+    actor_id = resolve_request_actor(request_actor_header())
+    authorize_project(actor_id, project_id, action)
+    logger.info(
+        "[FIX] Collaboration action allowed for current actor",
+        extra={"project_id": project_id, "action": action, "actor_id": actor_id},
+    )
+    return actor_id
+
+
 def authorize_project(actor_id: str | None, project_id: str, action: str) -> str | None:
     """Check ``action`` for ``actor_id`` on ``project_id``.
 

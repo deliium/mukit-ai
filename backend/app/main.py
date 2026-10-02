@@ -44,6 +44,7 @@ from .routers.adaptive_engine import adaptive_engine_validation_handler
 from .routers.adaptive_engine import router as adaptive_engine_router
 from .routers.musical_universe import router as musical_universe_router
 from .routers.musical_dependency import router as musical_dependency_router
+from .routers.personal_composer import router as personal_composer_router
 from .reference_feature_schemas import (
     ReferenceFeatureError,
     map_reference_feature_error_to_http,
@@ -129,6 +130,19 @@ async def lifespan(_app: FastAPI):
             "Application startup plugin load failed; continuing without plugins",
             extra={"error_type": type(exc).__name__},
         )
+    try:
+        from .services.personal_composer_service import sweep_orphaned_personal_jobs
+
+        interrupted = sweep_orphaned_personal_jobs()
+        logger.info(
+            "Application startup personal composers swept",
+            extra={"interrupted": interrupted},
+        )
+    except Exception as exc:
+        logger.warning(
+            "Application startup personal composer sweep failed",
+            extra={"error_type": type(exc).__name__, "code": "personal_sweep_skipped"},
+        )
     yield
     from .services.adaptive_engine_service import cancel_adaptive_engine_tasks
 
@@ -187,6 +201,7 @@ app.include_router(adaptive_scores_router)
 app.include_router(adaptive_engine_router)
 app.include_router(musical_universe_router)
 app.include_router(musical_dependency_router)
+app.include_router(personal_composer_router)
 app.add_exception_handler(RequestValidationError, adaptive_engine_validation_handler)
 
 _mt_settings = load_music_transformer_settings()
