@@ -165,6 +165,84 @@ def symbolic_composer_available(
     return True, SYMBOLIC_COMPOSER_MODEL_ID_MT, None
 
 
+def _generate_via_personal(
+    plan: CompositionPlan,
+    *,
+    model_id: str,
+    seed: int | None,
+    conditioning: TokenizerConditioningV1,
+    prefix_composition: CompositionV2 | None = None,
+    env: Mapping[str, str] | None = None,
+) -> SymbolicGenerateResult:
+    """Run a completed personal adapter. Incomplete rows are unavailable."""
+    from app.ai_runtime.errors import ModelNotFoundError, ModelUnavailableError
+    from app.services.personal_composer_store import get_by_registry_id
+
+    row = get_by_registry_id(model_id)
+    if row is None:
+        raise ModelNotFoundError(f"personal composer {model_id} is not registered")
+    if row.job.status != "complete":
+        raise ModelUnavailableError(f"personal composer {model_id} is not ready")
+    logger.info(
+        "Personal composer generate started",
+        extra={"composer_model_id": model_id, "engine": row.job.engine},
+    )
+    if row.job.engine == "fake":
+        try:
+            music, report = generate_fake_symbolic_composition(
+                plan,
+                seed=seed,
+                prefix_composition=prefix_composition,
+            )
+        except FakeSymbolicComposerError as exc:
+            raise SymbolicCompositionGenerateError(str(exc), code=SYMBOLIC_GENERATE_FAILED) from exc
+        return SymbolicGenerateResult(
+            composition=music,
+            report=report,
+            model_id=model_id,
+            backend="fake",
+            seed=seed,
+            conditioning=conditioning,
+        )
+    del env
+    from app.music_transformer.errors import (
+        MusicTransformerDependencyError,
+        MusicTransformerGenerateError,
+    )
+    from app.personal_composer.trainer import generate_from_personal_adapter
+    from app.personal_composer_settings import load_personal_composer_settings
+
+    adapter_dir = load_personal_composer_settings().root / row.job.adapter_id
+    try:
+        music, mt_report = generate_from_personal_adapter(
+            adapter_dir,
+            base_model_id=row.job.base_model_id,
+            base_checkpoint_basename=row.job.manifest.base_checkpoint_basename,
+            conditioning=conditioning,
+            prefix_composition=prefix_composition,
+            seed=seed,
+        )
+    except MusicTransformerDependencyError as exc:
+        raise SymbolicCompositionGenerateError(
+            "PyTorch is not installed for this personal composer",
+            code=SYMBOLIC_UNAVAILABLE,
+        ) from exc
+    except (MusicTransformerGenerateError, FileNotFoundError, OSError) as exc:
+        logger.error(
+            "[FIX] Personal torch generate failed",
+            extra={"composer_model_id": model_id, "error_type": type(exc).__name__},
+        )
+        raise SymbolicCompositionGenerateError(str(exc), code=SYMBOLIC_GENERATE_FAILED) from exc
+    return SymbolicGenerateResult(
+        composition=music,
+        report=mt_report.model_dump(mode="json"),
+        model_id=model_id,
+        backend="music_transformer",
+        seed=seed,
+        conditioning=conditioning,
+    )
+
+
 def generate_symbolic_composition(
     plan: CompositionPlan,
     *,
@@ -180,6 +258,15 @@ def generate_symbolic_composition(
     """Generate Composition V2 notes via fake, Music Transformer, or a plugin composer."""
     effective_seed = None if seed is None else int(seed) + int(resample_attempt)
     conditioning = plan_to_tokenizer_conditioning(plan, genre=genre, mood=mood)
+    if model_id and str(model_id).startswith("personal:"):
+        return _generate_via_personal(
+            plan,
+            model_id=model_id,
+            seed=effective_seed,
+            conditioning=conditioning,
+            prefix_composition=prefix_composition,
+            env=env,
+        )
     if model_id:
         plugin_result = _generate_via_plugin(
             plan,

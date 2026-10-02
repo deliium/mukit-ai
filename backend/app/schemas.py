@@ -306,6 +306,8 @@ class LLMGenerationOptions(BaseModel):
     pipeline: GenerationPipelineId = "llm_only"
     # Deterministic seed for hybrid / symbolic pipelines (ignored by llm_only).
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    # Optional symbolic composer. Blank keeps the implicit ready composer.
+    composer_model_id: str | None = Field(default=None, max_length=160)
     # Prefix composition for symbolic_continuation / symbolic_variation.
     prefix_composition: dict[str, Any] | None = None
     # Last-resort LLM note rewrite on hybrid composition failure (default off).

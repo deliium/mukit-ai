@@ -23,6 +23,7 @@ import MultiAgentPanel from './MultiAgentPanel.jsx';
 import ProjectVersionsPanel from './ProjectVersionsPanel.jsx';
 import CollaborationPanel from './CollaborationPanel.jsx';
 import ComposerProfilesPanel from './ComposerProfilesPanel.jsx';
+import PersonalComposerPanel from './PersonalComposerPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const PluginsPanel = lazy(() => import('./PluginsPanel.jsx'));
@@ -280,7 +281,12 @@ const ComposerWorkspace = () => {
             ) : null}
             {tab.id === 'universe' && selected ? <MusicalUniversePanel /> : null}
             {tab.id === 'harmony' && selected ? <HarmonyTimelinePanel /> : null}
-            {tab.id === 'profiles' && selected ? <ComposerProfilesPanel /> : null}
+            {tab.id === 'profiles' && selected ? (
+              <>
+                <ComposerProfilesPanel />
+                <PersonalComposerPanel />
+              </>
+            ) : null}
             {tab.id === 'plugins' && selected ? (
               <Suspense fallback={<p>Loading plugins…</p>}>
                 <PluginsPanel />

@@ -154,6 +154,11 @@ mukit-ai/
 | `backend/app/services/composer_profile_derive.py` | Multi-project abstract preference aggregate |
 | `backend/app/services/composer_profile_resolve.py` | Explicit-over-derived + strength soft fragment |
 | `backend/app/services/composer_profile_merge.py` | Additive generate merge + provenance (never mutates prompt) |
+| `backend/app/personal_composer_schemas.py` | Personal training manifest, snapshot index, adapter config, job, and eval documents |
+| `backend/app/personal_composer_settings.py` | `PERSONAL_COMPOSER_ROOT`, fake engine, project and step caps |
+| `backend/app/routers/personal_composer.py` | Train, list, stop, resume, evaluate, and delete personal adapters |
+| `backend/app/services/personal_composer_service.py` | Rights, snapshot, and job orchestration. Listing does not start training |
+| `frontend/src/components/PersonalComposerPanel.jsx` | Profiles-tab personal adapter form. Opening the tab lists jobs |
 | `scripts/run_tests.sh` | Local quality gate: ESLint + backend pytest + frontend unit tests |
 | `backend/app/composition_plan_schemas.py` | Strict `composition.plan.v1` DTOs (non-playable) |
 | `backend/app/services/composition_plan_constraints.py` | Plan ↔ hard `GenerationConstraints` conformance + digest |
@@ -356,6 +361,7 @@ mukit-ai/
 | Symbolic tokenizer | `docs/tokenizer.md` | Composition V2 ↔ token ids, quantization, CLI, versioning |
 | Symbolic embeddings | `docs/embeddings.md` | Handcrafted musical feature embeddings, similarity, reference conditioning |
 | Composer profiles | `docs/composer-profiles.md` | Durable preference profiles, soft generate conditioning, derive/promote |
+| Personal symbolic composer | `docs/personal-symbolic-composer.md` | Opt-in LoRA adapter on selected owned scores; optional hybrid composer |
 | Reference features | `docs/reference-features.md` | Selective dimension masks + preserve/borrow/regenerate policy for generate/develop/edit |
 | Symbolic Music Transformer | `docs/music-transformer.md` | PyTorch decoder-only LM, train/generate CLI, checkpoint card, optional API |
 | Musical workflow evaluation | `docs/workflow-evaluation.md` | Versioned V3/V4 brief suite, hard-metric regression, blinded listening |
@@ -383,6 +389,6 @@ mukit-ai/
 - Decompose shell command chains; do not combine unrelated git operations with `&&` when a failure mid-chain is confusing
   - Incorrect: `git checkout main && git pull`
   - Correct: First `git checkout main`, then `git pull origin main`
-- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data. Arrangement catalog IDs/ranges are not V2 fields; only applied V2 is persisted. Typed agent plans live in `agent.artifact.v1` envelopes / `agent_artifact_workspace` — never as alternate playable scores (`composition.v4` unsupported); `ai_agents/` must not import the workspace or SQLite. Symbolic embeddings measure affinity from note material — never artist≡style ids; never auto-export projects into `DATASET_ROOT`. Composer profiles (`composer.profile.v1`) are durable soft prefs only — never store event arrays / analysis reports / embedding vectors; never override prompt/hard `GenerationConstraints`; never write to `DATASET_ROOT`. Reference features (`reference.features.v1`) are derived dimension-masked sidecars — never mutate the reference Composition; never copy melodies into prompts; never write `DATASET_ROOT`.
+- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data. Arrangement catalog IDs/ranges are not V2 fields; only applied V2 is persisted. Typed agent plans live in `agent.artifact.v1` envelopes / `agent_artifact_workspace` — never as alternate playable scores (`composition.v4` unsupported); `ai_agents/` must not import the workspace or SQLite. Symbolic embeddings measure affinity from note material — never artist≡style ids; never auto-export projects into `DATASET_ROOT`. Composer profiles (`composer.profile.v1`) are durable soft prefs only — never store event arrays / analysis reports / embedding vectors; never override prompt/hard `GenerationConstraints`; never write to `DATASET_ROOT`. A personal composer adapter is a user-started LoRA job under `PERSONAL_COMPOSER_ROOT`, not a profile and not a copy in `DATASET_ROOT`; `ai_agents/` must not import `personal_composer_store`. Reference features (`reference.features.v1`) are derived dimension-masked sidecars — never mutate the reference Composition; never copy melodies into prompts; never write `DATASET_ROOT`.
 - Prefer extending `routers/` + `services/` over growing unrelated logic in `main.py`
 - Never log API keys, full prompts, raw MusicXML/MIDI/WAV payloads, uploaded import source bytes, full analysis reports, event arrays, or arrangement catalog override contents

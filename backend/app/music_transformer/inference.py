@@ -69,7 +69,33 @@ def generate_composition(
     model.load_state_dict(payload["model_state_dict"])
     model.to(resolved_device)
     model.eval()
+    return sample_and_decode(
+        model,
+        conditioning=conditioning,
+        prefix_composition=prefix_composition,
+        sample_config=sample_cfg,
+        device=resolved_device,
+        tokenizer_config=tok_cfg,
+        tokenizer_version=card.tokenizer.expected_tokenizer_version,
+        vocab_hash_prefix=card.tokenizer.vocab_hash[:12],
+    )
 
+
+def sample_and_decode(
+    model,
+    *,
+    conditioning: TokenizerConditioningV1 | dict[str, Any] | None = None,
+    prefix_composition: CompositionV2 | dict[str, Any] | None = None,
+    sample_config: MusicTransformerSampleConfigV1 | None = None,
+    device: str = "cpu",
+    tokenizer_config: TokenizerConfigV1 | None = None,
+    tokenizer_version: str,
+    vocab_hash_prefix: str,
+) -> tuple[CompositionV2, MusicTransformerGenerateReportV1]:
+    """Sample token ids from an already loaded model and decode Composition V2."""
+    tok_cfg = tokenizer_config or default_tokenizer_config()
+    vocab = build_vocab(tok_cfg)
+    sample_cfg = sample_config or MusicTransformerSampleConfigV1(greedy=True, max_new_tokens=64)
     prompt = _build_prompt(
         vocab=vocab,
         tok_cfg=tok_cfg,
@@ -85,7 +111,7 @@ def generate_composition(
         prompt,
         vocab,
         sample_cfg,
-        device=resolved_device,
+        device=device,
         constraints=constraints,
     )
 
@@ -112,7 +138,6 @@ def generate_composition(
     if decode_report.result == "repaired":
         status = "repaired"
 
-    # Pydantic already validated by decode; run integrity (canonical profile).
     integrity = validate_composition_integrity(composition, profile="canonical")
     if not integrity.ok:
         logger.error(
@@ -140,8 +165,8 @@ def generate_composition(
         generated_tokens=max(0, len(full_ids) - len(prompt)),
         notes_out=notes_out,
         bar_count=composition.bar_count,
-        tokenizer_version=card.tokenizer.expected_tokenizer_version,
-        vocab_hash_prefix=card.tokenizer.vocab_hash[:12],
+        tokenizer_version=tokenizer_version,
+        vocab_hash_prefix=vocab_hash_prefix,
         repair_result=decode_report.result,
         conditioning=cond_map,
     )

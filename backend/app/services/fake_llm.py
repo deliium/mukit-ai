@@ -803,6 +803,7 @@ async def generate_fake_hybrid_music_json(
     provider: LLMProviderSettings,
     *,
     constraints: GenerationConstraints | None = None,
+    composer_model_id: str | None = None,
 ) -> tuple[
     CompositionV2,
     list[str],
@@ -880,12 +881,14 @@ async def generate_fake_hybrid_music_json(
         density=PlanDensity(),
     )
     locked = ensure_plan_conforms(plan, active_constraints, stage="fake_hybrid_plan")
+    selected_composer = composer_model_id if composer_model_id and composer_model_id.startswith("personal:") else None
     result = generate_symbolic_composition(
         locked,
         seed=seed,
         genre=active_constraints.genre,
         mood=active_constraints.mood,
         prefer_fake=True,
+        model_id=selected_composer,
     )
     music = result.composition
     report = validate_generation_constraints(music, active_constraints)
@@ -909,7 +912,7 @@ async def generate_fake_hybrid_music_json(
             },
             {
                 "operation": "generate_composer",
-                "model_id": FAKE_SYMBOLIC_MODEL_ID,
+                "model_id": result.model_id,
                 "capability": "symbolic_composer",
                 "runtime": "fake_symbolic",
                 "seed": seed,

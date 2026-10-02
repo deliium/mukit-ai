@@ -224,6 +224,8 @@ const MusicGenerator = () => {
   const [pipeline, setPipeline] = useState('llm_only');
   const [hybridSeed, setHybridSeed] = useState('');
   const [symbolicReady, setSymbolicReady] = useState(false);
+  const [symbolicModels, setSymbolicModels] = useState([]);
+  const [composerModelId, setComposerModelId] = useState('');
   const [lastProvenance, setLastProvenance] = useState(null);
   const startedAtRef = useRef(null);
 
@@ -244,7 +246,9 @@ const MusicGenerator = () => {
     fetchAiModels({ capability: 'symbolic_composer', status: 'ready' })
       .then((response) => {
         if (cancelled) return;
-        const ready = Array.isArray(response?.models) && response.models.length > 0;
+        const models = Array.isArray(response?.models) ? response.models : [];
+        const ready = models.length > 0;
+        setSymbolicModels(models);
         setSymbolicReady(ready);
         console.debug('[MusicGenerator] Symbolic composer discovery', {
           ready,
@@ -256,6 +260,7 @@ const MusicGenerator = () => {
         console.debug('[MusicGenerator] Symbolic composer discovery failed', {
           message: error?.message || String(error),
         });
+        setSymbolicModels([]);
         setSymbolicReady(false);
       });
     return () => {
@@ -297,6 +302,7 @@ const MusicGenerator = () => {
     const requestData = buildLlmRequest(prompt, selectedProvider, selectedModel, {
       pipeline,
       seed: hybridSeed,
+      composerModelId: pipeline === 'hybrid_plan_symbolic' ? composerModelId : '',
       profileId: composerProfileId,
       profileStrength: composerProfileStrength,
     });
@@ -463,6 +469,26 @@ const MusicGenerator = () => {
               </option>
             </Select>
           </FormGroup>
+
+          {pipeline === 'hybrid_plan_symbolic' ? (
+            <FormGroup>
+              <Label htmlFor="composerModel">Symbolic composer</Label>
+              <Select
+                id="composerModel"
+                data-testid="generation-composer-model"
+                value={composerModelId}
+                disabled={generating}
+                onChange={(event) => setComposerModelId(event.target.value)}
+              >
+                <option value="">Default symbolic composer</option>
+                {symbolicModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.display_name || model.id}
+                  </option>
+                ))}
+              </Select>
+            </FormGroup>
+          ) : null}
 
           {pipeline === 'hybrid_plan_symbolic' ? (
             <FormGroup>

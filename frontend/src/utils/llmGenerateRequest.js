@@ -19,6 +19,12 @@ export function buildLlmRequest(prompt, selectedProvider, selectedModel, pipelin
       options.seed = Number(rawSeed);
     }
   }
+  if (pipeline === 'hybrid_plan_symbolic') {
+    const composerModelId = String(pipelineOptions.composerModelId || '').trim();
+    if (composerModelId) {
+      options.composer_model_id = composerModelId;
+    }
+  }
   const profileStrength = pipelineOptions.profileStrength || 'off';
   const profileId = pipelineOptions.profileId || null;
   const body = {

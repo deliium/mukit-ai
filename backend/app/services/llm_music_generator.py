@@ -416,7 +416,10 @@ async def generate_music_json(
         )
         try:
             music, warnings, provider, validation, provenance = await generate_fake_hybrid_music_json(
-                request, provider, constraints=constraints
+                request,
+                provider,
+                constraints=constraints,
+                composer_model_id=composer_model_id,
             )
             return music, warnings, provider, validation, _attach_soft_provenance(
                 provenance
@@ -767,12 +770,18 @@ def _resolve_hybrid_stage_models(
         operation=AiOperation.GENERATE_PLANNER,
         collapse_reserved_generate=False,
     )
+    composer_choice = (request.options.composer_model_id or "").strip()
+    composer_selection = (
+        ModelSelectionInput(model_id=composer_choice)
+        if composer_choice
+        else ModelSelectionInput()
+    )
     # Composer selection must not inherit the language model from the request.
     composer_model_id: str | None = None
     try:
         composer = resolve_model_for_operation(
             AiOperation.GENERATE_COMPOSER,
-            ModelSelectionInput(),
+            composer_selection,
             collapse_reserved_generate=False,
         )
         composer_model_id = composer.resolved_model_id
@@ -1148,7 +1157,7 @@ def _symbolic_condition(state: _GenerationState) -> _GenerationState:
 
 
 def _plugin_composer_model_id(stored_id: str | None) -> str | None:
-    """Pass a stored composer id through only when its runtime is ``plugin``."""
+    """Pass a stored composer id through when its runtime is plugin or personal."""
     if not stored_id:
         return None
     from app.ai_runtime.errors import ModelNotFoundError
@@ -1159,8 +1168,12 @@ def _plugin_composer_model_id(stored_id: str | None) -> str | None:
     except ModelNotFoundError:
         logger.debug("stored composer model id is not registered", extra={"model_id": stored_id})
         return None
-    if descriptor.runtime != "plugin":
+    if descriptor.runtime not in {"plugin", "personal_composer"}:
         return None
+    logger.info(
+        "Forwarding stored composer model",
+        extra={"composer_model_id": stored_id, "engine": descriptor.runtime},
+    )
     return stored_id
 
 

@@ -216,6 +216,25 @@ def build_registry_from_env(
             },
         )
 
+    from .runtimes.personal_composer import personal_composer_descriptors
+
+    for personal in personal_composer_descriptors(source):
+        if personal.id in models:
+            logger.warning(
+                "Personal composer model id collides with existing entry",
+                extra={"model_id": personal.id},
+            )
+            continue
+        models[personal.id] = personal
+        logger.info(
+            "Registered personal symbolic composer",
+            extra={
+                "model_id": personal.id,
+                "status": personal.status,
+                "runtime": personal.runtime,
+            },
+        )
+
     from .runtimes.local_audio_transcription import local_audio_mono_descriptors
 
     for audio_desc in local_audio_mono_descriptors(source):

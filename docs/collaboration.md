@@ -18,6 +18,7 @@ Each project has exactly one `owner`. The owner may share `editor`, `commenter`,
 | Open a review | yes | yes | | |
 | Approve or reject a review | yes | | | |
 | Share, change role, revoke | yes | | | |
+| Train a personal composer adapter (`train_adapter`) | yes | | | |
 
 A non-member receives 403 `collaboration_not_member`. A member whose role is too low receives 403 `collaboration_role_denied`. The role check runs before the existing compare-and-swap check.
 

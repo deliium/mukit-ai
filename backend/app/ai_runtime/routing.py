@@ -427,7 +427,7 @@ def default_operation_routes(env: Mapping[str, str] | None = None) -> dict[str, 
                 status="ready",
                 env=source,
             )
-            if model.runtime != "plugin"
+            if model.runtime not in {"plugin", "personal_composer"}
         ]
         if ready_composers:
             routes["generate_composer"] = ready_composers[0].id

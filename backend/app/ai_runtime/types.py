@@ -32,6 +32,7 @@ ModelRuntimeId = Literal[
     "sidecar_musicgen",
     "local_midi_ddsp",
     "plugin",
+    "personal_composer",
 ]
 
 

@@ -32,6 +32,20 @@ describe('buildLlmRequest pipeline options', () => {
     assert.equal(request.options.seed, 42);
   });
 
+  it('copies a hybrid composer id and omits a blank selection', () => {
+    const selected = buildLlmRequest(basePrompt, 'fake', 'fake-v1', {
+      pipeline: 'hybrid_plan_symbolic',
+      composerModelId: 'personal:pcomp_0123456789abcdef',
+    });
+    assert.equal(selected.options.composer_model_id, 'personal:pcomp_0123456789abcdef');
+
+    const blank = buildLlmRequest(basePrompt, 'fake', 'fake-v1', {
+      pipeline: 'hybrid_plan_symbolic',
+      composerModelId: '  ',
+    });
+    assert.equal(blank.options.composer_model_id, undefined);
+  });
+
   it('omits invalid hybrid seed', () => {
     const request = buildLlmRequest(basePrompt, 'fake', 'fake-v1', {
       pipeline: 'hybrid_plan_symbolic',
