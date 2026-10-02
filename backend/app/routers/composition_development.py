@@ -17,6 +17,7 @@ from app.composition_development_schemas import (
 from app.llm_settings import load_llm_settings
 from app.services.composition_edit_fingerprint import edit_fingerprint_log_prefix
 from app.services.llm_composition_development import run_composition_development_preview
+from app.services.preference_capture import capture_development_preview
 from app.services.llm_music_generator import (
     InvalidLLMOutputError,
     LLMGenerationError,
@@ -176,4 +177,5 @@ async def composition_development_preview_route(
             "elapsed_ms": int((time.perf_counter() - started) * 1000),
         },
     )
+    capture_development_preview(request, response)
     return response

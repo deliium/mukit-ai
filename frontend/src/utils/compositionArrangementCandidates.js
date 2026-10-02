@@ -532,6 +532,23 @@ function normalizePartList(parts, side) {
  * Normalize every arrangement preview operation request and explicit part mapping.
  * Never mutates the inbound payload.
  */
+function optionalProfileFields(payload) {
+  const extra = {};
+  if (typeof payload?.active_project_id === 'string') {
+    const projectId = payload.active_project_id.trim();
+    if (projectId.length >= 1 && projectId.length <= 80) {
+      extra.active_project_id = projectId;
+    }
+  }
+  if (typeof payload?.profile_id === 'string' && /^prof_[0-9a-f]{16}$/.test(payload.profile_id)) {
+    extra.profile_id = payload.profile_id;
+  }
+  if (['off', 'light', 'normal', 'strong'].includes(payload?.profile_strength)) {
+    extra.profile_strength = payload.profile_strength;
+  }
+  return extra;
+}
+
 export function normalizeArrangementRequest(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return fail('arrangement_invalid_operation', 'Arrangement request must be an object');
@@ -689,6 +706,7 @@ export function normalizeArrangementRequest(payload) {
     options: payload.options && typeof payload.options === 'object'
       ? { ...payload.options }
       : {},
+    ...optionalProfileFields(payload),
   };
 
   return { ok: true, request };

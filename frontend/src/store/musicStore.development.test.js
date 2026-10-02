@@ -162,6 +162,8 @@ test('development preview is ephemeral and apply succeeds with matching fingerpr
     selectedProvider: 'fake',
     selectedModel: 'fake-deterministic',
     currentProjectId: null,
+    preferenceCollectionEnabled: false,
+    preferenceRankingEnabled: false,
   });
 
   const before = structuredClone(useMusicStore.getState().editedMusicJson);
@@ -308,4 +310,135 @@ test('durable development apply sends ai.operation from developmentOperation', a
   });
   assert.equal(branched, true);
   assert.equal(applyBody.ai.operation, 'continue');
+});
+
+test('ranked development preview keeps the clicked candidate when the choice is refused', async (t) => {
+  const { compositionEditFingerprint } = await import('../utils/compositionCandidates.js');
+  const base = sixteenBarComposition();
+  const sourceFp = await compositionEditFingerprint(base);
+  const sparse = candidateFrom(base, { candidateId: 'cand_sparse_00001' });
+  const middle = candidateFrom(base, { candidateId: 'cand_middle_00001' });
+  const dense = candidateFrom(base, { candidateId: 'cand_dense_000001' });
+  sparse.composition.tracks[0].events[0].pitch = 'C4';
+  middle.composition.tracks[0].events[0].pitch = 'E4';
+  dense.composition.tracks[0].events[0].pitch = 'G4';
+  for (const candidate of [sparse, middle, dense]) {
+    candidate.edit_source_fingerprint = sourceFp;
+    candidate.candidate_fingerprint = await compositionEditFingerprint(candidate.composition);
+  }
+
+  const urls = [];
+  const restore = installAxiosStub(async (config) => {
+    urls.push(config.url);
+    if (config.url === '/composition/development/preview') {
+      return {
+        data: {
+          edit_source_fingerprint: sourceFp,
+          algorithm_version: 'composition.development.v1',
+          operation: 'continue',
+          development_intent: 'continue',
+          variation_strength: 'balanced',
+          requested_candidate_count: 3,
+          candidates: [sparse, middle, dense],
+          warning_codes: [],
+          provider: 'fake',
+          model: 'fake-deterministic',
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    if (config.url === '/preferences/rank') {
+      return {
+        data: {
+          schema_version: 'preference.ranking.v1',
+          ranking_applied: true,
+          ordered_candidate_ids: [
+            'cand_dense_000001',
+            'cand_middle_00001',
+            'cand_sparse_00001',
+          ],
+          scores: [1, 0.4, 0.1],
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
+    if (config.url === '/preferences/choices') {
+      const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+      assert.equal(body.surface, 'development');
+      assert.equal(body.chosen_candidate_id, 'cand_sparse_00001');
+      const error = new Error('Request failed');
+      error.isAxiosError = true;
+      error.response = {
+        status: 409,
+        data: {
+          detail: {
+            code: 'preference_collection_disabled',
+            message: 'Preference collection is off.',
+          },
+        },
+      };
+      throw error;
+    }
+    throw new Error(`unexpected url ${config.url}`);
+  });
+  t.after(() => {
+    restore();
+    useMusicStore.setState({
+      preferenceCollectionEnabled: false,
+      preferenceRankingEnabled: false,
+    });
+  });
+
+  useMusicStore.setState({
+    editedMusicJson: structuredClone(base),
+    compositionRevision: 'rev-base',
+    editCursorTick: 0,
+    compositionEditUndoStack: [],
+    compositionEditRedoStack: [],
+    developmentOperation: 'continue',
+    developmentIntent: 'continue',
+    developmentStrength: 'balanced',
+    developmentOutputBars: 8,
+    developmentCandidateCount: 3,
+    developmentSourceStartBar: 1,
+    developmentSourceEndBar: 16,
+    developmentStatus: 'idle',
+    developmentCandidates: [],
+    developmentSelectedCandidateId: null,
+    developmentAuditionActive: false,
+    selectedProvider: 'fake',
+    selectedModel: 'fake-deterministic',
+    currentProjectId: null,
+    composerProfileId: null,
+    composerProfileStrength: 'off',
+    preferenceCollectionEnabled: true,
+    preferenceRankingEnabled: true,
+    preferenceFeatureAvailable: true,
+  });
+
+  const ok = await useMusicStore.getState().startDevelopmentPreview();
+  assert.equal(ok, true);
+  assert.deepEqual(
+    useMusicStore.getState().developmentCandidates.map((item) => item.candidate_id),
+    ['cand_dense_000001', 'cand_middle_00001', 'cand_sparse_00001'],
+  );
+  assert.equal(useMusicStore.getState().developmentSelectedCandidateId, 'cand_dense_000001');
+  assert.equal(useMusicStore.getState().editedMusicJson.tracks[0].events[0].pitch, 'C4');
+
+  useMusicStore.getState().selectDevelopmentCandidate('cand_sparse_00001');
+  const applied = await useMusicStore.getState().applySelectedDevelopmentCandidate();
+  assert.equal(applied, true);
+  const after = useMusicStore.getState().editedMusicJson;
+  assert.equal(after.tracks[0].events[0].pitch, 'C4');
+  assert.equal(after.bar_count, 24);
+  assert.equal(useMusicStore.getState().developmentError, 'preference_collection_disabled');
+  assert.ok(urls.includes('/preferences/rank'));
+  assert.ok(urls.includes('/preferences/choices'));
+  assert.equal(urls.filter((url) => url === '/composition/development/preview').length, 1);
 });

@@ -24,6 +24,7 @@ import ProjectVersionsPanel from './ProjectVersionsPanel.jsx';
 import CollaborationPanel from './CollaborationPanel.jsx';
 import ComposerProfilesPanel from './ComposerProfilesPanel.jsx';
 import PersonalComposerPanel from './PersonalComposerPanel.jsx';
+import PreferenceLearningPanel from './PreferenceLearningPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const PluginsPanel = lazy(() => import('./PluginsPanel.jsx'));
@@ -285,6 +286,7 @@ const ComposerWorkspace = () => {
               <>
                 <ComposerProfilesPanel />
                 <PersonalComposerPanel />
+                <PreferenceLearningPanel />
               </>
             ) : null}
             {tab.id === 'plugins' && selected ? (

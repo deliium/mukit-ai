@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import {
+  rankPreferenceCandidates,
+  recordPreferenceChoice,
+} from '../api/preferenceApi.js';
+import { orderCandidatesByRanking } from '../utils/preferenceRanking.js';
+import {
   cancelAdaptiveTransition,
   commandAdaptivePlayback,
   commandAdaptiveScore,
@@ -1470,6 +1475,83 @@ function handleLiveMidiMessage(set, get, event) {
   }
 }
 
+function preferencePreviewPayload(state) {
+  const payload = {};
+  if (typeof state.currentProjectId === 'string' && state.currentProjectId) {
+    payload.active_project_id = state.currentProjectId;
+  }
+  if (typeof state.composerProfileId === 'string' && state.composerProfileId) {
+    payload.profile_id = state.composerProfileId;
+  }
+  if (typeof state.composerProfileStrength === 'string' && state.composerProfileStrength) {
+    payload.profile_strength = state.composerProfileStrength;
+  }
+  return payload;
+}
+
+async function rankedSessionCandidates(get, {
+  surface,
+  candidates,
+  requestId,
+  requestField,
+  baseRevision,
+}) {
+  if (!get().preferenceRankingEnabled) {
+    return {
+      candidates,
+      selectedId: candidates[0]?.candidate_id || null,
+      rankError: '',
+    };
+  }
+  try {
+    const ranking = await rankPreferenceCandidates({
+      surface,
+      candidate_ids: candidates.map((item) => item.candidate_id),
+    });
+    const latest = get();
+    if (latest[requestField] !== requestId) {
+      return { ignored: true };
+    }
+    if (latest.compositionRevision !== baseRevision) {
+      return { revisionStale: true };
+    }
+    const ordered = orderCandidatesByRanking(candidates, ranking);
+    const rankedId = Array.isArray(ranking?.ordered_candidate_ids)
+      ? ranking.ordered_candidate_ids[0]
+      : null;
+    return {
+      candidates: ordered,
+      selectedId: rankedId || ordered[0]?.candidate_id || null,
+      rankError: '',
+    };
+  } catch (error) {
+    const code = error?.code || 'preference_rank_failed';
+    console.debug('[musicStore] Preference rank failed', { surface, code });
+    return {
+      candidates,
+      selectedId: candidates[0]?.candidate_id || null,
+      rankError: code,
+    };
+  }
+}
+
+async function recordAppliedPreferenceChoice(get, set, { surface, candidateId, errorField }) {
+  if (!get().preferenceCollectionEnabled) {
+    return;
+  }
+  try {
+    await recordPreferenceChoice({
+      surface,
+      chosen_candidate_id: candidateId,
+    });
+    console.debug('[musicStore] Preference choice recorded', { surface });
+  } catch (error) {
+    const code = error?.code || 'preference_choice_failed';
+    console.debug('[musicStore] Preference choice failed', { surface, code });
+    set({ [errorField]: code });
+  }
+}
+
 export const useMusicStore = create((set, get) => ({
   apiStatus: 'checking',
   llmModelsLoaded: false,
@@ -1554,6 +1636,12 @@ export const useMusicStore = create((set, get) => ({
   composerProfileId: null,
   /** Profile strength: off | light | normal | strong (default off). */
   composerProfileStrength: 'off',
+  /** User collection switch. Opening Profiles reads it and does not turn it on. */
+  preferenceCollectionEnabled: false,
+  /** User ranking switch. Preview ranks only when this is true. */
+  preferenceRankingEnabled: false,
+  /** Deployment flag mirrored from GET /preferences/settings. */
+  preferenceFeatureAvailable: false,
   /** Cached list rows from GET /composer-profiles (id/name/updated_at/source_count). */
   composerProfileList: [],
   /** Last preview soft-fragment payload (session). */
@@ -2519,6 +2607,23 @@ export const useMusicStore = create((set, get) => ({
     set({
       composerProfileId: profileId || null,
       composerProfileStrength: nextStrength,
+    });
+  },
+
+  setPreferenceLearningFlags: ({
+    collectionEnabled = false,
+    rankingEnabled = false,
+    featureAvailable = false,
+  } = {}) => {
+    console.debug('[musicStore] Preference learning flags', {
+      collectionEnabled: Boolean(collectionEnabled),
+      rankingEnabled: Boolean(rankingEnabled),
+      featureAvailable: Boolean(featureAvailable),
+    });
+    set({
+      preferenceCollectionEnabled: Boolean(collectionEnabled),
+      preferenceRankingEnabled: Boolean(rankingEnabled),
+      preferenceFeatureAvailable: Boolean(featureAvailable),
     });
   },
 
@@ -8889,6 +8994,7 @@ export const useMusicStore = create((set, get) => ({
           provider: state.selectedProvider || null,
           model: state.selectedModel || null,
         },
+        ...preferencePreviewPayload(state),
         ...(styleReference ? { style_reference: styleReference } : {}),
         ...conditioningExtras,
       });
@@ -8910,17 +9016,38 @@ export const useMusicStore = create((set, get) => ({
         return false;
       }
 
-      const selectedId = response.candidates[0]?.candidate_id || null;
+      const ranked = await rankedSessionCandidates(get, {
+        surface: 'development',
+        candidates: response.candidates,
+        requestId,
+        requestField: 'developmentRequestId',
+        baseRevision,
+      });
+      if (ranked.ignored) {
+        console.warn('[musicStore] Ignoring stale development preference rank', { requestId });
+        return false;
+      }
+      if (ranked.revisionStale) {
+        set({
+          developmentStatus: 'stale',
+          developmentError: 'Composition changed while preview was loading',
+          developmentCandidates: [],
+          developmentSelectedCandidateId: null,
+          developmentAuditionActive: false,
+          developmentReferenceProvenance: null,
+        });
+        return false;
+      }
       const provenance = response.reference_provenance && typeof response.reference_provenance === 'object'
         ? response.reference_provenance
         : null;
       set({
         developmentStatus: 'ready',
-        developmentError: '',
+        developmentError: ranked.rankError || '',
         developmentWarnings: response.warning_codes || [],
         developmentEditSourceFingerprint: response.edit_source_fingerprint,
-        developmentCandidates: response.candidates,
-        developmentSelectedCandidateId: selectedId,
+        developmentCandidates: ranked.candidates,
+        developmentSelectedCandidateId: ranked.selectedId,
         developmentAuditionActive: false,
         developmentProvider: response.provider || null,
         developmentModel: response.model || null,
@@ -9077,6 +9204,11 @@ export const useMusicStore = create((set, get) => ({
           developmentCompareResult: null,
         },
       });
+      await recordAppliedPreferenceChoice(get, set, {
+        surface: 'development',
+        candidateId: candidate.candidate_id,
+        errorField: 'developmentError',
+      });
       return true;
     }
 
@@ -9141,6 +9273,11 @@ export const useMusicStore = create((set, get) => ({
         developmentAuditionActive: false,
         developmentCompareResult: null,
         ...(asNewBranch ? clearedVersionHistoryState() : {}),
+      });
+      await recordAppliedPreferenceChoice(get, set, {
+        surface: 'development',
+        candidateId: candidate.candidate_id,
+        errorField: 'developmentError',
       });
       return true;
     } catch (error) {
@@ -9493,6 +9630,7 @@ export const useMusicStore = create((set, get) => ({
           provider: state.selectedProvider || null,
           model: state.selectedModel || null,
         },
+        ...preferencePreviewPayload(state),
       });
 
       const latest = get();
@@ -9520,18 +9658,41 @@ export const useMusicStore = create((set, get) => ({
         return false;
       }
 
-      const selectedId = response.candidates[0]?.candidate_id || null;
-      const selectedCandidate = findArrangementCandidateById(response.candidates, selectedId);
+      const ranked = await rankedSessionCandidates(get, {
+        surface: 'arrangement',
+        candidates: response.candidates,
+        requestId,
+        requestField: 'arrangementRequestId',
+        baseRevision,
+      });
+      if (ranked.ignored) {
+        arrangementLogger.debug('Ignoring superseded arrangement preference rank', { requestId });
+        return false;
+      }
+      if (ranked.revisionStale) {
+        set({
+          arrangementStatus: 'stale',
+          arrangementStaleReason: 'source_changed',
+          arrangementError: 'Composition changed while preview was loading',
+          arrangementCandidates: [],
+          arrangementRejectedAttempts: [],
+          arrangementSelectedCandidateId: null,
+          arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
+          arrangementCandidateTrackControls: {},
+        });
+        return false;
+      }
+      const selectedCandidate = findArrangementCandidateById(ranked.candidates, ranked.selectedId);
       set({
         arrangementStatus: 'ready',
-        arrangementError: '',
+        arrangementError: ranked.rankError || '',
         arrangementStaleReason: null,
         arrangementWarnings: response.warning_codes || [],
         arrangementEditSourceFingerprint: response.edit_source_fingerprint,
         arrangementResponseCatalogFingerprint: response.catalog_fingerprint || null,
-        arrangementCandidates: response.candidates,
+        arrangementCandidates: ranked.candidates,
         arrangementRejectedAttempts: response.rejected_attempts || [],
-        arrangementSelectedCandidateId: selectedId,
+        arrangementSelectedCandidateId: ranked.selectedId,
         arrangementAuditionMode: ARRANGEMENT_AUDITION_SOURCE,
         arrangementCandidateTrackControls: selectedCandidate
           ? buildDefaultTrackControls(selectedCandidate.composition)
@@ -9724,6 +9885,11 @@ export const useMusicStore = create((set, get) => ({
         statePatch: localStatePatch,
       });
       void get().refreshMusicXmlFromEditedComposition();
+      await recordAppliedPreferenceChoice(get, set, {
+        surface: 'arrangement',
+        candidateId: candidate.candidate_id,
+        errorField: 'arrangementError',
+      });
       return true;
     }
 
@@ -9796,6 +9962,11 @@ export const useMusicStore = create((set, get) => ({
         ...(asNewBranch ? clearedVersionHistoryState() : {}),
       });
       void get().refreshMusicXmlFromEditedComposition();
+      await recordAppliedPreferenceChoice(get, set, {
+        surface: 'arrangement',
+        candidateId: candidate.candidate_id,
+        errorField: 'arrangementError',
+      });
       return true;
     } catch (error) {
       if (error instanceof ProjectRevisionConflictError) {

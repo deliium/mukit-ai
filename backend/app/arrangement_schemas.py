@@ -855,6 +855,9 @@ class CompositionArrangementPreviewRequest(BaseModel):
     instruction: str | None = Field(default=None, max_length=ARRANGEMENT_MAX_INSTRUCTION_CHARS)
     selection: LLMModelSelection = Field(default_factory=LLMModelSelection)
     options: CompositionArrangementOptions = Field(default_factory=CompositionArrangementOptions)
+    active_project_id: str | None = Field(default=None, min_length=1, max_length=80)
+    profile_id: str | None = Field(default=None, pattern=r"^prof_[0-9a-f]{16}$")
+    profile_strength: Literal["off", "light", "normal", "strong"] | None = None
 
     @field_validator("source_track_ids")
     @classmethod

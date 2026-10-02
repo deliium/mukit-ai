@@ -599,6 +599,8 @@ class CompositionDevelopmentPreviewRequest(BaseModel):
     style_references: list[StyleReferenceRequest] | None = Field(default=None, max_length=8)
     reference_conditioning_policy: ReferenceConditioningPolicy | None = None
     active_project_id: str | None = Field(default=None, min_length=1, max_length=80)
+    profile_id: str | None = Field(default=None, pattern=r"^prof_[0-9a-f]{16}$")
+    profile_strength: Literal["off", "light", "normal", "strong"] | None = None
 
     @field_validator("target_section_type")
     @classmethod
