@@ -68,6 +68,9 @@ models/audio-recovery/*
 *.gguf
 *.safetensors
 
+# Personal composer snapshots and adapters (user-selected scores; not a corpus)
+personal_composers/
+
 # Music Transformer checkpoints / experiment runs (train outputs); keep fixtures tiny
 checkpoints/
 experiments/

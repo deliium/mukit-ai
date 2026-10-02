@@ -1,0 +1,57 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 120,
+  "key": "C major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "duration_ticks": 1920,
+  "bar_count": 1,
+  "sections": [
+    {
+      "id": "section-1",
+      "type": "intro",
+      "label": "Etude",
+      "start_bar": 1,
+      "bar_count": 1,
+      "start_tick": 0,
+      "duration_ticks": 1920
+    }
+  ],
+  "tracks": [
+    {
+      "id": "piano-1",
+      "name": "Piano",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "events": [
+        {
+          "type": "note",
+          "pitch": "C4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "etude-c4"
+        },
+        {
+          "type": "note",
+          "pitch": "E4",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "etude-e4"
+        },
+        {
+          "type": "note",
+          "pitch": "G4",
+          "start_tick": 960,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "etude-g4"
+        }
+      ]
+    }
+  ],
+  "harmony": []
+}

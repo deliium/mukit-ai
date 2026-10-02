@@ -1,0 +1,57 @@
+{
+  "schema_version": "composition.v2",
+  "tempo": 120,
+  "key": "D major",
+  "time_signature": "4/4",
+  "ticks_per_quarter": 480,
+  "duration_ticks": 1920,
+  "bar_count": 1,
+  "sections": [
+    {
+      "id": "section-1",
+      "type": "intro",
+      "label": "Sketch",
+      "start_bar": 1,
+      "bar_count": 1,
+      "start_tick": 0,
+      "duration_ticks": 1920
+    }
+  ],
+  "tracks": [
+    {
+      "id": "piano-1",
+      "name": "Piano",
+      "instrument": "piano",
+      "role": "melody",
+      "midi_program": 0,
+      "channel": 1,
+      "events": [
+        {
+          "type": "note",
+          "pitch": "D4",
+          "start_tick": 0,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "sketch-d4"
+        },
+        {
+          "type": "note",
+          "pitch": "F4",
+          "start_tick": 480,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "sketch-f4"
+        },
+        {
+          "type": "note",
+          "pitch": "A4",
+          "start_tick": 960,
+          "duration_ticks": 480,
+          "velocity": 80,
+          "id": "sketch-a4"
+        }
+      ]
+    }
+  ],
+  "harmony": []
+}
