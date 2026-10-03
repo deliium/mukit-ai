@@ -87,6 +87,7 @@ def test_forbidden_persistence_imports_in_ai_agents():
         "from app.services.personal_composer_store",
         "from app.services.preference_store",
         "from app.services.execution_node_store",
+        "from app.services.scheduling_policy_store",
         "from app.services.adaptive_score_transition_pending",
         "from app.services.adaptive_score_transitions",
         "from app.services.adaptive_score_transition_service",
