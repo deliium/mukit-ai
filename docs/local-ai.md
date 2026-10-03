@@ -148,6 +148,7 @@ docker compose -f docker-compose.yml -f compose.dev.yml -f compose.local-ai.yml 
 ## See also
 
 - [AI Runtime](./ai-runtime.md) — registry, routing, provenance
+- [Execution nodes](./execution-nodes.md) — trusted LAN peers (`runtime=execution_node`) beyond a same-host sidecar
 - [Symbolic Music Transformer](./music-transformer.md) — offline PyTorch train/generate (separate from llama.cpp/vLLM)
 - [Testing](./testing.md) — backend unit tests (no GPU required in CI)
 - `.env.example` — `LOCAL_*` knobs

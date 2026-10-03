@@ -335,6 +335,7 @@ mukit-ai/
 | [Plugin SDK](docs/plugin-sdk.md) | In-process plugins on `PLUGIN_PATHS`; symbolic composers on `/ai/models` |
 | [Multi-agent (V4)](docs/multi-agent.md) | Specialized agents above runtime; workflow preview; Apply CAS |
 | [Optional local AI](docs/local-ai.md) | AMD/ROCm Compose profiles, llama.cpp/vLLM sidecars, troubleshooting |
+| [Execution nodes](docs/execution-nodes.md) | Trusted LAN ExecutionNode registration, heartbeat, typed remote `complete_text` |
 | [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
 | [Composition Editor](docs/composition-editor.md) | Piano-roll multi-note editing, clipboard, cursor/loop |
 | [Browser playback](docs/browser-playback.md) | Tone.js projection, mixer, samples vs FluidSynth export |

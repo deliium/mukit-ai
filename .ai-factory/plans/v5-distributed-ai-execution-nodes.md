@@ -349,44 +349,44 @@ Record `resolved_model_id`, `runtime=execution_node`, optional `limits.execution
 <!-- Commit checkpoint: tasks 4-6 -->
 
 ### Phase 3: Runtime integration
-- [ ] Task 7: Add `runtime=execution_node` to `ModelRuntimeId`, `ExecutionNodeLanguageModel` (httpx, task-index registration, cancel checks), `_attach_execution_node_descriptors` after plugin attach on every `reload_registry`, canonical id parse `node:<16hex>:<remainder>`, optional `execution_node_id` on `AiModelCatalogItem`. Do **not** invent ChatOpenAI credentials for these descriptors in `provider_settings_for_resolved`.
+- [x] Task 7: Add `runtime=execution_node` to `ModelRuntimeId`, `ExecutionNodeLanguageModel` (httpx, task-index registration, cancel checks), `_attach_execution_node_descriptors` after plugin attach on every `reload_registry`, canonical id parse `node:<16hex>:<remainder>`, optional `execution_node_id` on `AiModelCatalogItem`. Do **not** invent ChatOpenAI credentials for these descriptors in `provider_settings_for_resolved`.
   - LOGGING: INFO adapter construct `{model_id, node_id}`; DEBUG attach counts.
   - Files: `backend/app/ai_runtime/types.py`, `backend/app/ai_runtime/runtimes/execution_node.py`, `backend/app/ai_runtime/registry.py`, `backend/app/ai_runtime/routing.py`, `backend/app/ai_runtime_schemas.py`, tests
   - Depends on: Tasks 5, 6
 
-- [ ] Task 8: Add `ainvoke_text_for_resolved` invoke seam; switch `llm_music_generator._invoke_chat` and one region-edit invoke path to it when `runtime=execution_node` (else existing ChatOpenAI path). Unit test: resolved fake execution-node model returns deterministic text without building ChatOpenAI.
+- [x] Task 8: Add `ainvoke_text_for_resolved` invoke seam; switch `llm_music_generator._invoke_chat` and one region-edit invoke path to it when `runtime=execution_node` (else existing ChatOpenAI path). Unit test: resolved fake execution-node model returns deterministic text without building ChatOpenAI.
   - LOGGING: DEBUG seam branch `{runtime, model_id, purpose}`; never log prompt text.
   - Files: `backend/app/ai_runtime/invoke_text.py` (or `llm_chat_client.py`), `backend/app/services/llm_music_generator.py`, `backend/app/services/llm_composition_editor.py`, tests
   - Depends on: Task 7
 
-- [ ] Task 9: Fake peer (`AI_EXECUTION_NODE_FAKE`) that registers, heartbeats, and serves deterministic `complete_text` via in-process/ASGI transport (`http://execution-node.fake` allowlisted). Slow-complete flag for cancel tests.
+- [x] Task 9: Fake peer (`AI_EXECUTION_NODE_FAKE`) that registers, heartbeats, and serves deterministic `complete_text` via in-process/ASGI transport (`http://execution-node.fake` allowlisted). Slow-complete flag for cancel tests.
   - LOGGING: INFO fake peer start/stop; DEBUG each fake complete.
   - Files: `backend/app/services/execution_node_fake.py`, tests
   - Depends on: Tasks 5, 6, 7
 <!-- Commit checkpoint: tasks 7-9 -->
 
 ### Phase 4: Acceptance, security, ops, docs
-- [ ] Task 10: End-to-end acceptance: enable flag+token+fake → register/discover → `resolve_model_for_operation` + invoke seam / `_invoke_chat` succeeds → cancel via controller task index → heartbeat expiry → unavailable → unauthenticated 401. Assert token absent from caplog. (Depends on Tasks 5, 7, 8, 9.)
+- [x] Task 10: End-to-end acceptance: enable flag+token+fake → register/discover → `resolve_model_for_operation` + invoke seam / `_invoke_chat` succeeds → cancel via controller task index → heartbeat expiry → unavailable → unauthenticated 401. Assert token absent from caplog. (Depends on Tasks 5, 7, 8, 9.)
   - LOGGING: tests assert absence of secret substrings.
   - Files: `backend/tests/test_execution_node_acceptance.py`
   - Depends on: Tasks 5, 7, 8, 9
 
-- [ ] Task 11: Security tests — wrong/missing/query token; disabled flag; forbidden payload keys; address userinfo/link-local/metadata rejected; worker route allow-list AST snapshot (no shell routes; dispatch must not call `subprocess`/`os.system` for request bodies); `ai_agents` import ban for `execution_node_store`; role=`worker` does not expose `/projects`.
+- [x] Task 11: Security tests — wrong/missing/query token; disabled flag; forbidden payload keys; address userinfo/link-local/metadata rejected; worker route allow-list AST snapshot (no shell routes; dispatch must not call `subprocess`/`os.system` for request bodies); `ai_agents` import ban for `execution_node_store`; role=`worker` does not expose `/projects`.
   - LOGGING: capture at INFO+.
   - Files: `backend/tests/test_execution_node_security.py`, `backend/tests/test_ai_agents_architecture.py`
   - Depends on: Tasks 5, 6
 
-- [ ] Task 12: Worker auto-register/heartbeat loop when role is `worker` and controller URL set (async lifespan task, clean shutdown). Bound concurrency from `resources.max_concurrency`; busy/draining when active_tasks ≥ max.
+- [x] Task 12: Worker auto-register/heartbeat loop when role is `worker` and controller URL set (async lifespan task, clean shutdown). Bound concurrency from `resources.max_concurrency`; busy/draining when active_tasks ≥ max.
   - LOGGING: INFO loop start/stop; WARN register/heartbeat failure codes; never token.
   - Files: `backend/app/services/execution_node_worker_loop.py`, `backend/app/main.py` lifespan, tests
   - Depends on: Tasks 5, 6
 
-- [ ] Task 13: `.env.example` keys + optional `compose.execution-node.yml` profile (`AI_EXECUTION_NODE_ROLE=worker`, no default enable). Note: worker service should expose its own port; do not require studio nginx to proxy `/execution/v1` for LAN peers. Startup INFO logs role when feature enabled.
+- [x] Task 13: `.env.example` keys + optional `compose.execution-node.yml` profile (`AI_EXECUTION_NODE_ROLE=worker`, no default enable). Note: worker service should expose its own port; do not require studio nginx to proxy `/execution/v1` for LAN peers. Startup INFO logs role when feature enabled.
   - LOGGING: startup INFO `{enabled, role, fake}`.
   - Files: `.env.example`, `compose.execution-node.yml`, startup path in `main.py` or settings load
   - Depends on: Tasks 2, 6, 12
 
-- [ ] Task 14: Docs — `docs/execution-nodes.md`; cross-links from `docs/ai-runtime.md` and `docs/local-ai.md`; `AGENTS.md` entry points (schemas, settings, routers, services, invoke seam). Mandatory `/aif-docs` checkpoint.
+- [x] Task 14: Docs — `docs/execution-nodes.md`; cross-links from `docs/ai-runtime.md` and `docs/local-ai.md`; `AGENTS.md` entry points (schemas, settings, routers, services, invoke seam). Mandatory `/aif-docs` checkpoint.
   - LOGGING: document safe log fields.
   - Files: `docs/execution-nodes.md`, `docs/ai-runtime.md`, `docs/local-ai.md`, `AGENTS.md`
   - Depends on: Tasks 10–13

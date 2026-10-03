@@ -27,6 +27,8 @@ mukit-ai/
 │   │   ├── plugin_sdk/      # Public plugin import surface (manifest, protocols, context)
 │   │   ├── plugin_host/     # PLUGIN_PATHS discovery, import guard, catalog, host dispatch
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
+│   │   ├── execution_node_schemas.py  # execution.node.v1 + task DTOs (non-playable)
+│   │   ├── execution_node_settings.py  # AI_EXECUTION_NODES_* flag / token / role
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
 │   │   ├── video_scoring_schemas.py   # video.asset.v1 + video.scoring.v1
 │   │   ├── film_score_schemas.py      # film.score.plan.v1 + preview/commit DTOs
@@ -148,6 +150,15 @@ mukit-ai/
 | `backend/app/routers/composer_profiles.py` | Composer profile CRUD / derive / promote / preview / compare / export/import |
 | `backend/app/routers/preferences.py` | Preference settings, inspect, reset, choice record, and rank. Does not write `composition.v2` |
 | `backend/app/preference_settings.py` | `PREFERENCE_LEARNING_ENABLED` parser. Default off |
+| `backend/app/execution_node_schemas.py` | `execution.node.v1` / task DTOs, address allowlist, HTTP error map |
+| `backend/app/execution_node_settings.py` | `AI_EXECUTION_NODES_*` flag, token, role, TTL, fake |
+| `backend/app/services/execution_node_auth.py` | Bearer compare for every peer when enabled |
+| `backend/app/services/execution_node_store.py` | SQLite `execution_nodes` CAS; no Composition |
+| `backend/app/services/execution_node_service.py` | Controller register/heartbeat/list/cancel |
+| `backend/app/routers/execution_nodes.py` | `POST/GET/DELETE /ai/execution-nodes` |
+| `backend/app/routers/execution_worker.py` | Worker `/execution/v1/*` typed inference |
+| `backend/app/ai_runtime/runtimes/execution_node.py` | `runtime=execution_node` LanguageModel adapter |
+| `backend/app/ai_runtime/invoke_text.py` | `ainvoke_text_for_resolved` generate/edit seam |
 | `backend/app/services/preference_store.py` | Settings, pending ballots, choices, and the linear ranker. `ai_agents/` does not import it |
 | `frontend/src/components/PreferenceLearningPanel.jsx` | Profiles-tab inspect, toggles, and reset. Opening the tab does not record a choice |
 | `backend/app/routers/reference_features.py` | `POST /reference-features/analyze` (dimension-masked reference reports) |

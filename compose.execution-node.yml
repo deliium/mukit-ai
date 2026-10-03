@@ -1,0 +1,29 @@
+# Optional ExecutionNode worker profile (trusted LAN).
+# Default `docker compose up` does NOT enable this. The studio controller stays
+# the primary backend; this file adds a second process with AI_EXECUTION_NODE_ROLE=worker.
+#
+# Usage (example):
+#   export AI_EXECUTION_NODE_TOKEN=shared-secret
+#   docker compose -f docker-compose.yml -f compose.execution-node.yml --profile execution-node up --build
+#
+# The worker exposes its own port for /execution/v1/* and /ready. Studio nginx
+# does not need to proxy /execution/v1 for LAN peers — controllers call the
+# worker address registered by the peer directly.
+
+services:
+  execution-node-worker:
+    profiles: ["execution-node"]
+    build:
+      context: ./backend
+    ports:
+      - "${AI_EXECUTION_NODE_WORKER_HOST_PORT:-8010}:8000"
+    environment:
+      AI_EXECUTION_NODES_ENABLED: "1"
+      AI_EXECUTION_NODE_ROLE: worker
+      AI_EXECUTION_NODE_TOKEN: ${AI_EXECUTION_NODE_TOKEN:?set AI_EXECUTION_NODE_TOKEN}
+      AI_EXECUTION_NODE_CONTROLLER_URL: ${AI_EXECUTION_NODE_CONTROLLER_URL:-http://backend:8000}
+      AI_EXECUTION_NODE_FAKE: ${AI_EXECUTION_NODE_FAKE:-0}
+      LLM_FAKE_MODE: ${LLM_FAKE_MODE:-1}
+      PROJECT_DB_PATH: /tmp/execution-node-worker.db
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # Worker does not share the studio project volume by default.

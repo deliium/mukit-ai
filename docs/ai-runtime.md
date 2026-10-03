@@ -153,7 +153,7 @@ backend/app/ai_runtime/
   local_health.py   # Bounded sidecar probe (no weight download)
 ```
 
-See also: `.ai-factory/ARCHITECTURE.md` (Composition/LLM module), `.env.example`.
+See also: [Execution nodes](execution-nodes.md) for `runtime=execution_node` LAN peers, `.ai-factory/ARCHITECTURE.md` (Composition/LLM module), `.env.example`.
 
 ## Migration notes
 
