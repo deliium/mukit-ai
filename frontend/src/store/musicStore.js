@@ -8639,12 +8639,17 @@ export const useMusicStore = create((set, get) => ({
         sourceFingerprint,
         fingerprintPrefix: fingerprintPrefix(sourceFingerprint),
         scoreVsCurrent: score,
+        executionRuntime: currentResult.execution_runtime || null,
+        executionDevice: currentResult.execution_device || null,
+        fallbackReason: currentResult.fallback_reason || null,
       });
       set({ musicalReference: next, musicalReferenceStatus: 'ready' });
       embeddingLogger.debug('Musical reference score updated', {
         projectId: next?.projectId || null,
         fingerprintPrefix: next?.fingerprintPrefix || null,
         hasScore: score != null,
+        executionRuntime: next?.executionRuntime || null,
+        executionDevice: next?.executionDevice || null,
       });
       return score;
     } catch (error) {

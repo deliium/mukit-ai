@@ -344,6 +344,15 @@ export function normalizeMusicalReferenceSession(input) {
       return mask.ok ? mask.dimensions : undefined;
     })(),
     referenceFeatureMaskEnabled: Boolean(input.referenceFeatureMaskEnabled),
+    executionRuntime: typeof input.executionRuntime === 'string'
+      ? input.executionRuntime.slice(0, 40)
+      : null,
+    executionDevice: typeof input.executionDevice === 'string'
+      ? input.executionDevice.slice(0, 40)
+      : null,
+    fallbackReason: typeof input.fallbackReason === 'string'
+      ? input.fallbackReason.slice(0, 80)
+      : null,
   };
 }
 

@@ -598,6 +598,19 @@ const CompositionDevelopmentPanel = () => {
                   {musicalReference?.fingerprintPrefix && (
                     <span>Ref {musicalReference.fingerprintPrefix}…</span>
                   )}
+                  {musicalReference?.executionRuntime && (
+                    <span data-testid="develop-browser-embed-status">
+                      Embed:
+                      {' '}
+                      {musicalReference.executionRuntime}
+                      {musicalReference.executionDevice
+                        ? `/${musicalReference.executionDevice}`
+                        : ''}
+                      {musicalReference.fallbackReason
+                        ? ` (${musicalReference.fallbackReason})`
+                        : ''}
+                    </span>
+                  )}
                 </Meta>
                 {musicalReferenceError && (
                   <Status $tone="error" role="status">{musicalReferenceError}</Status>

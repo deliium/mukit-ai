@@ -1476,9 +1476,32 @@ function formatAxiosFailureDetail(error) {
   return message || 'Unknown request failure';
 }
 
+async function computeEmbeddingHttp(composition, scope, modelId = null) {
+  const body = {
+    composition,
+    scope,
+  };
+  if (typeof modelId === 'string' && modelId.trim()) {
+    body.model_id = modelId.trim();
+  }
+  const axiosResponse = await axios.post('/embeddings/compute', body);
+  const response = axiosResponse.data || {};
+  const embedding = response.embedding;
+  if (!embedding || typeof embedding !== 'object' || !Array.isArray(embedding.vector)) {
+    throw new EmbeddingApiError('Invalid embedding compute response', {
+      code: 'embed_invalid_response',
+    });
+  }
+  return {
+    embedding,
+    warning_codes: Array.isArray(response.warning_codes) ? response.warning_codes.slice(0, 32) : [],
+  };
+}
+
 /**
- * POST /embeddings/compute — symbolic embedding card for a composition scope.
- * Never logs full vectors.
+ * Symbolic embedding card for a composition scope.
+ * Prefers BrowserModelHost (browser CPU twin + optional WebGPU cosine path)
+ * when enabled; falls back to POST /embeddings/compute. Never logs full vectors.
  */
 export async function computeEmbedding(composition, scope = { kind: 'composition' }, modelId = null) {
   const inboundComposition = normalizeApiComposition(composition, {
@@ -1500,31 +1523,67 @@ export async function computeEmbedding(composition, scope = { kind: 'composition
     modelId: modelId || null,
   });
 
+  const requested = typeof modelId === 'string' ? modelId.trim() : '';
+  const preferBrowser = !requested || requested.startsWith('browser:');
+
   try {
-    const body = {
-      composition: inboundComposition,
-      scope: scopeResult.scope,
-    };
-    if (typeof modelId === 'string' && modelId.trim()) {
-      body.model_id = modelId.trim();
-    }
-    const axiosResponse = await axios.post('/embeddings/compute', body);
-    const response = axiosResponse.data || {};
-    const embedding = response.embedding;
-    if (!embedding || typeof embedding !== 'object' || !Array.isArray(embedding.vector)) {
-      throw new EmbeddingApiError('Invalid embedding compute response', {
-        code: 'embed_invalid_response',
+    if (preferBrowser) {
+      const { resolveEmbed } = await import('../utils/browserModels/browserModelHost.js');
+      const local = await resolveEmbed(
+        inboundComposition,
+        scopeResult.scope,
+        {
+          modelId: requested || null,
+          httpEmbed: async (comp, sc, mid) => {
+            const httpResult = await computeEmbeddingHttp(comp, sc, mid);
+            return httpResult.embedding;
+          },
+        },
+      );
+      if (local.execution_runtime === 'browser_model') {
+        embeddingLogger.debug('Embedding compute ready (browser_model)', {
+          dims: local.embedding.dims,
+          noteCount: local.embedding.note_count,
+          fingerprintPrefix: fingerprintPrefix(local.embedding.source_fingerprint),
+          executionDevice: local.execution_device,
+          fallbackReason: local.fallback_reason || null,
+        });
+        return {
+          embedding: local.embedding,
+          warning_codes: [],
+          execution_runtime: local.execution_runtime,
+          execution_device: local.execution_device,
+          fallback_reason: local.fallback_reason || null,
+        };
+      }
+      embeddingLogger.info('Embedding compute used HTTP fallback', {
+        reason: local.fallback_reason || null,
+        executionDevice: local.execution_device,
       });
+      return {
+        embedding: local.embedding,
+        warning_codes: [],
+        execution_runtime: 'http',
+        execution_device: local.execution_device || 'server_cpu',
+        fallback_reason: local.fallback_reason || null,
+      };
     }
+
+    const httpResult = await computeEmbeddingHttp(
+      inboundComposition,
+      scopeResult.scope,
+      requested || null,
+    );
     embeddingLogger.debug('Embedding compute ready', {
-      dims: embedding.dims,
-      noteCount: embedding.note_count,
-      fingerprintPrefix: fingerprintPrefix(embedding.source_fingerprint),
-      warningCodeCount: Array.isArray(response.warning_codes) ? response.warning_codes.length : 0,
+      dims: httpResult.embedding.dims,
+      noteCount: httpResult.embedding.note_count,
+      fingerprintPrefix: fingerprintPrefix(httpResult.embedding.source_fingerprint),
+      warningCodeCount: httpResult.warning_codes.length,
     });
     return {
-      embedding,
-      warning_codes: Array.isArray(response.warning_codes) ? response.warning_codes.slice(0, 32) : [],
+      ...httpResult,
+      execution_runtime: 'http',
+      execution_device: 'server_cpu',
     };
   } catch (error) {
     if (error instanceof EmbeddingApiError) {
