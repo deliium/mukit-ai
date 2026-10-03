@@ -448,6 +448,7 @@ def run_stem_set(
                 set_row = get_stem_set_row(conn, stem_set_id)
                 if set_row is not None:
                     from app.services.musical_dependency_capture import capture_rendered_edge
+                    from app.services.content_provenance_capture import capture_neural_provenance
 
                     capture_rendered_edge(
                         conn,
@@ -455,6 +456,18 @@ def run_stem_set(
                         asset_id=stem_set_id,
                         downstream_kind="neural_stem_set",
                         source_fingerprint=str(set_row.get("source_fingerprint") or ""),
+                    )
+                    capture_neural_provenance(
+                        conn,
+                        project_id=str(set_row.get("project_id") or "") or None,
+                        artifact_kind="neural_stem_set",
+                        artifact_id=stem_set_id,
+                        operation="neural_stem",
+                        fingerprint=str(set_row.get("source_fingerprint") or ""),
+                        source_revision_id=str(set_row.get("source_revision_id") or "") or None,
+                        model_id=str(set_row.get("model_id") or "") or None,
+                        model_version=str(set_row.get("model_version") or "") or None,
+                        runtime=str(set_row.get("adapter_kind") or "") or None,
                     )
             emit_render_span(
                 job_id=stem_set_id,
@@ -695,6 +708,7 @@ def rerender_stem(
                 set_row = get_stem_set_row(conn, stem_set_id)
                 if set_row is not None:
                     from app.services.musical_dependency_capture import capture_rendered_edge
+                    from app.services.content_provenance_capture import capture_neural_provenance
 
                     capture_rendered_edge(
                         conn,
@@ -702,6 +716,18 @@ def rerender_stem(
                         asset_id=stem_set_id,
                         downstream_kind="neural_stem_set",
                         source_fingerprint=str(set_row.get("source_fingerprint") or ""),
+                    )
+                    capture_neural_provenance(
+                        conn,
+                        project_id=str(set_row.get("project_id") or "") or None,
+                        artifact_kind="neural_stem_set",
+                        artifact_id=stem_set_id,
+                        operation="neural_stem_rerender",
+                        fingerprint=str(set_row.get("source_fingerprint") or ""),
+                        source_revision_id=str(set_row.get("source_revision_id") or "") or None,
+                        model_id=str(set_row.get("model_id") or "") or None,
+                        model_version=str(set_row.get("model_version") or "") or None,
+                        runtime=str(set_row.get("adapter_kind") or "") or None,
                     )
     return get_stem_set(stem_set_id, db_path=path)
 

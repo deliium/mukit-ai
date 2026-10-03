@@ -654,6 +654,41 @@ def commit_revision(
             generation_parameters=None if request.ai is None else request.ai.generation_parameters,
             db_path=path,
         )
+        from app.services.content_provenance_capture import capture_revision_provenance
+
+        _prov_summary = summary if isinstance(summary, dict) else {}
+        _gen = None if request.ai is None else request.ai.generation_parameters
+        _import_format = None
+        if isinstance(_prov_summary.get("import_format"), str):
+            _import_format = _prov_summary["import_format"]
+        elif isinstance(_prov_summary.get("source_format"), str):
+            _import_format = _prov_summary["source_format"]
+        elif isinstance(_gen, dict):
+            if isinstance(_gen.get("import_format"), str):
+                _import_format = _gen["import_format"]
+            elif isinstance(_gen.get("source_format"), str):
+                _import_format = _gen["source_format"]
+        _user_action = None
+        if isinstance(_prov_summary.get("user_action"), str):
+            _user_action = _prov_summary["user_action"]
+        elif isinstance(_gen, dict) and isinstance(_gen.get("user_action"), str):
+            _user_action = _gen["user_action"]
+        capture_revision_provenance(
+            conn,
+            project_id=project_id,
+            revision_id=result.head_revision_id,
+            operation_type=request.operation_type.value,
+            fingerprint=result.working_fingerprint,
+            prior_revision_id=request.expected_head_revision_id,
+            ai_operation=None if request.ai is None else request.ai.operation,
+            generation_parameters=_gen,
+            model_id=None if request.ai is None else request.ai.model_id or request.ai.model,
+            model_version=None if request.ai is None else request.ai.model_version,
+            runtime=None if request.ai is None else request.ai.runtime,
+            import_format=_import_format,
+            user_action=_user_action,
+            revision_created=result.revision_created,
+        )
         branch_name = _load_active_branch_name(conn, project_id, result.branch_id)
         composition = (
             None
@@ -1077,6 +1112,35 @@ def apply_as_branch_command(
             ai_operation=None if request.ai is None else request.ai.operation,
             generation_parameters=None if request.ai is None else request.ai.generation_parameters,
             db_path=path,
+        )
+        from app.services.content_provenance_capture import capture_revision_provenance
+
+        _prov_summary = summary if isinstance(summary, dict) else {}
+        _import_format = None
+        if isinstance(_prov_summary.get("import_format"), str):
+            _import_format = _prov_summary["import_format"]
+        elif isinstance(_prov_summary.get("source_format"), str):
+            _import_format = _prov_summary["source_format"]
+        _user_action = (
+            _prov_summary.get("user_action")
+            if isinstance(_prov_summary.get("user_action"), str)
+            else None
+        )
+        capture_revision_provenance(
+            conn,
+            project_id=project_id,
+            revision_id=result.head_revision_id,
+            operation_type=request.operation_type.value,
+            fingerprint=result.working_fingerprint,
+            prior_revision_id=request.expected_head_revision_id,
+            ai_operation=None if request.ai is None else request.ai.operation,
+            generation_parameters=None if request.ai is None else request.ai.generation_parameters,
+            model_id=None if request.ai is None else request.ai.model_id or request.ai.model,
+            model_version=None if request.ai is None else request.ai.model_version,
+            runtime=None if request.ai is None else request.ai.runtime,
+            import_format=_import_format,
+            user_action=_user_action,
+            revision_created=True,
         )
         composition = (
             None

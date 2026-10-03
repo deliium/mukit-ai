@@ -329,7 +329,7 @@ def _clear_track_for_reuse(
     cas = _branch_cas(db_path, project_id)
     with get_connection(db_path) as conn:
         try:
-            commit_durable_revision(
+            committed = commit_durable_revision(
                 conn,
                 project_id,
                 branch_id=str(cas["branch_id"]),
@@ -339,6 +339,17 @@ def _clear_track_for_reuse(
                 expected_source_fingerprint=str(cas["expected_source_fingerprint"]),
                 composition=cleared,
                 operation_type=operation_type,
+            )
+            from app.services.content_provenance_capture import capture_revision_provenance
+
+            capture_revision_provenance(
+                conn,
+                project_id=project_id,
+                revision_id=committed.head_revision_id,
+                operation_type=operation_type,
+                fingerprint=committed.working_fingerprint,
+                prior_revision_id=str(cas["expected_head_revision_id"]),
+                revision_created=committed.revision_created,
             )
         except ProjectRevisionConflictError as exc:
             raise AssetPackError("asset_pack_conflict", "CAS failed clearing reuse track") from exc

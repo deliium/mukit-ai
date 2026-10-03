@@ -715,12 +715,22 @@ def bind_audio_recovery_job(
             relpath=alignment_write.relpath,
         )
         from app.services.musical_dependency_capture import capture_transcribed_edge
+        from app.services.content_provenance_capture import capture_recovery_bind_provenance
 
         capture_transcribed_edge(
             conn,
             project_id=body.project_id,
             asset_id=source_write.asset_id,
             payload=source_bytes,
+        )
+        capture_recovery_bind_provenance(
+            conn,
+            project_id=body.project_id,
+            bind_id=job_id,
+            source_sha256=source_write.sha256_prefix,
+            revision_id=getattr(body, "revision_id", None)
+            if isinstance(getattr(body, "revision_id", None), str)
+            else None,
         )
         logger.info(
             "Bind alignment asset written",

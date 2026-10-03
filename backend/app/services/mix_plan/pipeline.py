@@ -304,6 +304,16 @@ def apply_mix(request: MixPlanApplyRequest, *, env: dict[str, str] | None = None
             dsp_backend=backend,
             fingerprint=fingerprint,
         )
+        from app.services.content_provenance_capture import capture_mix_plan_apply_provenance
+
+        capture_mix_plan_apply_provenance(
+            conn,
+            project_id=project_id,
+            revision_id=revision.id,
+            fingerprint=revision.sha256_prefix if hasattr(revision, "sha256_prefix") else fingerprint,
+            stem_set_id=plan.stem_set_id,
+            prior_mix_revision_id=parent,
+        )
     meta["applied"] = True
     meta["revision_id"] = revision.id
     from app.services.mix_plan_store import absolute_under_root, preview_dir_rel

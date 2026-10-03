@@ -205,6 +205,7 @@ def reuse_theme(
                 revision_created=committed.revision_created,
             )
             from app.services.musical_dependency_capture import capture_theme_reuse_edge
+            from app.services.content_provenance_capture import capture_revision_provenance
 
             capture_theme_reuse_edge(
                 conn,
@@ -216,6 +217,15 @@ def reuse_theme(
                 destination_project_id=request.destination_project_id,
                 motif_id=realized.motif_id,
                 occurrence_id=realized.occurrence_id,
+            )
+            capture_revision_provenance(
+                conn,
+                project_id=request.destination_project_id,
+                revision_id=committed.head_revision_id,
+                operation_type=THEME_APPLY_OPERATION,
+                fingerprint=committed.working_fingerprint,
+                prior_revision_id=request.expected_head_revision_id,
+                revision_created=committed.revision_created,
             )
     except (ProjectRevisionConflictError, ProjectHistoryValidationError) as exc:
         logger.warning(
