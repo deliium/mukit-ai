@@ -76,7 +76,7 @@ mukit-ai/
 │       ├── api/             # musicApi, projectApi
 │       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, AudioRecoveryPanel, VideoScoringPanel (Picture tab), FilmScorePanel (Agents tab), NeuralAudioRenderPanel (incl. Mix Analysis + Mix assist), …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI/audio sessions)
-│       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture, mixAnalysisUi, mixPlanUi, browserModels/ helpers
+│       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, midiExpressive/, audioCapture, mixAnalysisUi, mixPlanUi, browserModels/ helpers
 │   └── public/browser-models/ # Public BrowserModel manifests/assets only (never private weight trees)
 ├── clients/                 # Adaptive music engine clients. They do not import backend/app or frontend/src
 │   ├── fixtures/            # Shared public session, command, ack, error, and phase JSON
@@ -142,8 +142,9 @@ mukit-ai/
 | `backend/app/ai_runtime/runtimes/browser_model.py` | Discovery-only `runtime=browser_model` registry descriptors |
 | `docs/browser-webgpu-inference.md` | Benchmarks, asset policy, fallback, compatibility |
 | `frontend/src/utils/midiInputAccess.js` | Lazy Web MIDI access + device registry |
-| `frontend/src/utils/midiPerformanceCapture.js` | Session take buffer (raw ticks) |
-| `frontend/src/utils/midiTakeApply.js` | Timeline extend + batch commit into V2 |
+| `frontend/src/utils/midiPerformanceCapture.js` | Session take buffer (expressive events → raw ticks + optional performance curves) |
+| `frontend/src/utils/midiTakeApply.js` | Timeline extend + batch commit into V2 (+ optional `note_performances`) |
+| `frontend/src/utils/midiExpressive/` | Capability probe, MIDI1/MPE/UMP adapters, velocity degrade, prune helpers |
 | `frontend/src/utils/midiMetronome.js` | Ephemeral count-in / metronome clicks |
 | `backend/app/dataset/cli.py` | Offline dataset CLI (`python -m app.dataset.cli`) |
 | `backend/app/tokenizer/cli.py` | Offline tokenizer CLI (`python -m app.tokenizer.cli`) |

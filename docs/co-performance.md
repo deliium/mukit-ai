@@ -68,5 +68,5 @@ Jam modes (`user_melody` / `user_chords`), live features + harmony belief, jam c
 
 - [AI Jam](ai-jam.md)
 - [Browser playback](browser-playback.md)
-- [MIDI live input](midi-live-input.md)
+- [MIDI live input](midi-live-input.md) — expressive events may enter the live ring; Jam Commit still degrades to ordinary note velocity (no `note_performances` redesign in this path)
 - [Multi-agent (V4)](multi-agent.md)

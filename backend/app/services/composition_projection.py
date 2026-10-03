@@ -29,6 +29,7 @@ PROJECTION_ISSUE_CODES: dict[str, str] = {
     "expression_combined": "Dynamic marks were combined into expression/CC11 values.",
     "sustain_projected": "Sustain spans were projected to CC64 or pedal directions.",
     "motif_metadata_omitted": "Canonical motif metadata is not representable in this export format; note events are preserved.",
+    "performance_expression_omitted": "Optional note_performances expression curves are not representable in SMF; canonical note velocity is preserved.",
 }
 
 
@@ -168,6 +169,33 @@ def record_motif_metadata_omission(composition: Any, report: ProjectionReport) -
             "code": "motif_metadata_omitted",
             "motif_count": motif_count,
             "occurrence_count": occurrence_count,
+        },
+    )
+
+
+def record_performance_expression_omission(composition: Any, report: ProjectionReport) -> None:
+    """Record that optional note_performances curves are omitted from SMF export."""
+    if getattr(composition, "schema_version", None) != "composition.v2":
+        return
+    tracks = getattr(composition, "tracks", None) or ()
+    row_count = 0
+    for track in tracks:
+        rows = getattr(track, "note_performances", None) or ()
+        row_count += len(rows)
+    if row_count <= 0:
+        return
+    report.add_issue(
+        code="performance_expression_omitted",
+        severity="info",
+        status="omitted",
+        path="tracks[].note_performances",
+        details={"note_performance_count": row_count},
+    )
+    logger.warning(
+        "Export omitted note_performances expression metadata",
+        extra={
+            "code": "performance_expression_omitted",
+            "note_performance_count": row_count,
         },
     )
 
