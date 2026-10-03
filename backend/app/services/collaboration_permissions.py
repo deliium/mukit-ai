@@ -58,6 +58,8 @@ AI_ORIGIN_OPERATIONS: frozenset[str] = frozenset(
         "film-score-adapt-apply",
         "musical-universe-theme-apply",
         "autonomous-stage",
+        "asset-pack-generate",
+        "asset-pack-slot-regenerate",
     }
 )
 

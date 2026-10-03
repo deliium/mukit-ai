@@ -42,6 +42,8 @@ class RevisionOperationType(StrEnum):
     FILM_SCORE_ADAPT_APPLY = "film-score-adapt-apply"
     MUSICAL_UNIVERSE_THEME_APPLY = "musical-universe-theme-apply"
     AUTONOMOUS_STAGE = "autonomous-stage"
+    ASSET_PACK_GENERATE = "asset-pack-generate"
+    ASSET_PACK_SLOT_REGENERATE = "asset-pack-slot-regenerate"
     REVISION_RESTORE = "revision-restore"
     IMPORT = "import"
     MIGRATION = "migration"
