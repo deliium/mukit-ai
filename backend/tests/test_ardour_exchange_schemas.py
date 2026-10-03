@@ -132,6 +132,62 @@ def test_realize_request_accepts_short_instruction() -> None:
     assert model.intent == "counter_melody"
 
 
+@pytest.mark.parametrize(
+    "intent",
+    [
+        "counter_melody",
+        "arrangement_variation",
+        "regenerate_region",
+        "add_accompaniment",
+        "orchestrate_selection",
+        "reharmonize_selection",
+    ],
+)
+def test_realize_request_accepts_supported_intents(intent: str) -> None:
+    model = ArdourExchangeRealizeRequestV1.model_validate(
+        {
+            "schema_version": "ardour.exchange.realize_request.v1",
+            "intent": intent,
+            "candidate_count": 1,
+        }
+    )
+    assert model.intent == intent
+
+
+def test_realize_request_rejects_unknown_intent() -> None:
+    with pytest.raises(ValidationError):
+        ArdourExchangeRealizeRequestV1.model_validate(
+            {
+                "schema_version": "ardour.exchange.realize_request.v1",
+                "intent": "render_stems",
+                "candidate_count": 1,
+            }
+        )
+
+
+def test_realize_request_rejects_events_key() -> None:
+    with pytest.raises(ValidationError):
+        ArdourExchangeRealizeRequestV1.model_validate(
+            {
+                "schema_version": "ardour.exchange.realize_request.v1",
+                "intent": "counter_melody",
+                "events": [],
+            }
+        )
+
+
+def test_forbidden_keys_still_cover_manifest_and_ingest_scope() -> None:
+    assert "composition" in FORBIDDEN_PAYLOAD_KEYS
+    assert "events" in FORBIDDEN_PAYLOAD_KEYS
+    assert "prompt" in FORBIDDEN_PAYLOAD_KEYS
+    with pytest.raises(ValidationError, match="ardour_exchange_forbidden_payload"):
+        ArdourExchangeManifestV1.model_validate(_manifest(composition={"x": 1}))
+    with pytest.raises(ValidationError, match="ardour_exchange_forbidden_payload"):
+        ArdourExchangeIngestRequestV1.model_validate(
+            {"package_id": "aex_0123456789abcdef", "composition": {}}
+        )
+
+
 def test_reject_helper_raises_on_nested_forbidden() -> None:
     with pytest.raises(Exception) as excinfo:
         reject_exchange_forbidden_payload(

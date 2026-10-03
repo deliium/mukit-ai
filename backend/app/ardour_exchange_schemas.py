@@ -39,6 +39,9 @@ ArdourExchangeRealizeIntent = Literal[
     "counter_melody",
     "arrangement_variation",
     "regenerate_region",
+    "add_accompaniment",
+    "orchestrate_selection",
+    "reharmonize_selection",
 ]
 ArdourConnectionStateLite = Literal[
     "disabled",
@@ -384,12 +387,24 @@ class ArdourExchangePrepareResultV1(_Strict):
 
 
 class ArdourExchangeRealizeRequestV1(_Strict):
-    """Thin realize intent — maps to arrangement/development preview."""
+    """Thin realize intent — maps to arrangement/development/harmony preview."""
 
     schema_version: Literal["ardour.exchange.realize_request.v1"] = REALIZE_REQUEST_SCHEMA
     intent: ArdourExchangeRealizeIntent
     instruction: str | None = Field(default=None, max_length=200)
     candidate_count: int = Field(default=1, ge=1, le=4)
+
+    @model_validator(mode="after")
+    def _log_intent_acceptance(self) -> ArdourExchangeRealizeRequestV1:
+        logger.debug(
+            "Ardour exchange realize intent accepted",
+            extra={
+                "intent": self.intent,
+                "candidate_count": self.candidate_count,
+                "has_instruction": self.instruction is not None,
+            },
+        )
+        return self
 
 
 class ArdourExchangeApplyResponseV1(_Strict):

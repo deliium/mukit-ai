@@ -69,3 +69,75 @@ def test_counter_melody_uses_create_countermelody(tmp_path: Path, monkeypatch: p
     programs = {track.get("midi_program") for track in composition["tracks"]}
     assert "countermelody" in roles
     assert any("cello" in name for name in instruments) or 42 in programs
+
+
+def test_add_accompaniment_adds_harmony_piano(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    _ingest(tmp_path)
+    request = ArdourExchangeRealizeRequestV1.model_validate(
+        {
+            "schema_version": "ardour.exchange.realize_request.v1",
+            "intent": "add_accompaniment",
+            "candidate_count": 1,
+        }
+    )
+    result = asyncio.run(realize_exchange_intent(request))
+    assert result["operation"] == "add_accompaniment"
+    assert result["surface"] == "arrangement"
+    composition = result["preview"]["candidates"][0]["composition"]
+    roles = {track["role"] for track in composition["tracks"]}
+    assert "melody" in roles
+    assert "harmony" in roles
+    assert len(composition["tracks"]) >= 2
+
+
+def test_orchestrate_selection_uses_string_parts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    _ingest(tmp_path)
+    request = ArdourExchangeRealizeRequestV1.model_validate(
+        {
+            "schema_version": "ardour.exchange.realize_request.v1",
+            "intent": "orchestrate_selection",
+            "candidate_count": 1,
+        }
+    )
+    result = asyncio.run(realize_exchange_intent(request))
+    assert result["operation"] == "orchestrate_selected_tracks"
+    assert result["surface"] == "arrangement"
+    composition = result["preview"]["candidates"][0]["composition"]
+    roles = {track["role"] for track in composition["tracks"]}
+    instruments = {str(track.get("instrument", "")).lower() for track in composition["tracks"]}
+    programs = {track.get("midi_program") for track in composition["tracks"]}
+    assert "melody" in roles
+    assert "bass" in roles or "harmony" in roles
+    assert len(composition["tracks"]) >= 2
+    assert (
+        any("violin" in name or "cello" in name or "string" in name for name in instruments)
+        or {40, 42, 48} & programs
+    )
+
+
+def test_reharmonize_selection_returns_harmony_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LLM_FAKE_MODE", "1")
+    _ingest(tmp_path)
+    request = ArdourExchangeRealizeRequestV1.model_validate(
+        {
+            "schema_version": "ardour.exchange.realize_request.v1",
+            "intent": "reharmonize_selection",
+            "candidate_count": 1,
+        }
+    )
+    result = asyncio.run(realize_exchange_intent(request))
+    assert result["operation"] == "reharmonize"
+    assert result["surface"] == "harmony"
+    preview = result["preview"]
+    assert preview["content_policy"] == "preserve_harmony_adapt_melody"
+    assert len(preview["candidates"]) == 1
+    candidate = preview["candidates"][0]
+    assert candidate["candidate_id"].startswith("harmony-")
+    composition = candidate["composition"]
+    assert composition["schema_version"] == "composition.v2"
+    assert len(composition.get("harmony") or []) >= 1
+    assert composition["bar_count"] == 8
