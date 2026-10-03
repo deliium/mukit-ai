@@ -176,11 +176,12 @@ RUN_DOCKER_ACCEPTANCE=1 ./scripts/v1_docker_acceptance.sh
 RUN_DOCKER_ACCEPTANCE=1 ./scripts/v2_docker_acceptance.sh
 RUN_DOCKER_ACCEPTANCE=1 ./scripts/v3_docker_acceptance.sh
 RUN_DOCKER_ACCEPTANCE=1 ./scripts/v4_docker_acceptance.sh
+RUN_DOCKER_ACCEPTANCE=1 ./scripts/v5_docker_acceptance.sh
 # or
 RUN_DOCKER_ACCEPTANCE=1 ../.venv/bin/python -m pytest tests/test_docker_persistence_acceptance.py
 ```
 
-Uses Compose project names `mukit-v1-accept` / `mukit-v2-accept` / `mukit-v3-accept` / `mukit-v4-accept` by default and removes the volume on exit unless `KEEP_VOLUME=1`. V2 script covers V1→V2 migration on reopen, expressive fake generate, and multipart MIDI import through Nginx with save/reopen/re-export. V3 adds fake audio/neural modes, hybrid seeded generate, development preview, revision provenance, MIDI/MusicXML export smoke, restart reopen, and seeded fingerprint reproduce — no paid APIs or weight downloads. V4 starts one autonomous run, restarts the backend, and compares the event fingerprint. `./scripts/run_tests.sh` does not call it. Fake-mode studio pytest and the operations split (default tests, Docker, `RUN_LLM_SMOKE=1`, `RUN_WAV_RENDERER_SMOKE=1`) are in [v4-studio-operations.md](v4-studio-operations.md).
+Uses Compose project names `mukit-v1-accept` / `mukit-v2-accept` / `mukit-v3-accept` / `mukit-v4-accept` / `mukit-v5-accept` by default and removes the volume on exit unless `KEEP_VOLUME=1`. V2 script covers V1→V2 migration on reopen, expressive fake generate, and multipart MIDI import through Nginx with save/reopen/re-export. V3 adds fake audio/neural modes, hybrid seeded generate, development preview, revision provenance, MIDI/MusicXML export smoke, restart reopen, and seeded fingerprint reproduce — no paid APIs or weight downloads. V4 starts one autonomous run, restarts the backend, and compares the event fingerprint. V5 enables fake continuous/rights overlays, asserts `composition.v2` (never `composition.v5`), then restart-reopen fingerprint parity. `./scripts/run_tests.sh` does not call it. Fake-mode studio pytest and the operations split (default tests, Docker, `RUN_LLM_SMOKE=1`, `RUN_WAV_RENDERER_SMOKE=1`) are in [v4-studio-operations.md](v4-studio-operations.md). V5 continuous music and Composer OS matrix: [continuous-music.md](continuous-music.md), [v5-platform.md](v5-platform.md), `backend/tests/studio_acceptance/v5/`.
 
 ### Video scoring
 

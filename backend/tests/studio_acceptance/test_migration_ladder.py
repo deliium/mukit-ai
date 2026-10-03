@@ -14,6 +14,11 @@ from fastapi.testclient import TestClient
 
 from app.db.connection import _alembic_config, reset_database_initialization_cache
 from app.main import app
+from tests.studio_acceptance.invariants import (
+    assert_ardour_corruption_guards,
+    assert_composition_source_of_truth,
+    assert_v5_sidecar_tables,
+)
 from tests.test_composition_schema import valid_composition
 
 
@@ -92,8 +97,16 @@ def test_open_v1_after_upgrade_to_head(
     dumped = json.dumps(opened.json())
     assert "composition.v3" not in dumped
     assert "composition.v4" not in dumped
+    assert "composition.v5" not in dumped
+    assert_composition_source_of_truth(composition)
+    assert_v5_sidecar_tables(db_path)
     assert raw not in caplog.text
     stored = json.loads(_composition_text(db_path))
     assert stored["schema_version"] == "composition.v2"
     assert "composition.v3" not in stored
     assert "composition.v4" not in stored
+    assert "composition.v5" not in stored
+
+
+def test_v5_invariants_and_ardour_guards() -> None:
+    assert_ardour_corruption_guards()
