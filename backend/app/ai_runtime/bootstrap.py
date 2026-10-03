@@ -188,14 +188,19 @@ def build_registry_from_env(
         extra={"browser_model_count": browser_count},
     )
 
-    # Symbolic composers: fake tiny (always ready) + Music Transformer (checkpoint-gated).
+    # Symbolic composers: fake ensemble (tiny/sparse/dense) + Music Transformer.
     from .runtimes.music_transformer import (
-        default_fake_symbolic_descriptor,
+        fake_symbolic_ensemble_descriptors,
         music_transformer_descriptor,
     )
 
-    fake_symbolic = default_fake_symbolic_descriptor()
-    if fake_symbolic.id not in models:
+    for fake_symbolic in fake_symbolic_ensemble_descriptors():
+        if fake_symbolic.id in models:
+            logger.warning(
+                "Duplicate fake symbolic model id while bootstrapping",
+                extra={"model_id": fake_symbolic.id},
+            )
+            continue
         models[fake_symbolic.id] = fake_symbolic
         logger.info(
             "Registered fake symbolic composer model",

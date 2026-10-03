@@ -1,20 +1,31 @@
-"""Deterministic tiny symbolic composer for tests and LLM_FAKE_MODE hybrid.
+"""Deterministic fake symbolic composers for tests and LLM_FAKE_MODE hybrid.
 
 Produces valid ``composition.v2`` note events from ``CompositionPlan`` form metadata
 only. Pitch rule (documented fixture rule, not harmony invention):
 
 - Parse ``form.key`` tonic pitch class via ``parse_key``.
-- Emit one quarter-note per bar per track using major/minor diatonic scale degrees
-  ``(bar_index + seed + role_offset) % 7``, octave by role (melody=4, bass=2, else=3).
-- Never reads harmony chord symbols to invent pitches.
+- Emit diatonic scale degrees ``(bar_index + seed + role_offset) % 7``, octave by
+  role (melody=4, bass=2, else=3). Density variants change note count / duration
+  only — never invent pitches from harmony chord symbols.
 
-Model id: ``fake:symbolic-tiny`` (always ready in fake/pytest paths).
+Model ids (always ready in fake/pytest paths):
+
+- ``fake:symbolic-tiny`` — one half-bar note per bar (legacy shape)
+- ``fake:symbolic-sparse`` — fewer/longer notes (every other bar, full-bar)
+- ``fake:symbolic-dense`` — more/shorter notes (four sixteenths per bar)
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
+
+from app.ensemble_arbitration_schemas import (
+    FAKE_ENSEMBLE_MODEL_IDS,
+    FAKE_SYMBOLIC_DENSE_MODEL_ID,
+    FAKE_SYMBOLIC_SPARSE_MODEL_ID,
+    FAKE_SYMBOLIC_TINY_MODEL_ID,
+)
 
 from ..composition_plan_schemas import CompositionPlan, summarize_composition_plan
 from ..composition_schemas import (
@@ -32,10 +43,21 @@ from .composition_validator import validate_composition_integrity
 
 logger = logging.getLogger(__name__)
 
-FAKE_SYMBOLIC_MODEL_ID = "fake:symbolic-tiny"
+# Backward-compatible aliases (tiny is the historical default).
+FAKE_SYMBOLIC_MODEL_ID = FAKE_SYMBOLIC_TINY_MODEL_ID
 FAKE_SYMBOLIC_RUNTIME = "fake_symbolic"
 FAKE_SYMBOLIC_VERSION = "fake.symbolic.tiny.v1"
+FAKE_SYMBOLIC_SPARSE_VERSION = "fake.symbolic.sparse.v1"
+FAKE_SYMBOLIC_DENSE_VERSION = "fake.symbolic.dense.v1"
 DEFAULT_TICKS_PER_QUARTER = 480
+
+FakeDensityProfile = Literal["tiny", "sparse", "dense"]
+
+_FAKE_MODEL_META: dict[str, tuple[FakeDensityProfile, str]] = {
+    FAKE_SYMBOLIC_TINY_MODEL_ID: ("tiny", FAKE_SYMBOLIC_VERSION),
+    FAKE_SYMBOLIC_SPARSE_MODEL_ID: ("sparse", FAKE_SYMBOLIC_SPARSE_VERSION),
+    FAKE_SYMBOLIC_DENSE_MODEL_ID: ("dense", FAKE_SYMBOLIC_DENSE_VERSION),
+}
 
 _PC_TO_NAME = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 _MAJOR_SCALE = (0, 2, 4, 5, 7, 9, 11)
@@ -59,20 +81,36 @@ class FakeSymbolicComposerError(RuntimeError):
     """Raised when the fake symbolic composer cannot build a valid V2."""
 
 
+def is_fake_symbolic_model_id(model_id: str | None) -> bool:
+    """Return True when ``model_id`` is a known fake ensemble composer id."""
+    return bool(model_id) and str(model_id) in _FAKE_MODEL_META
+
+
+def resolve_fake_symbolic_model_id(model_id: str | None) -> str:
+    """Normalize a requested fake id; unknown/None → tiny."""
+    if model_id and str(model_id) in _FAKE_MODEL_META:
+        return str(model_id)
+    return FAKE_SYMBOLIC_TINY_MODEL_ID
+
+
 def generate_fake_symbolic_composition(
     plan: CompositionPlan,
     *,
     seed: int | None = 0,
     prefix_composition: CompositionV2 | None = None,
+    model_id: str | None = None,
 ) -> tuple[CompositionV2, dict[str, Any]]:
     """Build a deterministic valid Composition V2 from plan form metadata."""
     effective_seed = 0 if seed is None else int(seed)
+    resolved_model_id = resolve_fake_symbolic_model_id(model_id)
+    density, model_version = _FAKE_MODEL_META[resolved_model_id]
     form = plan.form
     logger.info(
         "Fake symbolic generate started",
         extra={
-            "model_id": FAKE_SYMBOLIC_MODEL_ID,
+            "model_id": resolved_model_id,
             "seed": effective_seed,
+            "density": density,
             "bar_count": form.bar_count,
             "instrumentation_count": len(form.instrumentation),
             "has_prefix": prefix_composition is not None,
@@ -100,6 +138,7 @@ def generate_fake_symbolic_composition(
         tonic_pc=tonic_pc,
         scale=scale,
         seed=effective_seed,
+        density=density,
     )
     tracks = _ensure_required_roles(
         tracks,
@@ -108,6 +147,7 @@ def generate_fake_symbolic_composition(
         tonic_pc=tonic_pc,
         scale=scale,
         seed=effective_seed,
+        density=density,
     )
     if prefix_composition is not None and prefix_composition.tracks:
         # Continuation/variation: keep prefix tracks and append a short continuation
@@ -147,7 +187,7 @@ def generate_fake_symbolic_composition(
         logger.error(
             "Fake symbolic composition failed integrity",
             extra={
-                "model_id": FAKE_SYMBOLIC_MODEL_ID,
+                "model_id": resolved_model_id,
                 "error_type": type(exc).__name__,
                 "detail": str(exc)[:200],
             },
@@ -156,9 +196,9 @@ def generate_fake_symbolic_composition(
 
     note_count = sum(len(track.events) for track in music.tracks)
     report = {
-        "model_id": FAKE_SYMBOLIC_MODEL_ID,
+        "model_id": resolved_model_id,
         "runtime": FAKE_SYMBOLIC_RUNTIME,
-        "model_version": FAKE_SYMBOLIC_VERSION,
+        "model_version": model_version,
         "seed": effective_seed,
         "status": "ok",
         "prompt_tokens": 0,
@@ -168,15 +208,26 @@ def generate_fake_symbolic_composition(
         "decode_result": "ok",
         "fallback_applied": False,
         "pitch_rule": "diatonic_scale_degree_from_form_key",
+        "density": density,
     }
+    logger.debug(
+        "Fake symbolic generate event count",
+        extra={
+            "model_id": resolved_model_id,
+            "seed": effective_seed,
+            "event_count": note_count,
+            "density": density,
+        },
+    )
     logger.info(
         "Fake symbolic generate completed",
         extra={
-            "model_id": FAKE_SYMBOLIC_MODEL_ID,
+            "model_id": resolved_model_id,
             "seed": effective_seed,
             "note_count": note_count,
             "track_count": len(music.tracks),
             "bar_count": music.bar_count,
+            "density": density,
         },
     )
     return music, report
@@ -208,6 +259,7 @@ def _tracks_from_plan(
     tonic_pc: int,
     scale: tuple[int, ...],
     seed: int,
+    density: FakeDensityProfile = "tiny",
 ) -> list[CompositionV2Track]:
     instruments = list(plan.form.instrumentation) or ["piano"]
     hints_by_family = {
@@ -228,6 +280,7 @@ def _tracks_from_plan(
             seed=seed,
             track_index=index,
             is_drum=is_drum,
+            density=density,
         )
         program = INSTRUMENT_PROGRAMS.get(instrument.strip().lower(), 0)
         tracks.append(
@@ -257,31 +310,46 @@ def _events_for_track(
     seed: int,
     track_index: int,
     is_drum: bool,
+    density: FakeDensityProfile = "tiny",
 ) -> list[CompositionV2NoteEvent]:
     octave = _ROLE_OCTAVE.get(role, 3)
     role_offset = _ROLE_PRIORITY.index(role) if role in _ROLE_PRIORITY else track_index
     events: list[CompositionV2NoteEvent] = []
     for bar_index in range(bar_count):
-        degree = (bar_index + seed + role_offset) % len(scale)
-        if is_drum:
-            pitch = "C2"
-        else:
-            pc = (tonic_pc + scale[degree]) % 12
-            pitch = f"{_PC_TO_NAME[pc]}{octave}"
-        start = bar_index * bar_ticks
-        duration = min(bar_ticks // 2, bar_ticks)
-        if duration < 1:
-            duration = bar_ticks
-        events.append(
-            CompositionV2NoteEvent(
-                type="note",
-                pitch=pitch,
-                start_tick=start,
-                duration_ticks=duration,
-                velocity=80 + (degree % 8),
-                id=f"{role}-{track_index + 1}-b{bar_index + 1}",
+        # Sparse: skip odd bars so note counts differ from tiny/dense.
+        if density == "sparse" and (bar_index % 2) == 1:
+            continue
+        subdivisions = 4 if density == "dense" else 1
+        slot = max(bar_ticks // subdivisions, 1)
+        for sub in range(subdivisions):
+            degree = (bar_index + seed + role_offset + sub) % len(scale)
+            if is_drum:
+                pitch = "C2"
+            else:
+                pc = (tonic_pc + scale[degree]) % 12
+                pitch = f"{_PC_TO_NAME[pc]}{octave}"
+            start = bar_index * bar_ticks + sub * slot
+            if density == "sparse":
+                duration = bar_ticks
+            elif density == "dense":
+                duration = max(slot // 2, 1)
+            else:
+                duration = min(bar_ticks // 2, bar_ticks)
+            if duration < 1:
+                duration = bar_ticks
+            # Keep note inside the bar (sparse full-bar is exact; others clamp).
+            if start + duration > (bar_index + 1) * bar_ticks:
+                duration = max((bar_index + 1) * bar_ticks - start, 1)
+            events.append(
+                CompositionV2NoteEvent(
+                    type="note",
+                    pitch=pitch,
+                    start_tick=start,
+                    duration_ticks=duration,
+                    velocity=80 + (degree % 8),
+                    id=f"{role}-{track_index + 1}-b{bar_index + 1}-s{sub}",
+                )
             )
-        )
     return events
 
 
@@ -293,6 +361,7 @@ def _ensure_required_roles(
     tonic_pc: int,
     scale: tuple[int, ...],
     seed: int,
+    density: FakeDensityProfile = "tiny",
 ) -> list[CompositionV2Track]:
     """Guarantee melody + bass + harmony/accompaniment roles for generation integrity."""
     roles = {track.role for track in tracks}
@@ -319,6 +388,7 @@ def _ensure_required_roles(
                     seed=seed,
                     track_index=0,
                     is_drum=False,
+                    density=density,
                 ),
             ),
         )
@@ -343,6 +413,7 @@ def _ensure_required_roles(
                     seed=seed,
                     track_index=len(out),
                     is_drum=False,
+                    density=density,
                 ),
             )
         )
@@ -368,6 +439,7 @@ def _ensure_required_roles(
                     seed=seed + 1,
                     track_index=len(out),
                     is_drum=False,
+                    density=density,
                 ),
             )
         )
@@ -387,9 +459,17 @@ def _merge_prefix_tracks(
 
 
 __all__ = [
+    "FAKE_ENSEMBLE_MODEL_IDS",
+    "FAKE_SYMBOLIC_DENSE_MODEL_ID",
+    "FAKE_SYMBOLIC_DENSE_VERSION",
     "FAKE_SYMBOLIC_MODEL_ID",
     "FAKE_SYMBOLIC_RUNTIME",
+    "FAKE_SYMBOLIC_SPARSE_MODEL_ID",
+    "FAKE_SYMBOLIC_SPARSE_VERSION",
+    "FAKE_SYMBOLIC_TINY_MODEL_ID",
     "FAKE_SYMBOLIC_VERSION",
     "FakeSymbolicComposerError",
     "generate_fake_symbolic_composition",
+    "is_fake_symbolic_model_id",
+    "resolve_fake_symbolic_model_id",
 ]

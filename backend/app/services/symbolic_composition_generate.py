@@ -21,6 +21,8 @@ from .fake_symbolic_composer import (
     FAKE_SYMBOLIC_MODEL_ID,
     FakeSymbolicComposerError,
     generate_fake_symbolic_composition,
+    is_fake_symbolic_model_id,
+    resolve_fake_symbolic_model_id,
 )
 
 
@@ -331,6 +333,52 @@ def _generate_via_lab(
     )
 
 
+def _generate_via_fake(
+    plan: CompositionPlan,
+    *,
+    model_id: str,
+    seed: int | None,
+    conditioning: TokenizerConditioningV1,
+    prefix_composition: CompositionV2 | None = None,
+    resample_attempt: int = 0,
+) -> SymbolicGenerateResult:
+    """Dispatch a known ``fake:symbolic-*`` composer and echo the requested id."""
+    resolved = resolve_fake_symbolic_model_id(model_id)
+    logger.info(
+        "Fake symbolic ensemble generate started",
+        extra={
+            "backend": "fake",
+            "model_id": resolved,
+            "seed": seed,
+            "resample_attempt": resample_attempt,
+            "has_prefix": prefix_composition is not None,
+            "bar_count": plan.form.bar_count,
+        },
+    )
+    try:
+        music, report = generate_fake_symbolic_composition(
+            plan,
+            seed=seed,
+            prefix_composition=prefix_composition,
+            model_id=resolved,
+        )
+    except FakeSymbolicComposerError as exc:
+        raise SymbolicCompositionGenerateError(str(exc), code=SYMBOLIC_GENERATE_FAILED) from exc
+    note_count = int(report.get("note_count") or 0)
+    logger.debug(
+        "Fake symbolic ensemble generate completed",
+        extra={"model_id": resolved, "seed": seed, "event_count": note_count},
+    )
+    return SymbolicGenerateResult(
+        composition=music,
+        report=report,
+        model_id=resolved,
+        backend="fake",
+        seed=seed,
+        conditioning=conditioning,
+    )
+
+
 def generate_symbolic_composition(
     plan: CompositionPlan,
     *,
@@ -364,6 +412,15 @@ def generate_symbolic_composition(
             prefix_composition=prefix_composition,
             env=env,
         )
+    if model_id and is_fake_symbolic_model_id(model_id):
+        return _generate_via_fake(
+            plan,
+            model_id=str(model_id),
+            seed=effective_seed,
+            conditioning=conditioning,
+            prefix_composition=prefix_composition,
+            resample_attempt=resample_attempt,
+        )
     if model_id:
         plugin_result = _generate_via_plugin(
             plan,
@@ -385,6 +442,7 @@ def generate_symbolic_composition(
             "resample_attempt": resample_attempt,
             "has_prefix": prefix_composition is not None,
             "bar_count": plan.form.bar_count,
+            "requested_model_id": model_id,
             "plan_summary": {
                 k: summarize_composition_plan(plan).get(k)
                 for k in ("schema_version", "section_count", "theme_enabled", "density_global")
@@ -393,21 +451,13 @@ def generate_symbolic_composition(
     )
 
     if backend == "fake":
-        try:
-            music, report = generate_fake_symbolic_composition(
-                plan,
-                seed=effective_seed,
-                prefix_composition=prefix_composition,
-            )
-        except FakeSymbolicComposerError as exc:
-            raise SymbolicCompositionGenerateError(str(exc), code=SYMBOLIC_GENERATE_FAILED) from exc
-        return SymbolicGenerateResult(
-            composition=music,
-            report=report,
-            model_id=FAKE_SYMBOLIC_MODEL_ID,
-            backend="fake",
+        return _generate_via_fake(
+            plan,
+            model_id=resolve_fake_symbolic_model_id(model_id),
             seed=effective_seed,
             conditioning=conditioning,
+            prefix_composition=prefix_composition,
+            resample_attempt=resample_attempt,
         )
 
     return _generate_via_music_transformer(

@@ -7,8 +7,14 @@ import os
 from typing import Mapping
 
 from app.services.fake_symbolic_composer import (
+    FAKE_ENSEMBLE_MODEL_IDS,
+    FAKE_SYMBOLIC_DENSE_MODEL_ID,
+    FAKE_SYMBOLIC_DENSE_VERSION,
     FAKE_SYMBOLIC_MODEL_ID,
     FAKE_SYMBOLIC_RUNTIME,
+    FAKE_SYMBOLIC_SPARSE_MODEL_ID,
+    FAKE_SYMBOLIC_SPARSE_VERSION,
+    FAKE_SYMBOLIC_TINY_MODEL_ID,
     FAKE_SYMBOLIC_VERSION,
 )
 from app.services.symbolic_composition_generate import (
@@ -26,30 +32,82 @@ logger = logging.getLogger(__name__)
 MUSIC_TRANSFORMER_RUNTIME = "music_transformer"
 FAKE_SYMBOLIC_RUNTIME_ID = "fake_symbolic"
 
+_FAKE_DESCRIPTOR_SPECS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        FAKE_SYMBOLIC_TINY_MODEL_ID,
+        "Fake symbolic tiny",
+        FAKE_SYMBOLIC_VERSION,
+        "symbolic-tiny",
+    ),
+    (
+        FAKE_SYMBOLIC_SPARSE_MODEL_ID,
+        "Fake symbolic sparse",
+        FAKE_SYMBOLIC_SPARSE_VERSION,
+        "symbolic-sparse",
+    ),
+    (
+        FAKE_SYMBOLIC_DENSE_MODEL_ID,
+        "Fake symbolic dense",
+        FAKE_SYMBOLIC_DENSE_VERSION,
+        "symbolic-dense",
+    ),
+)
+
 
 def default_fake_symbolic_descriptor() -> ModelDescriptor:
     """Always-ready tiny symbolic composer for fake mode / pytest."""
-    return ModelDescriptor(
-        id=FAKE_SYMBOLIC_MODEL_ID,
+    return _fake_symbolic_descriptor(
+        model_id=FAKE_SYMBOLIC_TINY_MODEL_ID,
         display_name="Fake symbolic tiny",
+        model_version=FAKE_SYMBOLIC_VERSION,
+        provider_model="symbolic-tiny",
+    )
+
+
+def fake_symbolic_ensemble_descriptors() -> tuple[ModelDescriptor, ...]:
+    """Ready descriptors for tiny / sparse / dense fake ensemble composers."""
+    return tuple(
+        _fake_symbolic_descriptor(
+            model_id=model_id,
+            display_name=display_name,
+            model_version=model_version,
+            provider_model=provider_model,
+        )
+        for model_id, display_name, model_version, provider_model in _FAKE_DESCRIPTOR_SPECS
+    )
+
+
+def _fake_symbolic_descriptor(
+    *,
+    model_id: str,
+    display_name: str,
+    model_version: str,
+    provider_model: str,
+) -> ModelDescriptor:
+    density = provider_model.removeprefix("symbolic-")
+    return ModelDescriptor(
+        id=model_id,
+        display_name=display_name,
         provider="fake",
         runtime=FAKE_SYMBOLIC_RUNTIME_ID,  # type: ignore[arg-type]
         primary_capability=ModelCapability.SYMBOLIC_COMPOSER,
         locality="local",
-        model_version=FAKE_SYMBOLIC_VERSION,
+        model_version=model_version,
         supported_operations=(AiOperation.GENERATE_COMPOSER,),
         status="ready",
         health=ModelHealth(
             status="ready",
-            detail="fake_symbolic_tiny",
+            detail=f"fake_symbolic_{density}",
             credentials_present=True,
         ),
         limits={
             "torch_required": False,
             "deterministic": True,
             "pitch_rule": "diatonic_scale_degree_from_form_key",
+            "density": density,
+            "ensemble_fake": True,
         },
-        provider_model="symbolic-tiny",
+        provider_model=provider_model,
     )
 
 
@@ -93,8 +151,12 @@ def music_transformer_descriptor(env: Mapping[str, str] | None = None) -> ModelD
 
 
 __all__ = [
+    "FAKE_ENSEMBLE_MODEL_IDS",
+    "FAKE_SYMBOLIC_MODEL_ID",
+    "FAKE_SYMBOLIC_RUNTIME",
     "FAKE_SYMBOLIC_RUNTIME_ID",
     "MUSIC_TRANSFORMER_RUNTIME",
     "default_fake_symbolic_descriptor",
+    "fake_symbolic_ensemble_descriptors",
     "music_transformer_descriptor",
 ]
