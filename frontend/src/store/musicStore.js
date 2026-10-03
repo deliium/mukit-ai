@@ -145,7 +145,10 @@ import {
 import { extractLivePerformanceFeatures } from '../utils/livePerformanceFeatures.js';
 import { getLivePlaybackEngine, requireLivePlaybackEngine } from '../utils/livePlaybackEngineAccess.js';
 import { applyAdaptivePlaybackInstructions, noteAdaptivePlayback } from '../utils/adaptivePlayback.js';
-import { continuationEventsToSchedule } from '../utils/adaptiveContinuation.js';
+import {
+  buildContinuationStartBody,
+  continuationEventsToSchedule,
+} from '../utils/adaptiveContinuation.js';
 import { dangerSample, lockedContextStartBody } from '../utils/adaptiveMusicalContext.js';
 import {
   applyAiJamTakeToComposition,
@@ -505,6 +508,8 @@ export const initialAdaptiveScoreState = {
   adaptiveContinuation: null,
   adaptiveContinuationBuffer: null,
   adaptiveContinuationError: '',
+  /** Client Continuous toggle. Opening Adaptive never sets this true. */
+  adaptiveContinuousEnabled: false,
 };
 
 export const initialPerformanceState = {
@@ -14174,6 +14179,10 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
+  setAdaptiveContinuousEnabled: (enabled) => {
+    set({ adaptiveContinuousEnabled: enabled === true });
+  },
+
   fillAdaptiveContinuation: async () => {
     const projectId = get().currentProjectId;
     const scoreId = get().adaptiveScoreId;
@@ -14184,10 +14193,19 @@ export const useMusicStore = create((set, get) => ({
     }
     try {
       if (!get().adaptiveContinuation?.continuation_id) {
-        const started = await startAdaptiveContinuationRequest(projectId, scoreId, {
-          expected_document_revision: revision,
+        const continuous = get().adaptiveContinuousEnabled === true;
+        const body = buildContinuationStartBody({
+          expectedDocumentRevision: revision,
           mode: 'continuation',
+          continuous,
         });
+        if (typeof console !== 'undefined' && console.debug) {
+          console.debug('adaptive continuous start', {
+            continuous,
+            score_id: scoreId,
+          });
+        }
+        const started = await startAdaptiveContinuationRequest(projectId, scoreId, body);
         if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
           return null;
         }
@@ -14214,6 +14232,14 @@ export const useMusicStore = create((set, get) => ({
       const snapshot = await maintainAdaptiveContinuationRequest(projectId, scoreId);
       if (get().currentProjectId !== projectId || get().adaptiveScoreId !== scoreId) {
         return null;
+      }
+      if (typeof console !== 'undefined' && console.debug) {
+        console.debug('adaptive continuous maintain', {
+          continuous: snapshot?.continuous === true,
+          virtual_bar: snapshot?.music_state?.virtual_bar ?? null,
+          source: snapshot?.source ?? null,
+          fallback_kind: snapshot?.fallback_kind ?? null,
+        });
       }
       let buffer = null;
       if (snapshot?.audible) {

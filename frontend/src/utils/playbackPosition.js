@@ -59,7 +59,8 @@ export function ticksToPlaybackSeconds(tick, {
 } = {}) {
   const timeline = composition ? compileTimeline(composition) : null;
   if (timeline) {
-    return tickToSeconds(timeline, Math.max(0, Math.min(Number(tick) || 0, timeline.durationTicks)));
+    // Do not clamp past durationTicks — continuous buffers use virtual ticks.
+    return tickToSeconds(timeline, Math.max(0, Number(tick) || 0));
   }
   const safeTempo = Number(tempo) || 100;
   const safeTpq = Number(ticksPerQuarter) || 480;

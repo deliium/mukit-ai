@@ -255,6 +255,51 @@ export class MukitAdaptiveClient {
     return result
   }
 
+  /** POST …/continuous/maintain. Returns continuation snapshot JSON; does not replace the engine session snapshot. */
+  async maintain_continuous(): Promise<Record<string, unknown>> {
+    logEvent("DEBUG", "maintain_continuous_enter")
+    const payload = await this.exclusive(async () => {
+      const session = this.snapshotValue
+      if (!session) throw new AdaptiveClientError("engine_session_missing", "No engine session is attached.")
+      const result = await this.exchange("POST", `/adaptive/session/${session.session_id}/continuous/maintain`, null)
+      if (result.status !== 200) throw this.failure(result)
+      return decodeJson(result)
+    })
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new AdaptiveClientError("engine_payload_invalid", "invalid continuous snapshot")
+    }
+    const body = payload as Record<string, unknown>
+    logEvent("DEBUG", "maintain_continuous_exit", {
+      job_status: body.job_status,
+      continuous: body.continuous,
+    })
+    return body
+  }
+
+  /** GET …/continuous/buffer. null when the server returns 204. */
+  async get_continuous_buffer(): Promise<Record<string, unknown> | null> {
+    logEvent("DEBUG", "get_continuous_buffer_enter")
+    const payload = await this.exclusive(async () => {
+      const session = this.snapshotValue
+      if (!session) throw new AdaptiveClientError("engine_session_missing", "No engine session is attached.")
+      const result = await this.exchange("GET", `/adaptive/session/${session.session_id}/continuous/buffer`, null)
+      if (result.status === 204) return null
+      if (result.status !== 200) throw this.failure(result)
+      return decodeJson(result)
+    })
+    if (payload === null) {
+      logEvent("DEBUG", "get_continuous_buffer_exit", { empty: true })
+      return null
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new AdaptiveClientError("engine_payload_invalid", "invalid continuous buffer")
+    }
+    const body = payload as Record<string, unknown>
+    const events = Array.isArray(body.events) ? body.events : []
+    logEvent("DEBUG", "get_continuous_buffer_exit", { event_count: events.length })
+    return body
+  }
+
   async listen(
     onAck: ((ack: unknown) => void) | null,
     onStatus: ((session: EngineSession) => void) | null,

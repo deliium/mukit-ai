@@ -187,6 +187,35 @@ test("false context_attached skips context", async () => {
   }
 })
 
+test("maintain_continuous path and disabled error", async () => {
+  const transport = new RecordingFetch()
+  const adaptive = await started(transport)
+  transport.push(200, {
+    schema_version: "adaptive.runtime.continuation.v1",
+    continuous: true,
+    job_status: "pending",
+    source: "fallback",
+    fallback_kind: "accompaniment",
+  })
+  const snapshot = await adaptive.maintain_continuous()
+  assert.ok(transport.calls.at(-1)?.url.endsWith("/continuous/maintain"))
+  assert.equal(transport.calls.at(-1)?.method, "POST")
+  assert.equal(snapshot.continuous, true)
+  transport.push(422, errorBody("adaptive_engine_continuous_disabled", "Adaptive engine continuous maintain is disabled."))
+  await assert.rejects(
+    () => adaptive.maintain_continuous(),
+    (error: unknown) => error instanceof AdaptiveClientError && error.code === "adaptive_engine_continuous_disabled",
+  )
+})
+
+test("get_continuous_buffer 204", async () => {
+  const transport = new RecordingFetch()
+  const adaptive = await started(transport)
+  transport.push(204, "")
+  assert.equal(await adaptive.get_continuous_buffer(), null)
+  assert.ok(transport.calls.at(-1)?.url.endsWith("/continuous/buffer"))
+})
+
 test("package source does not import the studio", () => {
   assertPackageHasNoStudioImport()
 })

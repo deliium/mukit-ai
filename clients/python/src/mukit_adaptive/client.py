@@ -360,6 +360,58 @@ class MukitAdaptiveClient:
         log_event(logging.DEBUG, "send_context_exit", request_id=result.request_id, coalesced=result.coalesced)
         return result
 
+    def maintain_continuous(self) -> dict[str, Any]:
+        """``POST …/continuous/maintain``. Returns the continuation snapshot JSON.
+
+        Does not mutate the engine session snapshot. When the engine continuous
+        flag is off the server returns ``adaptive_engine_continuous_disabled``.
+        """
+        log_event(logging.DEBUG, "maintain_continuous_enter")
+        with self._lock:
+            session = self._snapshot
+            if session is None:
+                raise AdaptiveClientError("engine_session_missing", "No engine session is attached.")
+            path = f"/adaptive/session/{session.session_id}/continuous/maintain"
+            result = self._exchange("POST", path, None)
+            if result.status != 200:
+                raise self._failure(result)
+            payload = _decode_json(result)
+        if not isinstance(payload, dict):
+            raise AdaptiveClientError("engine_payload_invalid", "invalid continuous snapshot")
+        log_event(
+            logging.DEBUG,
+            "maintain_continuous_exit",
+            session_id=session.session_id,
+            job_status=payload.get("job_status"),
+            continuous=payload.get("continuous"),
+        )
+        return payload
+
+    def get_continuous_buffer(self) -> dict[str, Any] | None:
+        """``GET …/continuous/buffer``. ``None`` when the server returns 204."""
+        log_event(logging.DEBUG, "get_continuous_buffer_enter")
+        with self._lock:
+            session = self._snapshot
+            if session is None:
+                raise AdaptiveClientError("engine_session_missing", "No engine session is attached.")
+            path = f"/adaptive/session/{session.session_id}/continuous/buffer"
+            result = self._exchange("GET", path, None)
+            if result.status == 204:
+                log_event(logging.DEBUG, "get_continuous_buffer_exit", empty=True)
+                return None
+            if result.status != 200:
+                raise self._failure(result)
+            payload = _decode_json(result)
+        if not isinstance(payload, dict):
+            raise AdaptiveClientError("engine_payload_invalid", "invalid continuous buffer")
+        log_event(
+            logging.DEBUG,
+            "get_continuous_buffer_exit",
+            session_id=session.session_id,
+            event_count=len(payload.get("events") or []) if isinstance(payload.get("events"), list) else 0,
+        )
+        return payload
+
     def listen(
         self,
         on_ack: Callable[..., None] | None,

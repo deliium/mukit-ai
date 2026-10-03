@@ -527,6 +527,70 @@ function continuationSnapshot(overrides = {}) {
   };
 }
 
+test('Fill ahead with Continuous toggle latches continuous on start', async () => {
+  seedScore();
+  useMusicStore.setState({
+    adaptivePlayback: playbackSnapshot(),
+    adaptiveContinuation: null,
+    adaptiveContinuousEnabled: true,
+    adaptiveContinuationError: '',
+  });
+  let startBody = null;
+  const restore = installAxiosStub(async (config) => {
+    const url = String(config.url);
+    if (url.endsWith('/continuation') && config.method === 'post') {
+      startBody = JSON.parse(config.data);
+      return {
+        status: 200,
+        data: continuationSnapshot({
+          continuous: true,
+          music_state: {
+            schema_version: 'adaptive.runtime.music_state.v1',
+            active_theme_ids: [],
+            motif_usage: [],
+            harmony_trajectory: [],
+            repetition_history: [],
+            energy: [],
+            tension: [],
+            orchestration_history: [],
+            runtime_state_id: 'state-exploration',
+            summary_digest: null,
+            virtual_bar: 5,
+            guard_flags: [],
+          },
+        }),
+      };
+    }
+    if (url.endsWith('/continuation/maintain')) {
+      return { status: 200, data: continuationSnapshot({ continuous: true }) };
+    }
+    if (url.includes('/continuation/buffer')) {
+      return { status: 200, data: { schema_version: 'adaptive.runtime.buffer.v1', events: [] } };
+    }
+    return { status: 204, data: null };
+  });
+  try {
+    await useMusicStore.getState().fillAdaptiveContinuation();
+    assert.equal(startBody.continuous, true);
+    assert.equal(startBody.mode, 'continuation');
+    assert.equal(useMusicStore.getState().adaptiveContinuation.continuous, true);
+  } finally {
+    restore();
+    useMusicStore.setState({
+      adaptivePlayback: null,
+      adaptiveContinuation: null,
+      adaptiveContinuousEnabled: false,
+      adaptiveContinuationError: '',
+    });
+  }
+});
+
+test('Continuous toggle defaults off and does not auto-arm', () => {
+  seedScore();
+  assert.equal(useMusicStore.getState().adaptiveContinuousEnabled, false);
+  assert.equal(useMusicStore.getState().adaptiveContinuation, null);
+});
+
 test('a rejected maintain leaves playback playing', async () => {
   seedScore();
   useMusicStore.setState({

@@ -13,6 +13,7 @@ from fakes import (
     RecordingTransport,
     assert_package_has_no_studio_import,
     command_document,
+    error_document,
     session_document,
 )
 
@@ -139,6 +140,44 @@ def test_logs_omit_context_values_and_include_command_and_warnings(
 
 def test_package_source_does_not_import_studio() -> None:
     assert_package_has_no_studio_import()
+
+
+def test_maintain_continuous_path_and_disabled_error() -> None:
+    transport = RecordingTransport()
+    client = _started(transport)
+    transport.push(
+        200,
+        {
+            "schema_version": "adaptive.runtime.continuation.v1",
+            "continuous": True,
+            "job_status": "pending",
+            "source": "fallback",
+            "fallback_kind": "accompaniment",
+        },
+    )
+    snapshot = client.maintain_continuous()
+    assert transport.calls[-1]["url"].endswith("/continuous/maintain")
+    assert transport.calls[-1]["method"] == "POST"
+    assert "/adaptive/sessions/" not in transport.calls[-1]["url"]
+    assert snapshot["continuous"] is True
+    transport.push(
+        422,
+        error_document(
+            "adaptive_engine_continuous_disabled",
+            "Adaptive engine continuous maintain is disabled.",
+        ),
+    )
+    with pytest.raises(AdaptiveClientError) as captured:
+        client.maintain_continuous()
+    assert captured.value.code == "adaptive_engine_continuous_disabled"
+
+
+def test_get_continuous_buffer_204() -> None:
+    transport = RecordingTransport()
+    client = _started(transport)
+    transport.push(204, b"")
+    assert client.get_continuous_buffer() is None
+    assert transport.calls[-1]["url"].endswith("/continuous/buffer")
 
 
 def error_limited(retry_after_ms: int) -> dict:

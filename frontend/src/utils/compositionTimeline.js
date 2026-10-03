@@ -262,10 +262,21 @@ function integrateTicks(timeline, startTick, endTick) {
 }
 
 export function tickToSeconds(timeline, tick) {
-  if (!timeline || tick < 0 || tick > timeline.durationTicks) {
+  if (!timeline || tick < 0) {
     return null;
   }
-  return integrateTicks(timeline, 0, tick);
+  const safeTick = Number(tick);
+  if (!Number.isFinite(safeTick)) {
+    return null;
+  }
+  if (safeTick <= timeline.durationTicks) {
+    return integrateTicks(timeline, 0, safeTick);
+  }
+  // Constant-tempo extension past authored duration for continuous Fill ahead.
+  const base = integrateTicks(timeline, 0, timeline.durationTicks);
+  const tempo = activeTempo(timeline, timeline.durationTicks);
+  const secondsPerTick = 60 / tempo / timeline.ticksPerQuarter;
+  return base + (safeTick - timeline.durationTicks) * secondsPerTick;
 }
 
 export function totalDurationSeconds(timeline) {

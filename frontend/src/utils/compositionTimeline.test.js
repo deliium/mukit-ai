@@ -47,3 +47,15 @@ test('compileTimeline rejects incomplete final bar duration', () => {
   raw.duration_ticks = 4700;
   assert.equal(compileTimeline(raw), null);
 });
+
+test('tickToSeconds extends past durationTicks at the final tempo', () => {
+  const raw = loadFixture();
+  delete raw.expectations;
+  const timeline = compileTimeline(raw);
+  const end = tickToSeconds(timeline, timeline.durationTicks);
+  const past = tickToSeconds(timeline, timeline.durationTicks + timeline.ticksPerQuarter);
+  const tempo = activeTempo(timeline, timeline.durationTicks);
+  const expectedDelta = 60 / tempo;
+  assert.ok(Number.isFinite(end));
+  assert.ok(Math.abs(past - (end + expectedDelta)) < 1e-9);
+});
