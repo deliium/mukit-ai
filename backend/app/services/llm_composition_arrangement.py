@@ -53,13 +53,28 @@ from app.services.llm_music_generator import (
 logger = logging.getLogger(__name__)
 
 
+_ARRANGEMENT_AI_FIELD_ALLOWLIST = frozenset(
+    {
+        "model_id",
+        "requested_model_id",
+        "resolved_model_id",
+        "fallback_applied",
+        "runtime",
+        "capability",
+        "ai_operation",
+        "model_version",
+    }
+)
+
+
 def _ai_resolution_kwargs() -> dict[str, Any]:
     from app.ai_runtime.routing import get_current_resolved_model, resolution_public_fields
 
     fields = resolution_public_fields(get_current_resolved_model())
     if "operation" in fields:
         fields["ai_operation"] = fields.pop("operation")
-    return fields
+    # ArrangementCandidate is extra=forbid and does not carry schedule/path fields.
+    return {key: value for key, value in fields.items() if key in _ARRANGEMENT_AI_FIELD_ALLOWLIST}
 
 
 CREATIVE_DIRECTIONS = (
