@@ -74,11 +74,13 @@
 - [x] **V5 Distributed AI execution nodes** — Trusted LAN ExecutionNode registration with authenticated heartbeat, capability/model discovery, availability TTL, and typed remote `LanguageModel` inference through `runtime=execution_node`. No arbitrary remote shell. Task cancel cooperates with operation traces. The score stays `composition.v2`. No `composition.v5`
 - [x] **V5 Capability-aware AI job scheduling** — Deterministic placement of LanguageModel jobs across controller-local and trusted-LAN ExecutionNode runtimes by required capability, installed model, memory, GPU class, estimated latency, job priority, and user policy (`prefer_local` / `fastest_available` / `memory_safe` / `fixed_node`). Private workloads never escalate to public cloud unless explicitly allowed. Node loss triggers bounded reschedule without silent trust escalation. The score stays `composition.v2`. No `composition.v5`
 - [x] **V5 Browser WebGPU inference for lightweight AI** — Evaluate latency-sensitive lightweight capabilities against backend CPU, local GPU backend, and browser WebGPU; register `runtime=browser_model` through the existing model abstraction with load/cache/capability detection and HTTP fallback; ship at least one public browser-local model (default: symbolic embedding compute) without exposing private server weights. The score stays `composition.v2`. No `composition.v5`
+- [x] **V5 Expressive MIDI performance input** — Capability-probed browser MIDI transports for higher-resolution velocity, per-note expression, pitch expression, controllers, MPE mapping, and optional MIDI 2.0/UMP abstractions, with graceful fallback to ordinary Web MIDI / QWERTY and deterministic degrade onto `composition.v2` notes (`velocity` 1–127). Optional performance metadata references event ids and does not invent a second playable score. Simulated-device tests required. No `composition.v5`
 
 ## Completed
 
 | Milestone | Date |
 |-----------|------|
+| V5 Expressive MIDI performance input | 2026-10-03 |
 | V5 Browser WebGPU inference for lightweight AI | 2026-10-03 |
 | V5 Capability-aware AI job scheduling | 2026-10-03 |
 | V5 Explicit preference learning | 2026-10-03 |
