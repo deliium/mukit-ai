@@ -99,6 +99,8 @@ def test_forbidden_persistence_imports_in_ai_agents():
         "from app.services.personal_composer_store",
         "from app.services.model_lab_store",
         "from app.model_lab_settings",
+        "from app.ensemble_arbitration_settings",
+        "from app.services.ensemble_arbitration_store",
         "from app.services.preference_store",
         "from app.services.ardour_exchange_store",
         "from app.services.ardour_exchange_ingest",

@@ -50,6 +50,7 @@ from .routers.content_provenance import router as content_provenance_router
 from .routers.rights_governance import router as rights_governance_router
 from .routers.personal_composer import router as personal_composer_router
 from .routers.model_lab import router as model_lab_router
+from .routers.ensemble_arbitration import router as ensemble_arbitration_router
 from .routers.performance_plans import router as performance_plans_router
 from .routers.spatial_scenes import router as spatial_scenes_router
 from .routers.ardour_companion import router as ardour_companion_router
@@ -282,6 +283,7 @@ if not _worker_only:
     app.include_router(rights_governance_router)
     app.include_router(personal_composer_router)
     app.include_router(model_lab_router)
+    app.include_router(ensemble_arbitration_router)
     app.include_router(performance_plans_router)
     app.include_router(spatial_scenes_router)
     app.include_router(ardour_companion_router)
