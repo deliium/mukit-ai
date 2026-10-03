@@ -1,0 +1,6 @@
+{
+  "schema_version": "performance.presets.v1",
+  "engine_version": "performance.conductor.v1.0",
+  "presets": ["mechanical", "restrained", "intimate", "dramatic"],
+  "note": "Numeric tables live in performance_conductor_constants.PRESET_DIMENSIONS; this file documents the closed catalog ids."
+}
