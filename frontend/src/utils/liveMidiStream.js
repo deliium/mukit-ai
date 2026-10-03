@@ -9,10 +9,11 @@
 import { createAppLogger } from './appLogger.js';
 import {
   clampMidiVelocity,
-  isSustainControlChange,
   MIDI_MESSAGE_KINDS,
-  parseMidiMessage,
 } from './midiInputMessages.js';
+import { adaptIncomingMidi } from './midiExpressive/adaptMessage.js';
+import { EXPRESSIVE_EVENT_KINDS } from './midiExpressive/constants.js';
+import { degradeVelocityU16ToMidi7 } from './midiExpressive/velocity.js';
 import {
   LIVE_MIDI_PHASE_EXCLUSION,
   createIdleLiveSession,
@@ -52,6 +53,8 @@ export function isLiveSessionBlockingMidiCapture(livePhase) {
  *   capacity?: number,
  *   getTick?: () => number,
  *   sessionId?: string,
+ *   expressiveEnv?: Record<string, unknown>,
+ *   mpeMappingEnabled?: boolean,
  * }} [options]
  */
 export function createLiveMidiStream(options = {}) {
@@ -64,9 +67,11 @@ export function createLiveMidiStream(options = {}) {
       ? options.getTick
       : () => 0;
   let sessionId = String(options.sessionId || `live-${Date.now()}`);
+  let expressiveEnv = options.expressiveEnv || null;
+  let mpeMappingEnabled = options.mpeMappingEnabled === true;
   /** @type {'idle'|'arming'|'running'|'degraded'|'stopping'|'cancelled'} */
   let phase = 'idle';
-  /** @type {Array<{ kind: string, tick: number, note?: number, velocity?: number, channel?: number, controller?: number, value?: number }>} */
+  /** @type {Array<{ kind: string, tick: number, note?: number, velocity?: number, channel?: number, controller?: number, value?: number, bend?: number, pressure?: number }>} */
   const ring = [];
   /** @type {Map<string, { note: number, channel: number, velocity: number, startTick: number }>} */
   const openNotes = new Map();
@@ -74,6 +79,7 @@ export function createLiveMidiStream(options = {}) {
   let noteOffCount = 0;
   let ignoredCount = 0;
   let droppedCount = 0;
+  let expressiveEventCount = 0;
 
   function noteKey(channel, note) {
     return `${channel}:${note}`;
@@ -157,84 +163,135 @@ export function createLiveMidiStream(options = {}) {
   }
 
   /**
-   * @param {Iterable<number> | ArrayLike<number> | null | undefined} data
+   * Ingest a transport-agnostic expressive event into the ring (features only — no Jam Commit redesign).
+   * @param {import('./midiExpressive/schemas.js').MidiExpressiveEventV1} event
    * @param {{ tick?: number }} [meta]
    */
-  function pushMessage(data, meta = {}) {
+  function pushExpressiveEvent(event, meta = {}) {
     if (phase !== 'running' && phase !== 'degraded') {
       return { ok: false, phase };
     }
-    const parsed = parseMidiMessage(data);
     const tick =
       meta.tick != null && Number.isFinite(Number(meta.tick))
         ? Math.max(0, Math.round(Number(meta.tick)))
         : Math.max(0, Math.round(Number(getTick()) || 0));
+    expressiveEventCount += 1;
 
-    if (parsed.kind === MIDI_MESSAGE_KINDS.NOTE_ON) {
-      const velocity = clampMidiVelocity(parsed.velocity);
-      const key = noteKey(parsed.channel, parsed.note);
-      // Retrigger: close previous at same tick.
+    if (event.kind === EXPRESSIVE_EVENT_KINDS.NOTE_ON) {
+      const velocity = clampMidiVelocity(degradeVelocityU16ToMidi7(event.velocity_u16) || 1);
+      const key = noteKey(event.channel, event.note);
       if (openNotes.has(key)) {
         pushRing({
           kind: MIDI_MESSAGE_KINDS.NOTE_OFF,
           tick,
-          note: parsed.note,
+          note: event.note,
           velocity: 0,
-          channel: parsed.channel,
+          channel: event.channel,
         });
         noteOffCount += 1;
       }
       openNotes.set(key, {
-        note: parsed.note,
-        channel: parsed.channel,
+        note: event.note,
+        channel: event.channel,
         velocity,
         startTick: tick,
       });
       pushRing({
         kind: MIDI_MESSAGE_KINDS.NOTE_ON,
         tick,
-        note: parsed.note,
+        note: event.note,
         velocity,
-        channel: parsed.channel,
+        channel: event.channel,
       });
       noteOnCount += 1;
-      log.debug('note on', { noteOnCount, tick });
-      return { ok: true, kind: parsed.kind, tick };
+      log.debug('expressive note on', { noteOnCount, tick });
+      return { ok: true, kind: event.kind, tick };
     }
 
-    if (parsed.kind === MIDI_MESSAGE_KINDS.NOTE_OFF) {
-      const key = noteKey(parsed.channel, parsed.note);
+    if (event.kind === EXPRESSIVE_EVENT_KINDS.NOTE_OFF) {
+      const key = noteKey(event.channel, event.note);
       if (openNotes.has(key)) {
         openNotes.delete(key);
       }
       pushRing({
         kind: MIDI_MESSAGE_KINDS.NOTE_OFF,
         tick,
-        note: parsed.note,
+        note: event.note,
         velocity: 0,
-        channel: parsed.channel,
+        channel: event.channel,
       });
       noteOffCount += 1;
-      log.debug('note off', { noteOffCount, tick });
-      return { ok: true, kind: parsed.kind, tick };
+      return { ok: true, kind: event.kind, tick };
     }
 
-    if (
-      parsed.kind === MIDI_MESSAGE_KINDS.CONTROL_CHANGE
-      && isSustainControlChange(parsed)
-    ) {
+    if (event.kind === EXPRESSIVE_EVENT_KINDS.CONTROL_CHANGE) {
+      const value = (Number(event.value_u32) >>> 25) & 0x7f;
       pushRing({
         kind: MIDI_MESSAGE_KINDS.CONTROL_CHANGE,
         tick,
-        controller: parsed.controller,
-        value: parsed.value,
-        channel: parsed.channel,
+        controller: event.controller,
+        value,
+        channel: event.channel,
       });
-      return { ok: true, kind: parsed.kind, tick };
+      return { ok: true, kind: event.kind, tick };
+    }
+
+    if (event.kind === EXPRESSIVE_EVENT_KINDS.PITCH_BEND) {
+      pushRing({
+        kind: 'pitch_bend',
+        tick,
+        bend: event.bend,
+        channel: event.channel,
+      });
+      return { ok: true, kind: event.kind, tick };
+    }
+
+    if (event.kind === EXPRESSIVE_EVENT_KINDS.PRESSURE) {
+      pushRing({
+        kind: 'pressure',
+        tick,
+        pressure: event.value,
+        note: event.note,
+        channel: event.channel,
+      });
+      return { ok: true, kind: event.kind, tick };
     }
 
     ignoredCount += 1;
     return { ok: true, kind: MIDI_MESSAGE_KINDS.IGNORED, tick };
+  }
+
+  /**
+   * @param {Iterable<number> | ArrayLike<number> | null | undefined} data
+   * @param {{ tick?: number, umpWords?: ArrayLike<number> }} [meta]
+   */
+  function pushMessage(data, meta = {}) {
+    if (phase !== 'running' && phase !== 'degraded') {
+      return { ok: false, phase };
+    }
+    const tick =
+      meta.tick != null && Number.isFinite(Number(meta.tick))
+        ? Math.max(0, Math.round(Number(meta.tick)))
+        : Math.max(0, Math.round(Number(getTick()) || 0));
+
+    const adapted = adaptIncomingMidi({
+      data,
+      umpWords: meta.umpWords,
+      expressiveEnv,
+      mpeMappingEnabled,
+      transport: meta.umpWords ? 'ump_experimental' : 'midi1_bytes',
+    });
+
+    let last = { ok: true, kind: MIDI_MESSAGE_KINDS.IGNORED, tick };
+    for (const event of adapted.events) {
+      if (event.kind === EXPRESSIVE_EVENT_KINDS.IGNORED) {
+        ignoredCount += 1;
+        last = { ok: true, kind: MIDI_MESSAGE_KINDS.IGNORED, tick };
+        continue;
+      }
+      last = pushExpressiveEvent(event, { tick });
+    }
+    return last;
   }
 
   function getSnapshot() {
@@ -248,6 +305,7 @@ export function createLiveMidiStream(options = {}) {
       noteOffCount,
       ignoredCount,
       droppedCount,
+      expressiveEventCount,
       events: ring.slice(),
     };
   }
@@ -339,6 +397,7 @@ export function createLiveMidiStream(options = {}) {
     stop,
     cancel,
     pushMessage,
+    pushExpressiveEvent,
     setGetTick,
     getSnapshot,
     getRecentEvents,

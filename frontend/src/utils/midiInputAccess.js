@@ -9,6 +9,7 @@ import {
   MIDI_SUPPORT_REASONS,
   probeWebMidiSupport,
 } from './midiInputSupport.js';
+import { probeMidiCapability } from './midiExpressive/capabilityProbe.js';
 
 const log = createAppLogger('midiInput');
 
@@ -79,46 +80,62 @@ export function listMidiInputs(access) {
 }
 
 /**
- * @returns {{ selectedInputId: string | null }}
+ * @returns {{ selectedInputId: string | null, mpeMappingEnabled: boolean }}
  */
 export function readMidiInputPreference(storage = globalThis.localStorage) {
   try {
     if (!storage || typeof storage.getItem !== 'function') {
-      return { selectedInputId: null };
+      return { selectedInputId: null, mpeMappingEnabled: false };
     }
     const raw = storage.getItem(MIDI_PREF_STORAGE_KEY);
     if (!raw) {
-      return { selectedInputId: null };
+      return { selectedInputId: null, mpeMappingEnabled: false };
     }
     const parsed = JSON.parse(raw);
     const selectedInputId =
       parsed && typeof parsed.selectedInputId === 'string' && parsed.selectedInputId
         ? parsed.selectedInputId
         : null;
-    return { selectedInputId };
+    const mpeMappingEnabled = parsed && parsed.mpeMappingEnabled === true;
+    return { selectedInputId, mpeMappingEnabled };
   } catch (error) {
     log.warn('Failed to read MIDI preference', {
       code: 'midi_pref_read_failed',
       message: error instanceof Error ? error.message : 'unknown',
     });
-    return { selectedInputId: null };
+    return { selectedInputId: null, mpeMappingEnabled: false };
   }
 }
 
 /**
- * @param {{ selectedInputId?: string | null }} preference
+ * @param {{ selectedInputId?: string | null, mpeMappingEnabled?: boolean }} preference
  */
 export function writeMidiInputPreference(preference, storage = globalThis.localStorage) {
   try {
     if (!storage || typeof storage.setItem !== 'function') {
       return false;
     }
+    const existing = readMidiInputPreference(storage);
     const selectedInputId =
-      preference && typeof preference.selectedInputId === 'string' && preference.selectedInputId
-        ? preference.selectedInputId
-        : null;
-    storage.setItem(MIDI_PREF_STORAGE_KEY, JSON.stringify({ selectedInputId }));
-    log.debug('Wrote MIDI preference', { hasSelection: Boolean(selectedInputId) });
+      preference && Object.prototype.hasOwnProperty.call(preference, 'selectedInputId')
+        ? (
+          typeof preference.selectedInputId === 'string' && preference.selectedInputId
+            ? preference.selectedInputId
+            : null
+        )
+        : existing.selectedInputId;
+    const mpeMappingEnabled =
+      preference && Object.prototype.hasOwnProperty.call(preference, 'mpeMappingEnabled')
+        ? preference.mpeMappingEnabled === true
+        : existing.mpeMappingEnabled;
+    storage.setItem(
+      MIDI_PREF_STORAGE_KEY,
+      JSON.stringify({ selectedInputId, mpeMappingEnabled }),
+    );
+    log.debug('Wrote MIDI preference', {
+      hasSelection: Boolean(selectedInputId),
+      mpeMappingEnabled,
+    });
     return true;
   } catch (error) {
     log.warn('Failed to write MIDI preference', {
@@ -135,6 +152,9 @@ export function writeMidiInputPreference(preference, storage = globalThis.localS
  *   requestMIDIAccess?: (options?: { sysex?: boolean }) => Promise<MIDIAccess>,
  *   probeEnv?: Parameters<typeof probeWebMidiSupport>[0],
  *   storage?: Storage,
+ *   hasUmpApi?: boolean,
+ *   mpeMappingEnabled?: boolean,
+ *   expressiveEnv?: Record<string, unknown>,
  * }} [deps]
  */
 export function createMidiAccessSession(deps = {}) {
@@ -213,26 +233,42 @@ export function createMidiAccessSession(deps = {}) {
    *   reason: string,
    *   inputs: MidiInputDescriptor[],
    *   preferredInputId: string | null,
+   *   capability: import('./midiExpressive/schemas.js').MidiCapabilityV1,
    * }>}
    */
   async function enable() {
+    const capabilitySnapshot = () => probeMidiCapability({
+      webMidiEnv: deps.probeEnv,
+      hasUmpApi: deps.hasUmpApi,
+      mpeMappingEnabled: deps.mpeMappingEnabled === true,
+      expressiveEnv: deps.expressiveEnv,
+    });
+
     if (disposed) {
       return {
         ok: false,
         reason: MIDI_SUPPORT_REASONS.UNSUPPORTED,
         inputs: [],
         preferredInputId: null,
+        capability: capabilitySnapshot(),
       };
     }
 
     const probe = probeWebMidiSupport(deps.probeEnv);
     if (!probe.supported) {
-      log.info('MIDI enable skipped — unsupported', { reason: probe.reason });
+      const capability = capabilitySnapshot();
+      log.info('MIDI enable skipped — unsupported', {
+        reason: probe.reason,
+        transport: capability.transport,
+        mpeEligible: capability.mpe.eligible,
+        highResVelocity: capability.high_res_velocity,
+      });
       return {
         ok: false,
         reason: probe.reason,
         inputs: [],
         preferredInputId: null,
+        capability,
       };
     }
 
@@ -245,14 +281,19 @@ export function createMidiAccessSession(deps = {}) {
         : null);
 
     if (!request) {
+      const capability = capabilitySnapshot();
       log.info('MIDI enable failed — no requestMIDIAccess', {
         reason: MIDI_SUPPORT_REASONS.UNSUPPORTED,
+        transport: capability.transport,
+        mpeEligible: capability.mpe.eligible,
+        highResVelocity: capability.high_res_velocity,
       });
       return {
         ok: false,
         reason: MIDI_SUPPORT_REASONS.UNSUPPORTED,
         inputs: [],
         preferredInputId: null,
+        capability,
       };
     }
 
@@ -265,6 +306,7 @@ export function createMidiAccessSession(deps = {}) {
           reason: MIDI_SUPPORT_REASONS.UNSUPPORTED,
           inputs: [],
           preferredInputId: null,
+          capability: capabilitySnapshot(),
         };
       }
 
@@ -283,10 +325,14 @@ export function createMidiAccessSession(deps = {}) {
           ? preferred.selectedInputId
           : null;
 
+      const capability = capabilitySnapshot();
       log.info('MIDI access enabled', {
         code: 'midi_access_enabled',
         inputCount: inputs.length,
         hasPreferred: Boolean(preferredInputId),
+        transport: capability.transport,
+        mpeEligible: capability.mpe.eligible,
+        highResVelocity: capability.high_res_velocity,
       });
       emit({ type: 'inputs', inputs });
       return {
@@ -294,13 +340,16 @@ export function createMidiAccessSession(deps = {}) {
         reason: MIDI_SUPPORT_REASONS.AVAILABLE,
         inputs,
         preferredInputId,
+        capability,
       };
     } catch (error) {
       const reason = midiAccessFailureReason(error);
+      const capability = capabilitySnapshot();
       log.error('MIDI access enable failed', {
         code: 'midi_access_failed',
         reason,
         message: error instanceof Error ? error.message : 'unknown',
+        transport: capability.transport,
       });
       emit({
         type: 'error',
@@ -312,6 +361,7 @@ export function createMidiAccessSession(deps = {}) {
         reason,
         inputs: [],
         preferredInputId: null,
+        capability,
       };
     }
   }

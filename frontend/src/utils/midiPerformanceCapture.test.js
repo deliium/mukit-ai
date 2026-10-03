@@ -72,3 +72,27 @@ test('discard clears buffer without notes', () => {
   assert.equal(capture.isCapturing(), false);
   assert.equal(capture.getSnapshot().noteCount, 0);
 });
+
+test('capture attaches MPE member pitch bend with relative tick_offset', () => {
+  let now = 0;
+  const capture = createMidiPerformanceCapture({
+    now: () => now,
+    composition,
+    originTick: 0,
+    mpeMappingEnabled: true,
+  });
+  capture.start({ atMs: 0 });
+  // Member channel 2 (0-based) = MIDI status 0x92
+  capture.injectMessage([0x92, 60, 100], { atMs: 0 });
+  now = 250;
+  capture.injectMessage([0xe2, 0x00, 0x50], { atMs: now });
+  now = 500;
+  capture.injectMessage([0x82, 60, 0], { atMs: now });
+  const summary = capture.stop({ atMs: now });
+  assert.equal(summary.noteCount, 1);
+  assert.equal(summary.performanceNoteCount, 1);
+  assert.ok(summary.notes[0].pitch_cents?.length >= 1);
+  assert.equal(summary.notes[0].pitch_cents[0].tick_offset, 240);
+  assert.equal(summary.notes[0].velocity, 100);
+  assert.equal(summary.notes[0].velocity_u16, 100 << 9);
+});

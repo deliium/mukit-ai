@@ -61,9 +61,20 @@ test('normalizeMidiInput and listMidiInputs skip disconnected ports', () => {
 
 test('MIDI preference round-trips selected input id', () => {
   const storage = createFakeStorage();
-  assert.deepEqual(readMidiInputPreference(storage), { selectedInputId: null });
+  assert.deepEqual(readMidiInputPreference(storage), {
+    selectedInputId: null,
+    mpeMappingEnabled: false,
+  });
   assert.equal(writeMidiInputPreference({ selectedInputId: 'dev-1' }, storage), true);
-  assert.deepEqual(readMidiInputPreference(storage), { selectedInputId: 'dev-1' });
+  assert.deepEqual(readMidiInputPreference(storage), {
+    selectedInputId: 'dev-1',
+    mpeMappingEnabled: false,
+  });
+  assert.equal(writeMidiInputPreference({ mpeMappingEnabled: true }, storage), true);
+  assert.deepEqual(readMidiInputPreference(storage), {
+    selectedInputId: 'dev-1',
+    mpeMappingEnabled: true,
+  });
   assert.ok(storage.getItem(MIDI_PREF_STORAGE_KEY));
 });
 
