@@ -236,3 +236,11 @@ INFO and DEBUG must not include `body_json`, command payloads, `composition_json
 - No embedded note events and no `composition.v5`.
 - No agent authoring and no `multi-agent-apply` of adaptive scores.
 - No resolution of neural stems, recovery WAVs, or `DATASET_ROOT`.
+
+Asset packs may optionally scaffold one minimal `adaptive.score.v1` **per asset project** from that slot’s adaptive label (material refs only). They never create one adaptive graph spanning multiple pack projects. See [Asset packs](asset-packs.md).
+
+## See also
+
+- [Asset packs](asset-packs.md) — optional per-slot adaptive scaffolds after generate
+- [Adaptive musical context](adaptive-musical-context.md) — external samples → playback commands
+- [Musical universe](musical-universe.md) — shared themes across member projects

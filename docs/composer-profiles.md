@@ -99,8 +99,11 @@ See `.env.example`.
 Wiring `profile_id` / `profile_strength` into Develop, arrangement, or multi-agent
 preview endpoints is intentionally deferred; generate path is the acceptance surface.
 
+Soundtrack **asset packs** soft-condition each slot via pack-side `resolve_profile_merge` into `creative.brief.v1` (not via `AutonomousRunStartV1.profile_id`). See [Asset packs](asset-packs.md).
+
 ## See also
 
 - [Symbolic embeddings](embeddings.md) — per-request musical reference conditioning
 - [Hybrid generation](hybrid-generation.md) — planner + symbolic pipelines
+- [Asset packs](asset-packs.md) — franchise packs that stamp a profile on generate
 - [Project persistence](project-persistence.md) — `PROJECT_DB_PATH` / Alembic

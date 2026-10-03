@@ -95,3 +95,12 @@ Codes you will see, without note text:
 A fingerprint mismatch against the project is `409 project_revision_conflict`. The previous revision stays head.
 
 The offline benchmark can measure this composer as the `v4_autonomous` arm. See [Musical workflow evaluation](workflow-evaluation.md). It reads existing run counters and does not add benchmark columns to `autonomous_runs`.
+
+Soundtrack **asset packs** call this composer once per slot under a shared AssetPackPlan. Pack-side Composer Profile soft merge folds into each slot brief; ship-1 does not add `profile_id` to `AutonomousRunStartV1`. See [Asset packs](asset-packs.md).
+
+## See also
+
+- [Asset packs](asset-packs.md) — multi-project soundtrack packs using autonomous per slot
+- [Multi-agent (V4)](multi-agent.md) — spine preview (still preview-only)
+- [Composer profiles](composer-profiles.md) — soft prefs folded into pack slot briefs
+

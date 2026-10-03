@@ -26,6 +26,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Composition Development**: Continue, add a named section, or vary a range via the Develop tab (`POST /composition/development/preview`); optional **musical reference** conditioning (project/section embedding — affinity, not artist style); 1–4 ephemeral candidates with Compare/Reject/Audition; Apply or Apply-as-branch commits (details: [docs/composition-development.md](docs/composition-development.md))
 - **Musical similarity / embeddings**: Handcrafted symbolic feature embeddings (`local:symbolic-features-v1`) for scoped similarity search and reference provenance; never auto-export projects into training corpora (details: [docs/embeddings.md](docs/embeddings.md))
 - **Composer profiles**: Named durable musical preference documents (`composer.profile.v1`) with Off/Light/Normal/Strong soft conditioning on generate; prompt/hard constraints always win; never copies melodies or writes `DATASET_ROOT` (details: [docs/composer-profiles.md](docs/composer-profiles.md))
+- **Soundtrack asset packs**: One franchise brief → inspectable AssetPackPlan → explicit generate of independent projects (Main Theme, Menu, Combat, …) sharing a Musical Universe + optional Composer Profile + production targets; Agents-tab panel; partial regenerate (details: [docs/asset-packs.md](docs/asset-packs.md))
 - **Reference features**: Select dimension masks (`density`, `texture`, …) and optional preserve/borrow/regenerate policy (with strengths) for generate/develop/edit soft conditioning; derived `reference.features.v1` only — no melody copy (details: [docs/reference-features.md](docs/reference-features.md))
 - **Hybrid generation**: Optional pipeline where the LLM plans (`composition.plan.v1`) and a symbolic composer writes notes; select Hybrid in the Music Generator when a ready `symbolic_composer` is available (details: [docs/hybrid-generation.md](docs/hybrid-generation.md))
 - **Multi-agent (V4)**: Specialized cooperating agents (Creative Director → … → Critic) return typed session artifacts; Apply uses `multi-agent-apply` CAS only (details: [docs/multi-agent.md](docs/multi-agent.md))
@@ -361,6 +362,7 @@ mukit-ai/
 | [Symbolic embeddings](docs/embeddings.md) | Handcrafted musical feature embeddings, similarity, reference conditioning |
 | [Browser WebGPU inference](docs/browser-webgpu-inference.md) | Browser-local symbolic embed twin, WebGPU cosine, public asset policy |
 | [Composer profiles](docs/composer-profiles.md) | Durable preference profiles, soft generate conditioning, derive/promote |
+| [Asset packs](docs/asset-packs.md) | Soundtrack / production packs: brief → AssetPackPlan → multi-project generate |
 | [Reference features](docs/reference-features.md) | Dimension masks + preserve/borrow/regenerate policy for generate/develop/edit |
 | [Composition Arrangement](docs/composition-arrangement.md) | Instrumentation / texture redistribution; catalog + preview + Apply |
 | [Composition Critique](docs/composition-critique.md) | Evaluation engine, strata policy, climax AC, evaluate API |

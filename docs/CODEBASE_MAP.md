@@ -402,6 +402,7 @@ flowchart TD
 - [Composition V2](composition-v2.md) — operational canonical contract
 - [Adaptive score](adaptive-score.md) — non-linear state graph, authoring commands, session playback clock, and the Adaptive tab
 - [Musical universe](musical-universe.md) — shared character themes that reference motif occurrences and reuse them into member projects
+- [Asset packs](asset-packs.md) — franchise brief → AssetPackPlan → multi-project generate with shared Theme A
 - [Derived material graph](derived-material-graph.md) — dependency edges among themes, variations, renders, and other derived assets; an upstream change lists them without rewriting notes
 - [Adaptive music engine](adaptive-music-engine.md) — external session a game calls without the studio
 - [Adaptive music client](adaptive-music-client.md) — Python and TypeScript callers of that session, plus the terminal phase demo

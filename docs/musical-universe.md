@@ -39,3 +39,12 @@ The destination notes land in `tracks[].events[]`. A cross-project placement cre
 A branch mismatch returns `universe_destination_conflict`. A universe revision mismatch returns `musical_universe_conflict`. Either miss leaves the destination score and the usage unwritten.
 
 The Universe tab lists entities, Theme A, variants, and usage, then asks for an explicit reuse into a member project. Opening the tab loads the stored universe. It does not write notes. Reuse stays disabled until the open project is saved.
+
+Soundtrack / production **asset packs** create several member projects from one franchise brief and bind Theme A automatically on generate. See [Asset packs](asset-packs.md).
+
+## See also
+
+- [Asset packs](asset-packs.md) — brief → AssetPackPlan → multi-project generate
+- [Derived material graph](derived-material-graph.md) — theme reuse edges and impact
+- [Composer profiles](composer-profiles.md) — soft conditioning across pack slots
+
