@@ -9,6 +9,7 @@ import { operationSummaryText } from '../utils/operationSummaryText.js';
 import AutonomousComposerPanel from './AutonomousComposerPanel.jsx';
 import FilmScorePanel from './FilmScorePanel.jsx';
 import FilmScoreAdaptPanel from './FilmScoreAdaptPanel.jsx';
+import AssetPackPanel from './AssetPackPanel.jsx';
 
 const WorkflowListeningPanel = lazy(() => import('./WorkflowListeningPanel.jsx'));
 
@@ -172,6 +173,7 @@ const MultiAgentPanel = () => {
       <AutonomousComposerPanel />
       <FilmScorePanel />
       <FilmScoreAdaptPanel />
+      <AssetPackPanel />
       <Suspense fallback={null}>
         <WorkflowListeningPanel />
       </Suspense>
