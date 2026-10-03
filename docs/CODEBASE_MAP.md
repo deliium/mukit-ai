@@ -404,6 +404,7 @@ flowchart TD
 - [Musical universe](musical-universe.md) — shared character themes that reference motif occurrences and reuse them into member projects
 - [Asset packs](asset-packs.md) — franchise brief → AssetPackPlan → multi-project generate with shared Theme A
 - [Derived material graph](derived-material-graph.md) — dependency edges among themes, variations, renders, and other derived assets; an upstream change lists them without rewriting notes
+- [Content provenance](content-provenance.md) — durable `content.provenance.record.v1` lineage + exportable manifest; optional C2PA; soft-fail capture
 - [Adaptive music engine](adaptive-music-engine.md) — external session a game calls without the studio
 - [Adaptive music client](adaptive-music-client.md) — Python and TypeScript callers of that session, plus the terminal phase demo
 - [Composition Analysis](composition-analysis.md) — deterministic sidecar and Analysis tab

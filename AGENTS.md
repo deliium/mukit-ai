@@ -246,6 +246,8 @@ mukit-ai/
 | `backend/app/services/asset_pack_generate.py` | Multi-project generate / regen orchestrator (universe Theme A + reuse) |
 | `backend/app/asset_pack_schemas.py` | `asset.pack.*.v1` DTOs (non-playable; no note keys) |
 | `backend/app/routers/musical_dependency.py` | Theme impact, dependency graph, and edge-only fingerprint refresh. These routes do not write notes |
+| `backend/app/routers/content_provenance.py` | Chain/manifest/status/credentials for `content.provenance.*.v1`. Downloads never insert; not on `/ready` |
+| `backend/app/services/content_provenance_store.py` | SQLite provenance DAG; soft-fail capture in `content_provenance_capture` |
 | `backend/app/routers/adaptive_engine.py` | External `/adaptive/*` session for one stored score: HTTP commands plus events and status sockets. Does not write the score |
 | `clients/python/src/mukit_adaptive/client.py` | Synchronous client for that public surface. Does not import `backend/app` or `frontend/src` |
 | `clients/python/src/mukit_adaptive/demo.py` | `python -m mukit_adaptive.demo` terminal phase loop |
@@ -423,6 +425,7 @@ mukit-ai/
 | Musical universe | `docs/musical-universe.md` | `musical.universe.v1` shared by member projects. Themes reference motif occurrences. Explicit reuse writes destination `composition.v2` notes. `ai_agents/` does not import `musical_universe_store` |
 | Asset packs | `docs/asset-packs.md` | `asset.pack.plan.v1` then multi-project generate; shared universe + profile soft merge + production targets; partial regen. `ai_agents/` does not import pack stores |
 | Derived material graph | `docs/derived-material-graph.md` | `musical.dependency.edge.v1` rows for motifs, themes, arrangements, variations, renders, transcriptions, and reference conditioning. Impact lists stale dependents and does not rewrite them. `ai_agents/` does not import `musical_dependency_store` |
+| Content provenance | `docs/content-provenance.md` | Durable `content.provenance.record.v1` DAG + exportable manifest; optional C2PA; honesty that internal metadata is not cryptographic. Soft-fail capture (unlike dependency hard-fail). `ai_agents/` does not import provenance stores |
 | Adaptive musical context | `docs/adaptive-musical-context.md` | Flat external samples mapped onto a closed context; hysteresis emits existing playback commands |
 | Adaptive runtime continuation | `docs/adaptive-runtime-continuation.md` | Session buffer ahead of playback; the clock does not await the model |
 | Adaptive music engine | `docs/adaptive-music-engine.md` | External `/adaptive/*` session, bearer-or-loopback auth, and context backpressure. `ai_agents/` does not import the engine modules |

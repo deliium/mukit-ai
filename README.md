@@ -356,6 +356,8 @@ mukit-ai/
 | [Audio recovery](docs/audio-recovery.md) | V4 mixed audio → separation/scaffolding → Apply→Bind overlay |
 | [Audio↔symbolic alignment](docs/audio-symbolic-alignment.md) | Bar↔source seek, waveform sync, stale renders, provenance |
 | [Neural audio rendering](docs/neural-audio-rendering.md) | Optional generative/neural instrument jobs; fidelity labels; Compose profile |
+| [Derived material graph](docs/derived-material-graph.md) | Explicit musical dependency edges; impact lists stale dependents without rewriting notes |
+| [Content provenance](docs/content-provenance.md) | Durable derivation chain + exportable manifest; optional C2PA honesty |
 | [Mix analysis](docs/mix-analysis.md) | DSP measurements + observations over neural stem/mix WAVs; soft-stale banners |
 | [AI-assisted mixing](docs/ai-assisted-mixing.md) | Preview, compare, and apply non-destructive mix revisions |
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |
