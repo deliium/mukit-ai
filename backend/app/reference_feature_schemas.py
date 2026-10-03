@@ -119,6 +119,7 @@ REFERENCE_FEATURE_ERROR_CODES: dict[str, str] = {
     "reference_feature_cap_exceeded": "A configured reference-features cap was exceeded.",
     "reference_feature_forbidden_payload": "Payload contains forbidden playable, vector, or identity fields.",
     "reference_feature_dataset_forbidden": "Reference feature analysis must not write to DATASET_ROOT.",
+    "rights_reference_refused": "This source is not eligible for reference analysis.",
     # reference.conditioning.policy.v1 (shared mapper)
     "reference_conditioning_partition_overlap": (
         "A dimension appears in more than one of preserve, borrow, or regenerate."
@@ -147,6 +148,7 @@ ReferenceFeatureErrorCode = Literal[
     "reference_feature_cap_exceeded",
     "reference_feature_forbidden_payload",
     "reference_feature_dataset_forbidden",
+    "rights_reference_refused",
     "reference_conditioning_partition_overlap",
     "reference_conditioning_borrow_dimension_conflict",
     "reference_conditioning_preserve_without_source",
@@ -469,6 +471,8 @@ class ReferenceFeatureAnalyzeRequest(StrictModel):
     requested_dimensions: list[DimensionId] | None = Field(default=None, max_length=32)
     compare_to: ReferenceFeatureCompareTarget | None = None
     import_origin: ImportOrigin | None = None
+    # Part K attestation when no studio registry row exists (legacy DatasetProvenance).
+    rights: dict[str, Any] | None = None
 
     @model_validator(mode="before")
     @classmethod

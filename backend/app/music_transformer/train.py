@@ -30,6 +30,10 @@ from app.music_transformer.data import (
 )
 from app.music_transformer.device import resolve_device
 from app.music_transformer.errors import MusicTransformerTrainError
+from app.music_transformer.rights_gate import (
+    verify_train_paths_against_rights,
+    write_model_data_manifest,
+)
 from app.music_transformer.experiment_schemas import MusicTransformerExperimentV1
 from app.music_transformer.experiments import (
     ExperimentPaths,
@@ -142,6 +146,12 @@ def train_model(
     )
     out = Path(out_checkpoint)
     save_checkpoint(out, model, card, optimizer=optimizer)
+    rights_manifest = getattr(train_config, "_rights_model_data_manifest", None)
+    if rights_manifest is not None:
+        write_model_data_manifest(
+            out.parent / "model.data.provenance.manifest.json",
+            rights_manifest,
+        )
     logger.info(
         "Training complete",
         extra={
@@ -209,6 +219,12 @@ def train_experiment(
         inputs=inputs,
         val_inputs=val_inputs,
     )
+    rights_manifest = getattr(train_cfg, "_rights_model_data_manifest", None)
+    if rights_manifest is not None:
+        write_model_data_manifest(
+            Path(paths.root) / "model.data.provenance.manifest.json",
+            rights_manifest,
+        )
     model = MusicTransformerLM(arch).to(resolved)
     optimizer = build_optimizer(model, train_cfg)
     scheduler = build_scheduler(optimizer, train_cfg)
@@ -382,6 +398,13 @@ def _load_corpora(
     # If split manifest missing, collect_input_paths already fell back to all examples
     if not train_paths and inputs:
         train_paths = list(inputs)
+    if dataset_dir is not None:
+        model_data_manifest = verify_train_paths_against_rights(
+            Path(dataset_dir),
+            list(train_paths),
+        )
+        # Stash on config object for callers that write experiment/checkpoint siblings.
+        setattr(train_config, "_rights_model_data_manifest", model_data_manifest)
     train_examples = load_encoded_corpus(
         train_paths,
         config=tok_cfg,

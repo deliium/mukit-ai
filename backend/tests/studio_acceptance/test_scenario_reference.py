@@ -47,6 +47,7 @@ def test_reference_melody_is_not_copied(
             "composition": reference,
             "requested_dimensions": ["melodic_contour"],
             "scope": {"kind": "composition"},
+            "rights": {"status": "user_owned", "user_owned_attested": True},
         },
     )
     assert analyzed.status_code == 200, analyzed.text

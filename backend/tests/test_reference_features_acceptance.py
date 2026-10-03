@@ -24,6 +24,8 @@ from app.services.reference_feature_condition import (
     resolve_reference_feature_conditioning,
 )
 
+_ATTESTED_RIGHTS = {"status": "user_owned", "user_owned_attested": True}
+
 FIXTURE = (
     Path(__file__).resolve().parents[1]
     / "app"
@@ -65,6 +67,7 @@ def test_analyze_density_texture_ok(composition_dict):
         ReferenceFeatureAnalyzeRequest(
             composition=composition_dict,
             requested_dimensions=["density", "texture"],
+            rights=_ATTESTED_RIGHTS,
         )
     )
     assert set(report.dimensions) == {"density", "texture"}
@@ -83,6 +86,7 @@ def test_analyze_http_route(client, composition_dict):
             "composition": composition_dict,
             "requested_dimensions": ["density", "texture"],
             "scope": {"kind": "composition"},
+            "rights": _ATTESTED_RIGHTS,
         },
     )
     assert response.status_code == 200
@@ -104,6 +108,7 @@ def test_analyze_with_compare_to_affinity(client, composition_dict):
         json={
             "composition": composition_dict,
             "requested_dimensions": ["density", "melodic_contour"],
+            "rights": _ATTESTED_RIGHTS,
             "compare_to": {
                 "composition": composition_dict,
                 "scope": {"kind": "composition"},
@@ -226,6 +231,7 @@ def test_composition_unchanged_by_analyze(composition_dict):
         ReferenceFeatureAnalyzeRequest(
             composition=composition_dict,
             requested_dimensions=["density", "texture", "melodic_contour"],
+            rights=_ATTESTED_RIGHTS,
         )
     )
     after = json.dumps(composition_dict, sort_keys=True)

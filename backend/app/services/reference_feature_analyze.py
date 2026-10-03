@@ -80,8 +80,15 @@ _ANTI_MELODY_LINE = (
 
 def analyze_reference_features(
     request: ReferenceFeatureAnalyzeRequest,
+    *,
+    enforce_rights: bool = True,
 ) -> ReferenceFeaturesV1:
-    """Analyze a musical reference into a derived feature report (no V2 writeback)."""
+    """Analyze a musical reference into a derived feature report (no V2 writeback).
+
+    ``enforce_rights`` defaults on for HTTP analyze. Internal preserve/borrow
+    assembly over the working composition may pass ``False`` and gate project
+    bindings separately.
+    """
     started = time.perf_counter()
     settings = load_reference_feature_settings()
     requested = normalize_requested_dimensions(
@@ -109,6 +116,15 @@ def analyze_reference_features(
             http_status=404 if code == "reference_feature_not_found" else 422,
             details=getattr(exc, "details", {}) or {},
         ) from exc
+
+    if enforce_rights:
+        from app.services.reference_rights_gate import assert_reference_rights_allowed
+
+        assert_reference_rights_allowed(
+            project_id=request.project_id,
+            revision_id=request.revision_id,
+            rights=request.rights,
+        )
 
     fingerprint = composition_source_fingerprint(composition)
     if (
@@ -260,7 +276,8 @@ def analyze_reference_features_from_composition(
             requested_dimensions=requested_dimensions,
             import_origin=import_origin,
         )
-    return analyze_reference_features(request)
+    # In-process conditioning helper: callers gate named project sources separately.
+    return analyze_reference_features(request, enforce_rights=False)
 
 
 def _build_source(

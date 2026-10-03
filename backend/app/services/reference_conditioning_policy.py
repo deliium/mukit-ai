@@ -427,7 +427,8 @@ def _summarize_preserve_dimensions(
         scope=scope,
         requested_dimensions=dimensions,
     )
-    report = analyze_reference_features(analyze_req)
+    # Working-composition preserve is session-local; rights gate is for named sources.
+    report = analyze_reference_features(analyze_req, enforce_rights=False)
     lines: list[str] = []
     applied: list[str] = []
     warnings: list[str] = []
@@ -460,6 +461,14 @@ def _strength_tagged_masked_binding(
     dim_strengths: dict[str, str],
     summary_max_chars: int,
 ) -> tuple[list[str], dict[str, Any], list[str], list[str], list[dict[str, str]]]:
+    if binding.project_id:
+        from app.services.reference_rights_gate import assert_reference_rights_allowed
+
+        assert_reference_rights_allowed(
+            project_id=binding.project_id,
+            revision_id=binding.revision_id,
+            rights=None,
+        )
     analyze_req = ReferenceFeatureAnalyzeRequest(
         project_id=binding.project_id,
         revision_id=binding.revision_id,
@@ -468,7 +477,7 @@ def _strength_tagged_masked_binding(
         expected_fingerprint=binding.expected_fingerprint,
         requested_dimensions=dims,
     )
-    report = analyze_reference_features(analyze_req)
+    report = analyze_reference_features(analyze_req, enforce_rights=False)
 
     lines: list[str] = []
     applied: list[str] = []

@@ -248,6 +248,14 @@ def _masked_binding(
     dims: list[DimensionId],
     summary_max_chars: int,
 ) -> tuple[str, dict[str, Any], list[str], list[str]]:
+    if binding.project_id:
+        from app.services.reference_rights_gate import assert_reference_rights_allowed
+
+        assert_reference_rights_allowed(
+            project_id=binding.project_id,
+            revision_id=binding.revision_id,
+            rights=None,
+        )
     analyze_req = ReferenceFeatureAnalyzeRequest(
         project_id=binding.project_id,
         revision_id=binding.revision_id,
@@ -257,7 +265,7 @@ def _masked_binding(
         requested_dimensions=dims,
     )
     try:
-        report = analyze_reference_features(analyze_req)
+        report = analyze_reference_features(analyze_req, enforce_rights=False)
     except ReferenceFeatureError:
         raise
     except (ReferenceResolveError, EmbeddingError) as exc:
