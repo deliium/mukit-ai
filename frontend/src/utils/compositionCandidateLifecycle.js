@@ -436,3 +436,99 @@ export function aiRuntimeFieldsFromResponse(response) {
     fallbackApplied: Boolean(response.fallback_applied),
   };
 }
+
+/**
+ * Project an ensemble survivor into the generate-apply candidate envelope.
+ * Does not call Apply — suggestion never writes the working score.
+ *
+ * @param {object} params
+ * @param {object} params.survivor - ensemble.candidate.v1 row
+ * @param {object|null|undefined} params.report - ensemble.arbitration.v1
+ * @param {object|null|undefined} params.workingComposition
+ * @param {object|null|undefined} params.promptSnapshot
+ */
+export async function stageEnsembleSurvivorAsGenerationCandidate({
+  survivor,
+  report = null,
+  workingComposition = null,
+  promptSnapshot = null,
+} = {}) {
+  if (!survivor || typeof survivor !== 'object' || !survivor.composition) {
+    throw new Error('Ensemble survivor composition is required');
+  }
+  const provenance = survivor.provenance && typeof survivor.provenance === 'object'
+    ? survivor.provenance
+    : {};
+  const policy = report?.policy && typeof report.policy === 'object' ? report.policy : {};
+  const siblingModelIds = Array.isArray(policy.model_ids) ? policy.model_ids : [];
+  const seed = provenance.seed ?? policy.base_seed ?? null;
+  const modelId = provenance.model_id || null;
+  const generationParameters = {
+    provenance_schema: 'generation.provenance.v1',
+    pipeline_id: 'ensemble_arbitration',
+    seed,
+    strategy: provenance.strategy || policy.strategy || 'parallel_once',
+    attempt_ordinal: provenance.attempt_ordinal ?? null,
+    ensemble_candidate_id: survivor.candidate_id || null,
+    sibling_model_ids: siblingModelIds,
+    suggested_candidate_id: report?.suggested_candidate_id || null,
+    musical_quality_claim: false,
+    critic_is_subjective_layer: true,
+    ranking_is_preference_not_quality: true,
+    ranking_applied: Boolean(report?.ranking_applied),
+    stages: [
+      {
+        operation: 'ensemble_symbolic_compose',
+        model_id: modelId,
+        capability: 'symbolic_composer',
+        runtime: provenance.runtime || null,
+        model_version: provenance.model_version || null,
+        seed,
+      },
+    ],
+  };
+  const sourceFingerprint = await fingerprintCompositionOrNull(workingComposition);
+  const candidateFingerprint = await compositionEditFingerprint(survivor.composition);
+  console.debug('[ensemble] stage survivor', {
+    candidateId: survivor.candidate_id || null,
+    suggestedId: report?.suggested_candidate_id || null,
+    modelId,
+    suggestedEqualsSelected: Boolean(
+      report?.suggested_candidate_id
+      && survivor.candidate_id
+      && report.suggested_candidate_id === survivor.candidate_id,
+    ),
+  });
+  return buildAiCandidateEnvelope({
+    candidateId: survivor.candidate_id || makeAiCandidateId('ens'),
+    operationType: 'generate-apply',
+    composition: survivor.composition,
+    sourceFingerprint,
+    candidateFingerprint,
+    provider: 'ensemble',
+    model: modelId,
+    modelId,
+    modelVersion: provenance.model_version || null,
+    runtime: provenance.runtime || null,
+    capability: 'symbolic_composer',
+    operation: 'generate-apply',
+    generationParameters,
+    resolvedModelId: modelId,
+    instruction: promptSnapshot?.instructions || null,
+    warnings: [
+      'ensemble_arbitration_preview',
+      'preference_critic_not_musical_truth',
+    ],
+    extras: {
+      prompt: promptSnapshot || null,
+      pipeline_id: 'ensemble_arbitration',
+      seed,
+      stages: generationParameters.stages,
+      ensemble_report_honesty: {
+        musical_quality_claim: false,
+        critic_is_subjective_layer: true,
+        ranking_is_preference_not_quality: true,
+      },
+    },
+  });
+}

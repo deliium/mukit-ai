@@ -2,6 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { fetchAiModels, generateLlmMusicJson } from '../api/musicApi.js';
 import { listComposerProfiles } from '../api/composerProfileApi.js';
+import {
+  getEnsembleArbitrationStatus,
+  getEnsembleArbitrationStrategies,
+  previewEnsembleArbitration,
+} from '../api/ensembleArbitrationApi.js';
 import { buildLlmRequest } from '../utils/llmGenerateRequest.js';
 import { buildStyleReferenceFromMusicalReference } from '../utils/compositionEmbeddingReference.js';
 import {
@@ -9,6 +14,13 @@ import {
   collectMultiRefBorrowRows,
   loadConditioningSession,
 } from '../utils/referenceConditioningPolicy.js';
+import { stageEnsembleSurvivorAsGenerationCandidate } from '../utils/compositionCandidateLifecycle.js';
+import {
+  buildEnsemblePreviewRequest,
+  clampEnsembleModelIds,
+  clampEnsembleTopN,
+  normalizeEnsembleSelectionMode,
+} from '../utils/ensembleArbitrationForm.js';
 import ComposerWorkspace from './ComposerWorkspace.jsx';
 import ImportControls from './ImportControls.jsx';
 import ProjectComposerBar from './ProjectComposerBar.jsx';
@@ -199,6 +211,9 @@ const MusicGenerator = () => {
   const refreshGenerationComparison = useMusicStore((state) => state.refreshGenerationComparison);
   const rejectGenerationCandidate = useMusicStore((state) => state.rejectGenerationCandidate);
   const applyGenerationCandidate = useMusicStore((state) => state.applyGenerationCandidate);
+  const installEnsembleGenerationCandidate = useMusicStore(
+    (state) => state.installEnsembleGenerationCandidate,
+  );
   const currentProjectId = useMusicStore((state) => state.currentProjectId);
   const composerProfileId = useMusicStore((state) => state.composerProfileId);
   const composerProfileStrength = useMusicStore((state) => state.composerProfileStrength);
@@ -227,6 +242,16 @@ const MusicGenerator = () => {
   const [symbolicModels, setSymbolicModels] = useState([]);
   const [composerModelId, setComposerModelId] = useState('');
   const [lastProvenance, setLastProvenance] = useState(null);
+  const [ensembleEnabled, setEnsembleEnabled] = useState(false);
+  const [ensembleModeOn, setEnsembleModeOn] = useState(false);
+  const [ensembleMaxModels, setEnsembleMaxModels] = useState(3);
+  const [ensembleModelIds, setEnsembleModelIds] = useState([]);
+  const [ensembleSelectionMode, setEnsembleSelectionMode] = useState('human');
+  const [ensembleTopN, setEnsembleTopN] = useState(2);
+  const [ensembleBusy, setEnsembleBusy] = useState(false);
+  const [ensembleError, setEnsembleError] = useState('');
+  const [ensembleReport, setEnsembleReport] = useState(null);
+  const [ensembleSelectedId, setEnsembleSelectedId] = useState('');
   const startedAtRef = useRef(null);
 
   useEffect(() => {
@@ -263,6 +288,19 @@ const MusicGenerator = () => {
         setSymbolicModels([]);
         setSymbolicReady(false);
       });
+    // Status/strategies only — never start ensemble fan-out on open.
+    Promise.all([
+      getEnsembleArbitrationStatus().catch(() => null),
+      getEnsembleArbitrationStrategies().catch(() => null),
+    ]).then(([status]) => {
+      if (cancelled || !status) return;
+      setEnsembleEnabled(Boolean(status.enabled));
+      setEnsembleMaxModels(Number(status.max_models) || 3);
+      console.debug('[MusicGenerator] Ensemble status', {
+        enabled: Boolean(status.enabled),
+        maxModels: status.max_models,
+      });
+    });
     return () => {
       cancelled = true;
     };
@@ -286,6 +324,91 @@ const MusicGenerator = () => {
     }, 1000);
     return () => clearInterval(timer);
   }, [generationStatus]);
+
+  const toggleEnsembleModel = (modelId) => {
+    setEnsembleModelIds((current) => {
+      const next = current.includes(modelId)
+        ? current.filter((id) => id !== modelId)
+        : [...current, modelId];
+      return clampEnsembleModelIds(next, ensembleMaxModels);
+    });
+  };
+
+  const handleRunEnsemble = async () => {
+    setEnsembleError('');
+    const built = buildEnsemblePreviewRequest({
+      modelIds: ensembleModelIds,
+      selectionMode: ensembleSelectionMode,
+      topN: ensembleTopN,
+      baseSeed: hybridSeed === '' ? 0 : Number(hybridSeed),
+      maxModels: ensembleMaxModels,
+      prompt,
+    });
+    if (!built.ok) {
+      setEnsembleError(built.message);
+      return;
+    }
+    setEnsembleBusy(true);
+    try {
+      const report = await previewEnsembleArbitration(built.request);
+      setEnsembleReport(report);
+      const suggested = report?.suggested_candidate_id || '';
+      const firstId = report?.candidates?.[0]?.candidate_id || '';
+      setEnsembleSelectedId(
+        normalizeEnsembleSelectionMode(ensembleSelectionMode) === 'human'
+          ? (firstId || '')
+          : (suggested || firstId || ''),
+      );
+      console.debug('[MusicGenerator] Ensemble preview', {
+        suggestedId: suggested || null,
+        survivorCount: report?.candidates?.length || 0,
+        rejectedCount: report?.rejected_attempts?.length || 0,
+      });
+    } catch (error) {
+      setEnsembleReport(null);
+      setEnsembleSelectedId('');
+      setEnsembleError(error?.message || 'Ensemble preview failed');
+    } finally {
+      setEnsembleBusy(false);
+    }
+  };
+
+  const handleStageEnsembleSurvivor = async ({ applyAfter = false } = {}) => {
+    if (!ensembleReport || !ensembleSelectedId) {
+      setEnsembleError('Select an ensemble survivor before staging.');
+      return;
+    }
+    const survivor = (ensembleReport.candidates || []).find(
+      (item) => item.candidate_id === ensembleSelectedId,
+    );
+    if (!survivor) {
+      setEnsembleError('Selected ensemble survivor is missing.');
+      return;
+    }
+    setApplyBusy(true);
+    setEnsembleError('');
+    try {
+      const envelope = await stageEnsembleSurvivorAsGenerationCandidate({
+        survivor,
+        report: ensembleReport,
+        workingComposition: editedMusicJson,
+        promptSnapshot: prompt,
+      });
+      const installed = await installEnsembleGenerationCandidate(envelope);
+      if (!installed) {
+        setEnsembleError('Could not stage ensemble survivor.');
+        return;
+      }
+      // Suggestion never auto-Applies — only explicit Apply does.
+      if (applyAfter) {
+        await applyGenerationCandidate();
+      }
+    } catch (error) {
+      setEnsembleError(error?.message || 'Ensemble stage failed');
+    } finally {
+      setApplyBusy(false);
+    }
+  };
 
   const handleGenerateLlmJson = async () => {
     if (!availableLlmModels.length) {
@@ -504,6 +627,158 @@ const MusicGenerator = () => {
                 onChange={(event) => setHybridSeed(event.target.value)}
               />
             </FormGroup>
+          ) : null}
+
+          {pipeline === 'hybrid_plan_symbolic' && ensembleEnabled ? (
+            <div data-testid="ensemble-arbitration-panel" style={{ marginBottom: 14 }}>
+              <FormGroup>
+                <Label htmlFor="ensembleModeToggle">
+                  <input
+                    id="ensembleModeToggle"
+                    data-testid="ensemble-mode-toggle"
+                    type="checkbox"
+                    checked={ensembleModeOn}
+                    disabled={generating || ensembleBusy}
+                    onChange={(event) => setEnsembleModeOn(event.target.checked)}
+                    style={{ marginRight: 8 }}
+                  />
+                  Ensemble mode (multi-model preview)
+                </Label>
+              </FormGroup>
+              {ensembleModeOn ? (
+                <>
+                  <StatusMessage className="info" data-testid="ensemble-honesty-banner">
+                    Preference and critic scores are not musical truth. Suggested
+                    does not Apply — pick a survivor and commit explicitly.
+                  </StatusMessage>
+                  <FormGroup>
+                    <Label>Symbolic models (2–{ensembleMaxModels})</Label>
+                    <div data-testid="ensemble-model-multiselect">
+                      {symbolicModels.map((model) => (
+                        <label
+                          key={model.id}
+                          style={{ display: 'block', fontSize: '0.9rem', marginBottom: 4 }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={ensembleModelIds.includes(model.id)}
+                            disabled={generating || ensembleBusy}
+                            onChange={() => toggleEnsembleModel(model.id)}
+                            style={{ marginRight: 8 }}
+                          />
+                          {model.display_name || model.id}
+                        </label>
+                      ))}
+                    </div>
+                  </FormGroup>
+                  <ParameterGrid>
+                    <FormGroup>
+                      <Label htmlFor="ensembleSelectionMode">Selection mode</Label>
+                      <Select
+                        id="ensembleSelectionMode"
+                        data-testid="ensemble-selection-mode"
+                        value={ensembleSelectionMode}
+                        disabled={generating || ensembleBusy}
+                        onChange={(event) => setEnsembleSelectionMode(
+                          normalizeEnsembleSelectionMode(event.target.value),
+                        )}
+                      >
+                        <option value="human">Human pick</option>
+                        <option value="auto_suggest">Auto suggest</option>
+                        <option value="top_n">Top-N list</option>
+                      </Select>
+                    </FormGroup>
+                    <FormGroup>
+                      <Label htmlFor="ensembleTopN">Top-N</Label>
+                      <Input
+                        id="ensembleTopN"
+                        data-testid="ensemble-top-n"
+                        type="number"
+                        min="1"
+                        max={ensembleMaxModels}
+                        value={ensembleTopN}
+                        disabled={generating || ensembleBusy || ensembleSelectionMode !== 'top_n'}
+                        onChange={(event) => setEnsembleTopN(
+                          clampEnsembleTopN(event.target.value, ensembleMaxModels),
+                        )}
+                      />
+                    </FormGroup>
+                  </ParameterGrid>
+                  <Button
+                    type="button"
+                    data-testid="ensemble-run"
+                    disabled={generating || ensembleBusy || ensembleModelIds.length < 2}
+                    onClick={handleRunEnsemble}
+                  >
+                    {ensembleBusy ? 'Running ensemble…' : 'Run ensemble preview'}
+                  </Button>
+                  {ensembleError ? (
+                    <StatusMessage className="error" data-testid="ensemble-error">
+                      {ensembleError}
+                    </StatusMessage>
+                  ) : null}
+                  {ensembleReport ? (
+                    <div data-testid="ensemble-results" style={{ marginTop: 10 }}>
+                      {ensembleReport.suggested_candidate_id ? (
+                        <StatusMessage className="info" data-testid="ensemble-suggested">
+                          Suggested (not Applied): {ensembleReport.suggested_candidate_id}
+                        </StatusMessage>
+                      ) : null}
+                      {(ensembleReport.rejected_attempts || []).length ? (
+                        <StatusMessage className="info" data-testid="ensemble-rejected">
+                          Rejected:{' '}
+                          {(ensembleReport.rejected_attempts || [])
+                            .map((item) => `${item.model_id} (${item.stage}/${item.code})`)
+                            .join('; ')}
+                        </StatusMessage>
+                      ) : null}
+                      {(ensembleReport.candidates || []).map((candidate) => (
+                        <label
+                          key={candidate.candidate_id}
+                          data-testid={`ensemble-candidate-${candidate.candidate_id}`}
+                          style={{ display: 'block', marginBottom: 6, fontSize: '0.9rem' }}
+                        >
+                          <input
+                            type="radio"
+                            name="ensemble-survivor"
+                            checked={ensembleSelectedId === candidate.candidate_id}
+                            onChange={() => setEnsembleSelectedId(candidate.candidate_id)}
+                            style={{ marginRight: 8 }}
+                          />
+                          {candidate.provenance?.model_id || candidate.candidate_id}
+                          {candidate.candidate_id === ensembleReport.suggested_candidate_id
+                            ? ' · suggested'
+                            : ''}
+                          {candidate.critic?.finding_count != null
+                            ? ` · critic findings ${candidate.critic.finding_count}`
+                            : ''}
+                        </label>
+                      ))}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        <Button
+                          type="button"
+                          data-testid="ensemble-stage"
+                          style={{ width: 'auto', marginTop: 0, background: '#475569' }}
+                          disabled={applyBusy || !ensembleSelectedId}
+                          onClick={() => handleStageEnsembleSurvivor({ applyAfter: false })}
+                        >
+                          Stage selected
+                        </Button>
+                        <Button
+                          type="button"
+                          data-testid="ensemble-apply-selected"
+                          style={{ width: 'auto', marginTop: 0, background: '#059669' }}
+                          disabled={applyBusy || !ensembleSelectedId}
+                          onClick={() => handleStageEnsembleSurvivor({ applyAfter: true })}
+                        >
+                          Apply selected
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
           ) : null}
 
           {lastProvenance?.stages?.length ? (

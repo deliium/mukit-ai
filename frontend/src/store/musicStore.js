@@ -1914,6 +1914,38 @@ export const useMusicStore = create((set, get) => ({
     return true;
   },
 
+  installEnsembleGenerationCandidate: async (envelope) => {
+    if (!envelope || typeof envelope !== 'object' || !envelope.composition) {
+      return false;
+    }
+    const started = await get().startGeneration();
+    if (!started) {
+      return false;
+    }
+    const capture = get().generationRequestCapture;
+    const candidate = {
+      ...envelope,
+      status: AI_CANDIDATE_STATUS.READY,
+      source_fingerprint: capture?.sourceFingerprint || envelope.source_fingerprint,
+      operation_type: 'generate-apply',
+    };
+    console.info('[musicStore] Ensemble generation candidate staged', {
+      ...aiCandidateLogFields(candidate),
+      pipelineId: candidate.pipeline_id || null,
+      seed: candidate.seed ?? null,
+    });
+    set({
+      generationCandidate: candidate,
+      generationAuditionActive: false,
+      generationCompareResult: null,
+      generationStatus: 'success',
+      uiError: '',
+      warnings: Array.isArray(candidate.warnings) ? candidate.warnings : [],
+      generatedMusicJson: candidate.composition,
+    });
+    return true;
+  },
+
   completeGeneration: async ({
     music,
     musicxml,
