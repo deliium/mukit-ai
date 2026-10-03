@@ -48,6 +48,7 @@ ENGINE_ERROR_CODES: frozenset[str] = frozenset(
         "engine_superseded",
         "engine_playback_stopped",
         "engine_clock_not_owned",
+        "adaptive_engine_continuous_disabled",
     }
 )
 
@@ -78,6 +79,7 @@ ENGINE_ERROR_MESSAGES: dict[str, str] = {
     "engine_superseded": "A newer engine command replaced this request.",
     "engine_playback_stopped": "Adaptive playback is not running for this session.",
     "engine_clock_not_owned": "This engine session does not advance the playback clock.",
+    "adaptive_engine_continuous_disabled": "Adaptive engine continuous maintain is disabled.",
 }
 
 ENGINE_ERROR_STATUS: dict[str, int] = {
@@ -98,6 +100,7 @@ ENGINE_ERROR_STATUS: dict[str, int] = {
     "engine_superseded": 409,
     "engine_playback_stopped": 409,
     "engine_clock_not_owned": 409,
+    "adaptive_engine_continuous_disabled": 422,
 }
 
 EngineClockOwner = Literal["engine", "existing"]
@@ -164,6 +167,7 @@ class AdaptiveEngineErrorV1(_Strict):
         "engine_superseded",
         "engine_playback_stopped",
         "engine_clock_not_owned",
+        "adaptive_engine_continuous_disabled",
     ]
     message: str = Field(min_length=1, max_length=200)
     session_id: str | None = None
@@ -217,6 +221,8 @@ class AdaptiveEngineSessionV1(_Strict):
     warnings: list[str] = Field(default_factory=list, max_length=8)
     document_revision: int = Field(ge=1)
     context_attached: bool
+    continuous_enabled: bool = False
+    engine_continuous_enabled: bool = False
     telemetry: AdaptiveEngineTelemetryV1
 
     @field_validator("bar", "beat", "document_revision", mode="before")

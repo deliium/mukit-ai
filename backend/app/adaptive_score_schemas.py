@@ -130,6 +130,8 @@ ADAPTIVE_SCORE_ERROR_CODES: dict[str, str] = {
     "realization_invalid": "The transition realization cannot be scheduled.",
     "transition_request_not_pending": "That transition request is not the current pending request.",
     "playback_not_running": "Adaptive playback is not running for this score.",
+    "adaptive_continuous_disabled": "Continuous generative music is disabled.",
+    "adaptive_engine_continuous_disabled": "Adaptive engine continuous maintain is disabled.",
 }
 
 

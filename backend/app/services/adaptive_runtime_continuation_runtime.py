@@ -14,6 +14,7 @@ from app.adaptive_runtime_continuation_schemas import (
     AdaptiveRuntimeBufferV1,
     AdaptiveRuntimeContinuationV1,
 )
+from app.adaptive_runtime_music_state_schemas import AdaptiveRuntimeMusicStateV1
 from app.composition_plan_schemas import CompositionPlan
 from app.composition_schemas import CompositionV2
 
@@ -56,6 +57,10 @@ class HeldContinuation:
     job: ContinuationJob | None = None
     active_job_id: str | None = None
     session_revision: int = 1
+    continuous: bool = False
+    music_state: AdaptiveRuntimeMusicStateV1 | None = None
+    last_applied_digest: str | None = None
+    seed_bump: int = 0
     _guard: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 

@@ -621,9 +621,19 @@ async def start_project_continuation(
     enforce_current(project_id, "read")
     try:
         request = parse_adaptive_runtime_continuation_start(body)
+        logger.info(
+            "Adaptive runtime continuation start",
+            extra={
+                "code": "continuation_start",
+                "project_id": project_id,
+                "score_id": score_id,
+                "continuous": request.continuous,
+                "mode": request.mode,
+            },
+        )
         return start_adaptive_runtime_continuation(project_id, score_id, request)
     except AdaptiveScoreError as exc:
-        logger.debug(
+        logger.info(
             "Adaptive runtime continuation rejected",
             extra={"code": exc.code, "project_id": project_id, "score_id": score_id},
         )

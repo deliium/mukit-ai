@@ -32,6 +32,14 @@ from app.adaptive_engine_schemas import (
 from app.adaptive_musical_context_schemas import AdaptiveContextExternalV1
 from app.adaptive_score_schemas import log_adaptive_schema_failure
 from app.services.adaptive_engine_auth import authorize_engine_request
+from app.adaptive_runtime_continuation_schemas import (
+    AdaptiveRuntimeBufferV1,
+    AdaptiveRuntimeContinuationV1,
+)
+from app.services.adaptive_engine_continuous import (
+    get_engine_continuous_buffer,
+    maintain_engine_continuous,
+)
 from app.services.adaptive_engine_service import (
     command_engine_context,
     command_engine_event,
@@ -205,6 +213,55 @@ def post_event(
     if not isinstance(body, (AdaptiveEngineStingerEventV1, AdaptiveEngineCueEventV1)):
         raise _http_error(AdaptiveEngineError("engine_payload_invalid"))
     return _invoke(lambda: command_engine_event(session_id, body))
+
+
+@router.post(
+    "/adaptive/session/{session_id}/continuous/maintain",
+    response_model=AdaptiveRuntimeContinuationV1,
+    responses={
+        401: {"model": AdaptiveEngineErrorV1},
+        404: {"model": AdaptiveEngineErrorV1},
+        422: {"model": AdaptiveEngineErrorV1},
+    },
+)
+async def post_continuous_maintain(
+    session_id: str,
+    _: Annotated[None, Depends(require_engine_access)],
+) -> AdaptiveRuntimeContinuationV1:
+    """Opt-in continuous maintain. Not auto-armed on engine start. Not on /ready."""
+    logger.info(
+        "Adaptive engine continuous maintain",
+        extra={
+            "code": "engine_continuous_maintain",
+            "session_id": session_id if session_id.startswith("aeng_") else "invalid",
+        },
+    )
+    try:
+        return maintain_engine_continuous(session_id)
+    except AdaptiveEngineError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get(
+    "/adaptive/session/{session_id}/continuous/buffer",
+    response_model=AdaptiveRuntimeBufferV1,
+    responses={
+        401: {"model": AdaptiveEngineErrorV1},
+        404: {"model": AdaptiveEngineErrorV1},
+        422: {"model": AdaptiveEngineErrorV1},
+    },
+)
+def get_continuous_buffer(
+    session_id: str,
+    _: Annotated[None, Depends(require_engine_access)],
+) -> AdaptiveRuntimeBufferV1 | Response:
+    try:
+        buffer = get_engine_continuous_buffer(session_id)
+    except AdaptiveEngineError as exc:
+        raise _http_error(exc) from exc
+    if buffer is None:
+        return Response(status_code=204)
+    return buffer
 
 
 @router.post(

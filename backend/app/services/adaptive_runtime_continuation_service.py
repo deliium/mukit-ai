@@ -9,6 +9,7 @@ coroutine the caller schedules.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -29,6 +30,15 @@ from app.adaptive_runtime_continuation_schemas import (
 from app.adaptive_runtime_continuation_settings import (
     load_adaptive_runtime_continuation_settings,
 )
+from app.adaptive_runtime_music_state_schemas import (
+    empty_music_state,
+    project_legacy_runtime_context,
+)
+from app.services.adaptive_runtime_music_state import (
+    evaluate_continuous_guards,
+    next_virtual_bar,
+    update_music_state,
+)
 from app.adaptive_score_schemas import (
     ADAPTIVE_SCORE_ERROR_CODES,
     AdaptiveScoreError,
@@ -45,6 +55,7 @@ from app.services.adaptive_playback_runtime import (
     get_default_playback_registry,
 )
 from app.services.adaptive_runtime_continuation import (
+    WARNING_GUARD_DUPLICATE,
     WARNING_INVALID,
     WARNING_LATE,
     WARNING_MESSAGES,
@@ -53,6 +64,7 @@ from app.services.adaptive_runtime_continuation import (
     WARNING_NOT_RUNNING,
     WARNING_STALE,
     WARNING_UNBOUNDED,
+    WARNING_VIRTUAL_TIMELINE,
     continuation_audible,
     continuation_seed,
     count_pitch_class_repetitions,
@@ -120,6 +132,17 @@ def start_adaptive_runtime_continuation(
     now_ms: Clock | None = None,
 ) -> AdaptiveRuntimeContinuationV1:
     """Open a session. Does not schedule a model."""
+    settings = load_adaptive_runtime_continuation_settings()
+    if request.continuous and not settings.adaptive_continuous_enabled:
+        logger.info(
+            "Continuous continuation refused; flag off",
+            extra={"code": "adaptive_continuous_disabled"},
+        )
+        raise AdaptiveScoreError(
+            "adaptive_continuous_disabled",
+            ADAPTIVE_SCORE_ERROR_CODES["adaptive_continuous_disabled"],
+            http_status=422,
+        )
     slots = registry or get_default_continuation_registry()
     loaded = _load(project_id, score_id, db_path=db_path, playback_registry=playback_registry)
     if loaded.score_revision != request.expected_document_revision:
@@ -138,6 +161,7 @@ def start_adaptive_runtime_continuation(
             document_revision=loaded.score_revision,
             warnings=[WARNING_NOT_RUNNING],
             state_id="idle",
+            continuous=request.continuous,
         )
         _log("start", project_id, score_id, snapshot)
         return snapshot
@@ -145,6 +169,7 @@ def start_adaptive_runtime_continuation(
         project_id,
         loaded,
         mode=request.mode,
+        continuous=request.continuous,
         now_ms=now_ms or _monotonic_ms,
         schedule_model=False,
         scheduler=None,
@@ -209,7 +234,15 @@ def maintain_adaptive_runtime_continuation(
         )
         _log("maintain", project_id, score_id, snapshot)
         return snapshot
-    view = _prepare(held.mode, loaded, previous=held.snapshot.context)
+    view = _prepare(
+        held.mode,
+        loaded,
+        previous=held.snapshot.context,
+        continuous=held.continuous,
+        music_state=held.music_state,
+    )
+    held.music_state = view.music_state
+    held.seed_bump = view.seed_bump
     job = held.job
     if job is not None and job_identity_matches(
         anchor_bar=view.window.anchor_bar,
@@ -317,7 +350,14 @@ def _load(
     return _Loaded(playback, record.score, composition, timeline, record.document_revision)
 
 
-def _prepare(mode: str, loaded: _Loaded, *, previous) -> _View:
+def _prepare(
+    mode: str,
+    loaded: _Loaded,
+    *,
+    previous,
+    continuous: bool = False,
+    music_state=None,
+) -> _View:
     playback = loaded.playback
     composition = loaded.composition
     timeline = loaded.timeline
@@ -357,21 +397,86 @@ def _prepare(mode: str, loaded: _Loaded, *, previous) -> _View:
     classes = _bar_pitch_classes(composition, timeline, recent_start, recent_end)
     repetition = count_pitch_class_repetitions(classes)
     themes = _theme_ids(composition, prefix_start_tick, prefix_end_tick)
-    context = update_runtime_context(
-        previous,
-        intensity=playback.intensity,
-        theme_ids=themes,
-        harmony_tail=tail,
-        harmony_chord_count=chord_count,
-        recent_start_bar=recent_start,
-        recent_end_bar=recent_end,
-        repetition_count=repetition,
-    )
+    digest = prefix_digest(_prefix_rows(composition, prefix_start_tick, prefix_end_tick))
+    ticks_per_bar = bar_duration_ticks(composition.time_signature, composition.ticks_per_quarter)
+    last_end_tick = timeline.bar_end_tick(composition.bar_count) if composition.bar_count >= 1 else 0
+    playback_at_end = playback.position_tick >= timeline.duration_ticks
     loop = playback.instructions.loop
+    loop_wrapping_at_end = bool(
+        loop.enabled and playback_at_end and loop.end_bar is not None
+    )
+
+    seed_bump = 0
+    resolved_music_state = music_state
+    if continuous:
+        prior_virtual = (
+            music_state.virtual_bar
+            if music_state is not None
+            else composition.bar_count + 1
+        )
+        play_bars = load_adaptive_runtime_continuation_settings().play_bars
+        legacy_target = playback.bar + play_bars
+        use_virtual = (
+            legacy_target > composition.bar_count
+            or playback_at_end
+            or loop_wrapping_at_end
+        )
+        virtual_bar = (
+            next_virtual_bar(
+                current_virtual_bar=prior_virtual,
+                bar_count=composition.bar_count,
+                advanced=False,
+            )
+            if use_virtual
+            else max(1, playback.bar)
+        )
+        orch = hashlib.sha256(
+            "|".join(
+                f"{track.id}:{track.role}:{track.midi_program}"
+                for track in composition.tracks
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        resolved_music_state = update_music_state(
+            music_state,
+            prefix_digest=digest,
+            theme_ids=themes,
+            motif_ids=themes,
+            harmony_label=tail,
+            intensity=playback.intensity,
+            tension=playback.intensity,
+            orchestration_fingerprint=orch,
+            runtime_state_id=playback.runtime_state_id,
+            virtual_bar=virtual_bar,
+            score_theme_ids=themes,
+        )
+        guards = evaluate_continuous_guards(
+            resolved_music_state,
+            score_theme_ids=themes,
+        )
+        seed_bump = guards.seed_bump
+        context = project_legacy_runtime_context(resolved_music_state)
+        # Prefer guard repetition when higher than pitch-class count.
+        if context.repetition_count < repetition:
+            context = context.model_copy(update={"repetition_count": repetition})
+    else:
+        context = update_runtime_context(
+            previous,
+            intensity=playback.intensity,
+            theme_ids=themes,
+            harmony_tail=tail,
+            harmony_chord_count=chord_count,
+            recent_start_bar=recent_start,
+            recent_end_bar=recent_end,
+            repetition_count=repetition,
+        )
+
     target_guess = playback.bar + load_adaptive_runtime_continuation_settings().play_bars
     deadline = 0
     if 1 <= target_guess <= composition.bar_count:
         deadline = timeline.bar_start_tick(target_guess)
+    virtual_for_plan = (
+        resolved_music_state.virtual_bar if resolved_music_state is not None else None
+    )
     window = plan_runtime_window(
         bar=playback.bar,
         bar_count=composition.bar_count,
@@ -383,18 +488,28 @@ def _prepare(mode: str, loaded: _Loaded, *, previous) -> _View:
         context=context,
         deadline_tick=deadline,
         extra_warnings=extra,
+        continuous=continuous,
+        virtual_bar=virtual_for_plan,
+        playback_at_end=playback_at_end,
+        loop_wrapping_at_end=loop_wrapping_at_end,
+        last_compiled_bar_end_tick=last_end_tick,
+        ticks_per_bar_assumed=ticks_per_bar,
     )
-    digest = prefix_digest(_prefix_rows(composition, prefix_start_tick, prefix_end_tick))
     notes, anchor_midi, track = _relative_cell(composition, context.theme_ids)
     generate_bars = load_adaptive_runtime_continuation_settings().generate_bars
     meter_changed = False
-    ticks_per_bar = bar_duration_ticks(composition.time_signature, composition.ticks_per_quarter)
-    if window.target_start_bar is not None and window.target_end_bar is not None:
+    if (
+        window.target_start_bar is not None
+        and window.target_end_bar is not None
+        and WARNING_VIRTUAL_TIMELINE not in window.warnings
+    ):
         target_start = timeline.bar_start_tick(window.target_start_bar)
         target_end = timeline.bar_end_tick(window.target_end_bar)
         meter = timeline.active_time_signature(target_start)
         ticks_per_bar = bar_duration_ticks(meter, composition.ticks_per_quarter)
-        meter_changed = any(target_start < tick < target_end for tick, _sig in timeline.time_signature_changes)
+        meter_changed = any(
+            target_start < tick < target_end for tick, _sig in timeline.time_signature_changes
+        )
         if window.deadline_tick != target_start:
             window = plan_runtime_window(
                 bar=playback.bar,
@@ -407,13 +522,23 @@ def _prepare(mode: str, loaded: _Loaded, *, previous) -> _View:
                 context=context,
                 deadline_tick=target_start,
                 extra_warnings=extra,
+                continuous=continuous,
+                virtual_bar=virtual_for_plan,
+                playback_at_end=playback_at_end,
+                loop_wrapping_at_end=loop_wrapping_at_end,
+                last_compiled_bar_end_tick=last_end_tick,
+                ticks_per_bar_assumed=ticks_per_bar,
             )
+    elif continuous and WARNING_VIRTUAL_TIMELINE in window.warnings:
+        meter_changed = True
     plan = None
     if window.target_start_bar is not None:
         plan = _symbolic_plan(composition, generate_bars, mode, playback.intensity)
     return _View(
         window=window,
         context=context,
+        music_state=resolved_music_state,
+        seed_bump=seed_bump,
         digest=digest,
         tail=context.harmony_tail,
         notes=notes,
@@ -429,6 +554,9 @@ def _prepare(mode: str, loaded: _Loaded, *, previous) -> _View:
         loop_enabled=loop.enabled,
         loop_start=loop.start_bar,
         loop_end=loop.end_bar,
+        continuous=continuous,
+        virtual_timeline=WARNING_VIRTUAL_TIMELINE in window.warnings,
+        bar_count=composition.bar_count,
     )
 
 
@@ -446,10 +574,19 @@ def _arm(
     if view.meter_changed:
         warnings = merge_warning_codes(warnings, [WARNING_METER])
     events: tuple = ()
+    fallback_order = window.fallback_order
+    if held.continuous and view.music_state is not None:
+        guards = evaluate_continuous_guards(
+            view.music_state,
+            score_theme_ids=list(view.context.theme_ids),
+        )
+        fallback_order = guards.fallback_order
+        held.seed_bump = guards.seed_bump
     if window.target_start_bar is not None and view.plan is not None:
         seed = continuation_seed(window.anchor_bar, held.mode, playback.runtime_state_id)
+        seed = (seed + held.seed_bump) & 0x7FFFFFFF
         realized = realize_fallback(
-            window.fallback_order,
+            fallback_order,
             loop_enabled=view.loop_enabled,
             loop_start_bar=view.loop_start,
             loop_end_bar=view.loop_end,
@@ -472,6 +609,37 @@ def _arm(
     else:
         seed = 0
         kind = window.fallback_kind
+    # Continuous past end: prefer accompaniment when reuse_loop would be silent.
+    if (
+        held.continuous
+        and getattr(view, "virtual_timeline", False)
+        and kind == "reuse_loop"
+        and not view.loop_enabled
+        and view.plan is not None
+    ):
+        seed = continuation_seed(window.anchor_bar, held.mode, playback.runtime_state_id)
+        seed = (seed + held.seed_bump + 1) & 0x7FFFFFFF
+        realized = realize_fallback(
+            ("accompaniment",),
+            loop_enabled=False,
+            loop_start_bar=None,
+            loop_end_bar=None,
+            plan=view.plan,
+            seed=seed,
+            relative_notes=view.notes,
+            anchor_midi=view.anchor_midi,
+            destination_track=view.track,
+            composition=loaded.composition,
+            job_id="pending",
+            deadline_tick=window.deadline_tick,
+            ticks_per_bar=view.ticks_per_bar,
+            generate_bars=view.generate_bars,
+            target_span_ticks=view.generate_bars * view.ticks_per_bar,
+            meter_changed=view.meter_changed,
+        )
+        events = realized.events
+        kind = realized.fallback_kind
+        warnings = merge_warning_codes(warnings, list(realized.warnings))
     job_id = secrets.token_hex(4)
     job_token = f"arcj_{job_id}"
     if realized is not None:
@@ -498,13 +666,16 @@ def _arm(
         warnings = merge_warning_codes(list(window.warnings), list(realized.warnings))
         if view.meter_changed:
             warnings = merge_warning_codes(warnings, [WARNING_METER])
-    audible = continuation_audible(
-        fallback_kind=kind,
-        loop_enabled=view.loop_enabled,
-        loop_start_bar=view.loop_start,
-        loop_end_bar=view.loop_end,
-        target_start_bar=window.target_start_bar,
-    )
+    if held.continuous and getattr(view, "virtual_timeline", False):
+        audible = kind != "reuse_loop" or bool(events)
+    else:
+        audible = continuation_audible(
+            fallback_kind=kind,
+            loop_enabled=view.loop_enabled,
+            loop_start_bar=view.loop_start,
+            loop_end_bar=view.loop_end,
+            target_start_bar=window.target_start_bar,
+        )
     prior = held.snapshot.telemetry
     telemetry = prior.model_copy(
         update={
@@ -526,6 +697,8 @@ def _arm(
         state_id=playback.runtime_state_id,
         intensity=playback.intensity,
         context=view.context,
+        music_state=view.music_state,
+        continuous=held.continuous,
         warnings=warnings,
         telemetry=telemetry,
         document_revision=held.session_revision,
@@ -566,6 +739,21 @@ def _arm(
     held.buffer = buffer
     held.job = job
     held.active_job_id = None if job is None else job.job_id
+    held.music_state = view.music_state
+    if (
+        held.continuous
+        and getattr(view, "virtual_timeline", False)
+        and held.music_state is not None
+    ):
+        held.music_state = held.music_state.model_copy(
+            update={
+                "virtual_bar": next_virtual_bar(
+                    current_virtual_bar=held.music_state.virtual_bar,
+                    bar_count=view.bar_count,
+                    advanced=True,
+                )
+            }
+        )
     logger.debug(
         "Continuation armed",
         extra={
@@ -577,6 +765,10 @@ def _arm(
             "harmony_chord_count": view.context.harmony_chord_count,
             "fallback_kind": snapshot.fallback_kind,
             "pipeline_id": pipeline_id_for_mode(held.mode),
+            "continuous": held.continuous,
+            "virtual_bar": None
+            if held.music_state is None
+            else held.music_state.virtual_bar,
         },
     )
     return held
@@ -635,11 +827,23 @@ def _apply_model(job: ContinuationJob, music: CompositionV2, now_ms: Clock) -> N
         _discard(held, WARNING_STALE, late=True)
         _log("discard", project_id, score_id, held.snapshot)
         return
-    view = _prepare(held.mode, loaded, previous=held.snapshot.context)
+    view = _prepare(
+        held.mode,
+        loaded,
+        previous=held.snapshot.context,
+        continuous=held.continuous,
+        music_state=held.music_state,
+    )
     settings = load_adaptive_runtime_continuation_settings()
     elapsed = now_ms() - job.armed_monotonic_ms
+    # Continuous virtual jobs compare against the armed virtual deadline, not
+    # playback.bar (which never exceeds bar_count).
+    playback_bar_for_apply = playback.bar
+    if held.continuous and job.target_start_bar is not None:
+        if job.target_start_bar > loaded.composition.bar_count:
+            playback_bar_for_apply = max(1, job.anchor_bar)
     musical = result_applicable(
-        playback_bar=playback.bar,
+        playback_bar=playback_bar_for_apply,
         position_tick=playback.position_tick,
         target_start_bar=job.target_start_bar,
         deadline_tick=job.deadline_tick,
@@ -680,13 +884,32 @@ def _apply_model(job: ContinuationJob, music: CompositionV2, now_ms: Clock) -> N
         return
     if held.active_job_id != job.job_id:
         return
-    audible = continuation_audible(
-        fallback_kind=held.snapshot.fallback_kind,
-        loop_enabled=playback.instructions.loop.enabled,
-        loop_start_bar=playback.instructions.loop.start_bar,
-        loop_end_bar=playback.instructions.loop.end_bar,
-        target_start_bar=job.target_start_bar,
+    candidate_digest = prefix_digest(
+        [
+            (event.start_tick, midi_pitch_number(event.pitch), event.duration_ticks)
+            for event in placed.events
+        ]
     )
+    if held.continuous:
+        guards = evaluate_continuous_guards(
+            view.music_state or empty_music_state(),
+            last_applied_digest=held.last_applied_digest,
+            candidate_digest=candidate_digest,
+        )
+        if guards.hard_reject_duplicate:
+            _discard(held, WARNING_GUARD_DUPLICATE, late=False)
+            _log("discard", project_id, score_id, held.snapshot)
+            return
+    if held.continuous and job.target_start_bar is not None and job.target_start_bar > loaded.composition.bar_count:
+        audible = True
+    else:
+        audible = continuation_audible(
+            fallback_kind=held.snapshot.fallback_kind,
+            loop_enabled=playback.instructions.loop.enabled,
+            loop_start_bar=playback.instructions.loop.start_bar,
+            loop_end_bar=playback.instructions.loop.end_bar,
+            target_start_bar=job.target_start_bar,
+        )
     warnings = merge_warning_codes(
         [item.code for item in held.snapshot.warnings],
         list(placed.warnings),
@@ -702,6 +925,8 @@ def _apply_model(job: ContinuationJob, music: CompositionV2, now_ms: Clock) -> N
             "audible": audible,
             "warnings": _warning_models(warnings),
             "telemetry": telemetry,
+            "music_state": view.music_state,
+            "continuous": held.continuous,
         }
     )
     held.buffer = _buffer(
@@ -718,6 +943,8 @@ def _apply_model(job: ContinuationJob, music: CompositionV2, now_ms: Clock) -> N
             job.generate_bars,
         ),
     )
+    held.last_applied_digest = candidate_digest
+    held.music_state = view.music_state
     _log("apply", project_id, score_id, held.snapshot)
 
 
@@ -772,10 +999,30 @@ def _replace_snapshot(held: HeldContinuation, *, warnings: list[str], applicable
     return held.snapshot.model_copy(deep=True)
 
 
-def _held_from_playback(project_id: str, loaded: _Loaded, *, mode: str, now_ms: Clock, schedule_model: bool, scheduler):
+def _held_from_playback(
+    project_id: str,
+    loaded: _Loaded,
+    *,
+    mode: str,
+    continuous: bool = False,
+    now_ms: Clock,
+    schedule_model: bool,
+    scheduler,
+):
     del project_id, now_ms, schedule_model, scheduler
     playback = loaded.playback
-    view = _prepare(mode, loaded, previous=empty_runtime_context())
+    initial_state = (
+        empty_music_state(virtual_bar=loaded.composition.bar_count + 1)
+        if continuous
+        else None
+    )
+    view = _prepare(
+        mode,
+        loaded,
+        previous=empty_runtime_context(),
+        continuous=continuous,
+        music_state=initial_state,
+    )
     snapshot = _snapshot(
         continuation_id="arcn_" + secrets.token_hex(4),
         job_id=None,
@@ -789,6 +1036,8 @@ def _held_from_playback(project_id: str, loaded: _Loaded, *, mode: str, now_ms: 
         state_id=playback.runtime_state_id,
         intensity=playback.intensity,
         context=view.context,
+        music_state=view.music_state,
+        continuous=continuous,
         warnings=list(view.window.warnings),
         telemetry=AdaptiveRuntimeContinuationTelemetryV1(),
         document_revision=loaded.score_revision,
@@ -798,10 +1047,20 @@ def _held_from_playback(project_id: str, loaded: _Loaded, *, mode: str, now_ms: 
         mode=mode,
         snapshot=snapshot,
         session_revision=loaded.score_revision,
+        continuous=continuous,
+        music_state=view.music_state,
+        seed_bump=view.seed_bump,
     )
 
 
-def _idle_snapshot(*, mode: str, document_revision: int, warnings: list[str], state_id: str):
+def _idle_snapshot(
+    *,
+    mode: str,
+    document_revision: int,
+    warnings: list[str],
+    state_id: str,
+    continuous: bool = False,
+):
     context = empty_runtime_context()
     return AdaptiveRuntimeContinuationV1(
         continuation_id="arcn_" + secrets.token_hex(4),
@@ -821,6 +1080,8 @@ def _idle_snapshot(*, mode: str, document_revision: int, warnings: list[str], st
         runtime_state_id=state_id,
         intensity=0,
         context=context,
+        music_state=None,
+        continuous=continuous,
         warnings=_warning_models(warnings),
         telemetry=AdaptiveRuntimeContinuationTelemetryV1(),
         document_revision=document_revision,
@@ -847,6 +1108,8 @@ def _snapshot(**kwargs: Any) -> AdaptiveRuntimeContinuationV1:
         runtime_state_id=kwargs["state_id"],
         intensity=kwargs["intensity"],
         context=kwargs["context"],
+        music_state=kwargs.get("music_state"),
+        continuous=bool(kwargs.get("continuous", False)),
         warnings=_warning_models(kwargs["warnings"]),
         telemetry=kwargs["telemetry"],
         document_revision=kwargs["document_revision"],
@@ -1072,6 +1335,12 @@ def _monotonic_ms() -> int:
 
 
 def _log(action: str, project_id: str, score_id: str, snapshot: AdaptiveRuntimeContinuationV1) -> None:
+    guard_flags = (
+        list(snapshot.music_state.guard_flags) if snapshot.music_state is not None else []
+    )
+    virtual_bar = (
+        snapshot.music_state.virtual_bar if snapshot.music_state is not None else None
+    )
     logger.info(
         "Adaptive runtime continuation",
         extra={
@@ -1088,6 +1357,9 @@ def _log(action: str, project_id: str, score_id: str, snapshot: AdaptiveRuntimeC
             "source": snapshot.source,
             "job_status": snapshot.job_status,
             "audible": snapshot.audible,
+            "continuous": snapshot.continuous,
+            "virtual_bar": virtual_bar,
+            "guard_flags": guard_flags,
             "warning_codes": [item.code for item in snapshot.warnings],
             "arm_count": snapshot.telemetry.arm_count,
             "model_apply_count": snapshot.telemetry.model_apply_count,

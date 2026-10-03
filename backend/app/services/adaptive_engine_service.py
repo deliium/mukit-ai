@@ -847,6 +847,13 @@ def _resolve_stinger(
 def _project(held: _HeldEngine, snapshot: AdaptivePlaybackRuntimeV1) -> AdaptiveEngineSessionV1:
     _remember_playback_warnings(held, snapshot)
     pending = snapshot.pending_transition
+    # Echo deployment flags only (no MusicState / buffer). Settings module is
+    # outside the engine import ban list used by architecture tests.
+    from app.adaptive_runtime_continuation_settings import (
+        load_adaptive_runtime_continuation_settings,
+    )
+
+    continuation_settings = load_adaptive_runtime_continuation_settings()
     return AdaptiveEngineSessionV1(
         session_id=held.session_id,
         project_id=held.project_id,
@@ -864,6 +871,8 @@ def _project(held: _HeldEngine, snapshot: AdaptivePlaybackRuntimeV1) -> Adaptive
         warnings=list(held.warnings),
         document_revision=held.document_revision,
         context_attached=held.context_attached,
+        continuous_enabled=continuation_settings.adaptive_continuous_enabled,
+        engine_continuous_enabled=continuation_settings.adaptive_engine_continuous_enabled,
         telemetry=AdaptiveEngineTelemetryV1(
             command_count=held.command_count,
             rejected_count=held.rejected_count,
