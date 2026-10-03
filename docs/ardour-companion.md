@@ -7,13 +7,17 @@ Connect the Studio **Ardour** tab to one active Ardour session over **Ardour OSC
 1. Connect with host, OSC port, and feedback listen port.
 2. With explicit **Allow DAW control**, send play / stop / locate, master record-arm, and strip fader / pan / mute / solo.
 3. Treat **OSC feedback** as the source of truth (`accepted` ≠ observed).
-4. Exchange musical assets via existing MIDI / MusicXML / WAV export (file import into Ardour).
+4. Drive the focused **Ardour workflow** surface (session → transport/timecode → musical scope → Send → alternatives → return) without treating the Studio editor as a replacement DAW.
+5. Exchange selected-region packages via Lua + `/ardour/exchange/*` (see [ardour-session-exchange.md](ardour-session-exchange.md)); whole-score handoff still uses MIDI / MusicXML / WAV export.
 
 ```text
-composition.v2  ──export──►  Ardour session
-SPA Ardour tab ──HTTP──► FastAPI companion ──OSC UDP──┘
-                         ▲ feedback UDP │
-                         └──────────────┘
+Ardour (primary DAW)
+  OSC companion: session + transport + strip select
+  Lua: export/import exchange packages
+        │
+        ▼
+Studio Ardour workflow tab
+  scope → Send (ingest) → Realize → Apply → Prepare (working V2)
 ```
 
 ## Enable in Ardour
@@ -79,28 +83,50 @@ If feedback never arrives: confirm Ardour OSC is enabled, feedback port matches,
 
 ## Lua recipes
 
-Operator-installed examples live under `backend/examples/ardour/`. Mukit does **not** remote-execute Lua. Use them for session housekeeping OSC does not cover cleanly.
+Operator-installed examples live under `backend/examples/ardour/`. Copy them with `./scripts/install_ardour_helpers.sh <ardour-scripts-dir>` (idempotent; refuses `.ardour` session paths). Mukit does **not** remote-execute Lua.
 
-## Why not LV2 in ship-1
+## Why not LV2
 
-Transport, locate, record-arm, strip select/name, fader/pan/mute/solo, and feedback are covered by Ardour’s built-in OSC surface. File exchange uses existing export. No in-graph DSP or meter tap is required for this milestone.
+**Verdict: not required.** OSC + Lua + file/session exchange satisfies V5 Ardour companion acceptance without a native plugin. Do not scaffold an LV2 project for this milestone.
+
+| Capability | OSC + Lua + exchange | Full LV2 AI host | Minimal LV2 bridge |
+|------------|----------------------|------------------|--------------------|
+| Transport / locate / strip mixer | Yes (OSC) | Overkill | Unnecessary |
+| Selected-region MIDI round-trip | Yes (Lua packages) | Would reimplement backend | Still needs file or port I/O |
+| AI generate / transform | HTTP backend preview engines | Reimplements AI in-plugin | Shuttles buffers only |
+| Continuous bidirectional note sync | Out of acceptance | Possible, huge scope | Possible, huge scope |
+| In-graph meter taps / sample-accurate audio I/O | Out of acceptance | Native | Native |
+| Packaging / CI matrix | Docs + install script today | Native build hell | Native build/CI matrix |
+
+Remaining gaps (continuous note sync, in-graph meters, zero-file MIDI paste over a plugin port) are explicitly out of acceptance. Revisit LV2 only if a future milestone needs sample-accurate in-graph audio I/O that files cannot provide.
 
 ## Honesty limits
 
 - No bidirectional continuous note sync over OSC.
 - No auto-import of Ardour sessions into `composition.v2`.
 - Selected-region material exchange is a separate package path — see [ardour-session-exchange.md](ardour-session-exchange.md) (Lua export/import + `/ardour/exchange/*`). Mukit still never edits `.ardour` XML.
-- No Tone.js transport coupling to Ardour playhead in ship-1.
+- No Tone.js transport coupling to Ardour playhead as a requirement.
 - No multi-DAW abstraction; Ardour-only.
+- Timecode display is samples÷`sample_rate` (optional 30 fps frames display-only), not true Ardour BBT (OSC bit `+32` out of scope).
 - `ai_agents/` must not import companion or exchange modules.
 
 ## UI
 
-Studio tab **Ardour**: host / ports / permission checkbox / Connect·Disconnect, status banner, transport + strip table. Polls status every **1000 ms** while the tab is selected; clears on leave. Opening the tab never connects. Mixer/transport controls follow **session** `control_permission` from connect (status), not a post-connect checkbox flip alone — reconnect with the box checked to grant control.
+Studio tab **Ardour** is an ordered workflow surface (`data-testid="ardour-workflow-panel"`):
+
+1. Connected session (host/ports/permission/Connect)
+2. Transport + timecode readout
+3. Selected musical scope (manifest bars when preview present; else OSC strip + locate + Lua export CTA)
+4. Send to AI Composer (scan/upload/ingest; explicit inbound Apply)
+5. AI op → Realize → alternatives → Apply
+6. Prepare / download (working `composition.v2`) + Lua return CTA; optional stems
+
+Strip mixer lives under **Mixer (advanced)**. Polls companion status every **1000 ms** while the tab is selected (DEBUG only — not INFO spam). Opening the tab never connects, ingests, or applies. Mixer/transport controls follow **session** `control_permission` from connect.
 
 ## See also
 
 - [ardour-session-exchange.md](ardour-session-exchange.md) — selected-region package exchange (ingest / realize / prepare)
 - [daw-interoperability.md](daw-interoperability.md) — SMF / MusicXML / WAV handoff + Ardour import steps
 - [composition-v2.md](composition-v2.md) — playable score contract
-- `backend/examples/ardour/README.md` — Lua install notes
+- `backend/examples/ardour/README.md` — Lua install + connected-workflow quickstart
+- `scripts/install_ardour_helpers.sh` — copy Lua recipes to an Ardour scripts directory

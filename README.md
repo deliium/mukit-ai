@@ -346,8 +346,8 @@ mukit-ai/
 | [Browser playback](docs/browser-playback.md) | Tone.js projection, mixer, samples vs FluidSynth export |
 | [Performance conductor](docs/performance-conductor.md) | Durable plans + session realizations; same notes, different performances |
 | [Spatial music](docs/spatial-music.md) | SpatialMix scenes + stereo/FOA preview; notes and stem WAVs unchanged |
-| [Ardour companion](docs/ardour-companion.md) | Live Ardour OSC transport/mixer companion; feedback-observed; no note rewrite |
-| [Ardour session exchange](docs/ardour-session-exchange.md) | Selected MIDI region packages; ingest/realize/prepare; Lua operator-install only |
+| [Ardour companion](docs/ardour-companion.md) | Live Ardour OSC + ordered workflow UI; LV2 not required; feedback-observed; no note rewrite |
+| [Ardour session exchange](docs/ardour-session-exchange.md) | Selected MIDI region packages; realize intents; prepare working V2; Lua install script |
 | [MIDI live input](docs/midi-live-input.md) | Web MIDI / QWERTY performance capture into V2 |
 | [Co-performance](docs/co-performance.md) | Live stream, horizon accompaniment, degradation, predict |
 | [AI Jam](docs/ai-jam.md) | Jam modes, belief/hysteresis, multi-track Commit, fallback |

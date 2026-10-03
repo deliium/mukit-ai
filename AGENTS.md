@@ -224,12 +224,17 @@ mukit-ai/
 | `backend/app/ardour_exchange_settings.py` | `ARDOUR_EXCHANGE_*` flag / root / max bytes / GC |
 | `backend/app/services/ardour_exchange_store.py` | FS packages under exchange root; session preview registry |
 | `backend/app/routers/ardour_exchange.py` | `/ardour/exchange/*` ingest/preview/apply/realize/prepare |
-| `frontend/src/components/ArdourCompanionPanel.jsx` | Ardour tab: host/ports, control permission, 1000 ms status poll, mixer controls |
+| `frontend/src/components/ArdourCompanionPanel.jsx` | Ardour workflow tab: session → transport/timecode → scope/send/realize/return; mixer under advanced; `data-testid=ardour-workflow-panel` |
+| `frontend/src/components/ArdourExchangePanel.jsx` | Workflow steps 3–6: scope, Send, realize intents, applyRealize, prepare working V2, optional stems |
+| `frontend/src/utils/ardourExchange/applyRealize.js` | Seed arrangement/development/harmony store surfaces then Apply |
+| `frontend/src/utils/ardourExchange/stemWorkflow.js` | SPA-only neural stem-set enqueue/poll + prepare `stem_id` |
+| `frontend/src/utils/ardourCompanion/timecode.js` | Samples + sample_rate → HH:MM:SS display (not BBT) |
+| `scripts/install_ardour_helpers.sh` | Copy operator Lua recipes; refuse `.ardour` session paths |
 | `frontend/src/components/ArdourExchangePanel.jsx` | Ardour tab Exchange section: ingest/Apply/realize/prepare |
 | `frontend/src/api/ardourCompanionApi.js` | Ardour companion HTTP client |
 | `frontend/src/api/ardourExchangeApi.js` | Ardour exchange HTTP client |
 | `backend/examples/ardour/` | Operator-install Lua recipes (never remote-executed) |
-| `docs/ardour-companion.md` | OSC setup, Compose host routing, permission model, honesty limits |
+| `docs/ardour-companion.md` | OSC setup, workflow UI, Compose host routing, permission model, Why not LV2, honesty limits |
 | `backend/app/services/performance_conductor.py` | Pure deterministic conductor; tick_delta rubato; no FastAPI/SQLite/LLM |
 | `frontend/src/components/PerformancePanel.jsx` | Performance tab: catalog clone, plan select, mechanical/performed audition |
 | `frontend/src/utils/performanceConductor/scheduleApply.js` | Apply realization deltas for Tone schedule without mutating working V2 |
@@ -389,7 +394,8 @@ mukit-ai/
 | Browser playback | `docs/browser-playback.md` | Tone.js instruments/mixer/transport; ephemeral session state |
 | Performance conductor | `docs/performance-conductor.md` | Durable `performance.plan.v1` + session realizations; same notes, different performances |
 | Spatial music | `docs/spatial-music.md` | Durable `spatial.scene.v1` SpatialMix + session `spatial.preview.v1`; stereo/FOA preview without rewriting notes or stems |
-| Ardour companion | `docs/ardour-companion.md` | Process-memory Ardour OSC transport/mixer; feedback-observed; never rewrites notes; Lua recipes operator-install only |
+| Ardour companion | `docs/ardour-companion.md` | Process-memory Ardour OSC transport/mixer + ordered workflow UI; feedback-observed; never rewrites notes; LV2 not required; Lua via install script |
+| Ardour session exchange | `docs/ardour-session-exchange.md` | Selected MIDI region packages; realize intents; prepare from working composition.v2; SPA stems optional |
 | Ardour session exchange | `docs/ardour-session-exchange.md` | Selected MIDI region packages; ingest → realize → prepare; SPA `completeImport` replace; never edits Ardour XML |
 | DAW interoperability | `docs/daw-interoperability.md` | SMF Type 1 / MusicXML handoff, Ableton/Reaper/Ardour recipes, drag/download, V3 acceptance |
 | MIDI live input | `docs/midi-live-input.md` | Web MIDI / QWERTY performance capture into V2 |

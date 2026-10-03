@@ -2,14 +2,35 @@
 
 These scripts are **examples** for session ops that are awkward or unavailable over Ardour OSC. Mukit never remote-injects or remote-executes Lua.
 
-## Install
+## Quick install
+
+```bash
+# From the repo root — copies *.lua into your Ardour scripts directory
+./scripts/install_ardour_helpers.sh "$HOME/.config/ardour8/scripts"
+# or: ARDOUR_SCRIPTS_DIR=... ./scripts/install_ardour_helpers.sh
+```
+
+The script is idempotent (overwrite copy only). It refuses destinations that look like a `.ardour` session file path. It never starts Ardour.
+
+### Manual Script Manager steps
 
 1. Open Ardour with your session.
 2. **Window → Scripting** (or the Lua Script Manager).
-3. Add / load a script from this directory.
-4. Run it manually when needed.
+3. Add / load a script from the install destination (or from this directory).
+4. Optional: bind as an **Editor Action** if your Ardour build exposes that for Lua scripts.
+5. Run export/import manually when needed.
 
 No secrets belong in these files. Do not paste API keys or composition JSON into Lua.
+
+## Connected workflow quickstart
+
+1. Enable companion + exchange (`ARDOUR_COMPANION_ENABLED`, `ARDOUR_EXCHANGE_ENABLED`) and point `ARDOUR_EXCHANGE_ROOT` at a host directory bind-mounted into the backend container.
+2. In Ardour: select an 8-bar (or other) MIDI region → run `export_selected_midi_region.lua`.
+3. In Studio **Ardour** tab (workflow surface): Connect (optional for transport) → **Send to AI Composer** (scan/ingest) → choose AI op → Realize → review alternatives → Apply.
+4. **Prepare outbound package** (uses the working `composition.v2` after Apply) → download if needed.
+5. In Ardour: set `ARDOUR_EXCHANGE_PACKAGE` / run `import_exchange_package.lua` at `start_samples` / same bars.
+
+AI Composer holds a temporary working score for AI ops; **Ardour remains the DAW**. Opening the Ardour tab never auto-connects, auto-ingests, or auto-applies.
 
 ## Scripts
 
@@ -24,10 +45,17 @@ No secrets belong in these files. Do not paste API keys or composition JSON into
 
 Point both Lua and the Mukit backend at the same host directory via `ARDOUR_EXCHANGE_ROOT` (Compose bind-mount into the backend container). See `docs/ardour-session-exchange.md`.
 
+### Env checklist (printed by the install script)
+
+- `ARDOUR_COMPANION_ENABLED=1`
+- `ARDOUR_EXCHANGE_ENABLED=1`
+- `ARDOUR_EXCHANGE_ROOT=<shared package directory>`
+- Optional fake modes for CI: `ARDOUR_COMPANION_FAKE`, `LLM_FAKE_MODE`
+
 ### SMF export approach
 
 `export_selected_midi_region.lua` prefers Ardour Editor/Session MIDI export APIs when available; otherwise it documents a minimal Type-0 SMF writer from the MIDI model. Adapt note extraction to your Ardour Lua bindings. Refuse empty selection.
 
 ## Relation to Mukit companion
 
-Transport, mixer fader/pan/mute/solo, and master record-arm use the OSC companion (`docs/ardour-companion.md`). Selected-region material exchange uses these Lua recipes plus `/ardour/exchange/*` (`docs/ardour-session-exchange.md`). Mukit never remote-executes Lua and never edits `.ardour` session XML.
+Transport, mixer fader/pan/mute/solo, and master record-arm use the OSC companion (`docs/ardour-companion.md`). Selected-region material exchange uses these Lua recipes plus `/ardour/exchange/*` (`docs/ardour-session-exchange.md`). The Studio Ardour tab is an ordered workflow (session → transport → scope → send → alternatives → return). Mukit never remote-executes Lua and never edits `.ardour` session XML. **LV2 is not required** for this workflow — see the “Why not LV2” section in `docs/ardour-companion.md`.
