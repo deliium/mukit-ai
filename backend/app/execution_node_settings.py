@@ -200,3 +200,22 @@ def execution_nodes_enabled(env: Mapping[str, str] | None = None) -> bool:
     source = env if env is not None else os.environ
     enabled, _ = _parse_truthy(source.get(ENABLED_ENV), code="execution_nodes_flag_unrecognized")
     return enabled
+
+
+def execution_node_role(env: Mapping[str, str] | None = None) -> ExecutionNodeRoleSetting:
+    """Return the configured role without requiring a token."""
+    source = env if env is not None else os.environ
+    role_raw = (source.get(ROLE_ENV) or "").strip().lower()
+    if role_raw in {"controller", "worker", "both"}:
+        return role_raw  # type: ignore[return-value]
+    return "controller"
+
+
+def try_load_execution_node_settings(
+    env: Mapping[str, str] | None = None,
+) -> ExecutionNodeSettings | ExecutionNodeError:
+    """Load settings or return the domain error (does not raise)."""
+    try:
+        return load_execution_node_settings(env)
+    except ExecutionNodeError as exc:
+        return exc

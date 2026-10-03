@@ -332,17 +332,17 @@ Record `resolved_model_id`, `runtime=execution_node`, optional `limits.execution
 <!-- Commit checkpoint: tasks 1-3 -->
 
 ### Phase 2: Store and HTTP surfaces
-- [ ] Task 4: Alembic `20261003_0024_execution_nodes.py` + `execution_node_store.py` (upsert, CAS heartbeat, list, get, delete). No Composition imports.
+- [x] Task 4: Alembic `20261003_0024_execution_nodes.py` + `execution_node_store.py` (upsert, CAS heartbeat, list, get, delete). No Composition imports.
   - LOGGING: INFO upsert/delete with `node_id` + revision; DEBUG CAS conflict.
   - Files: `backend/app/db/alembic/versions/20261003_0024_execution_nodes.py`, `backend/app/services/execution_node_store.py`, `backend/tests/test_execution_node_store.py`
   - Depends on: Task 1
 
-- [ ] Task 5: Controller service + router (register with address allowlist, heartbeat TTL, list/get/delete, disabled→404). In-memory **task index** for cancel forward. Wire into `main.py`. Soft `/ready` `execution_nodes` block. Map domain errors via `map_execution_node_error_to_http`.
+- [x] Task 5: Controller service + router (register with address allowlist, heartbeat TTL, list/get/delete, disabled→404). In-memory **task index** for cancel forward. Wire into `main.py`. Soft `/ready` `execution_nodes` block. Map domain errors via `map_execution_node_error_to_http`.
   - LOGGING: INFO register/heartbeat/delete/cancel; WARN TTL→unavailable; DEBUG task-index insert/remove.
   - Files: `backend/app/services/execution_node_service.py`, `backend/app/services/execution_node_tasks.py` (index), `backend/app/routers/execution_nodes.py`, `backend/app/main.py`, `backend/app/ready.py`, tests
   - Depends on: Tasks 1, 2, 3, 4
 
-- [ ] Task 6: Worker router `/execution/v1/health|models|complete_text|tasks/{id}/cancel` gated by role. Dispatch `complete_text` into local Fake/Local LanguageModel builders. In-memory worker task table with cancel events. When role is **`worker`**, mount only `/ready` + worker router (not projects/imports/neural/agents). Route/dispatch tests here; defer allow-list AST snapshot to Task 11.
+- [x] Task 6: Worker router `/execution/v1/health|models|complete_text|tasks/{id}/cancel` gated by role. Dispatch `complete_text` into local Fake/Local LanguageModel builders. In-memory worker task table with cancel events. When role is **`worker`**, mount only `/ready` + worker router (not projects/imports/neural/agents). Route/dispatch tests here; defer allow-list AST snapshot to Task 11.
   - LOGGING: INFO task lifecycle with ids only; ERROR with failure_code.
   - Files: `backend/app/routers/execution_worker.py`, `backend/app/services/execution_worker_dispatch.py`, `backend/app/main.py` (conditional includes), `backend/tests/test_execution_worker_routes.py`
   - Depends on: Tasks 1, 2, 3

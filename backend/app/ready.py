@@ -200,6 +200,9 @@ def build_readiness_report() -> dict[str, Any]:
     from app.services.music_transformer_generate import music_transformer_readiness_block
 
     mt_block = music_transformer_readiness_block()
+    from app.services.execution_node_service import execution_nodes_readiness_block
+
+    execution_nodes_block = execution_nodes_readiness_block()
     ready = bool(db_ok and catalog_ok)
     report = {
         "status": "ready" if ready else "not_ready",
@@ -215,6 +218,7 @@ def build_readiness_report() -> dict[str, Any]:
             "default_provider": llm_settings.default_provider,
         },
         "local_ai": local_ai_block,
+        "execution_nodes": execution_nodes_block,
         "ai": ai_summary,
         "wav": {
             "ready": wav_ready,

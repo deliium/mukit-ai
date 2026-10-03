@@ -175,48 +175,86 @@ app.add_middleware(
     expose_headers=list(PROJECTION_EXPOSE_HEADERS),
 )
 
-app.include_router(projects_router)
-app.include_router(collaboration_router)
-app.include_router(imports_router)
-app.include_router(transcription_router)
-app.include_router(neural_audio_router)
-app.include_router(mix_analysis_router)
-app.include_router(mix_plan_router)
-app.include_router(audio_recovery_router)
-app.include_router(analysis_router)
-app.include_router(critique_router)
-app.include_router(motifs_router)
-app.include_router(harmony_router)
-app.include_router(composition_development_router)
-app.include_router(arrangement_router)
-app.include_router(ai_models_router)
-app.include_router(plugins_router)
-app.include_router(ai_agents_router)
-app.include_router(embeddings_router)
-app.include_router(composer_profiles_router)
-app.include_router(preferences_router)
-app.include_router(reference_features_router)
-app.include_router(live_performance_router)
-app.include_router(video_scoring_router)
-app.include_router(film_score_router)
-app.include_router(adaptive_scores_router)
-app.include_router(adaptive_engine_router)
-app.include_router(musical_universe_router)
-app.include_router(musical_dependency_router)
-app.include_router(personal_composer_router)
-app.add_exception_handler(RequestValidationError, adaptive_engine_validation_handler)
+from .execution_node_settings import execution_node_role, execution_nodes_enabled
 
-_mt_settings = load_music_transformer_settings()
-if _mt_settings.api_enabled:
-    from .routers.music_transformer import router as music_transformer_router
+_execution_nodes_enabled = execution_nodes_enabled()
+_execution_node_role = execution_node_role()
+_worker_only = bool(_execution_nodes_enabled and _execution_node_role == "worker")
 
-    app.include_router(music_transformer_router)
+if _execution_nodes_enabled:
     logger.info(
-        "Music Transformer API router enabled",
-        extra={"device": _mt_settings.device, "has_default_checkpoint": _mt_settings.default_checkpoint is not None},
+        "Execution nodes feature enabled",
+        extra={
+            "enabled": True,
+            "role": _execution_node_role,
+            "worker_only": _worker_only,
+        },
     )
+
+if not _worker_only:
+    app.include_router(projects_router)
+    app.include_router(collaboration_router)
+    app.include_router(imports_router)
+    app.include_router(transcription_router)
+    app.include_router(neural_audio_router)
+    app.include_router(mix_analysis_router)
+    app.include_router(mix_plan_router)
+    app.include_router(audio_recovery_router)
+    app.include_router(analysis_router)
+    app.include_router(critique_router)
+    app.include_router(motifs_router)
+    app.include_router(harmony_router)
+    app.include_router(composition_development_router)
+    app.include_router(arrangement_router)
+    app.include_router(ai_models_router)
+    app.include_router(plugins_router)
+    app.include_router(ai_agents_router)
+    app.include_router(embeddings_router)
+    app.include_router(composer_profiles_router)
+    app.include_router(preferences_router)
+    app.include_router(reference_features_router)
+    app.include_router(live_performance_router)
+    app.include_router(video_scoring_router)
+    app.include_router(film_score_router)
+    app.include_router(adaptive_scores_router)
+    app.include_router(adaptive_engine_router)
+    app.include_router(musical_universe_router)
+    app.include_router(musical_dependency_router)
+    app.include_router(personal_composer_router)
+    app.add_exception_handler(RequestValidationError, adaptive_engine_validation_handler)
+
+    _mt_settings = load_music_transformer_settings()
+    if _mt_settings.api_enabled:
+        from .routers.music_transformer import router as music_transformer_router
+
+        app.include_router(music_transformer_router)
+        logger.info(
+            "Music Transformer API router enabled",
+            extra={
+                "device": _mt_settings.device,
+                "has_default_checkpoint": _mt_settings.default_checkpoint is not None,
+            },
+        )
+    else:
+        logger.info("Music Transformer API router disabled (MUSIC_TRANSFORMER_API_ENABLED=0)")
 else:
-    logger.info("Music Transformer API router disabled (MUSIC_TRANSFORMER_API_ENABLED=0)")
+    logger.info(
+        "Worker-only mount: studio routers omitted",
+        extra={"role": _execution_node_role},
+    )
+
+# Controllers and workers always mount the typed surfaces; handlers return 404
+# when the feature or role is off so TestClient can toggle env after import.
+from .routers.execution_nodes import router as execution_nodes_router
+from .routers.execution_worker import router as execution_worker_router
+
+app.include_router(execution_nodes_router)
+app.include_router(execution_worker_router)
+if _execution_nodes_enabled:
+    logger.info(
+        "Execution node routers mounted",
+        extra={"role": _execution_node_role},
+    )
 
 
 def _composition_export_summary(composition: CompositionV2) -> dict:
