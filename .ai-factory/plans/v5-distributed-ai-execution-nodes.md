@@ -315,17 +315,17 @@ Record `resolved_model_id`, `runtime=execution_node`, optional `limits.execution
 ## Tasks
 
 ### Phase 1: Contracts and auth
-- [ ] Task 1: Define `execution_node_schemas.py` with `ExecutionNodeV1`, registration, heartbeat, **`ExecutionNodeCatalogV1`**, task, result, forbidden-key validator, `ExecutionNodeError` + HTTP map, and address-allowlist helpers (loopback, RFC1918, optional CIDRs; refuse link-local/metadata/userinfo). Unit tests for parse, forbidden keys, catalog, and address rejection.
+- [x] Task 1: Define `execution_node_schemas.py` with `ExecutionNodeV1`, registration, heartbeat, **`ExecutionNodeCatalogV1`**, task, result, forbidden-key validator, `ExecutionNodeError` + HTTP map, and address-allowlist helpers (loopback, RFC1918, optional CIDRs; refuse link-local/metadata/userinfo). Unit tests for parse, forbidden keys, catalog, and address rejection.
   - LOGGING: schema module may log rejection codes only (no payloads).
   - Files: `backend/app/execution_node_schemas.py`, `backend/tests/test_execution_node_schemas.py`
   - Depends on: none
 
-- [ ] Task 2: Add `execution_node_settings.py` (flag, token, role, TTL, fake, max nodes, address CIDRs, allow_hostname) with collaboration-style truthy parser. Enabled+empty token → `execution_node_token_missing`. Log unknown flag strings without echoing raw values.
+- [x] Task 2: Add `execution_node_settings.py` (flag, token, role, TTL, fake, max nodes, address CIDRs, allow_hostname) with collaboration-style truthy parser. Enabled+empty token → `execution_node_token_missing`. Log unknown flag strings without echoing raw values.
   - LOGGING: DEBUG `{enabled, role, heartbeat_ttl, fake, max_nodes, token_present, allow_hostname}` — never token.
   - Files: `backend/app/execution_node_settings.py`, `backend/tests/test_execution_node_settings.py`
   - Depends on: none
 
-- [ ] Task 3: Pure `execution_node_auth.py` (bearer compare, query refuse, peer_class). Token required for every peer when enabled. Mirror adaptive-engine tests without importing adaptive modules.
+- [x] Task 3: Pure `execution_node_auth.py` (bearer compare, query refuse, peer_class). Token required for every peer when enabled. Mirror adaptive-engine tests without importing adaptive modules.
   - LOGGING: INFO refuse with code; DEBUG allow with peer_class.
   - Files: `backend/app/services/execution_node_auth.py`, `backend/tests/test_execution_node_auth.py`
   - Depends on: Task 2
