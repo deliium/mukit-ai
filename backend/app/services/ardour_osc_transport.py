@@ -11,7 +11,7 @@ from app.ardour_companion_schemas import ArdourCompanionError, ArdourHostClass
 from app.services.ardour_feedback_state import ArdourFeedbackState
 from app.services.ardour_osc_codec import OscCodecError, decode_osc_message, encode_osc_message
 from app.services.ardour_osc_fake_peer import ArdourOscFakePeer
-from app.services.ardour_osc_paths import build_set_surface
+from app.services.ardour_osc_paths import build_set_surface, build_strip_list
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,8 @@ class ArdourOscTransport:
             self.state.mark_awaiting_feedback()
             packet = build_set_surface(feedback_port=self.feedback_port)
             self.send_raw(packet)
+            # Optional inventory probe — end_route_list may supply sample_rate.
+            self.send_raw(build_strip_list())
 
     def send_raw(self, packet: bytes) -> None:
         path, args = decode_osc_message(packet)

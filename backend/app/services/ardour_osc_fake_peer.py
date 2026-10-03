@@ -10,10 +10,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.services.ardour_osc_paths import (
+    PATH_END_ROUTE_LIST,
     PATH_LOCATE,
     PATH_REC_ENABLE_TOGGLE,
     PATH_SET_SURFACE,
     PATH_STRIP_FADER,
+    PATH_STRIP_LIST,
     PATH_STRIP_MUTE,
     PATH_STRIP_PAN,
     PATH_STRIP_SOLO,
@@ -39,6 +41,7 @@ class ArdourOscFakePeer:
     locate_samples: int = 0
     record_armed: bool = False
     selected_ssid: int = 1
+    sample_rate: int = 48000
     strips: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -96,7 +99,17 @@ class ArdourOscFakePeer:
 
         if path == PATH_LOCATE and args:
             self.locate_samples = int(args[0])
-            feedback.append(("/position/samples", [self.locate_samples]))
+            # Ardour commonly reports position as a digit string.
+            feedback.append(("/position/samples", [str(self.locate_samples)]))
+            return feedback
+
+        if path == PATH_STRIP_LIST:
+            feedback.append(
+                (
+                    PATH_END_ROUTE_LIST,
+                    [len(self.strips), 0, 0, int(self.sample_rate)],
+                )
+            )
             return feedback
 
         if path == PATH_REC_ENABLE_TOGGLE:

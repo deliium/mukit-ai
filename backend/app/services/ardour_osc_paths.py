@@ -6,14 +6,16 @@ from typing import Final
 
 from app.services.ardour_osc_codec import encode_osc_message
 
-# Locked /set_surface constants (plan Task 2).
+# Locked /set_surface constants (foundation + exchange position-in-samples).
 SET_SURFACE_BANK_SIZE: Final[int] = 16
 SET_SURFACE_STRIP_TYPES: Final[int] = 159
-# feedback = 1+2+8+16+8192 (strip buttons, strip values, heartbeat, master, select)
-SET_SURFACE_FEEDBACK: Final[int] = 8219
+# feedback = 8219 (foundation) + 1024 (position in samples) = 9243
+SET_SURFACE_FEEDBACK: Final[int] = 9243
 SET_SURFACE_GAINMODE: Final[int] = 0
 
 PATH_SET_SURFACE: Final[str] = "/set_surface"
+PATH_STRIP_LIST: Final[str] = "/strip/list"
+PATH_END_ROUTE_LIST: Final[str] = "/end_route_list"
 PATH_TRANSPORT_PLAY: Final[str] = "/transport_play"
 PATH_TRANSPORT_STOP: Final[str] = "/transport_stop"
 PATH_LOCATE: Final[str] = "/locate"
@@ -51,6 +53,11 @@ def set_surface_arg_tuple(*, feedback_port: int | None = None) -> tuple[int, ...
 def build_set_surface(*, feedback_port: int | None = None) -> bytes:
     """Encode locked ``/set_surface`` for companion connect."""
     return encode_osc_message(PATH_SET_SURFACE, *set_surface_arg_tuple(feedback_port=feedback_port))
+
+
+def build_strip_list() -> bytes:
+    """Request strip inventory; ``end_route_list`` may carry sample_rate."""
+    return encode_osc_message(PATH_STRIP_LIST)
 
 
 def build_transport_play() -> bytes:

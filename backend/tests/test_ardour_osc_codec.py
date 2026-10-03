@@ -56,8 +56,8 @@ def test_refuse_bundle_and_bad_path() -> None:
 
 
 def test_feedback_bitmask_constant() -> None:
-    assert SET_SURFACE_FEEDBACK == 1 + 2 + 8 + 16 + 8192
-    assert SET_SURFACE_FEEDBACK == 8219
+    assert SET_SURFACE_FEEDBACK == 1 + 2 + 8 + 16 + 8192 + 1024
+    assert SET_SURFACE_FEEDBACK == 9243
 
 
 def test_set_surface_arg_tuple_frozen() -> None:
@@ -68,17 +68,17 @@ def test_set_surface_arg_tuple_frozen() -> None:
         SET_SURFACE_FEEDBACK,
         SET_SURFACE_GAINMODE,
     )
-    assert locked == (16, 159, 8219, 0)
+    assert locked == (16, 159, 9243, 0)
     with_port = set_surface_arg_tuple(feedback_port=8000)
     assert with_port[:4] == locked
-    assert with_port == (16, 159, 8219, 0, 0, 0, 8000)
+    assert with_port == (16, 159, 9243, 0, 0, 0, 8000)
 
 
 def test_build_set_surface_encodes_locked_args() -> None:
     packet = build_set_surface(feedback_port=8000)
     path, args = decode_osc_message(packet)
     assert path == "/set_surface"
-    assert args == [16, 159, 8219, 0, 0, 0, 8000]
+    assert args == [16, 159, 9243, 0, 0, 0, 8000]
 
 
 def test_transport_and_locate_builders() -> None:

@@ -29,6 +29,20 @@ def test_transport_and_strip_reduce() -> None:
     assert strips[0].mute == 1
 
 
+def test_position_samples_accepts_digit_string() -> None:
+    state = ArdourFeedbackState()
+    state.apply_message("/position/samples", ["48000"], now=1.0)
+    assert state.locate_samples == 48000
+    state.apply_message("/position/samples", [96000], now=1.1)
+    assert state.locate_samples == 96000
+
+
+def test_end_route_list_sets_sample_rate() -> None:
+    state = ArdourFeedbackState()
+    state.apply_message("/end_route_list", [2, 0, 0, 48000], now=1.0)
+    assert state.sample_rate == 48000
+
+
 def test_stale_after_timeout() -> None:
     state = ArdourFeedbackState(stale_timeout_ms=500)
     state.mark_awaiting_feedback()

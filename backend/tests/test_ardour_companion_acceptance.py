@@ -36,12 +36,12 @@ def client(tmp_path, monkeypatch):
     companion.shutdown_ardour_companion()
 
 
-def test_codec_locked_set_surface_and_feedback_8219() -> None:
-    assert SET_SURFACE_FEEDBACK == 8219
-    assert set_surface_arg_tuple() == (16, 159, 8219, 0)
+def test_codec_locked_set_surface_and_feedback_9243() -> None:
+    assert SET_SURFACE_FEEDBACK == 9243
+    assert set_surface_arg_tuple() == (16, 159, 9243, 0)
     path, args = decode_osc_message(build_set_surface(feedback_port=8000))
     assert path == "/set_surface"
-    assert args == [16, 159, 8219, 0, 0, 0, 8000]
+    assert args == [16, 159, 9243, 0, 0, 0, 8000]
 
 
 def test_fake_connect_play_fader_record_replace_disconnect(client: TestClient) -> None:

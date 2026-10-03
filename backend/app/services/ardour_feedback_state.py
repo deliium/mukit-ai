@@ -12,6 +12,7 @@ from app.ardour_companion_schemas import (
     ArdourStripObservedV1,
 )
 from app.services.ardour_osc_paths import (
+    PATH_END_ROUTE_LIST,
     PATH_HEARTBEAT,
     PATH_LOCATE,
     PATH_REC_ENABLE_TOGGLE,
@@ -48,6 +49,7 @@ class ArdourFeedbackState:
     last_requested_locate_samples: int | None = None
     record_armed: bool | None = None
     selected_ssid: int | None = None
+    sample_rate: int | None = None
     strips: dict[int, StripState] = field(default_factory=dict)
     last_feedback_monotonic: float | None = None
     last_error_code: str | None = None
@@ -161,11 +163,23 @@ class ArdourFeedbackState:
 
         if path == PATH_LOCATE or path in {"/position/smpte", "/position/samples"}:
             if args:
-                try:
-                    self.locate_samples = int(args[0])
+                samples = _as_sample_position(args[0])
+                if samples is not None:
+                    self.locate_samples = samples
                     logger.debug("Feedback state", extra={"field": "locate_samples"})
-                except (TypeError, ValueError):
-                    pass
+            return
+
+        if path == PATH_END_ROUTE_LIST:
+            # Ardour end_route_list typically: n_strips, n_busses, n_vcas, sample_rate, ...
+            rate = _as_sample_rate_from_end_route_list(args)
+            if rate is not None:
+                self.sample_rate = rate
+                logger.debug("Feedback state", extra={"field": "sample_rate"})
+            else:
+                logger.warning(
+                    "Ardour sample_rate unknown from end_route_list",
+                    extra={"code": "ardour_sample_rate_unknown", "arg_count": len(args)},
+                )
             return
 
         if path in {PATH_REC_ENABLE_TOGGLE, "/rec_enable", "/master/rec_enable"}:
@@ -238,9 +252,39 @@ class ArdourFeedbackState:
         self.last_requested_locate_samples = None
         self.record_armed = None
         self.selected_ssid = None
+        self.sample_rate = None
         self.strips.clear()
         self.last_feedback_monotonic = None
         self.last_error_code = None
+
+
+def _as_sample_position(value: Any) -> int | None:
+    """Parse locate/position samples as int or digit string."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float) and value.is_integer() and value >= 0:
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            return int(text)
+    return None
+
+
+def _as_sample_rate_from_end_route_list(args: list[Any]) -> int | None:
+    """Best-effort sample_rate from ``/end_route_list`` args."""
+    candidates: list[Any]
+    if len(args) >= 4:
+        candidates = [args[3], *args]
+    else:
+        candidates = list(args)
+    for item in candidates:
+        rate = _as_sample_position(item)
+        if rate is not None and 8000 <= rate <= 192000:
+            return rate
+    return None
 
 
 def _as_boolish(value: Any) -> bool | None:

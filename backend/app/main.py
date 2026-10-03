@@ -50,6 +50,7 @@ from .routers.personal_composer import router as personal_composer_router
 from .routers.performance_plans import router as performance_plans_router
 from .routers.spatial_scenes import router as spatial_scenes_router
 from .routers.ardour_companion import router as ardour_companion_router
+from .routers.ardour_exchange import router as ardour_exchange_router
 from .reference_feature_schemas import (
     ReferenceFeatureError,
     map_reference_feature_error_to_http,
@@ -182,6 +183,10 @@ async def lifespan(_app: FastAPI):
     cancel_adaptive_engine_tasks()
     shutdown_ardour_companion()
     logger.info("Ardour companion lifespan teardown complete")
+    from .services.ardour_exchange_store import shutdown_exchange
+
+    shutdown_exchange(gc=True)
+    logger.info("Ardour exchange lifespan teardown complete")
     await stop_worker_loop()
     logger.info("Application shutdown")
 
@@ -260,6 +265,7 @@ if not _worker_only:
     app.include_router(performance_plans_router)
     app.include_router(spatial_scenes_router)
     app.include_router(ardour_companion_router)
+    app.include_router(ardour_exchange_router)
     app.add_exception_handler(RequestValidationError, adaptive_engine_validation_handler)
 
     _mt_settings = load_music_transformer_settings()
