@@ -38,6 +38,7 @@ import {
 import { resolveLiveSnapshotFingerprint } from '../utils/compositionSnapshotFingerprint.js';
 import MixAnalysisPanel from './MixAnalysisPanel.jsx';
 import MixAssistPanel from './MixAssistPanel.jsx';
+import ContentProvenanceInspect from './ContentProvenanceInspect.jsx';
 
 const log = createAppLogger('neuralAudioRender');
 const stemLog = createAppLogger('neuralAudioStems');
@@ -192,6 +193,8 @@ const NeuralAudioRenderPanel = () => {
   const [adapterKind, setAdapterKind] = useState('');
   const [jobs, setJobs] = useState([]);
   const [stemSets, setStemSets] = useState([]);
+  const [selectedJobId, setSelectedJobId] = useState(null);
+  const [selectedStemId, setSelectedStemId] = useState(null);
   const [sessionReportId, setSessionReportId] = useState(null);
   const onSessionReport = useCallback((reportId) => {
     setSessionReportId(reportId || null);
@@ -635,7 +638,20 @@ const NeuralAudioRenderPanel = () => {
               });
             }
             return (
-              <JobItem key={job.id} data-testid={`neural-audio-job-${job.id}`} data-status={job.status} data-stale={stale ? 'true' : 'false'}>
+              <JobItem
+                key={job.id}
+                data-testid={`neural-audio-job-${job.id}`}
+                data-status={job.status}
+                data-stale={stale ? 'true' : 'false'}
+                data-selected={selectedJobId === job.id ? 'true' : 'false'}
+                onClick={() => {
+                  if (job.status === 'complete') {
+                    setSelectedJobId(job.id);
+                    setSelectedStemId(null);
+                  }
+                }}
+                style={selectedJobId === job.id ? { outline: '2px solid #94a3b8' } : undefined}
+              >
                 <div>
                   <Badge $status={job.status} data-testid={`neural-audio-job-status-${job.id}`}>
                     {job.status}
@@ -683,18 +699,32 @@ const NeuralAudioRenderPanel = () => {
                     disabled={!isNeuralAudioDownloadReady(job)}
                     data-testid={`neural-audio-download-${job.id}`}
                     data-ready={isNeuralAudioDownloadReady(job) ? 'true' : 'false'}
-                    onClick={() => handleDownload(job.id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDownload(job.id);
+                    }}
                   >
                     Download
                   </SecondaryButton>
                   <SecondaryButton
                     type="button"
                     data-testid={`neural-audio-delete-${job.id}`}
-                    onClick={() => handleDelete(job.id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDelete(job.id);
+                    }}
                   >
                     Delete
                   </SecondaryButton>
                 </Row>
+                {selectedJobId === job.id && job.status === 'complete' && currentProjectId ? (
+                  <ContentProvenanceInspect
+                    projectId={currentProjectId}
+                    artifactKind="neural_render"
+                    artifactId={job.id}
+                    testIdPrefix={`neural-provenance-${job.id}`}
+                  />
+                ) : null}
               </JobItem>
             );
           })}
@@ -806,6 +836,26 @@ const NeuralAudioRenderPanel = () => {
                 >
                   Delete set
                 </SecondaryButton>
+                {stemSet.status === 'complete' && currentProjectId ? (
+                  <SecondaryButton
+                    type="button"
+                    data-testid={`neural-audio-stem-set-provenance-${stemSet.id}`}
+                    onClick={() => {
+                      setSelectedStemId(stemSet.id);
+                      setSelectedJobId(null);
+                    }}
+                  >
+                    Provenance
+                  </SecondaryButton>
+                ) : null}
+                {selectedStemId === stemSet.id && currentProjectId ? (
+                  <ContentProvenanceInspect
+                    projectId={currentProjectId}
+                    artifactKind="neural_stem_set"
+                    artifactId={stemSet.id}
+                    testIdPrefix={`stem-set-provenance-${stemSet.id}`}
+                  />
+                ) : null}
               </JobItem>
             );
           })}

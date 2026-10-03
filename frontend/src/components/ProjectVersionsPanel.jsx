@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import styled from 'styled-components';
 import { useMusicStore } from '../store/musicStore.js';
 import { formatRevisionProvenanceSummary } from '../utils/compositionCandidateLifecycle.js';
+import ContentProvenanceInspect from './ContentProvenanceInspect.jsx';
 
 const Panel = styled.section`
   display: flex;
@@ -516,6 +517,14 @@ const ProjectVersionsPanel = () => {
                   Compare as right
                 </Button>
               </Row>
+              {selected && currentProjectId ? (
+                <ContentProvenanceInspect
+                  projectId={currentProjectId}
+                  artifactKind="composition_revision"
+                  artifactId={revision.id}
+                  testIdPrefix={`version-provenance-chain-${revision.id}`}
+                />
+              ) : null}
             </Item>
           );
         })}

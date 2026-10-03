@@ -24,6 +24,7 @@ import {
   isMixPlanStale,
   mixAssistPreviewRequest,
 } from '../utils/mixPlanUi.js';
+import ContentProvenanceInspect from './ContentProvenanceInspect.jsx';
 
 const SubPanel = styled.div`
   margin-top: 16px;
@@ -462,6 +463,14 @@ export function MixAssistPanel({
             </Button>
             {headId ? <Help>Head {headId.slice(0, 8)}</Help> : null}
           </Row>
+          {headId && currentProjectId ? (
+            <ContentProvenanceInspect
+              projectId={currentProjectId}
+              artifactKind="mix_plan_revision"
+              artifactId={headId}
+              testIdPrefix="mix-assist-provenance"
+            />
+          ) : null}
         </>
       )}
     </SubPanel>
