@@ -20,6 +20,7 @@ import {
   formatArdourStatusBanner,
   startArdourStatusPoll,
 } from '../utils/ardourCompanion/controls.js';
+import { formatArdourTimecode } from '../utils/ardourCompanion/timecode.js';
 import ArdourExchangePanel from './ArdourExchangePanel.jsx';
 
 const logger = createAppLogger('ardourCompanion');
@@ -28,7 +29,19 @@ const Wrap = styled.section`
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: 820px;
+  max-width: 860px;
+`;
+
+const Step = styled.section`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+`;
+
+const StepTitle = styled.h3`
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
 `;
 
 const Row = styled.div`
@@ -97,8 +110,21 @@ const CheckLabel = styled.label`
   color: #0f172a;
 `;
 
+const Details = styled.details`
+  border-top: 1px solid #e2e8f0;
+  padding-top: 12px;
+`;
+
+const Summary = styled.summary`
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #0f172a;
+`;
+
 /**
- * Thin Ardour companion tab. Opening never connects and never writes the score.
+ * Ardour workflow tab: session → transport → scope → send → alternatives → return.
+ * Opening never connects and never writes the score or Ardour session files.
  */
 const ArdourCompanionPanel = () => {
   const [host, setHost] = useState('127.0.0.1');
@@ -115,6 +141,7 @@ const ArdourCompanionPanel = () => {
       const next = await getArdourCompanionStatus();
       setStatus(next);
       setError(null);
+      // DEBUG only — avoid INFO spam every 1000 ms poll tick.
       logger.debug('poll status', { connection_state: next?.connection_state });
     } catch (err) {
       setError(err?.message || 'Status failed');
@@ -129,12 +156,13 @@ const ArdourCompanionPanel = () => {
     };
   }, []);
 
-  // Gate on session-observed permission from status (connect body), not the local
-  // checkbox alone — checking the box after a no-permission connect must not enable controls.
   const controlsEnabled = canControlArdour({
     controlPermission: Boolean(status?.control_permission),
     connectionState: status?.connection_state,
   });
+
+  const clock = formatArdourTimecode(status?.locate_samples, status?.sample_rate);
+  const playing = status?.transport_playing === true;
 
   const run = async (label, action) => {
     setBusy(true);
@@ -159,12 +187,13 @@ const ArdourCompanionPanel = () => {
 
   if (status && status.enabled === false) {
     return (
-      <Wrap>
+      <Wrap data-testid="ardour-workflow-panel">
         <Muted>Companion disabled (`ARDOUR_COMPANION_ENABLED`).</Muted>
         <Muted>
           Export MIDI / MusicXML / WAV from Export, then import into Ardour.
           See docs/ardour-companion.md.
         </Muted>
+        <ArdourExchangePanel companionStatus={status} />
       </Wrap>
     );
   }
@@ -172,195 +201,210 @@ const ArdourCompanionPanel = () => {
   const strips = Array.isArray(status?.strips) ? status.strips : [];
 
   return (
-    <Wrap>
+    <Wrap data-testid="ardour-workflow-panel">
       <Muted>
-        Connect to one Ardour session over OSC. Feedback is the source of truth.
-        Opening this tab does not connect. Asset handoff uses existing Export
-        (see docs/ardour-companion.md).
+        Stay in Ardour as the DAW; use AI Composer only for scoped generate / transform / return.
+        Opening this tab does not connect, ingest, or apply. Mukit never edits Ardour session XML.
       </Muted>
 
-      <Banner>{formatArdourStatusBanner(status)}</Banner>
-      {error ? <Banner role="alert">{error}</Banner> : null}
+      <Step data-testid="ardour-workflow-session">
+        <StepTitle>1. Connected session</StepTitle>
+        <Banner>{formatArdourStatusBanner(status)}</Banner>
+        {error ? <Banner role="alert">{error}</Banner> : null}
 
-      <Row>
-        <Field>
-          Host
-          <Input value={host} onChange={(e) => setHost(e.target.value)} />
-        </Field>
-        <Field>
-          OSC port
-          <Input
-            type="number"
-            min={1}
-            max={65535}
-            value={oscPort}
-            onChange={(e) => setOscPort(Number(e.target.value))}
-          />
-        </Field>
-        <Field>
-          Feedback port
-          <Input
-            type="number"
-            min={1}
-            max={65535}
-            value={feedbackPort}
-            onChange={(e) => setFeedbackPort(Number(e.target.value))}
-          />
-        </Field>
-      </Row>
+        <Row>
+          <Field>
+            Host
+            <Input value={host} onChange={(e) => setHost(e.target.value)} />
+          </Field>
+          <Field>
+            OSC port
+            <Input
+              type="number"
+              min={1}
+              max={65535}
+              value={oscPort}
+              onChange={(e) => setOscPort(Number(e.target.value))}
+            />
+          </Field>
+          <Field>
+            Feedback port
+            <Input
+              type="number"
+              min={1}
+              max={65535}
+              value={feedbackPort}
+              onChange={(e) => setFeedbackPort(Number(e.target.value))}
+            />
+          </Field>
+        </Row>
 
-      <CheckLabel>
-        <input
-          type="checkbox"
-          checked={controlPermission}
-          onChange={(e) => setControlPermission(e.target.checked)}
-        />
-        Allow DAW control
-      </CheckLabel>
-      {status?.session_id && !status.control_permission ? (
+        <CheckLabel>
+          <input
+            type="checkbox"
+            checked={controlPermission}
+            onChange={(e) => setControlPermission(e.target.checked)}
+          />
+          Allow DAW control
+        </CheckLabel>
+        {status?.session_id && !status.control_permission ? (
+          <Muted>
+            Session connected without DAW control. Reconnect with the checkbox enabled to send
+            transport/mixer commands.
+          </Muted>
+        ) : null}
+
+        <Row>
+          <Button
+            type="button"
+            disabled={busy}
+            onClick={() => run('connect', () => connectArdourCompanion({
+              host,
+              osc_port: oscPort,
+              feedback_port: feedbackPort,
+              control_permission: controlPermission,
+            }))}
+          >
+            Connect
+          </Button>
+          <Button
+            type="button"
+            disabled={busy}
+            onClick={() => run('disconnect', () => disconnectArdourCompanion())}
+          >
+            Disconnect
+          </Button>
+        </Row>
+      </Step>
+
+      <Step data-testid="ardour-workflow-transport">
+        <StepTitle>2. Transport + timecode</StepTitle>
+        <Banner>
+          {playing ? 'playing' : 'stopped'}
+          {' · '}
+          {clock.display}
+          {status?.locate_samples != null ? ` · samples=${status.locate_samples}` : ''}
+          {status?.sample_rate ? ` · ${status.sample_rate} Hz` : ''}
+        </Banner>
+        <Row>
+          <Button
+            type="button"
+            disabled={busy || !controlsEnabled}
+            onClick={() => run('play', () => ardourTransportPlay())}
+          >
+            Play
+          </Button>
+          <Button
+            type="button"
+            disabled={busy || !controlsEnabled}
+            onClick={() => run('stop', () => ardourTransportStop())}
+          >
+            Stop
+          </Button>
+          <Field>
+            Locate samples
+            <Input
+              type="number"
+              min={0}
+              value={locateSamples}
+              onChange={(e) => setLocateSamples(Number(e.target.value))}
+            />
+          </Field>
+          <Button
+            type="button"
+            disabled={busy || !controlsEnabled}
+            onClick={() => run('locate', () => ardourTransportLocate({ samples: locateSamples, roll: 0 }))}
+          >
+            Locate
+          </Button>
+          <Button
+            type="button"
+            disabled={busy || !controlsEnabled}
+            onClick={() => run('record_arm', () => setArdourRecordArm(!(status?.record_armed)))}
+          >
+            Record {status?.record_armed ? 'armed' : 'disarmed'}
+          </Button>
+        </Row>
         <Muted>
-          Session connected without DAW control. Reconnect with the checkbox enabled to send
-          transport/mixer commands.
+          Display clock is samples÷sample_rate (not Ardour BBT). Selected strip:{' '}
+          {status?.selected_strip_name || status?.selected_ssid || '—'}
         </Muted>
-      ) : null}
+      </Step>
 
-      <Row>
-        <Button
-          type="button"
-          disabled={busy}
-          onClick={() => run('connect', () => connectArdourCompanion({
-            host,
-            osc_port: oscPort,
-            feedback_port: feedbackPort,
-            control_permission: controlPermission,
-          }))}
-        >
-          Connect
-        </Button>
-        <Button
-          type="button"
-          disabled={busy}
-          onClick={() => run('disconnect', () => disconnectArdourCompanion())}
-        >
-          Disconnect
-        </Button>
-      </Row>
+      <ArdourExchangePanel companionStatus={status} />
 
-      <Row>
-        <Button
-          type="button"
-          disabled={busy || !controlsEnabled}
-          onClick={() => run('play', () => ardourTransportPlay())}
-        >
-          Play
-        </Button>
-        <Button
-          type="button"
-          disabled={busy || !controlsEnabled}
-          onClick={() => run('stop', () => ardourTransportStop())}
-        >
-          Stop
-        </Button>
-        <Field>
-          Locate samples
-          <Input
-            type="number"
-            min={0}
-            value={locateSamples}
-            onChange={(e) => setLocateSamples(Number(e.target.value))}
-          />
-        </Field>
-        <Button
-          type="button"
-          disabled={busy || !controlsEnabled}
-          onClick={() => run('locate', () => ardourTransportLocate({ samples: locateSamples, roll: 0 }))}
-        >
-          Locate
-        </Button>
-        <Button
-          type="button"
-          disabled={busy || !controlsEnabled}
-          onClick={() => run('record_arm', () => setArdourRecordArm(!(status?.record_armed)))}
-        >
-          Record {status?.record_armed ? 'armed' : 'disarmed'}
-        </Button>
-      </Row>
-
-      <Muted>
-        Transport playing: {status?.transport_playing == null ? 'unknown' : String(status.transport_playing)}
-        {' · '}
-        Selected strip: {status?.selected_ssid ?? '—'}
-      </Muted>
-
-      <Table>
-        <thead>
-          <tr>
-            <th>SSID</th>
-            <th>Name</th>
-            <th>Fader</th>
-            <th>Pan</th>
-            <th>Mute</th>
-            <th>Solo</th>
-          </tr>
-        </thead>
-        <tbody>
-          {strips.map((strip) => (
-            <tr key={strip.ssid}>
-              <td>{strip.ssid}</td>
-              <td>{strip.name || '—'}</td>
-              <td>
-                <Input
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  disabled={!controlsEnabled || busy}
-                  value={strip.fader ?? 0}
-                  onChange={(e) => {
-                    const value = Number(e.target.value);
-                    void run('strip_fader', () => setArdourStripFader(strip.ssid, value));
-                  }}
-                />
-              </td>
-              <td>
-                <Input
-                  type="number"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  disabled={!controlsEnabled || busy}
-                  value={strip.pan ?? 0.5}
-                  onChange={(e) => {
-                    const value = Number(e.target.value);
-                    void run('strip_pan', () => setArdourStripPan(strip.ssid, value));
-                  }}
-                />
-              </td>
-              <td>
-                <input
-                  type="checkbox"
-                  disabled={!controlsEnabled || busy}
-                  checked={Boolean(strip.mute)}
-                  onChange={(e) => {
-                    void run('strip_mute', () => setArdourStripMute(strip.ssid, e.target.checked ? 1 : 0));
-                  }}
-                />
-              </td>
-              <td>
-                <input
-                  type="checkbox"
-                  disabled={!controlsEnabled || busy}
-                  checked={Boolean(strip.solo)}
-                  onChange={(e) => {
-                    void run('strip_solo', () => setArdourStripSolo(strip.ssid, e.target.checked ? 1 : 0));
-                  }}
-                />
-              </td>
+      <Details data-testid="ardour-workflow-mixer">
+        <Summary>Mixer (advanced)</Summary>
+        <Muted>Strip fader / pan / mute / solo — secondary to the AI Composer workflow.</Muted>
+        <Table>
+          <thead>
+            <tr>
+              <th>SSID</th>
+              <th>Name</th>
+              <th>Fader</th>
+              <th>Pan</th>
+              <th>Mute</th>
+              <th>Solo</th>
             </tr>
-          ))}
-        </tbody>
-      </Table>
-      <ArdourExchangePanel />
+          </thead>
+          <tbody>
+            {strips.map((strip) => (
+              <tr key={strip.ssid}>
+                <td>{strip.ssid}</td>
+                <td>{strip.name || '—'}</td>
+                <td>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    disabled={!controlsEnabled || busy}
+                    value={strip.fader ?? 0}
+                    onChange={(e) => {
+                      const value = Number(e.target.value);
+                      void run('strip_fader', () => setArdourStripFader(strip.ssid, value));
+                    }}
+                  />
+                </td>
+                <td>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    disabled={!controlsEnabled || busy}
+                    value={strip.pan ?? 0.5}
+                    onChange={(e) => {
+                      const value = Number(e.target.value);
+                      void run('strip_pan', () => setArdourStripPan(strip.ssid, value));
+                    }}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="checkbox"
+                    disabled={!controlsEnabled || busy}
+                    checked={Boolean(strip.mute)}
+                    onChange={(e) => {
+                      void run('strip_mute', () => setArdourStripMute(strip.ssid, e.target.checked ? 1 : 0));
+                    }}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="checkbox"
+                    disabled={!controlsEnabled || busy}
+                    checked={Boolean(strip.solo)}
+                    onChange={(e) => {
+                      void run('strip_solo', () => setArdourStripSolo(strip.ssid, e.target.checked ? 1 : 0));
+                    }}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </Details>
     </Wrap>
   );
 };
