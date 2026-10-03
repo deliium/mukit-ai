@@ -15,6 +15,7 @@ import CompositionAnalysisPanel from './CompositionAnalysisPanel.jsx';
 import AdaptiveScorePanel from './AdaptiveScorePanel.jsx';
 import PerformancePanel from './PerformancePanel.jsx';
 import SpatialScenePanel from './SpatialScenePanel.jsx';
+import ArdourCompanionPanel from './ArdourCompanionPanel.jsx';
 import VideoScoringPanel from './VideoScoringPanel.jsx';
 import HarmonyTimelinePanel from './HarmonyTimelinePanel.jsx';
 import MotifPanel from './MotifPanel.jsx';
@@ -117,6 +118,7 @@ const TABS = [
   { id: 'adaptive', label: 'Adaptive' },
   { id: 'performance', label: 'Performance' },
   { id: 'spatial', label: 'Spatial' },
+  { id: 'ardour', label: 'Ardour' },
   { id: 'picture', label: 'Picture' },
 ];
 
@@ -279,6 +281,7 @@ const ComposerWorkspace = () => {
             {tab.id === 'adaptive' && selected ? <AdaptiveScorePanel /> : null}
             {tab.id === 'performance' && selected ? <PerformancePanel /> : null}
             {tab.id === 'spatial' && selected ? <SpatialScenePanel /> : null}
+            {tab.id === 'ardour' && selected ? <ArdourCompanionPanel /> : null}
             {tab.id === 'picture' && selected ? <VideoScoringPanel /> : null}
             {tab.id === 'develop' && selected ? <CompositionDevelopmentPanel /> : null}
             {tab.id === 'arrange' && selected ? <ArrangementPanel /> : null}

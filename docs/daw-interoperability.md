@@ -90,6 +90,18 @@ Sections never invent notes — only meta markers. Projection reports list omiss
 
 **Limits:** No `.rpp` write; MusicXML is better for notation-oriented workflows than for Reaper media items.
 
+## Ardour (file import)
+
+Live transport/mixer control is a separate OSC companion — see [ardour-companion.md](ardour-companion.md). Asset exchange still uses file export/import:
+
+1. In Mukit **Export**, download **Standard MIDI** (primary), **MusicXML** (notation), and/or **WAV** (FluidSynth bounce).
+2. In Ardour: **Session → Import** (or drag the file into the editor).
+3. For SMF Type 1: choose MIDI tracks / tempo map as Ardour prompts; assign instruments per track (Mukit programs are GM hints).
+4. For MusicXML: import when you want notation-oriented material; expect automation gaps vs MIDI.
+5. For WAV: import as audio regions; this does not update `composition.v2`.
+
+**Limits:** Mukit does not write Ardour session files. The OSC companion never silently rewrites notes from Ardour feedback.
+
 ## MusicXML
 
 Use for Sibelius / Dorico / MuseScore / notation review. Expect `automation_omitted_from_notation` and related projection headers — MIDI remains the automation-faithful DAW path.
@@ -138,6 +150,7 @@ sequenceDiagram
 ## See also
 
 - [composition-v2.md](composition-v2.md) — score contract + projection codes
+- [ardour-companion.md](ardour-companion.md) — live Ardour OSC companion (V5)
 - [import.md](import.md) — MIDI/MusicXML ingress
 - [browser-playback.md](browser-playback.md) — Tone.js (not a DAW bridge)
 - [testing.md](testing.md) — V1/V2/V3 Docker gates
