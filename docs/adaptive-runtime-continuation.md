@@ -4,6 +4,8 @@ Playback can keep sounding while a symbolic model prepares the next bars. The pl
 
 The playback clock does not call a model. Maintain returns a deterministic fallback immediately. The model is a scheduled task the request does not await.
 
+Opt-in **Continuous mode** (MusicState + virtual bars past `bar_count`) is documented in [continuous-music.md](continuous-music.md).
+
 ## Documents
 
 | Schema | Role |
@@ -71,7 +73,7 @@ All routes use the adaptive-score read permission.
 
 | Method | Path | Result |
 |--------|------|--------|
-| POST | `/{score_id}/continuation` | Start. Body: `expected_document_revision` and `mode`. Playback that is not running returns 200 with `playback_not_running` and does not store a session. |
+| POST | `/{score_id}/continuation` | Start. Body: `expected_document_revision`, `mode`, and optional `continuous` (latched when `ADAPTIVE_CONTINUOUS_ENABLED`). Playback that is not running returns 200 with `playback_not_running` and does not store a session. |
 | GET | `/{score_id}/continuation` | Snapshot, or 204 |
 | POST | `/{score_id}/continuation/maintain` | Fallback snapshot. 404 `continuation_not_running` when no session exists. |
 | GET | `/{score_id}/continuation/buffer` | Buffer, or 204 |

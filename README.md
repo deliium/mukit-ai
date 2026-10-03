@@ -376,6 +376,8 @@ mukit-ai/
 | [Adaptive musical context](docs/adaptive-musical-context.md) | Flat external samples, hysteresis, and playback commands from the Adaptive tab |
 | [Adaptive music client](docs/adaptive-music-client.md) | Python and TypeScript clients plus a terminal exploration / danger / combat / victory demo |
 | [Adaptive runtime continuation](docs/adaptive-runtime-continuation.md) | Session lookahead beside the playback clock; fallback notes stay in memory |
+| [Continuous generative music](docs/continuous-music.md) | Opt-in virtual timeline + MusicState; buffer is not the durable score |
+| [V5 Composer OS platform](docs/v5-platform.md) | V5 product surface, migration ladder, studio matrix, CI vs opt-in Docker |
 | [Composition Analysis](docs/composition-analysis.md) | Deterministic sidecar, scopes, warnings, Analysis tab |
 | [MIDI / MusicXML import](docs/import.md) | Ingestion mappings, limits, issue codes, security |
 | [Symbolic datasets](docs/datasets.md) | Offline licensed corpus pipeline (`DATASET_ROOT`, CLI build/verify) |
