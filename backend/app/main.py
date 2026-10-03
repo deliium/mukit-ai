@@ -144,10 +144,38 @@ async def lifespan(_app: FastAPI):
             "Application startup personal composer sweep failed",
             extra={"error_type": type(exc).__name__, "code": "personal_sweep_skipped"},
         )
+    try:
+        from .execution_node_settings import load_execution_node_settings
+        from .services.execution_node_fake import ensure_fake_peer_registered
+        from .services.execution_node_worker_loop import start_worker_loop
+
+        exec_settings = load_execution_node_settings()
+        logger.info(
+            "Execution nodes startup",
+            extra={
+                "enabled": exec_settings.enabled,
+                "role": exec_settings.role,
+                "fake": exec_settings.fake,
+            },
+        )
+        if exec_settings.enabled and exec_settings.fake and exec_settings.role in {
+            "controller",
+            "both",
+        }:
+            ensure_fake_peer_registered()
+        if exec_settings.enabled and exec_settings.role in {"worker", "both"}:
+            start_worker_loop()
+    except Exception as exc:
+        logger.warning(
+            "Execution nodes startup skipped",
+            extra={"error_type": type(exc).__name__},
+        )
     yield
     from .services.adaptive_engine_service import cancel_adaptive_engine_tasks
+    from .services.execution_node_worker_loop import stop_worker_loop
 
     cancel_adaptive_engine_tasks()
+    await stop_worker_loop()
     logger.info("Application shutdown")
 
 
