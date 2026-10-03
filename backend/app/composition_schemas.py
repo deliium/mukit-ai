@@ -773,6 +773,73 @@ class CompositionV2SustainPedal(BaseModel):
     duration_ticks: int = Field(..., gt=0)
 
 
+# Caps locked with frontend midiExpressive/constants.js (Task 2).
+NOTE_PERFORMANCE_MAX_CURVE_POINTS = 32
+NOTE_PERFORMANCE_MAX_CONTROLLER_IDS = 8
+
+
+def degrade_velocity_u16_to_midi7(velocity_u16: int) -> int:
+    """Commit degrade: clamp(round(velocity_u16 / 512), 1, 127); 0 stays 0."""
+    if velocity_u16 <= 0:
+        return 0
+    return min(127, max(1, int(round(velocity_u16 / 512))))
+
+
+class CompositionV2PitchCentsPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tick_offset: int
+    cents: int
+
+
+class CompositionV2PressurePoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tick_offset: int
+    value: float = Field(..., ge=0.0, le=1.0)
+
+
+class CompositionV2ControllerPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tick_offset: int
+    controller: int = Field(..., ge=0, le=127)
+    value: int = Field(..., ge=0, le=127)
+
+
+class CompositionV2NotePerformance(BaseModel):
+    """Optional per-note performance metadata keyed by event_id (not playable alone)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str = Field(..., min_length=1, max_length=120)
+    velocity_u16: int | None = Field(default=None, ge=0, le=65535)
+    pitch_cents: list[CompositionV2PitchCentsPoint] = Field(default_factory=list)
+    pressure: list[CompositionV2PressurePoint] = Field(default_factory=list)
+    controllers: list[CompositionV2ControllerPoint] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_curve_caps(self) -> CompositionV2NotePerformance:
+        if len(self.pitch_cents) > NOTE_PERFORMANCE_MAX_CURVE_POINTS:
+            raise ValueError(
+                f"pitch_cents must have at most {NOTE_PERFORMANCE_MAX_CURVE_POINTS} points"
+            )
+        if len(self.pressure) > NOTE_PERFORMANCE_MAX_CURVE_POINTS:
+            raise ValueError(
+                f"pressure must have at most {NOTE_PERFORMANCE_MAX_CURVE_POINTS} points"
+            )
+        if len(self.controllers) > NOTE_PERFORMANCE_MAX_CURVE_POINTS:
+            raise ValueError(
+                f"controllers must have at most {NOTE_PERFORMANCE_MAX_CURVE_POINTS} points"
+            )
+        controller_ids = {point.controller for point in self.controllers}
+        if len(controller_ids) > NOTE_PERFORMANCE_MAX_CONTROLLER_IDS:
+            raise ValueError(
+                f"controllers may reference at most {NOTE_PERFORMANCE_MAX_CONTROLLER_IDS} ids"
+            )
+        return self
+
+
 class CompositionV2AutomationPoint(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -820,6 +887,7 @@ class CompositionV2Track(BaseModel):
     dynamic_marks: list[CompositionV2DynamicMark] = Field(default_factory=list)
     sustain_pedals: list[CompositionV2SustainPedal] = Field(default_factory=list)
     automation: list[CompositionV2AutomationLane] = Field(default_factory=list)
+    note_performances: list[CompositionV2NotePerformance] = Field(default_factory=list)
 
     @field_validator("id", "name", "instrument")
     @classmethod
@@ -1304,6 +1372,7 @@ class CompositionV2(BaseModel):
         if len(event_ids) != len(set(event_ids)):
             raise ValueError("Note event ids must be unique when present")
 
+        _validate_composition_note_performances(self)
         _validate_composition_motifs(self)
 
         logger.info(
@@ -1324,6 +1393,58 @@ class CompositionV2(BaseModel):
             },
         )
         return self
+
+
+def _validate_composition_note_performances(composition: CompositionV2) -> None:
+    """Resolve note_performances event_ids on the same track; enforce degrade invariant."""
+    total = 0
+    for track in composition.tracks:
+        rows = track.note_performances or []
+        if not rows:
+            continue
+        total += len(rows)
+        events_by_id = {
+            event.id: event for event in track.events if event.id is not None
+        }
+        seen_event_ids: set[str] = set()
+        for row in rows:
+            if row.event_id in seen_event_ids:
+                raise ValueError(
+                    f"note_performances event_id {row.event_id!r} is duplicated on track {track.id}"
+                )
+            seen_event_ids.add(row.event_id)
+            event = events_by_id.get(row.event_id)
+            if event is None:
+                raise ValueError(
+                    f"note_performances event_id {row.event_id!r} is not on track {track.id}"
+                )
+            if row.velocity_u16 is not None:
+                expected = degrade_velocity_u16_to_midi7(row.velocity_u16)
+                if expected != event.velocity:
+                    raise ValueError(
+                        "note_performances.velocity_u16 must degrade to the event velocity "
+                        f"(event_id={row.event_id!r}, expected={expected}, got={event.velocity})"
+                    )
+            duration = event.duration_ticks
+            for point in row.pitch_cents:
+                if point.tick_offset < 0 or point.tick_offset > duration:
+                    raise ValueError(
+                        f"pitch_cents tick_offset out of range for event {row.event_id!r}"
+                    )
+            for point in row.pressure:
+                if point.tick_offset < 0 or point.tick_offset > duration:
+                    raise ValueError(
+                        f"pressure tick_offset out of range for event {row.event_id!r}"
+                    )
+            for point in row.controllers:
+                if point.tick_offset < 0 or point.tick_offset > duration:
+                    raise ValueError(
+                        f"controllers tick_offset out of range for event {row.event_id!r}"
+                    )
+    logger.debug(
+        "Composition V2 note_performances validation",
+        extra={"note_performance_count": total},
+    )
 
 
 def _index_events_by_id(

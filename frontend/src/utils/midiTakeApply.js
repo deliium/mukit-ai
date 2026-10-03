@@ -9,6 +9,11 @@ import {
   barDurationTicks,
   compileTimeline,
 } from './compositionTimeline.js';
+import { PERFORMANCE_METADATA_DROP_REASON } from './midiExpressive/constants.js';
+import {
+  degradeVelocityU16ToMidi7,
+  promoteMidi1VelocityToU16,
+} from './midiExpressive/velocity.js';
 import { validateMusicJson } from './musicJsonValidation.js';
 import { ensureNoteId } from './pianoRollEvents.js';
 
@@ -283,6 +288,8 @@ export function applyMidiTakeToComposition(composition, options = {}) {
   const newEvents = [];
   const noteRefs = [];
   const skipWarnings = [];
+  /** @type {Array<object>} */
+  const pendingPerformances = [];
 
   notes.forEach((note, index) => {
     const start = Math.round(Number(note.start_tick) || 0);
@@ -295,7 +302,13 @@ export function applyMidiTakeToComposition(composition, options = {}) {
       skipWarnings.push('note_missing_pitch');
       return;
     }
-    const velocity = Math.max(1, Math.min(127, Math.round(Number(note.velocity) || 1)));
+    let velocity = Math.max(1, Math.min(127, Math.round(Number(note.velocity) || 1)));
+    if (note.velocity_u16 != null && Number.isFinite(Number(note.velocity_u16))) {
+      const degraded = degradeVelocityU16ToMidi7(Number(note.velocity_u16));
+      if (degraded > 0) {
+        velocity = degraded;
+      }
+    }
     const draft = {
       type: 'note',
       pitch: note.pitch,
@@ -310,6 +323,45 @@ export function applyMidiTakeToComposition(composition, options = {}) {
     });
     newEvents.push({ ...draft, id });
     noteRefs.push({ trackId, eventId: id });
+
+    const velocityU16 = note.velocity_u16 != null && Number.isFinite(Number(note.velocity_u16))
+      ? Math.max(0, Math.min(65535, Math.round(Number(note.velocity_u16))))
+      : null;
+    const hasHighResVelocity = velocityU16 != null
+      && velocityU16 !== promoteMidi1VelocityToU16(velocity);
+    const hasCurves = Boolean(
+      (Array.isArray(note.pitch_cents) && note.pitch_cents.length)
+      || (Array.isArray(note.pressure) && note.pressure.length)
+      || (Array.isArray(note.controllers) && note.controllers.length)
+      || hasHighResVelocity,
+    );
+    if (hasCurves) {
+      /** @type {Record<string, unknown>} */
+      const row = { event_id: id };
+      if (velocityU16 != null) {
+        row.velocity_u16 = velocityU16;
+      }
+      if (Array.isArray(note.pitch_cents) && note.pitch_cents.length) {
+        row.pitch_cents = note.pitch_cents.map((p) => ({
+          tick_offset: Math.round(Number(p.tick_offset) || 0),
+          cents: Math.round(Number(p.cents) || 0),
+        }));
+      }
+      if (Array.isArray(note.pressure) && note.pressure.length) {
+        row.pressure = note.pressure.map((p) => ({
+          tick_offset: Math.round(Number(p.tick_offset) || 0),
+          value: Math.max(0, Math.min(1, Number(p.value) || 0)),
+        }));
+      }
+      if (Array.isArray(note.controllers) && note.controllers.length) {
+        row.controllers = note.controllers.map((p) => ({
+          tick_offset: Math.round(Number(p.tick_offset) || 0),
+          controller: Math.max(0, Math.min(127, Math.round(Number(p.controller) || 0))),
+          value: Math.max(0, Math.min(127, Math.round(Number(p.value) || 0))),
+        }));
+      }
+      pendingPerformances.push(row);
+    }
   });
 
   if (!newEvents.length && !sustainPedals.length) {
@@ -330,6 +382,10 @@ export function applyMidiTakeToComposition(composition, options = {}) {
     });
   }
 
+  const existingPerformances = Array.isArray(working.tracks[trackIndex].note_performances)
+    ? working.tracks[trackIndex].note_performances
+    : [];
+
   const tracks = working.tracks.map((track, index) => {
     if (index !== trackIndex) {
       return track;
@@ -343,12 +399,44 @@ export function applyMidiTakeToComposition(composition, options = {}) {
     } else if ('sustain_pedals' in track) {
       nextTrack.sustain_pedals = Array.isArray(track.sustain_pedals) ? track.sustain_pedals : [];
     }
+    if (pendingPerformances.length) {
+      nextTrack.note_performances = [...existingPerformances, ...pendingPerformances];
+    } else if ('note_performances' in track) {
+      nextTrack.note_performances = existingPerformances;
+    }
     return nextTrack;
   });
 
   working = { ...working, tracks };
+  const warnings = [...skipWarnings, ...mergedPedals.warnings];
 
-  const validation = validateMusicJson(working);
+  let validation = validateMusicJson(working);
+  if (!validation.valid && pendingPerformances.length) {
+    log.warn('Performance metadata dropped after validation failure', {
+      code: PERFORMANCE_METADATA_DROP_REASON,
+      message: validation.message,
+      performanceCount: pendingPerformances.length,
+    });
+    warnings.push(PERFORMANCE_METADATA_DROP_REASON);
+    working = {
+      ...working,
+      tracks: working.tracks.map((track, index) => {
+        if (index !== trackIndex) {
+          return track;
+        }
+        const next = { ...track, events: [...existingEvents, ...newEvents] };
+        if (mergedPedals.pedals.length) {
+          next.sustain_pedals = mergedPedals.pedals;
+        }
+        if ('note_performances' in track || existingPerformances.length) {
+          next.note_performances = existingPerformances;
+        }
+        return next;
+      }),
+    };
+    validation = validateMusicJson(working);
+  }
+
   if (!validation.valid) {
     log.error('MIDI take validation failed', {
       code: MIDI_TAKE_ERROR_CODES.VALIDATION_FAILED,
@@ -365,6 +453,7 @@ export function applyMidiTakeToComposition(composition, options = {}) {
 
   log.info('MIDI take applied', {
     noteCount: newEvents.length,
+    performanceCount: pendingPerformances.length,
     pedalCount: sustainPedals.length,
     barsAdded: extended.barsAdded,
     trackId,
@@ -377,6 +466,6 @@ export function applyMidiTakeToComposition(composition, options = {}) {
     barsAdded: extended.barsAdded,
     previousDuration: extended.previousDuration,
     nextDuration: extended.nextDuration,
-    warnings: [...skipWarnings, ...mergedPedals.warnings],
+    warnings,
   };
 }

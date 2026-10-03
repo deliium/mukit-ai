@@ -112,9 +112,15 @@ import {
 } from '../utils/audioAlignment.js';
 import { probeAudioInputSupport } from '../utils/audioInputSupport.js';
 import { createAudioRecorder } from '../utils/audioRecorder.js';
-import { createMidiAccessSession } from '../utils/midiInputAccess.js';
+import {
+  createMidiAccessSession,
+  readMidiInputPreference,
+  writeMidiInputPreference,
+} from '../utils/midiInputAccess.js';
 import { MIDI_MESSAGE_KINDS, parseMidiMessage } from '../utils/midiInputMessages.js';
 import { probeWebMidiSupport } from '../utils/midiInputSupport.js';
+import { isMidiExpressiveEnabled } from '../utils/midiExpressive/constants.js';
+import { probeMidiCapability } from '../utils/midiExpressive/capabilityProbe.js';
 import { createMidiPerformanceCapture } from '../utils/midiPerformanceCapture.js';
 import { createMidiMetronome } from '../utils/midiMetronome.js';
 import { applyMidiTakeToComposition } from '../utils/midiTakeApply.js';
@@ -712,6 +718,12 @@ const initialMidiInputState = {
   midiTakeSummary: null,
   midiErrorCode: null,
   midiErrorMessage: '',
+  /** Session midi.capability.v1 snapshot (not persisted on Composition). */
+  midiCapability: null,
+  /** MPE mapping preference (midiInput:v1); default off. */
+  midiMpeMappingEnabled: false,
+  /** Effective expressive gate (VITE_MIDI_EXPRESSIVE_ENABLED). */
+  midiExpressiveEnabled: isMidiExpressiveEnabled(),
 };
 
 const initialLivePerformanceState = {
@@ -1037,10 +1049,14 @@ function disposeMidiInputSubscription() {
 function beginMidiCapture(set, get, { originTick, atMs } = {}) {
   const state = get();
   const composition = state.editedMusicJson;
+  const expressiveEnv = { VITE_MIDI_EXPRESSIVE_ENABLED: state.midiExpressiveEnabled ? 'true' : 'false' };
   if (!midiCaptureSession) {
     midiCaptureSession = createMidiPerformanceCapture({
       composition,
       originTick: originTick ?? state.editCursorTick ?? 0,
+      mpeMappingEnabled: state.midiMpeMappingEnabled === true,
+      expressiveEnv,
+      transport: state.midiCapability?.transport || 'midi1_bytes',
     });
   }
   midiPendingTake = null;
@@ -1048,6 +1064,9 @@ function beginMidiCapture(set, get, { originTick, atMs } = {}) {
     originTick: originTick ?? state.editCursorTick ?? 0,
     composition,
     atMs,
+    mpeMappingEnabled: state.midiMpeMappingEnabled === true,
+    expressiveEnv,
+    transport: state.midiCapability?.transport || 'midi1_bytes',
   });
   if (!transitionMidiPhase(set, get, MIDI_PHASES.RECORDING, 'capture-start')) {
     return false;
@@ -10433,7 +10452,15 @@ export const useMusicStore = create((set, get) => ({
       midiAccessSession = null;
     }
 
-    midiAccessSession = createMidiAccessSession(deps);
+    const pref = readMidiInputPreference(deps.storage);
+    const mpeMappingEnabled = get().midiMpeMappingEnabled === true || pref.mpeMappingEnabled === true;
+    midiAccessSession = createMidiAccessSession({
+      ...deps,
+      mpeMappingEnabled,
+      expressiveEnv: {
+        VITE_MIDI_EXPRESSIVE_ENABLED: get().midiExpressiveEnabled ? 'true' : 'false',
+      },
+    });
     midiAccessUnsubscribe = midiAccessSession.subscribe((event) => {
       handleMidiAccessEvent(set, get, event);
     });
@@ -10450,6 +10477,7 @@ export const useMusicStore = create((set, get) => ({
         midiSelectedInputId: null,
         midiErrorCode: result.reason,
         midiErrorMessage: result.reason,
+        midiCapability: result.capability || null,
       });
       midiLogger.info('MIDI enable failed in store', { reason: result.reason });
       return result;
@@ -10469,6 +10497,8 @@ export const useMusicStore = create((set, get) => ({
       midiDestinationTrackId: destination,
       midiErrorCode: null,
       midiErrorMessage: '',
+      midiCapability: result.capability || null,
+      midiMpeMappingEnabled: mpeMappingEnabled,
     });
     if (selectedInputId) {
       get().selectMidiInput(selectedInputId);
@@ -10477,8 +10507,38 @@ export const useMusicStore = create((set, get) => ({
       inputCount: result.inputs.length,
       hasSelection: Boolean(selectedInputId),
       destinationTrackId: destination,
+      transport: result.capability?.transport,
+      mpeEligible: result.capability?.mpe?.eligible,
+      highResVelocity: result.capability?.high_res_velocity,
     });
     return result;
+  },
+
+  setMidiMpeMappingEnabled: (enabled) => {
+    const mpeMappingEnabled = enabled === true;
+    set({ midiMpeMappingEnabled: mpeMappingEnabled });
+    writeMidiInputPreference({ mpeMappingEnabled });
+    if (midiCaptureSession && typeof midiCaptureSession.setMpeMappingEnabled === 'function') {
+      midiCaptureSession.setMpeMappingEnabled(mpeMappingEnabled);
+    }
+    const state = get();
+    // After Enable MIDI, keep the known-good Web MIDI probe context — do not
+    // re-evaluate navigator (often absent in unit tests / after enable).
+    const webAlreadyAvailable =
+      state.midiAccessStatus === 'ready'
+      || state.midiCapability?.web_midi === 'available';
+    const capability = probeMidiCapability({
+      webMidiEnv: webAlreadyAvailable
+        ? { isSecureContext: true, hasRequestMidiAccess: true }
+        : undefined,
+      mpeMappingEnabled,
+      hasUmpApi: state.midiCapability?.transport === 'ump_experimental',
+      expressiveEnv: {
+        VITE_MIDI_EXPRESSIVE_ENABLED: state.midiExpressiveEnabled ? 'true' : 'false',
+      },
+    });
+    set({ midiCapability: capability });
+    midiLogger.debug('MPE mapping preference updated', { mpeMappingEnabled });
   },
 
   selectMidiInput: (inputId) => {

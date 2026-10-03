@@ -111,9 +111,13 @@ const MidiInputPanel = () => {
   const midiErrorMessage = useMusicStore((state) => state.midiErrorMessage);
   const midiTakeSummary = useMusicStore((state) => state.midiTakeSummary);
   const pianoRollTrackId = useMusicStore((state) => state.pianoRollTrackId);
+  const midiCapability = useMusicStore((state) => state.midiCapability);
+  const midiMpeMappingEnabled = useMusicStore((state) => state.midiMpeMappingEnabled);
+  const midiExpressiveEnabled = useMusicStore((state) => state.midiExpressiveEnabled);
 
   const probeMidiSupport = useMusicStore((state) => state.probeMidiSupport);
   const enableMidiAccess = useMusicStore((state) => state.enableMidiAccess);
+  const setMidiMpeMappingEnabled = useMusicStore((state) => state.setMidiMpeMappingEnabled);
   const selectMidiInput = useMusicStore((state) => state.selectMidiInput);
   const setMidiDestinationTrackId = useMusicStore((state) => state.setMidiDestinationTrackId);
   const setMidiMetronomeEnabled = useMusicStore((state) => state.setMidiMetronomeEnabled);
@@ -186,6 +190,11 @@ const MidiInputPanel = () => {
         Phase: {midiPhase}
         {midiAccessStatus !== 'idle' ? ` · access: ${midiAccessStatus}` : ''}
         {midiArmed ? ' · armed' : ''}
+        {midiCapability?.transport
+          ? ` · transport: ${midiCapability.transport}`
+          : ''}
+        {midiExpressiveEnabled === false ? ' · expressive: off' : ''}
+        {midiMpeMappingEnabled ? ' · MPE: on' : ''}
       </Status>
 
       {unsupported ? (
@@ -231,6 +240,16 @@ const MidiInputPanel = () => {
       </Row>
 
       <Row>
+        <Label>
+          <input
+            type="checkbox"
+            checked={Boolean(midiMpeMappingEnabled)}
+            disabled={midiExpressiveEnabled === false}
+            onChange={(event) => setMidiMpeMappingEnabled(event.target.checked)}
+          />
+          {' '}
+          MPE mapping
+        </Label>
         <Label>
           Count-in
           <Select

@@ -1,6 +1,11 @@
 import { classifyCompositionVersion, SCHEMA_VERSION_V2 } from './compositionVersion.js';
 import { barEndTick, barStartTick, compileTimeline } from './compositionTimeline.js';
 import { validateMotifDefinitions } from './compositionMotifs.js';
+import {
+  NOTE_PERFORMANCE_MAX_CONTROLLER_IDS,
+  NOTE_PERFORMANCE_MAX_CURVE_POINTS,
+} from './midiExpressive/constants.js';
+import { degradeVelocityU16ToMidi7 } from './midiExpressive/velocity.js';
 
 const KEY_PATTERN = /^[A-G](?:#|b)?\s+(?:major|minor)$/;
 const TIME_SIGNATURE_PATTERN = /^\d{1,2}\/\d{1,2}$/;
@@ -323,9 +328,102 @@ function validateCanonicalTracks(tracks, durationTicks, variant) {
       if (!tieResult.valid) {
         return tieResult;
       }
+      const perfResult = validateNotePerformances(track);
+      if (!perfResult.valid) {
+        return perfResult;
+      }
     }
   }
   return valid('Canonical tracks are valid.');
+}
+
+/**
+ * Optional note_performances — orphans / degrade mismatch / caps fail validation.
+ * @param {object} track
+ */
+export function validateNotePerformances(track) {
+  const rows = track.note_performances;
+  if (rows == null) {
+    return valid('note_performances absent');
+  }
+  if (!Array.isArray(rows)) {
+    return invalid(`Track ${track.id} note_performances must be an array.`);
+  }
+  if (rows.length === 0) {
+    return valid('note_performances empty');
+  }
+  const eventsById = new Map();
+  for (const event of track.events || []) {
+    if (event && typeof event.id === 'string' && event.id) {
+      eventsById.set(event.id, event);
+    }
+  }
+  const seen = new Set();
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') {
+      return invalid(`Track ${track.id} note_performances entries must be objects.`);
+    }
+    const eventId = typeof row.event_id === 'string' ? row.event_id : '';
+    if (!eventId) {
+      return invalid(`Track ${track.id} note_performances require event_id.`);
+    }
+    if (seen.has(eventId)) {
+      return invalid(`Track ${track.id} note_performances duplicate event_id ${eventId}.`);
+    }
+    seen.add(eventId);
+    const event = eventsById.get(eventId);
+    if (!event) {
+      return invalid(`Track ${track.id} note_performances orphan event_id ${eventId}.`);
+    }
+    if (row.velocity_u16 != null) {
+      const u16 = Number(row.velocity_u16);
+      if (!Number.isInteger(u16) || u16 < 0 || u16 > 65535) {
+        return invalid(`note_performances.velocity_u16 must be 0..65535 (${eventId}).`);
+      }
+      const expected = degradeVelocityU16ToMidi7(u16);
+      if (expected !== Number(event.velocity)) {
+        return invalid(
+          `note_performances.velocity_u16 must degrade to event.velocity (${eventId}).`,
+        );
+      }
+    }
+    const duration = Number(event.duration_ticks) || 0;
+    const curveChecks = [
+      ['pitch_cents', row.pitch_cents, 'cents'],
+      ['pressure', row.pressure, 'value'],
+      ['controllers', row.controllers, 'controller'],
+    ];
+    for (const [name, points] of curveChecks) {
+      if (points == null) {
+        continue;
+      }
+      if (!Array.isArray(points)) {
+        return invalid(`note_performances.${name} must be an array (${eventId}).`);
+      }
+      if (points.length > NOTE_PERFORMANCE_MAX_CURVE_POINTS) {
+        return invalid(
+          `note_performances.${name} exceeds ${NOTE_PERFORMANCE_MAX_CURVE_POINTS} points (${eventId}).`,
+        );
+      }
+      for (const point of points) {
+        const offset = Number(point?.tick_offset);
+        if (!Number.isInteger(offset) || offset < 0 || offset > duration) {
+          return invalid(
+            `note_performances.${name} tick_offset out of range (${eventId}).`,
+          );
+        }
+      }
+    }
+    if (Array.isArray(row.controllers)) {
+      const ids = new Set(row.controllers.map((p) => Number(p.controller)));
+      if (ids.size > NOTE_PERFORMANCE_MAX_CONTROLLER_IDS) {
+        return invalid(
+          `note_performances.controllers exceed ${NOTE_PERFORMANCE_MAX_CONTROLLER_IDS} ids (${eventId}).`,
+        );
+      }
+    }
+  }
+  return valid('note_performances valid');
 }
 
 function validateCanonicalEvent(event, durationTicks, variant) {

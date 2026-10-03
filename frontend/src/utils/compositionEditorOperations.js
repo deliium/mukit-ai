@@ -12,6 +12,7 @@ import {
   uniqueNoteRefs,
 } from './compositionEditorSelection.js';
 import { applyMotifReconciliation } from './compositionMotifs.js';
+import { pruneNotePerformancesForRemovedEventIds } from './midiExpressive/pruneNotePerformances.js';
 import {
   ARTICULATION_VALUES,
   DEFAULT_NOTE_VELOCITY,
@@ -377,6 +378,10 @@ export function deleteNotes(composition, refs, { lockedTrackIds = null } = {}) {
   let nextComposition = { ...composition, tracks };
   if (Array.isArray(composition.motifs) && composition.motifs.length && removedEventIds.length) {
     nextComposition = applyMotifReconciliation(nextComposition, removedEventIds).composition;
+  }
+  if (removedEventIds.length) {
+    const pruned = pruneNotePerformancesForRemovedEventIds(nextComposition, removedEventIds);
+    nextComposition = pruned.composition;
   }
 
   return okResult(nextComposition, selectionFromRefs([]), {

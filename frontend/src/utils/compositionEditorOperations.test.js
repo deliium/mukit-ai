@@ -242,6 +242,52 @@ test('deleteNotes removes notes, clears broken ties, and reconciles motifs', () 
   assert.deepEqual(result.composition.motifs, []);
 });
 
+test('deleteNotes prunes note_performances for removed event ids', () => {
+  const composition = buildComposition({
+    tracks: [
+      {
+        id: 'melody',
+        name: 'Melody',
+        instrument: 'Piano',
+        role: 'melody',
+        midi_program: 0,
+        channel: 1,
+        events: [
+          {
+            id: 'n1',
+            type: 'note',
+            pitch: 'C4',
+            start_tick: 0,
+            duration_ticks: 480,
+            velocity: 90,
+            articulations: [],
+            tie: null,
+          },
+          {
+            id: 'n2',
+            type: 'note',
+            pitch: 'E4',
+            start_tick: 480,
+            duration_ticks: 480,
+            velocity: 90,
+            articulations: [],
+            tie: null,
+          },
+        ],
+        note_performances: [
+          { event_id: 'n1', velocity_u16: 90 << 9, pitch_cents: [{ tick_offset: 0, cents: 10 }] },
+          { event_id: 'n2', velocity_u16: 90 << 9 },
+        ],
+      },
+    ],
+  });
+  const result = deleteNotes(composition, [makeNoteRef('melody', 'n1')]);
+  assert.equal(result.ok, true);
+  const rows = result.composition.tracks[0].note_performances;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].event_id, 'n2');
+});
+
 test('cutNotes returns clipboard and deletes atomically', () => {
   const composition = buildComposition();
   const refs = [makeNoteRef('melody', 'n1')];
