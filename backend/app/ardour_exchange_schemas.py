@@ -355,10 +355,17 @@ class ArdourExchangeIngestRequestV1(_ForbiddenScanStrict):
         return value
 
 
-class ArdourExchangePrepareRequestV1(_ForbiddenScanStrict):
-    """Build an outbound package from working V2 (or last draft) + alignment."""
+class ArdourExchangePrepareRequestV1(_Strict):
+    """Build an outbound package from working V2 (or last draft) + alignment.
+
+    Narrow exception vs manifest/ingest: top-level ``composition`` may carry a
+    playable ``composition.v2`` (post-Apply working score). Nested event arrays
+    inside that composition are expected and are not scanned as forbidden keys.
+    Other top-level / sibling keys still refuse the forbidden-key set.
+    """
 
     schema_version: Literal["ardour.exchange.prepare.v1"] = PREPARE_REQUEST_SCHEMA
+    composition: CompositionV2 | None = None
     track_ids: list[str] = Field(default_factory=list, max_length=64)
     start_bar: int | None = Field(default=None, ge=1)
     bar_count: int | None = Field(default=None, ge=1, le=256)
@@ -366,6 +373,17 @@ class ArdourExchangePrepareRequestV1(_ForbiddenScanStrict):
     stem_id: str | None = Field(default=None, min_length=1, max_length=80)
     # Alignment defaults copied from current preview when omitted.
     use_preview_alignment: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_forbidden_keys_except_composition(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            probe = {key: item for key, item in value.items() if key != "composition"}
+            try:
+                reject_exchange_forbidden_payload(probe, model_name=cls.__name__)
+            except ArdourExchangeError as exc:
+                raise ValueError(exc.code) from exc
+        return value
 
 
 class ArdourExchangePrepareResultV1(_Strict):

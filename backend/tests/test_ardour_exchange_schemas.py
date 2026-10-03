@@ -79,12 +79,27 @@ def test_manifest_rejects_session_xml_key() -> None:
         ArdourExchangeManifestV1.model_validate(payload)
 
 
-def test_prepare_request_rejects_composition_key() -> None:
+def test_prepare_request_accepts_working_composition() -> None:
+    composition = CompositionV2.model_validate(json.loads(_FIXTURE_V2.read_text(encoding="utf-8")))
+    model = ArdourExchangePrepareRequestV1.model_validate(
+        {
+            "schema_version": "ardour.exchange.prepare.v1",
+            "composition": composition.model_dump(mode="json"),
+            "use_preview_alignment": True,
+        }
+    )
+    assert model.composition is not None
+    assert model.composition.schema_version == "composition.v2"
+
+
+def test_prepare_request_still_rejects_sibling_forbidden_keys() -> None:
+    composition = CompositionV2.model_validate(json.loads(_FIXTURE_V2.read_text(encoding="utf-8")))
     with pytest.raises(ValidationError, match="ardour_exchange_forbidden_payload"):
         ArdourExchangePrepareRequestV1.model_validate(
             {
                 "schema_version": "ardour.exchange.prepare.v1",
-                "composition": {"schema_version": "composition.v2"},
+                "composition": composition.model_dump(mode="json"),
+                "prompt": "x",
             }
         )
 

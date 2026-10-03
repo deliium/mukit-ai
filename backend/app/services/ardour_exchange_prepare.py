@@ -42,13 +42,27 @@ def prepare_outbound_package(
     *,
     composition: CompositionV2 | Mapping[str, Any] | None = None,
 ) -> ArdourExchangePrepareResultV1:
-    """Write an outbound package under the exchange root."""
+    """Write an outbound package under the exchange root.
+
+    Prefer ``request.composition`` (working score) when present, else the
+    explicit ``composition`` kwarg, else the session preview draft.
+    """
     preview = get_exchange_preview()
-    source_composition = composition
-    if source_composition is None:
-        if preview is None:
-            raise ArdourExchangeError("ardour_exchange_preview_missing")
+    if request.composition is not None:
+        source_composition: CompositionV2 | Mapping[str, Any] = request.composition
+        prepare_source = "working"
+    elif composition is not None:
+        source_composition = composition
+        prepare_source = "working"
+    elif preview is not None:
         source_composition = preview.draft_composition
+        prepare_source = "draft"
+    else:
+        logger.warning(
+            "Ardour exchange prepare missing preview",
+            extra={"code": "ardour_exchange_preview_missing"},
+        )
+        raise ArdourExchangeError("ardour_exchange_preview_missing")
 
     if isinstance(source_composition, CompositionV2):
         comp_dict = source_composition.model_dump(mode="json")
@@ -59,6 +73,10 @@ def prepare_outbound_package(
 
     if request.use_preview_alignment:
         if preview is None:
+            logger.warning(
+                "Ardour exchange prepare alignment missing preview",
+                extra={"code": "ardour_exchange_preview_missing", "prepare_source": prepare_source},
+            )
             raise ArdourExchangeError("ardour_exchange_preview_missing")
         start_bar = preview.alignment.start_bar
         bar_count = preview.alignment.bar_count
@@ -143,10 +161,20 @@ def prepare_outbound_package(
         audio_files=audio_files,
     )
     download_path = f"/ardour/exchange/packages/{package_id}/download"
+    logger.debug(
+        "Ardour exchange prepare slice",
+        extra={
+            "prepare_source": prepare_source,
+            "track_id_count": len(track_ids),
+            "start_bar": start_bar,
+            "bar_count": bar_count,
+        },
+    )
     logger.info(
         "Ardour exchange prepare complete",
         extra={
-            "package_id": package_id,
+            "package_id": package_id[:20],
+            "prepare_source": prepare_source,
             "bar_count": bar_count,
             "has_audio": bool(audio_files),
             "byte_size": packed.byte_size,

@@ -127,7 +127,7 @@ export async function realizeArdourExchange(intent, { instruction = null, candid
 
 export async function prepareArdourExchange(body = {}) {
   try {
-    const response = await axios.post('/ardour/exchange/prepare', {
+    const payload = {
       schema_version: 'ardour.exchange.prepare.v1',
       use_preview_alignment: body.use_preview_alignment !== false,
       track_ids: body.track_ids || [],
@@ -135,8 +135,15 @@ export async function prepareArdourExchange(body = {}) {
       bar_count: body.bar_count ?? null,
       track_name: body.track_name ?? null,
       stem_id: body.stem_id ?? null,
+    };
+    if (body.composition != null) {
+      payload.composition = body.composition;
+    }
+    const response = await axios.post('/ardour/exchange/prepare', payload);
+    logger.info('prepare', {
+      package_id: response.data?.package_id,
+      has_composition: body.composition != null,
     });
-    logger.info('prepare', { package_id: response.data?.package_id });
     return response.data;
   } catch (error) {
     throw failure(error, 'POST /ardour/exchange/prepare');
