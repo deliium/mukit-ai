@@ -13,8 +13,10 @@ from app.execution_node_schemas import (
     ExecutionNodeCatalogV1,
     ExecutionNodeError,
     ExecutionNodeInstalledModelV1,
+    ExecutionNodeResourcesV1,
     ExecutionTaskResultV1,
     ExecutionTaskV1,
+    HeartbeatAvailability,
 )
 from app.execution_node_settings import load_execution_node_settings
 from app.operation_trace import is_run_cancelled
@@ -33,13 +35,46 @@ class WorkerTaskState:
 _lock = threading.Lock()
 _TASKS: dict[str, WorkerTaskState] = {}
 _ACTIVE = 0
+_DRAINING = False
 
 
 def clear_worker_tasks() -> None:
-    global _ACTIVE
+    global _ACTIVE, _DRAINING
     with _lock:
         _TASKS.clear()
         _ACTIVE = 0
+        _DRAINING = False
+
+
+def set_worker_draining(draining: bool) -> None:
+    """Mark the worker as draining (refuse new work; heartbeat advertises draining)."""
+    global _DRAINING
+    with _lock:
+        _DRAINING = bool(draining)
+    logger.info(
+        "[FIX] Worker draining flag updated",
+        extra={"draining": bool(draining)},
+    )
+
+
+def worker_resource_snapshot() -> tuple[ExecutionNodeResourcesV1, HeartbeatAvailability]:
+    """Return live resource counters and heartbeat availability for this worker."""
+    settings = load_execution_node_settings()
+    max_concurrency = settings.max_concurrency
+    with _lock:
+        active = _ACTIVE
+        draining = _DRAINING
+    resources = ExecutionNodeResourcesV1(
+        active_tasks=active,
+        max_concurrency=max_concurrency,
+    )
+    if draining:
+        availability: HeartbeatAvailability = "draining"
+    elif active >= max_concurrency:
+        availability = "busy"
+    else:
+        availability = "available"
+    return resources, availability
 
 
 def cancel_worker_task(task_id: str) -> dict[str, str]:
@@ -85,19 +120,41 @@ async def dispatch_complete_text(task: ExecutionTaskV1) -> ExecutionTaskResultV1
     """Run one typed complete_text task against local fake/local adapters."""
     global _ACTIVE
     settings = load_execution_node_settings()
+    max_concurrency = settings.max_concurrency
     started = time.perf_counter()
     state = WorkerTaskState()
     with _lock:
-        if _ACTIVE >= 64:
+        if _DRAINING or _ACTIVE >= max_concurrency:
+            logger.warning(
+                "[FIX] Worker concurrency gate refused task",
+                extra={
+                    "task_id": task.task_id,
+                    "active_tasks": _ACTIVE,
+                    "max_concurrency": max_concurrency,
+                    "draining": _DRAINING,
+                    "code": "execution_node_busy",
+                },
+            )
             raise ExecutionNodeError(
                 "execution_node_busy",
                 "Worker is at concurrency capacity.",
+                details={
+                    "active_tasks": _ACTIVE,
+                    "max_concurrency": max_concurrency,
+                    "draining": _DRAINING,
+                },
             )
         _TASKS[task.task_id] = state
         _ACTIVE += 1
     logger.info(
         "Worker task started",
-        extra={"task_id": task.task_id, "model_id": task.model_id, "purpose": task.purpose},
+        extra={
+            "task_id": task.task_id,
+            "model_id": task.model_id,
+            "purpose": task.purpose,
+            "active_tasks": _ACTIVE,
+            "max_concurrency": max_concurrency,
+        },
     )
     try:
         if task.operation_run_id and is_run_cancelled(task.operation_run_id):

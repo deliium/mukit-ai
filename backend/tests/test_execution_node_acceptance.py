@@ -105,6 +105,40 @@ def test_cancel_cooperates_with_operation_trace(acceptance_env, monkeypatch) -> 
     assert getattr(exc_info.value, "code", "") == "execution_node_task_not_found"
 
 
+def test_cancel_forwards_to_slow_worker(acceptance_env, monkeypatch) -> None:
+    monkeypatch.setenv("AI_EXECUTION_NODE_FAKE_SLOW", "1")
+    ensure_fake_peer_registered(db_path=acceptance_env)
+    reload_registry()
+    resolved = resolve_model_for_operation(
+        AiOperation.GENERATE,
+        {"model_id": "node:0123456789abcdef:fake:language"},
+    )
+    set_current_resolved_model(resolved)
+
+    async def _run() -> str:
+        invoke = asyncio.create_task(
+            ainvoke_text_for_resolved(resolved, "slow", purpose="generate")
+        )
+        task_id = None
+        for _ in range(100):
+            ids = tasks.list_task_ids()
+            if ids:
+                task_id = ids[0]
+                break
+            await asyncio.sleep(0.02)
+        assert task_id is not None
+        cancelled = await service.cancel_task(task_id, db_path=acceptance_env)
+        assert cancelled["status"] == "cancelled"
+        assert cancelled["task_id"] == task_id
+        try:
+            return await invoke
+        except Exception as exc:  # noqa: BLE001
+            return f"{type(exc).__name__}:{getattr(exc, 'code', '')}"
+
+    outcome = asyncio.run(_run())
+    assert "operation_cancelled" in outcome
+
+
 def test_heartbeat_ttl_makes_model_unavailable(acceptance_env) -> None:
     ensure_fake_peer_registered(db_path=acceptance_env)
     reload_registry()

@@ -17,6 +17,7 @@ def test_default_disabled() -> None:
     assert settings.role == "controller"
     assert settings.fake is False
     assert settings.max_nodes == 8
+    assert settings.max_concurrency == 2
     assert settings.heartbeat_ttl_seconds == 30
 
 
@@ -36,6 +37,7 @@ def test_enabled_with_token(caplog: pytest.LogCaptureFixture) -> None:
             "AI_EXECUTION_NODE_ROLE": "both",
             "AI_EXECUTION_NODE_FAKE": "on",
             "AI_EXECUTION_NODE_MAX_NODES": "4",
+            "AI_EXECUTION_NODE_MAX_CONCURRENCY": "3",
             "AI_EXECUTION_NODE_ALLOW_HOSTNAME": "1",
             "AI_EXECUTION_NODE_ADDRESS_ALLOW_CIDRS": "100.64.0.0/10, 198.18.0.0/15",
         }
@@ -45,6 +47,7 @@ def test_enabled_with_token(caplog: pytest.LogCaptureFixture) -> None:
     assert settings.role == "both"
     assert settings.fake is True
     assert settings.max_nodes == 4
+    assert settings.max_concurrency == 3
     assert settings.allow_hostname is True
     assert settings.address_allow_cidrs == ("100.64.0.0/10", "198.18.0.0/15")
     assert token not in caplog.text

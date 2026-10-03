@@ -13,10 +13,13 @@ from app.execution_node_schemas import (
     ExecutionNodeHealthV1,
     ExecutionNodeHeartbeatV1,
     ExecutionNodeRegistrationV1,
-    ExecutionNodeResourcesV1,
 )
 from app.execution_node_settings import ExecutionNodeSettings, load_execution_node_settings
-from app.services.execution_worker_dispatch import worker_catalog
+from app.services.execution_worker_dispatch import (
+    set_worker_draining,
+    worker_catalog,
+    worker_resource_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +66,7 @@ async def worker_loop_once(
     base = settings.controller_url.rstrip("/")
     register_url = f"{base}/ai/execution-nodes/register"
     heartbeat_url = f"{base}/ai/execution-nodes/{node_id}/heartbeat"
-    resources = ExecutionNodeResourcesV1(active_tasks=0, max_concurrency=2)
+    resources, availability = worker_resource_snapshot()
     registration = ExecutionNodeRegistrationV1(
         node_id=node_id,
         display_name="Mukit execution worker",
@@ -94,14 +97,24 @@ async def worker_loop_once(
         )
         return
 
+    resources, availability = worker_resource_snapshot()
     heartbeat = ExecutionNodeHeartbeatV1(
         node_id=node_id,
         health=ExecutionNodeHealthV1(status="ready"),
         resources=resources,
-        availability="available",
+        availability=availability,
         document_revision=_revision,
         installed_models=models,
         capabilities=["language_planner"],
+    )
+    logger.debug(
+        "[FIX] Worker heartbeat availability",
+        extra={
+            "node_id": node_id,
+            "availability": availability,
+            "active_tasks": resources.active_tasks,
+            "max_concurrency": resources.max_concurrency,
+        },
     )
     hb = await _post_json(
         client,
@@ -174,12 +187,14 @@ def start_worker_loop(*, public_address: str = "http://127.0.0.1:8000") -> None:
     if _task is not None and not _task.done():
         return
     _stop.clear()
+    set_worker_draining(False)
     _task = asyncio.create_task(_loop_main(public_address))
     logger.info("Worker heartbeat loop task created")
 
 
 async def stop_worker_loop() -> None:
     global _task
+    set_worker_draining(True)
     _stop.set()
     if _task is not None:
         try:

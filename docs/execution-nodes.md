@@ -28,6 +28,7 @@ Defaults are off. When `AI_EXECUTION_NODES_ENABLED=1`, `AI_EXECUTION_NODE_TOKEN`
 | `AI_EXECUTION_NODE_CONTROLLER_URL` | Worker bootstrap register target |
 | `AI_EXECUTION_NODE_HEARTBEAT_*` | Interval / TTL |
 | `AI_EXECUTION_NODE_FAKE` | In-process peer at `http://execution-node.fake` |
+| `AI_EXECUTION_NODE_MAX_CONCURRENCY` | Worker in-flight `complete_text` cap (1–64; default 2). Heartbeat reports `busy` when `active_tasks ≥ max`, `draining` while the worker loop is stopping |
 | `AI_EXECUTION_NODE_ADDRESS_ALLOW_CIDRS` | Extra CIDRs beyond loopback + RFC1918 |
 | `AI_EXECUTION_NODE_ALLOW_HOSTNAME` | Allow non-builtin DNS hostnames |
 

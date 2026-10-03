@@ -23,6 +23,7 @@ HEARTBEAT_INTERVAL_ENV = "AI_EXECUTION_NODE_HEARTBEAT_INTERVAL_SECONDS"
 HEARTBEAT_TTL_ENV = "AI_EXECUTION_NODE_HEARTBEAT_TTL_SECONDS"
 FAKE_ENV = "AI_EXECUTION_NODE_FAKE"
 MAX_NODES_ENV = "AI_EXECUTION_NODE_MAX_NODES"
+MAX_CONCURRENCY_ENV = "AI_EXECUTION_NODE_MAX_CONCURRENCY"
 ADDRESS_CIDRS_ENV = "AI_EXECUTION_NODE_ADDRESS_ALLOW_CIDRS"
 ALLOW_HOSTNAME_ENV = "AI_EXECUTION_NODE_ALLOW_HOSTNAME"
 
@@ -43,6 +44,7 @@ class ExecutionNodeSettings:
     heartbeat_ttl_seconds: int
     fake: bool
     max_nodes: int
+    max_concurrency: int
     address_allow_cidrs: tuple[str, ...]
     allow_hostname: bool
 
@@ -156,6 +158,12 @@ def load_execution_node_settings(env: Mapping[str, str] | None = None) -> Execut
         minimum=1,
         maximum=32,
     )
+    max_concurrency = _clamp_int(
+        source.get(MAX_CONCURRENCY_ENV),
+        default=2,
+        minimum=1,
+        maximum=64,
+    )
 
     cidrs_raw = (source.get(ADDRESS_CIDRS_ENV) or "").strip()
     cidrs = tuple(part.strip() for part in cidrs_raw.split(",") if part.strip())
@@ -172,6 +180,7 @@ def load_execution_node_settings(env: Mapping[str, str] | None = None) -> Execut
         heartbeat_ttl_seconds=ttl,
         fake=fake,
         max_nodes=max_nodes,
+        max_concurrency=max_concurrency,
         address_allow_cidrs=cidrs,
         allow_hostname=allow_hostname,
     )
@@ -182,6 +191,7 @@ def load_execution_node_settings(env: Mapping[str, str] | None = None) -> Execut
         "heartbeat_ttl": settings.heartbeat_ttl_seconds,
         "fake": settings.fake,
         "max_nodes": settings.max_nodes,
+        "max_concurrency": settings.max_concurrency,
         "token_present": settings.token_present,
         "allow_hostname": settings.allow_hostname,
     }

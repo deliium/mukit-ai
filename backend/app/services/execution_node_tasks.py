@@ -72,6 +72,11 @@ def require_task(task_id: str) -> ExecutionTaskIndexEntry:
     return entry
 
 
+def list_task_ids() -> list[str]:
+    with _lock:
+        return sorted(_INDEX.keys())
+
+
 def clear_tasks() -> None:
     with _lock:
         _INDEX.clear()

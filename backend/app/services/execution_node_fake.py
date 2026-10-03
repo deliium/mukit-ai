@@ -12,13 +12,13 @@ from app.execution_node_schemas import (
     ExecutionNodeHeartbeatV1,
     ExecutionNodeInstalledModelV1,
     ExecutionNodeRegistrationV1,
-    ExecutionNodeResourcesV1,
     ExecutionNodeV1,
 )
 from app.execution_node_settings import load_execution_node_settings
 from app.routers.execution_worker import router as worker_router
 from app.services import execution_node_runtime as live
 from app.services import execution_node_service as service
+from app.services.execution_worker_dispatch import worker_resource_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ def ensure_fake_peer_registered(*, db_path: Any = None) -> ExecutionNodeV1:
     settings = load_execution_node_settings()
     if not settings.enabled or not settings.fake:
         raise RuntimeError("Fake execution node is not enabled")
+    resources, availability = worker_resource_snapshot()
     registration = ExecutionNodeRegistrationV1(
         node_id=FAKE_NODE_ID,
         display_name="Fake execution node",
@@ -62,7 +63,7 @@ def ensure_fake_peer_registered(*, db_path: Any = None) -> ExecutionNodeV1:
         capabilities=["language_planner"],
         available_runtimes=["fake"],
         installed_models=[fake_installed_model()],
-        resources=ExecutionNodeResourcesV1(active_tasks=0, max_concurrency=2),
+        resources=resources,
         health=ExecutionNodeHealthV1(status="ready", detail="fake"),
     )
     node = service.register_node(registration, settings=settings, db_path=db_path)
@@ -71,8 +72,8 @@ def ensure_fake_peer_registered(*, db_path: Any = None) -> ExecutionNodeV1:
         ExecutionNodeHeartbeatV1(
             node_id=FAKE_NODE_ID,
             health=ExecutionNodeHealthV1(status="ready", detail="fake"),
-            resources=ExecutionNodeResourcesV1(active_tasks=0, max_concurrency=2),
-            availability="available",
+            resources=resources,
+            availability=availability,
             document_revision=node.document_revision,
             installed_models=[fake_installed_model()],
             capabilities=["language_planner"],
