@@ -49,6 +49,7 @@ from .routers.musical_dependency import router as musical_dependency_router
 from .routers.content_provenance import router as content_provenance_router
 from .routers.rights_governance import router as rights_governance_router
 from .routers.personal_composer import router as personal_composer_router
+from .routers.model_lab import router as model_lab_router
 from .routers.performance_plans import router as performance_plans_router
 from .routers.spatial_scenes import router as spatial_scenes_router
 from .routers.ardour_companion import router as ardour_companion_router
@@ -151,6 +152,19 @@ async def lifespan(_app: FastAPI):
         logger.warning(
             "Application startup personal composer sweep failed",
             extra={"error_type": type(exc).__name__, "code": "personal_sweep_skipped"},
+        )
+    try:
+        from .services.model_lab_service import sweep_orphaned_model_lab_experiments
+
+        lab_interrupted = sweep_orphaned_model_lab_experiments()
+        logger.info(
+            "Application startup Model Lab experiments swept",
+            extra={"interrupted": lab_interrupted},
+        )
+    except Exception as exc:
+        logger.warning(
+            "Application startup Model Lab sweep failed",
+            extra={"error_type": type(exc).__name__, "code": "model_lab_sweep_skipped"},
         )
     try:
         from .execution_node_settings import load_execution_node_settings
@@ -267,6 +281,7 @@ if not _worker_only:
     app.include_router(content_provenance_router)
     app.include_router(rights_governance_router)
     app.include_router(personal_composer_router)
+    app.include_router(model_lab_router)
     app.include_router(performance_plans_router)
     app.include_router(spatial_scenes_router)
     app.include_router(ardour_companion_router)

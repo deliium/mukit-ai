@@ -244,6 +244,25 @@ def build_registry_from_env(
             },
         )
 
+    from .runtimes.model_lab import model_lab_descriptors
+
+    for lab in model_lab_descriptors(source):
+        if lab.id in models:
+            logger.warning(
+                "Model Lab model id collides with existing entry",
+                extra={"model_id": lab.id},
+            )
+            continue
+        models[lab.id] = lab
+        logger.info(
+            "Registered Model Lab symbolic composer",
+            extra={
+                "model_id": lab.id,
+                "status": lab.status,
+                "runtime": lab.runtime,
+            },
+        )
+
     from .runtimes.local_audio_transcription import local_audio_mono_descriptors
 
     for audio_desc in local_audio_mono_descriptors(source):

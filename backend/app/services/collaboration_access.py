@@ -62,6 +62,72 @@ def resolve_request_actor(header_value: str | None) -> str | None:
     return actor_id
 
 
+def authorize_studio_lab(action: str = "train_model_lab") -> str | None:
+    """Authorize a studio-scoped Lab mutate when collaboration is on.
+
+    Lab experiments are not project-owned. When collaboration is enabled the
+    caller must be a known actor who owns at least one project (or the
+    single-user ``local`` actor). When collaboration is off, returns ``None``
+    without any membership lookup.
+    """
+    if not collaboration_enabled():
+        return None
+    actor_id = resolve_request_actor(request_actor_header())
+    assert actor_id is not None
+    if not role_allows("owner", action):
+        # Defensive: action must be owner-capable in the freeze matrix.
+        logger.info(
+            "Collaboration studio Lab denied",
+            extra={
+                "actor_id": actor_id,
+                "action": action,
+                "code": "collaboration_role_denied",
+            },
+        )
+        raise CollaborationError(
+            "Role cannot perform this action",
+            code="collaboration_role_denied",
+            details={"action": action},
+        )
+    from app.db.connection import get_connection, get_project_db_path
+
+    with get_connection(get_project_db_path()) as conn:
+        row = conn.execute(
+            """
+            SELECT project_id FROM project_memberships
+            WHERE actor_id = ? AND role = 'owner'
+            LIMIT 1
+            """,
+            (actor_id,),
+        ).fetchone()
+    if row is None and actor_id != LOCAL_ACTOR_ID:
+        logger.info(
+            "Collaboration studio Lab denied",
+            extra={
+                "actor_id": actor_id,
+                "action": action,
+                "code": "collaboration_role_denied",
+            },
+        )
+        raise CollaborationError(
+            "Studio Lab mutates require an actor who owns a project",
+            code="collaboration_role_denied",
+            details={"action": action},
+        )
+    # local actor may train even before the first project exists (single-user).
+    if row is None and actor_id == LOCAL_ACTOR_ID:
+        logger.info(
+            "Collaboration studio Lab allowed for local actor",
+            extra={"actor_id": actor_id, "action": action},
+        )
+        return actor_id
+    logger.info(
+        "Collaboration studio Lab allowed",
+        extra={"actor_id": actor_id, "action": action},
+    )
+    return actor_id
+
+
 def authorize_current(project_id: str | None, action: str) -> str | None:
     """Authorize the captured actor header without importing FastAPI.
 

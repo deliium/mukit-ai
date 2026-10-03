@@ -27,6 +27,7 @@ import ProjectVersionsPanel from './ProjectVersionsPanel.jsx';
 import CollaborationPanel from './CollaborationPanel.jsx';
 import ComposerProfilesPanel from './ComposerProfilesPanel.jsx';
 import PersonalComposerPanel from './PersonalComposerPanel.jsx';
+import ModelLabPanel from './ModelLabPanel.jsx';
 import PreferenceLearningPanel from './PreferenceLearningPanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
@@ -112,6 +113,7 @@ const TABS = [
   { id: 'universe', label: 'Universe' },
   { id: 'harmony', label: 'Harmony' },
   { id: 'profiles', label: 'Profiles' },
+  { id: 'lab', label: 'Lab' },
   { id: 'plugins', label: 'Plugins' },
   { id: 'advanced', label: 'Advanced JSON' },
   { id: 'analysis', label: 'Analysis' },
@@ -298,6 +300,7 @@ const ComposerWorkspace = () => {
                 <PreferenceLearningPanel />
               </>
             ) : null}
+            {tab.id === 'lab' && selected ? <ModelLabPanel /> : null}
             {tab.id === 'plugins' && selected ? (
               <Suspense fallback={<p>Loading plugins…</p>}>
                 <PluginsPanel />

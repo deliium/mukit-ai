@@ -1168,7 +1168,7 @@ def _plugin_composer_model_id(stored_id: str | None) -> str | None:
     except ModelNotFoundError:
         logger.debug("stored composer model id is not registered", extra={"model_id": stored_id})
         return None
-    if descriptor.runtime not in {"plugin", "personal_composer"}:
+    if descriptor.runtime not in {"plugin", "personal_composer", "model_lab"}:
         return None
     logger.info(
         "Forwarding stored composer model",

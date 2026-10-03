@@ -76,12 +76,19 @@ def test_role_matrix_matches_the_action_table():
         "share",
         "delete_project",
         "train_adapter",
+        "train_model_lab",
     }
     for action in ACTIONS:
         assert role_allows("owner", action) is True
     for action in ("read", "write_score", "write_audio", "comment", "review_open"):
         assert role_allows("editor", action) is True
-    for action in ("review_decide", "share", "delete_project", "train_adapter"):
+    for action in (
+        "review_decide",
+        "share",
+        "delete_project",
+        "train_adapter",
+        "train_model_lab",
+    ):
         assert role_allows("editor", action) is False
     assert role_allows("commenter", "read") is True
     assert role_allows("commenter", "comment") is True

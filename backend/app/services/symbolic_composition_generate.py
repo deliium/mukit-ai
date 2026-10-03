@@ -243,6 +243,94 @@ def _generate_via_personal(
     )
 
 
+def _generate_via_lab(
+    plan: CompositionPlan,
+    *,
+    model_id: str,
+    seed: int | None,
+    conditioning: TokenizerConditioningV1,
+    prefix_composition: CompositionV2 | None = None,
+    env: Mapping[str, str] | None = None,
+) -> SymbolicGenerateResult:
+    """Run a registered Model Lab checkpoint. Fake never calls ``load_checkpoint``."""
+    from pathlib import Path
+
+    from app.ai_runtime.errors import ModelNotFoundError, ModelUnavailableError
+    from app.model_lab_settings import load_model_lab_settings
+    from app.services.model_lab_store import get_by_registry_id
+
+    row = get_by_registry_id(model_id)
+    if row is None:
+        raise ModelNotFoundError(f"model lab {model_id} is not registered")
+    if row.status != "complete" or row.registered_checkpoint_step is None:
+        raise ModelUnavailableError(f"model lab {model_id} is not ready")
+    logger.info(
+        "Model Lab generate started",
+        extra={"composer_model_id": model_id, "engine": row.engine},
+    )
+    if row.engine == "fake":
+        try:
+            music, report = generate_fake_symbolic_composition(
+                plan,
+                seed=seed,
+                prefix_composition=prefix_composition,
+            )
+        except FakeSymbolicComposerError as exc:
+            raise SymbolicCompositionGenerateError(str(exc), code=SYMBOLIC_GENERATE_FAILED) from exc
+        return SymbolicGenerateResult(
+            composition=music,
+            report=report,
+            model_id=model_id,
+            backend="fake",
+            seed=seed,
+            conditioning=conditioning,
+        )
+    del env
+    from app.music_transformer.errors import (
+        MusicTransformerDependencyError,
+        MusicTransformerGenerateError,
+    )
+    from app.music_transformer.inference import generate_composition
+
+    settings = load_model_lab_settings()
+    step = int(row.registered_checkpoint_step)
+    checkpoint = settings.root / row.id / "checkpoints" / f"step_{step:08d}.pt"
+    if not checkpoint.is_file():
+        raise ModelUnavailableError(f"model lab checkpoint missing for {model_id}")
+    # Defense-in-depth: only Lab-owned paths under MODEL_LAB_ROOT/<id>/checkpoints/.
+    try:
+        checkpoint.resolve().relative_to((settings.root / row.id / "checkpoints").resolve())
+    except ValueError as exc:
+        raise ModelUnavailableError(f"model lab checkpoint path refused for {model_id}") from exc
+    try:
+        music, mt_report = generate_composition(
+            checkpoint,
+            conditioning=conditioning,
+            prefix_composition=prefix_composition,
+            seed=seed,
+            device="cpu",
+        )
+    except MusicTransformerDependencyError as exc:
+        raise SymbolicCompositionGenerateError(
+            "PyTorch is not installed for this Model Lab composer",
+            code=SYMBOLIC_UNAVAILABLE,
+        ) from exc
+    except (MusicTransformerGenerateError, FileNotFoundError, OSError) as exc:
+        logger.error(
+            "Model Lab torch generate failed",
+            extra={"composer_model_id": model_id, "error_type": type(exc).__name__},
+        )
+        raise SymbolicCompositionGenerateError(str(exc), code=SYMBOLIC_GENERATE_FAILED) from exc
+    return SymbolicGenerateResult(
+        composition=music,
+        report=mt_report.model_dump(mode="json"),
+        model_id=model_id,
+        backend="music_transformer",
+        seed=seed,
+        conditioning=conditioning,
+    )
+
+
 def generate_symbolic_composition(
     plan: CompositionPlan,
     *,
@@ -260,6 +348,15 @@ def generate_symbolic_composition(
     conditioning = plan_to_tokenizer_conditioning(plan, genre=genre, mood=mood)
     if model_id and str(model_id).startswith("personal:"):
         return _generate_via_personal(
+            plan,
+            model_id=model_id,
+            seed=effective_seed,
+            conditioning=conditioning,
+            prefix_composition=prefix_composition,
+            env=env,
+        )
+    if model_id and str(model_id).startswith("lab:"):
+        return _generate_via_lab(
             plan,
             model_id=model_id,
             seed=effective_seed,

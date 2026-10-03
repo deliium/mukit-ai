@@ -881,7 +881,11 @@ async def generate_fake_hybrid_music_json(
         density=PlanDensity(),
     )
     locked = ensure_plan_conforms(plan, active_constraints, stage="fake_hybrid_plan")
-    selected_composer = composer_model_id if composer_model_id and composer_model_id.startswith("personal:") else None
+    selected_composer = None
+    if composer_model_id and (
+        composer_model_id.startswith("personal:") or composer_model_id.startswith("lab:")
+    ):
+        selected_composer = composer_model_id
     result = generate_symbolic_composition(
         locked,
         seed=seed,

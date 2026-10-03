@@ -44,6 +44,7 @@ CONTROLLER_LOCAL_RUNTIMES = frozenset(
         "music_transformer",
         "plugin",
         "personal_composer",
+        "model_lab",
     }
 )
 

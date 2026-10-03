@@ -18,6 +18,7 @@ Action = Literal[
     "share",
     "delete_project",
     "train_adapter",
+    "train_model_lab",
 ]
 RevisionOrigin = Literal["ai", "human"]
 
@@ -34,6 +35,7 @@ ACTIONS: frozenset[str] = frozenset(
         "share",
         "delete_project",
         "train_adapter",
+        "train_model_lab",
     }
 )
 
