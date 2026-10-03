@@ -33,6 +33,7 @@ ModelRuntimeId = Literal[
     "local_midi_ddsp",
     "plugin",
     "personal_composer",
+    "execution_node",
 ]
 
 

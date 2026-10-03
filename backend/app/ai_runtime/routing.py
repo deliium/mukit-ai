@@ -222,6 +222,11 @@ def provider_settings_for_resolved(
             break
     if configured is None:
         configured = get_provider_settings(descriptor.provider, env)
+    if descriptor.runtime == "execution_node":
+        raise ModelUnavailableError(
+            "Execution-node models use ainvoke_text_for_resolved; ChatOpenAI credentials are not invented",
+            code="model_unavailable",
+        )
     if configured is None:
         # Fake or known provider missing from LLM settings after registry mismatch.
         if descriptor.runtime == "fake":
@@ -286,7 +291,15 @@ def resolve_provider_for_operation(
         generation_parameters=generation_parameters,
         collapse_reserved_generate=collapse_reserved_generate,
     )
-    provider = provider_settings_for_resolved(resolved, active, env=env)
+    if resolved.descriptor.runtime == "execution_node":
+        provider = LLMProviderSettings(
+            provider="execution_node",
+            model=resolved.descriptor.provider_model or resolved.resolved_model_id,
+            api_key="execution_node",
+            is_default=False,
+        )
+    else:
+        provider = provider_settings_for_resolved(resolved, active, env=env)
     set_current_resolved_model(resolved)
     logger.info(
         "Resolved provider for operation",

@@ -45,6 +45,7 @@ def reload_registry(
         _default_model_id = default_id
         if descriptors is None:
             _attach_plugin_descriptors()
+            _attach_execution_node_descriptors()
         logger.info(
             "AI model registry reloaded",
             extra={
@@ -201,6 +202,87 @@ def _attach_plugin_descriptors() -> None:
     else:
         logger.info("plugins attached", extra={"model_descriptor_count": count})
     _last_plugin_descriptor_count = count
+
+
+def _attach_execution_node_descriptors() -> None:
+    """Register ready remote models from available ExecutionNodes."""
+    try:
+        from app.ai_runtime.capabilities import ModelCapability
+        from app.ai_runtime.operations import AiOperation
+        from app.ai_runtime.types import ModelHealth
+        from app.execution_node_schemas import build_execution_node_model_id
+        from app.execution_node_settings import load_execution_node_settings
+        from app.services import execution_node_service as nodes
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "Execution node attach skipped",
+            extra={"error_type": type(exc).__name__},
+        )
+        return
+
+    try:
+        settings = load_execution_node_settings()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "Execution node settings unavailable for attach",
+            extra={"error_type": type(exc).__name__},
+        )
+        return
+    if not settings.enabled:
+        return
+    if settings.role not in {"controller", "both"}:
+        return
+
+    attached = 0
+    try:
+        for node in nodes.list_nodes(settings=settings):
+            if node.availability not in {"available", "busy"}:
+                continue
+            for row in node.installed_models:
+                if row.status != "ready":
+                    continue
+                try:
+                    capability = ModelCapability(row.primary_capability)
+                except ValueError:
+                    capability = ModelCapability.LANGUAGE_PLANNER
+                ops: list[AiOperation] = []
+                for name in row.supported_operations or ["generate"]:
+                    try:
+                        ops.append(AiOperation(name))
+                    except ValueError:
+                        continue
+                if not ops:
+                    ops = [AiOperation.GENERATE]
+                model_id = build_execution_node_model_id(node.node_id, row.id)
+                descriptor = ModelDescriptor(
+                    id=model_id,
+                    display_name=f"{row.display_name} @ {node.display_name}",
+                    provider="execution_node",
+                    runtime="execution_node",
+                    primary_capability=capability,
+                    locality="remote",
+                    model_version=row.model_version,
+                    supported_operations=tuple(ops),
+                    status="ready",
+                    health=ModelHealth(status="ready", detail="execution_node", credentials_present=True),
+                    limits={
+                        "execution_node_id": node.node_id,
+                        "execution_node_address": node.address,
+                    },
+                    provider_model=row.id,
+                )
+                register_model(descriptor, overwrite=True)
+                attached += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Execution node descriptor attach failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return
+    logger.debug(
+        "execution nodes attached",
+        extra={"model_descriptor_count": attached},
+    )
 
 
 def _counts_by_capability(models: dict[str, ModelDescriptor]) -> dict[str, int]:

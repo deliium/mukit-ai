@@ -28,6 +28,7 @@ def _to_catalog_item(descriptor, *, default_model_id: str | None) -> AiModelCata
         if isinstance(stem_caps_raw, (list, tuple))
         else []
     )
+    execution_node_id = limits.get("execution_node_id")
     return AiModelCatalogItem(
         id=descriptor.id,
         display_name=descriptor.display_name,
@@ -43,6 +44,7 @@ def _to_catalog_item(descriptor, *, default_model_id: str | None) -> AiModelCata
         limits=limits,
         health_detail=descriptor.health.detail,
         stem_capabilities=stem_capabilities,
+        execution_node_id=str(execution_node_id)[:64] if execution_node_id else None,
     )
 
 

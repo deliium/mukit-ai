@@ -767,6 +767,8 @@ def _build_draft_prompt(
 
 
 async def _invoke_edit_chat(state: _EditState, prompt: str) -> str:
+    from app.ai_runtime.invoke_text import ainvoke_text_for_resolved
+    from app.ai_runtime.routing import get_current_resolved_model
     from .llm_chat_client import ainvoke_chat_text, build_chat_openai
 
     request = state["request"]
@@ -778,6 +780,40 @@ async def _invoke_edit_chat(state: _EditState, prompt: str) -> str:
         temperature = load_llm_settings().temperature
 
     model_name = _selected_edit_model(request, provider)
+    resolved = get_current_resolved_model()
+    if resolved is not None and resolved.descriptor.runtime == "execution_node":
+        logger.debug(
+            "Calling execution-node invoke seam for region edit",
+            extra={
+                "provider": provider.provider,
+                "model": resolved.resolved_model_id,
+                "stage": state.get("current_stage"),
+                "timeout_seconds": timeout_seconds,
+                "prompt_length": len(prompt),
+            },
+        )
+        try:
+            return await ainvoke_text_for_resolved(
+                resolved,
+                prompt,
+                purpose="region_edit",
+                provider=provider,
+                temperature=temperature,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as exc:
+            logger.error(
+                "[FIX] Execution-node provider call failed during region edit",
+                extra={
+                    "provider": provider.provider,
+                    "model": resolved.resolved_model_id,
+                    "stage": state.get("current_stage"),
+                    "timeout_seconds": timeout_seconds,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise LLMGenerationError(f"LLM provider call failed: {type(exc).__name__}") from exc
+
     try:
         client = build_chat_openai(
             api_key=provider.api_key,

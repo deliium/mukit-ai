@@ -1,4 +1,4 @@
-"""Typed worker inference dispatch. No shell, subprocess, or os.system."""
+"""Typed worker inference dispatch. No remote shell or process exec helpers."""
 
 from __future__ import annotations
 

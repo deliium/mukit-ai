@@ -263,7 +263,19 @@ async def cancel_task(
     url = f"{node.address.rstrip('/')}{entry.cancel_path}"
     headers = {"Authorization": f"Bearer {cfg.token}"}
     owns_client = http_client is None
-    client = http_client or httpx.AsyncClient(timeout=10.0)
+    if http_client is not None:
+        client = http_client
+    elif "execution-node.fake" in node.address:
+        from app.services.execution_node_fake import get_fake_worker_asgi_app
+
+        transport = httpx.ASGITransport(app=get_fake_worker_asgi_app())
+        client = httpx.AsyncClient(
+            transport=transport,
+            base_url=node.address.rstrip("/"),
+            timeout=10.0,
+        )
+    else:
+        client = httpx.AsyncClient(timeout=10.0)
     try:
         response = await client.post(url, headers=headers)
     finally:

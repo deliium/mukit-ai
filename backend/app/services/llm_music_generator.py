@@ -2392,6 +2392,8 @@ async def _run_json_stage(
 
 
 async def _invoke_chat(state: _GenerationState, prompt: str) -> str:
+    from app.ai_runtime.invoke_text import ainvoke_text_for_resolved
+    from app.ai_runtime.routing import get_current_resolved_model
     from .llm_chat_client import ainvoke_chat_text, build_chat_openai
 
     request = state["request"]
@@ -2403,6 +2405,45 @@ async def _invoke_chat(state: _GenerationState, prompt: str) -> str:
         temperature = load_llm_settings().temperature
 
     model_name = _selected_model(request, provider)
+    resolved = get_current_resolved_model()
+    if resolved is not None and resolved.descriptor.runtime == "execution_node":
+        logger.debug(
+            "Calling execution-node invoke seam",
+            extra={
+                "provider": provider.provider,
+                "model": resolved.resolved_model_id,
+                "stage": state.get("current_stage"),
+                "timeout_seconds": timeout_seconds,
+                "prompt_length": len(prompt),
+            },
+        )
+        try:
+            return await ainvoke_text_for_resolved(
+                resolved,
+                prompt,
+                purpose="music_generation",
+                provider=provider,
+                temperature=temperature,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as exc:
+            logger.error(
+                "[FIX] Execution-node provider call failed",
+                extra={
+                    "provider": provider.provider,
+                    "model": resolved.resolved_model_id,
+                    "stage": state.get("current_stage"),
+                    "retry_count": state.get("retry_count", 0),
+                    "timeout_seconds": timeout_seconds,
+                    "error_type": type(exc).__name__,
+                    "error_detail": str(exc)[:200],
+                },
+            )
+            raise LLMGenerationError(
+                f"LLM provider request failed during stage '{state.get('current_stage')}': "
+                f"{type(exc).__name__} (timeout_seconds={timeout_seconds})"
+            ) from exc
+
     try:
         client = build_chat_openai(
             api_key=provider.api_key,
