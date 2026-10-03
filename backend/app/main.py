@@ -46,6 +46,7 @@ from .routers.adaptive_engine import adaptive_engine_validation_handler
 from .routers.adaptive_engine import router as adaptive_engine_router
 from .routers.musical_universe import router as musical_universe_router
 from .routers.musical_dependency import router as musical_dependency_router
+from .routers.content_provenance import router as content_provenance_router
 from .routers.personal_composer import router as personal_composer_router
 from .routers.performance_plans import router as performance_plans_router
 from .routers.spatial_scenes import router as spatial_scenes_router
@@ -262,6 +263,7 @@ if not _worker_only:
     app.include_router(adaptive_engine_router)
     app.include_router(musical_universe_router)
     app.include_router(musical_dependency_router)
+    app.include_router(content_provenance_router)
     app.include_router(personal_composer_router)
     app.include_router(performance_plans_router)
     app.include_router(spatial_scenes_router)
