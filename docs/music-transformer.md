@@ -14,6 +14,11 @@ Music quality is out of scope; **validity and reproducibility** are in scope.
 | Optional torch extra | Default `docker compose up` pulling ROCm torch |
 | Same tokenizer vocab train + inference | Dual token schemes / GGUF in FastAPI |
 
+Train loads gate rights via the shared evaluator (no personal/MT unsafe override).
+Non-`training_allowed` inputs refuse; a successful train emits
+`model.data.provenance.manifest.v1` beside the experiment. See
+[rights-governance.md](rights-governance.md).
+
 ## Architecture
 
 ```text

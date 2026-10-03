@@ -120,6 +120,14 @@ Never summaries, vectors, or event arrays.
 # REFERENCE_FEATURES_STRENGTH_LEGEND_MAX_CHARS=240
 ```
 
+## Rights gate
+
+Analyze and reference-conditioned soft assembly call
+`evaluate_rights_use(reference_analyze)`. Allowed: `training_allowed` and
+`reference_only`. Refused: `no_training` and `unknown` (structured
+`rights_reference_refused`). Resolution: registry → request attestation → refuse.
+See [rights-governance.md](rights-governance.md).
+
 ## Privacy
 
 - Reference material stays in `PROJECT_DB_PATH` / session only.
@@ -128,6 +136,7 @@ Never summaries, vectors, or event arrays.
 
 ## See also
 
+- [Rights governance](rights-governance.md)
 - [Symbolic embeddings](embeddings.md)
 - [Composer profiles](composer-profiles.md)
 - [Composition development](composition-development.md)

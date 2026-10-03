@@ -9,6 +9,7 @@ Offline pipeline that turns licensed MIDI, MusicXML/MXL, and Composition V2 JSON
 | [Import](import.md) | HTTP multipart → workspace `composition.v2`; reused as parsers here |
 | [Tokenizer](tokenizer.md) | REMI-style Composition V2 ↔ token ids (`python -m app.tokenizer.cli`); consumes examples/splits read-only |
 | [Music Transformer](music-transformer.md) | Experiment train/eval/listen/compare over tokenizer-encoded examples; never `PROJECT_DB_PATH`; metrics ≠ musical quality |
+| [Rights governance](rights-governance.md) | Shared evaluator + `rights/` siblings (`index.jsonl`, `manifest.json`); `reference_only` never enters train splits |
 | [Local AI](local-ai.md) | Optional inference sidecars; Compose `--profile training` points at offline Music Transformer CLI (not the web API) |
 | Projects / revisions | Never used; corpora are filesystem-only |
 
@@ -24,6 +25,8 @@ $DATASET_ROOT/<dataset_name>/<dataset_version_id>/
   splits/train.jsonl
   splits/validation.jsonl
   splits/test.jsonl
+  rights/index.jsonl     # rights.registry.entry.v1 lines (sibling; not in version digest)
+  rights/manifest.json   # model.data.provenance.manifest.v1 (dataset_train_split)
   stats.json             # dataset.stats.v1
   BUILD_ID
 ```
@@ -43,6 +46,12 @@ Every source needs a status (sidecar `*.meta.json` / `*.meta.yaml`, or pipeline 
 | `unknown` | **no** (inventory only) |
 
 `unknown` / `restricted` never appear in `splits/train.*` unless `eligibility.allow_unsafe_train_pollution` is explicitly true (logs ERROR).
+
+Train eligibility also consults the shared rights evaluator after mapping
+sidecars (including optional `use_policy`). A source with
+`use_policy=reference_only` is excluded from train even when legacy
+`provenance_status` looks train-shaped. Rights sibling bytes are not folded into
+`dataset_version_id`. Details: [rights-governance.md](rights-governance.md).
 
 ## CLI
 

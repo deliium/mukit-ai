@@ -6,7 +6,14 @@ Training starts only from `POST /personal-composers`. Project open, process star
 
 ## What gets stored
 
-The request lists project ids and one provenance object per id. `compute_train_eligible` must be true, and the projects must have note events. When collaboration is on, the actor must be the project owner (`train_adapter`). The accepted request copies those scores into `PERSONAL_COMPOSER_ROOT/<adapter id>/snapshot/`. That directory is a frozen snapshot. It is not `DATASET_ROOT` and it is not the live score. Later edits to the projects do not change the job.
+The request lists project ids and one provenance object per id. Rights resolve
+via the studio registry first, then request attestation, else refuse (never
+default `training_allowed`). `reference_only` / `unknown` / `no_training` hard-fail
+train. After a successful snapshot, the service upserts registry rows for those
+projects. Opening Profiles / listing adapters never upserts. Details:
+[rights-governance.md](rights-governance.md).
+
+`compute_train_eligible` must be true, and the projects must have note events. When collaboration is on, the actor must be the project owner (`train_adapter`). The accepted request copies those scores into `PERSONAL_COMPOSER_ROOT/<adapter id>/snapshot/`. That directory is a frozen snapshot. It is not `DATASET_ROOT` and it is not the live score. Later edits to the projects do not change the job.
 
 The job writes `personal.training_manifest.v1`, `personal.dataset_snapshot.v1`, and `personal.adapter_config.v1`. The method is `lora`. Rank defaults to 4. Targets are `qkv` and `out_proj`. `freeze_base` is true.
 

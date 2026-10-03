@@ -36,8 +36,8 @@ mukit-ai/
 │   │   ├── film_score_schemas.py      # film.score.plan.v1 + preview/commit DTOs
 │   │   ├── film_score_adapt_schemas.py  # film.score.adaptation.v1 + preview/commit DTOs
 │   │   ├── video_scoring_settings.py  # VIDEO_ASSET_ROOT / VIDEO_ASSET_MAX_UPLOAD_BYTES
-│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + preferences + ai_scheduling + reference_features + live_performance + video_scoring + film_score + ai_models + ai_agents + plugins + collaboration + adaptive_scores + adaptive_engine + performance_plans + spatial_scenes + ardour_companion + ardour_exchange HTTP API
-│   │   ├── services/        # Domain + orchestration (incl. composition_critique, adaptive_score_*, adaptive_playback*, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, video_scoring_store, video_container_probe, video_scoring_map, film_score_tempo, film_score_accents, film_score_workflow, film_score_adapt, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm, ardour_companion_*, ardour_exchange_*)
+│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + preferences + ai_scheduling + reference_features + rights_governance + live_performance + video_scoring + film_score + ai_models + ai_agents + plugins + collaboration + adaptive_scores + adaptive_engine + performance_plans + spatial_scenes + ardour_companion + ardour_exchange HTTP API
+│   │   ├── services/        # Domain + orchestration (incl. composition_critique, adaptive_score_*, adaptive_playback*, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, rights_governance_*, reference_rights_gate, personal_composer_rights, video_scoring_store, video_container_probe, video_scoring_map, film_score_tempo, film_score_accents, film_score_workflow, film_score_adapt, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm, ardour_companion_*, ardour_exchange_*)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
 │   │   ├── analysis_schemas.py     # composition.analysis.v1 DTOs / warning codes
@@ -61,6 +61,8 @@ mukit-ai/
 │   │   ├── mix_analysis_schemas.py          # mix.analysis.v1 DTOs / measurement vs observation vs interpretation
 │   │   ├── mix_plan_settings.py             # MIX_PLAN_* revision root / caps / fake mode
 │   │   ├── mix_plan_schemas.py              # mix.plan.v1 / intent / master-target DTOs (never PCM)
+│   │   ├── rights_governance_schemas.py     # rights.registry.entry.v1 + model.data.provenance.manifest.v1
+│   │   ├── rights_governance_settings.py    # RIGHTS_GOVERNANCE_* caps (no separate FS root)
 │   │   ├── embeddings/      # Handcrafted symbolic feature embeddings (cache/index; no torch; never DATASET_ROOT ingest)
 │   │   ├── dataset/         # Offline symbolic corpus pipeline (CLI; DATASET_ROOT only)
 │   │   ├── tokenizer/       # Composition V2 ↔ tokens codec (CLI; no PROJECT_DB_PATH)
@@ -73,7 +75,7 @@ mukit-ai/
 ├── frontend/                # React + Vite SPA
 │   ├── e2e/                 # Playwright V1/V2/import/analysis/motif/arrangement/editor/neural-audio acceptance journeys
 │   └── src/
-│       ├── api/             # musicApi, projectApi
+│       ├── api/             # musicApi, projectApi, rightsGovernanceApi, …
 │       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, AudioRecoveryPanel, VideoScoringPanel (Picture tab), FilmScorePanel / AssetPackPanel (Agents tab), PerformancePanel, SpatialScenePanel, ArdourCompanionPanel, ArdourExchangePanel, NeuralAudioRenderPanel (incl. Mix Analysis + Mix assist), …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI/audio sessions)
 │       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, midiExpressive/, audioCapture, mixAnalysisUi, mixPlanUi, browserModels/ helpers
@@ -84,7 +86,7 @@ mukit-ai/
 │   └── typescript/          # Private package @mukit/adaptive-music
 ├── scripts/                 # run_tests.sh, v1/v2/v3_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
-├── docs/                    # composition.v2/v1, ai-runtime, browser-webgpu-inference, plugin-sdk, multi-agent, hybrid-generation, daw-interoperability, ardour-companion, ardour-session-exchange, editor, midi-live-input, audio-transcription, audio-recovery, video-scoring, neural-audio-rendering, mix-analysis, analysis, arrangement, import, datasets, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, browser-webgpu-inference, plugin-sdk, multi-agent, hybrid-generation, daw-interoperability, ardour-companion, ardour-session-exchange, editor, midi-live-input, audio-transcription, audio-recovery, video-scoring, neural-audio-rendering, mix-analysis, rights-governance, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -248,6 +250,10 @@ mukit-ai/
 | `backend/app/routers/musical_dependency.py` | Theme impact, dependency graph, and edge-only fingerprint refresh. These routes do not write notes |
 | `backend/app/routers/content_provenance.py` | Chain/manifest/status/credentials for `content.provenance.*.v1`. Downloads never insert; not on `/ready` |
 | `backend/app/services/content_provenance_store.py` | SQLite provenance DAG; soft-fail capture in `content_provenance_capture` |
+| `backend/app/routers/rights_governance.py` | Status/GET/PUT/evaluate for `rights.registry.entry.v1`. Status not on `/ready` |
+| `backend/app/services/rights_governance_policy.py` | Pure `evaluate_rights_use` + Part K `resolve_rights_entry` |
+| `backend/app/services/rights_governance_store.py` | SQLite `rights_registry_entries` CAS; project-delete GC |
+| `frontend/src/api/rightsGovernanceApi.js` | Rights registry HTTP client (Profiles hydrate; never upserts on open) |
 | `backend/app/routers/adaptive_engine.py` | External `/adaptive/*` session for one stored score: HTTP commands plus events and status sockets. Does not write the score |
 | `clients/python/src/mukit_adaptive/client.py` | Synchronous client for that public surface. Does not import `backend/app` or `frontend/src` |
 | `clients/python/src/mukit_adaptive/demo.py` | `python -m mukit_adaptive.demo` terminal phase loop |
@@ -426,6 +432,7 @@ mukit-ai/
 | Asset packs | `docs/asset-packs.md` | `asset.pack.plan.v1` then multi-project generate; shared universe + profile soft merge + production targets; partial regen. `ai_agents/` does not import pack stores |
 | Derived material graph | `docs/derived-material-graph.md` | `musical.dependency.edge.v1` rows for motifs, themes, arrangements, variations, renders, transcriptions, and reference conditioning. Impact lists stale dependents and does not rewrite them. `ai_agents/` does not import `musical_dependency_store` |
 | Content provenance | `docs/content-provenance.md` | Durable `content.provenance.record.v1` DAG + exportable manifest; optional C2PA; honesty that internal metadata is not cryptographic. Soft-fail capture (unlike dependency hard-fail). `ai_agents/` does not import provenance stores |
+| Rights governance | `docs/rights-governance.md` | Durable `rights.registry.entry.v1` + pure `evaluate_rights_use`; hard-fail train/reference gates; `model.data.provenance.manifest.v1`; dataset `rights/` siblings. Soft-fail content provenance is complementary. `ai_agents/` does not import the rights store |
 | Adaptive musical context | `docs/adaptive-musical-context.md` | Flat external samples mapped onto a closed context; hysteresis emits existing playback commands |
 | Adaptive runtime continuation | `docs/adaptive-runtime-continuation.md` | Session buffer ahead of playback; the clock does not await the model |
 | Adaptive music engine | `docs/adaptive-music-engine.md` | External `/adaptive/*` session, bearer-or-loopback auth, and context backpressure. `ai_agents/` does not import the engine modules |
@@ -466,6 +473,6 @@ mukit-ai/
 - Decompose shell command chains; do not combine unrelated git operations with `&&` when a failure mid-chain is confusing
   - Incorrect: `git checkout main && git pull`
   - Correct: First `git checkout main`, then `git pull origin main`
-- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data. Arrangement catalog IDs/ranges are not V2 fields; only applied V2 is persisted. Typed agent plans live in `agent.artifact.v1` envelopes / `agent_artifact_workspace` — never as alternate playable scores (`composition.v4` unsupported); `ai_agents/` must not import the workspace or SQLite. Symbolic embeddings measure affinity from note material — never artist≡style ids; never auto-export projects into `DATASET_ROOT`. Composer profiles (`composer.profile.v1`) are durable soft prefs only — never store event arrays / analysis reports / embedding vectors; never override prompt/hard `GenerationConstraints`; never write to `DATASET_ROOT`. An explicit preference choice is `preference.choice.v1` and does not update `composer.profile.v1`; `ai_agents/` does not import `preference_store`. A personal composer adapter is a user-started LoRA job under `PERSONAL_COMPOSER_ROOT`, not a profile and not a copy in `DATASET_ROOT`; `ai_agents/` must not import `personal_composer_store`. Reference features (`reference.features.v1`) are derived dimension-masked sidecars — never mutate the reference Composition; never copy melodies into prompts; never write `DATASET_ROOT`.
+- Treat `composition.v2` `tracks[].events[]` as the only playable source; do not invent notes from `harmony`. V1 is migration input only. Raw MIDI/MusicXML import sets `harmony: []` and does not run musical analysis. `composition.analysis.v1` is a derived sidecar only — never persist it as composition data. Arrangement catalog IDs/ranges are not V2 fields; only applied V2 is persisted. Typed agent plans live in `agent.artifact.v1` envelopes / `agent_artifact_workspace` — never as alternate playable scores (`composition.v4` unsupported); `ai_agents/` must not import the workspace or SQLite. Symbolic embeddings measure affinity from note material — never artist≡style ids; never auto-export projects into `DATASET_ROOT`. Composer profiles (`composer.profile.v1`) are durable soft prefs only — never store event arrays / analysis reports / embedding vectors; never override prompt/hard `GenerationConstraints`; never write to `DATASET_ROOT`. An explicit preference choice is `preference.choice.v1` and does not update `composer.profile.v1`; `ai_agents/` does not import `preference_store`. A personal composer adapter is a user-started LoRA job under `PERSONAL_COMPOSER_ROOT`, not a profile and not a copy in `DATASET_ROOT`; `ai_agents/` must not import `personal_composer_store`. Reference features (`reference.features.v1`) are derived dimension-masked sidecars — never mutate the reference Composition; never copy melodies into prompts; never write `DATASET_ROOT`. Rights governance (`rights.registry.entry.v1`) is permission-to-use for train/reference — hard-fail gates; never store events/PCM/prompts on rights docs; never invent `training_allowed` on missing data; `ai_agents/` must not import `rights_governance_store` or `rights_governance_settings`. Content provenance remains soft-fail derivation lineage.
 - Prefer extending `routers/` + `services/` over growing unrelated logic in `main.py`
 - Never log API keys, full prompts, raw MusicXML/MIDI/WAV payloads, uploaded import source bytes, full analysis reports, event arrays, or arrangement catalog override contents

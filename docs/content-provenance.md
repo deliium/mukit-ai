@@ -33,7 +33,9 @@ Capture runs beside existing writers (`commit_revision`, neural complete,
 `apply_mix`, recovery bind, theme reuse, pack clear). Soft-fail wrapper catches
 cycle/cap/`ContentProvenanceError`, logs WARNING, and returns — the primary
 writer still commits. This intentionally diverges from
-`musical.dependency.edge.v1` cycle **hard-fail**.
+`musical.dependency.edge.v1` cycle **hard-fail** and from
+[rights governance](rights-governance.md) permission gates (also **hard-fail** —
+derivation lineage ≠ permission-to-use).
 
 Idempotent upsert key: `(artifact_kind, artifact_id, operation)`.
 Manifest/chain **downloads never insert** records.
@@ -49,6 +51,9 @@ only when `user_action=audio_transcribe` is present.
   compactly on AI records.
 - `musical.dependency.edge.v1` `rendered_from` stays the musical **stale** edge.
 - Provenance is the richer AI/human lineage with trust labels.
+- [Rights governance](rights-governance.md) (`rights.registry.entry.v1`,
+  `model.data.provenance.manifest.v1`) is permission-to-use for train/reference —
+  complementary, not replaced by this DAG.
 
 ## HTTP
 
