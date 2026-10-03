@@ -237,10 +237,19 @@ import {
   PLAYBACK_SOURCE_ARRANGEMENT,
   PLAYBACK_SOURCE_DEVELOPMENT,
   PLAYBACK_SOURCE_GENERATION,
+  PLAYBACK_SOURCE_PERFORMANCE,
   PLAYBACK_SOURCE_VERSION,
   exclusiveAuditionPatch,
   resolvePlaybackSource,
 } from '../utils/playbackSource.js';
+import {
+  comparePerformancePlan,
+  createPerformancePlan,
+  listPerformancePlans,
+  listPerformancePresets,
+  realizePerformancePlan,
+} from '../api/performanceApi.js';
+import { applyRealizationToScheduleComposition } from '../utils/performanceConductor/scheduleApply.js';
 import {
   AI_CANDIDATE_STATUS,
   aiCandidateLogFields,
@@ -471,6 +480,23 @@ export const initialAdaptiveScoreState = {
   adaptiveContinuationBuffer: null,
   adaptiveContinuationError: '',
 };
+
+export const initialPerformanceState = {
+  performancePlans: [],
+  performancePresets: [],
+  performanceSelectedPlanId: null,
+  performanceDocumentRevision: null,
+  performanceStatus: 'idle',
+  performanceError: '',
+  performanceAuditionActive: false,
+  performanceAuditionMode: 'mechanical',
+  performanceRealization: null,
+  performanceScheduleComposition: null,
+  performanceStale: false,
+  performanceCompare: null,
+};
+
+let performanceRequestSeq = 0;
 
 let adaptiveScoreRequestSeq = 0;
 let adaptivePlaybackMemory = null;
@@ -1727,6 +1753,7 @@ export const useMusicStore = create((set, get) => ({
 
   ...initialHarmonyUiState,
   ...initialAdaptiveScoreState,
+  ...initialPerformanceState,
   ...initialReharmonizePreviewState,
   multiAgentStatus: 'idle',
   multiAgentError: '',
@@ -13078,6 +13105,183 @@ export const useMusicStore = create((set, get) => ({
     });
   },
 
+  clearPerformanceAudition: () => {
+    logger.debug('Clearing performance audition');
+    set({
+      performanceAuditionActive: false,
+      performanceAuditionMode: 'mechanical',
+      performanceRealization: null,
+      performanceScheduleComposition: null,
+      performanceStale: false,
+      performanceCompare: null,
+    });
+  },
+
+  loadPerformanceStudio: async () => {
+    const projectId = get().currentProjectId;
+    performanceRequestSeq += 1;
+    const requestId = performanceRequestSeq;
+    if (!projectId) {
+      set({ ...initialPerformanceState });
+      return;
+    }
+    logger.debug('Loading performance studio', { projectId, requestId });
+    set({ performanceStatus: 'loading', performanceError: '' });
+    try {
+      const [listed, catalog] = await Promise.all([
+        listPerformancePlans(projectId),
+        listPerformancePresets(projectId),
+      ]);
+      if (get().currentProjectId !== projectId || requestId !== performanceRequestSeq) {
+        return;
+      }
+      const plans = Array.isArray(listed?.plans) ? listed.plans : [];
+      const presets = Array.isArray(catalog?.presets) ? catalog.presets : [];
+      const selected = get().performanceSelectedPlanId;
+      const stillSelected = plans.some((p) => p.id === selected) ? selected : (plans[0]?.id || null);
+      set({
+        performancePlans: plans,
+        performancePresets: presets,
+        performanceSelectedPlanId: stillSelected,
+        performanceStatus: 'ready',
+        performanceError: '',
+      });
+      logger.info('Performance studio loaded', {
+        planCount: plans.length,
+        presetCount: presets.length,
+      });
+    } catch (error) {
+      if (get().currentProjectId !== projectId || requestId !== performanceRequestSeq) {
+        return;
+      }
+      logger.warn('Performance studio load failed', { code: error.code || null });
+      set({
+        performanceStatus: 'error',
+        performanceError: error.message || 'Failed to load performance plans',
+      });
+    }
+  },
+
+  clonePerformancePreset: async (presetId) => {
+    const projectId = get().currentProjectId;
+    const composition = get().editedMusicJson;
+    if (!projectId || !composition) {
+      set({ performanceError: 'Open a project with a composition to clone a preset' });
+      return null;
+    }
+    logger.info('Cloning performance preset', { presetId, planId: null, mode: 'clone' });
+    set({ performanceStatus: 'loading', performanceError: '' });
+    try {
+      const created = await createPerformancePlan(projectId, {
+        preset_id: presetId,
+        composition,
+        name: String(presetId),
+      });
+      await get().loadPerformanceStudio();
+      const planId = created?.plan?.id || null;
+      if (planId) {
+        set({
+          performanceSelectedPlanId: planId,
+          performanceDocumentRevision: created.document_revision,
+        });
+      }
+      logger.info('Cloned performance preset', { presetId, planId });
+      return created;
+    } catch (error) {
+      logger.warn('Clone performance preset failed', { code: error.code || null });
+      set({
+        performanceStatus: 'error',
+        performanceError: error.message || 'Clone failed',
+      });
+      return null;
+    }
+  },
+
+  selectPerformancePlan: (planId) => {
+    get().clearPerformanceAudition();
+    set({ performanceSelectedPlanId: planId || null });
+  },
+
+  setPerformanceAuditionMode: async (mode) => {
+    const projectId = get().currentProjectId;
+    const planId = get().performanceSelectedPlanId;
+    const composition = get().editedMusicJson;
+    const nextMode = mode === 'performed' ? 'performed' : 'mechanical';
+    logger.info('Performance audition mode', { planId, mode: nextMode });
+
+    if (nextMode === 'mechanical') {
+      set({
+        ...exclusiveAuditionPatch(PLAYBACK_SOURCE_WORKING),
+        performanceAuditionActive: false,
+        performanceAuditionMode: 'mechanical',
+        performanceRealization: null,
+        performanceScheduleComposition: null,
+        performanceStale: false,
+      });
+      return;
+    }
+
+    if (!projectId || !planId || !composition) {
+      set({ performanceError: 'Select a plan to audition performed' });
+      return;
+    }
+
+    set({ performanceStatus: 'loading', performanceError: '' });
+    try {
+      const realized = await realizePerformancePlan(projectId, planId, composition);
+      const schedule = applyRealizationToScheduleComposition(
+        composition,
+        realized.realization,
+      );
+      set({
+        ...exclusiveAuditionPatch(PLAYBACK_SOURCE_PERFORMANCE),
+        performanceAuditionActive: true,
+        performanceAuditionMode: 'performed',
+        performanceRealization: realized.realization,
+        performanceScheduleComposition: schedule,
+        performanceStale: Boolean(realized.stale),
+        performanceStatus: 'ready',
+        performanceError: '',
+        performanceDocumentRevision: realized.document_revision,
+      });
+      logger.debug('Performance audition toggled', {
+        planId,
+        mode: 'performed',
+        stale: Boolean(realized.stale),
+        noteCount: realized.realization?.metrics?.note_count ?? 0,
+      });
+    } catch (error) {
+      logger.warn('Performance realize failed', { code: error.code || null });
+      set({
+        performanceStatus: 'error',
+        performanceError: error.message || 'Realize failed',
+        performanceAuditionActive: false,
+        performanceAuditionMode: 'mechanical',
+        performanceScheduleComposition: null,
+      });
+    }
+  },
+
+  compareSelectedPerformancePlan: async () => {
+    const projectId = get().currentProjectId;
+    const planId = get().performanceSelectedPlanId;
+    const composition = get().editedMusicJson;
+    if (!projectId || !planId || !composition) {
+      return null;
+    }
+    try {
+      const compared = await comparePerformancePlan(projectId, planId, composition);
+      set({
+        performanceCompare: compared,
+        performanceStale: Boolean(compared.stale),
+      });
+      return compared;
+    } catch (error) {
+      set({ performanceError: error.message || 'Compare failed' });
+      return null;
+    }
+  },
+
   loadAdaptiveScore: async () => {
     const projectId = get().currentProjectId;
     adaptiveScoreRequestSeq += 1;
@@ -14490,6 +14694,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     saveConflict: null,
     ...clearedVersionHistoryState(),
     ...initialMusicalReferenceSessionState,
+    ...initialPerformanceState,
     activeView: openComposer ? 'composer' : get().activeView,
     generatedMusicJson: composition,
     editedMusicJson: composition,

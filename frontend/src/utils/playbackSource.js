@@ -12,6 +12,7 @@ export const PLAYBACK_SOURCE_DEVELOPMENT = 'development';
 export const PLAYBACK_SOURCE_ARRANGEMENT = 'arrangement';
 export const PLAYBACK_SOURCE_VERSION = 'version';
 export const PLAYBACK_SOURCE_GENERATION = 'generation';
+export const PLAYBACK_SOURCE_PERFORMANCE = 'performance';
 
 /** Fine-grained audition kinds (subset of coarse `source` for AI previews). */
 export const PLAYBACK_SOURCE_KIND_WORKING = 'working';
@@ -23,6 +24,7 @@ export const PLAYBACK_SOURCE_KIND_AI_EDIT = 'ai_edit';
 export const PLAYBACK_SOURCE_KIND_MOTIF = 'motif';
 export const PLAYBACK_SOURCE_KIND_REHARMONIZE = 'reharmonize';
 export const PLAYBACK_SOURCE_KIND_MULTI_AGENT = 'multi_agent';
+export const PLAYBACK_SOURCE_KIND_PERFORMANCE = 'performance';
 
 /** Mixer control buckets — AI preview kinds share one ephemeral scope. */
 export const PLAYBACK_MIXER_SCOPE_WORKING = 'working';
@@ -63,6 +65,7 @@ export function mixerScopeForSourceKind(sourceKind) {
     case PLAYBACK_SOURCE_KIND_MOTIF:
     case PLAYBACK_SOURCE_KIND_REHARMONIZE:
     case PLAYBACK_SOURCE_KIND_MULTI_AGENT:
+    case PLAYBACK_SOURCE_KIND_PERFORMANCE:
       return PLAYBACK_MIXER_SCOPE_PREVIEW;
     case PLAYBACK_SOURCE_KIND_WORKING:
     default:
@@ -89,6 +92,8 @@ export function coarseSourceForKind(sourceKind) {
     case PLAYBACK_SOURCE_KIND_REHARMONIZE:
     case PLAYBACK_SOURCE_KIND_MULTI_AGENT:
       return PLAYBACK_SOURCE_GENERATION;
+    case PLAYBACK_SOURCE_KIND_PERFORMANCE:
+      return PLAYBACK_SOURCE_PERFORMANCE;
     case PLAYBACK_SOURCE_KIND_WORKING:
     default:
       return PLAYBACK_SOURCE_WORKING;
@@ -150,6 +155,18 @@ export function buildPlaybackSourceResult(sourceKind, sourceId, composition) {
  */
 export function resolvePlaybackSource(state, deps = {}) {
   const arrangementMode = deps.arrangementCandidateMode || 'candidate';
+
+  if (state?.performanceAuditionActive && state?.performanceScheduleComposition) {
+    const planId = state.performanceSelectedPlanId != null
+      ? String(state.performanceSelectedPlanId)
+      : EMPTY_SOURCE_ID;
+    return buildPlaybackSourceResult(
+      PLAYBACK_SOURCE_KIND_PERFORMANCE,
+      planId,
+      state.performanceScheduleComposition,
+    );
+  }
+
   if (state?.arrangementAuditionMode === arrangementMode) {
     const findArr = deps.findArrangementCandidateById;
     const candidate = typeof findArr === 'function'
@@ -294,6 +311,7 @@ export function exclusiveAuditionPatch(source, arrangementSourceMode = 'source')
     motifAuditionActive: false,
     reharmonizeAuditionActive: false,
     multiAgentAuditionActive: false,
+    performanceAuditionActive: false,
   };
   if (source === PLAYBACK_SOURCE_ARRANGEMENT) {
     return {
@@ -312,6 +330,16 @@ export function exclusiveAuditionPatch(source, arrangementSourceMode = 'source')
       motifAuditionActive: false,
       reharmonizeAuditionActive: false,
       multiAgentAuditionActive: false,
+      performanceAuditionActive: false,
+    };
+  }
+  if (source === PLAYBACK_SOURCE_PERFORMANCE) {
+    return {
+      developmentAuditionActive: false,
+      arrangementAuditionMode: arrangementSourceMode,
+      versionAuditionActive: false,
+      ...clearAiPreviews,
+      // Caller sets performanceAuditionActive true after this patch.
     };
   }
   if (source === PLAYBACK_SOURCE_DEVELOPMENT) {

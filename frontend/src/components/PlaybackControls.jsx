@@ -135,6 +135,12 @@ const PlaybackControls = () => {
 
   const arrangementCandidateAudition = arrangementAuditionMode === ARRANGEMENT_AUDITION_CANDIDATE;
 
+  const performanceAuditionActive = useMusicStore((state) => state.performanceAuditionActive);
+  const performanceSelectedPlanId = useMusicStore((state) => state.performanceSelectedPlanId);
+  const performanceScheduleComposition = useMusicStore(
+    (state) => state.performanceScheduleComposition,
+  );
+
   const playbackResolved = useMemo(() => resolvePlaybackSource(
     {
       editedMusicJson,
@@ -155,6 +161,9 @@ const PlaybackControls = () => {
       developmentAuditionActive,
       developmentCandidates,
       developmentSelectedCandidateId,
+      performanceAuditionActive,
+      performanceSelectedPlanId,
+      performanceScheduleComposition,
     },
     {
       findArrangementCandidateById,
@@ -175,6 +184,9 @@ const PlaybackControls = () => {
     generationCandidate,
     motifAuditionActive,
     motifCandidate,
+    performanceAuditionActive,
+    performanceScheduleComposition,
+    performanceSelectedPlanId,
     reharmonizeAuditionActive,
     reharmonizeCandidate,
     versionAuditionActive,

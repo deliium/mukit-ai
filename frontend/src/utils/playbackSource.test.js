@@ -11,7 +11,9 @@ import {
   PLAYBACK_SOURCE_KIND_AI_EDIT,
   PLAYBACK_SOURCE_KIND_MOTIF,
   PLAYBACK_SOURCE_KIND_MULTI_AGENT,
+  PLAYBACK_SOURCE_KIND_PERFORMANCE,
   PLAYBACK_SOURCE_KIND_REHARMONIZE,
+  PLAYBACK_SOURCE_PERFORMANCE,
   PLAYBACK_SOURCE_VERSION,
   PLAYBACK_SOURCE_WORKING,
   buildPlaybackSourceKey,
@@ -132,6 +134,7 @@ test('exclusiveAuditionPatch clears competitors', () => {
     motifAuditionActive: false,
     reharmonizeAuditionActive: false,
     multiAgentAuditionActive: false,
+    performanceAuditionActive: false,
   });
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_DEVELOPMENT, 'source'), {
     arrangementAuditionMode: 'source',
@@ -141,6 +144,7 @@ test('exclusiveAuditionPatch clears competitors', () => {
     motifAuditionActive: false,
     reharmonizeAuditionActive: false,
     multiAgentAuditionActive: false,
+    performanceAuditionActive: false,
   });
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_WORKING, 'source'), {
     developmentAuditionActive: false,
@@ -151,6 +155,7 @@ test('exclusiveAuditionPatch clears competitors', () => {
     motifAuditionActive: false,
     reharmonizeAuditionActive: false,
     multiAgentAuditionActive: false,
+    performanceAuditionActive: false,
   });
 });
 
@@ -205,6 +210,32 @@ test('generation outranks motif and ai_edit', () => {
   });
   assert.equal(resolved.sourceKind, 'generation');
   assert.equal(resolved.composition, generation);
+});
+
+test('resolvePlaybackSource wires performance audition with preview mixer', () => {
+  const performed = { id: 'performed-schedule' };
+  const resolved = resolvePlaybackSource({
+    editedMusicJson: working,
+    performanceAuditionActive: true,
+    performanceSelectedPlanId: 'pplan_abc',
+    performanceScheduleComposition: performed,
+    versionAuditionActive: true,
+    versionSelectedRevisionId: 'r1',
+    versionRevisionDetails: { r1: { composition: version } },
+  });
+  assert.equal(resolved.source, PLAYBACK_SOURCE_PERFORMANCE);
+  assert.equal(resolved.sourceKind, PLAYBACK_SOURCE_KIND_PERFORMANCE);
+  assert.equal(resolved.sourceId, 'pplan_abc');
+  assert.equal(resolved.mixerScope, PLAYBACK_MIXER_SCOPE_PREVIEW);
+  assert.equal(resolved.composition, performed);
+});
+
+test('exclusiveAuditionPatch performance clears competing modes', () => {
+  const patch = exclusiveAuditionPatch(PLAYBACK_SOURCE_PERFORMANCE);
+  assert.equal(patch.developmentAuditionActive, false);
+  assert.equal(patch.versionAuditionActive, false);
+  assert.equal(patch.generationAuditionActive, false);
+  assert.equal(patch.performanceAuditionActive, false);
 });
 
 test('resolvePlaybackSource wires multi-agent pass audition', () => {
