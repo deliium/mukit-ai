@@ -84,11 +84,13 @@
 - [x] **V5 Spatial music scene and preview** — Project-scoped `spatial.scene.v1` with SpatialMix metadata (azimuth, elevation, distance, spread, optional motion) for tracks and/or completed neural stems. Deterministic `spatial.preview.v1` stereo + FOA Ambisonic-compatible coefficients; synchronized Web Audio / Tone preview without rewriting `composition.v2` notes or stem WAVs. Not a Dolby Atmos workstation. No `composition.v5`
 - [x] **V5 Model Lab for training and evaluating musical AI models** — Opt-in research control plane (`MODEL_LAB_ENABLED`) over corpus Music Transformer experiments: select existing dataset versions + tokenizer/architecture presets, Lab-capped train/eval/listen/compare, Lab-tab wizard, explicit register as `lab:{id}` on `/ai/models`. No shell/argv; never writes `DATASET_ROOT` or `composition.v2` notes; Personal Composer stays Profiles. No `composition.v5`
 - [x] **V5 Controlled multi-model candidate generation and arbitration** — Opt-in ensemble fan-out (`ENSEMBLE_ARBITRATION_ENABLED`) across explicit ready `symbolic_composer` ids for one client-supplied `composition.plan.v1` + hard constraints; hard validate before critic annotate and in-process preference rank; selection modes `auto_suggest` / `human` / `top_n`; session-only `ensemble.arbitration.v1` until Generate-panel `applyGenerationCandidate`. Status not on `/ready`; no Collab C; no `score_pending` / ballot surface; never invents `composition.v5`
+- [x] **V5 Continuous generative music and end-to-end platform hardening** — Opt-in continuous mode on runtime continuation with session `adaptive.runtime.music_state.v1`, virtual bars past stored `bar_count`, fallback-first + late discard, Adaptive-tab Continuous UX, optional engine continuous maintain; fake-mode V5 studio matrix + opt-in `scripts/v5_docker_acceptance.sh`; score stays `composition.v2` / session buffer only; no `composition.v5`
 
 ## Completed
 
 | Milestone | Date |
 |-----------|------|
+| V5 Continuous generative music and end-to-end platform hardening | 2026-10-04 |
 | V5 Controlled multi-model candidate generation and arbitration | 2026-10-04 |
 | V5 Model Lab for training and evaluating musical AI models | 2026-10-04 |
 | V5 Spatial music scene and preview | 2026-10-04 |
