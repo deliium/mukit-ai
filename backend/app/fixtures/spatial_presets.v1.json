@@ -1,0 +1,103 @@
+{
+  "schema_version": "spatial.presets.v1",
+  "presets": {
+    "front_stereo": {
+      "name": "Front stereo",
+      "description": "Melody leftish, accompaniment rightish, low distance.",
+      "sources": [
+        {
+          "id": "ssrc_melody",
+          "source_kind": "track",
+          "track_id": "melody-1",
+          "azimuth_deg": 25.0,
+          "elevation_deg": 0.0,
+          "distance": 1.2,
+          "spread": 0.05,
+          "gain": 1.0
+        },
+        {
+          "id": "ssrc_harmony",
+          "source_kind": "track",
+          "track_id": "harmony-1",
+          "azimuth_deg": -30.0,
+          "elevation_deg": 0.0,
+          "distance": 1.8,
+          "spread": 0.15,
+          "gain": 0.95
+        },
+        {
+          "id": "ssrc_bass",
+          "source_kind": "track",
+          "track_id": "bass-1",
+          "azimuth_deg": 0.0,
+          "elevation_deg": -5.0,
+          "distance": 1.5,
+          "spread": 0.1,
+          "gain": 1.0
+        }
+      ]
+    },
+    "circle_ensemble": {
+      "name": "Circle ensemble",
+      "description": "Tracks evenly spaced on an azimuth ring.",
+      "sources": [
+        {
+          "id": "ssrc_melody",
+          "source_kind": "track",
+          "track_id": "melody-1",
+          "azimuth_deg": 0.0,
+          "elevation_deg": 0.0,
+          "distance": 2.5,
+          "spread": 0.0,
+          "gain": 1.0
+        },
+        {
+          "id": "ssrc_harmony",
+          "source_kind": "track",
+          "track_id": "harmony-1",
+          "azimuth_deg": 120.0,
+          "elevation_deg": 0.0,
+          "distance": 2.5,
+          "spread": 0.0,
+          "gain": 0.9
+        },
+        {
+          "id": "ssrc_bass",
+          "source_kind": "track",
+          "track_id": "bass-1",
+          "azimuth_deg": -120.0,
+          "elevation_deg": 0.0,
+          "distance": 2.5,
+          "spread": 0.0,
+          "gain": 0.95
+        }
+      ]
+    },
+    "close_intimate": {
+      "name": "Close intimate",
+      "description": "Small distances, mild spread.",
+      "sources": [
+        {
+          "id": "ssrc_melody",
+          "source_kind": "track",
+          "track_id": "melody-1",
+          "azimuth_deg": 10.0,
+          "elevation_deg": 5.0,
+          "distance": 0.8,
+          "spread": 0.35,
+          "gain": 1.0
+        },
+        {
+          "id": "ssrc_harmony",
+          "source_kind": "track",
+          "track_id": "harmony-1",
+          "azimuth_deg": -12.0,
+          "elevation_deg": 2.0,
+          "distance": 1.0,
+          "spread": 0.4,
+          "gain": 0.85
+        }
+      ]
+    }
+  }
+}
