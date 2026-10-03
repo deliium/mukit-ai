@@ -12,10 +12,15 @@ from app.services.adaptive_runtime_continuation import (
     FALLBACK_ACCOMPANIMENT,
     FALLBACK_MOTIF,
     FALLBACK_REUSE_LOOP,
+    WARNING_METER,
+    WARNING_VIRTUAL_TIMELINE,
+    WARNING_WINDOW_PAST_END,
+    plan_continuous_window,
     plan_runtime_window,
     prefix_window,
     result_applicable,
     update_runtime_context,
+    virtual_bar_deadline_tick,
 )
 from app.services.adaptive_runtime_continuation_fallback import (
     place_local_events,
@@ -285,3 +290,118 @@ def test_place_local_events_puts_bar_one_on_bar_six() -> None:
     original = next(event for track in music.tracks for event in track.events if event.start_tick == 0)
     shifted = next(event for event in placed.events if event.id == original.id)
     assert shifted.start_tick == deadline
+
+
+def test_legacy_past_end_idle_unchanged_when_continuous_false() -> None:
+    window = plan_runtime_window(
+        bar=14,
+        bar_count=16,
+        loop_start_bar=None,
+        loop_end_bar=None,
+        loop_enabled=False,
+        intensity=0.2,
+        state_id="state-exploration",
+        context=_context(),
+        deadline_tick=0,
+        continuous=False,
+    )
+    assert window.job_status == "idle"
+    assert window.target_start_bar is None
+    assert WARNING_WINDOW_PAST_END in window.warnings
+    assert WARNING_VIRTUAL_TIMELINE not in window.warnings
+
+
+def test_continuous_virtual_non_idle_uses_virtual_bar_anchor(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    tpb = _ticks()
+    last_end = 16 * tpb
+    window = plan_runtime_window(
+        bar=16,
+        bar_count=16,
+        loop_start_bar=1,
+        loop_end_bar=16,
+        loop_enabled=True,
+        intensity=0.4,
+        state_id="state-exploration",
+        context=_context(),
+        deadline_tick=last_end,
+        continuous=True,
+        virtual_bar=17,
+        playback_at_end=True,
+        last_compiled_bar_end_tick=last_end,
+        ticks_per_bar_assumed=tpb,
+    )
+    assert window.job_status == "pending"
+    assert window.anchor_bar == 17
+    assert (window.reserved_start_bar, window.reserved_end_bar) == (17, 21)
+    assert (window.target_start_bar, window.target_end_bar) == (22, 29)
+    assert WARNING_VIRTUAL_TIMELINE in window.warnings
+    assert WARNING_METER in window.warnings
+    assert WARNING_WINDOW_PAST_END not in window.warnings
+    expected_deadline = virtual_bar_deadline_tick(
+        target_start_bar=22,
+        bar_count=16,
+        last_compiled_bar_end_tick=last_end,
+        ticks_per_bar_assumed=tpb,
+    )
+    assert window.deadline_tick == expected_deadline
+    assert any(getattr(record, "continuous", None) is True for record in caplog.records)
+    assert any(getattr(record, "virtual_bar", None) == 17 for record in caplog.records)
+
+
+def test_continuous_anchor_when_legacy_target_start_past_bar_count() -> None:
+    tpb = _ticks()
+    direct = plan_continuous_window(
+        bar_count=8,
+        virtual_bar=9,
+        intensity=0.5,
+        state_id="state-combat",
+        context=_context(repetition=3),
+        last_compiled_bar_end_tick=8 * tpb,
+        ticks_per_bar_assumed=tpb,
+        play_bars=5,
+        generate_bars=8,
+    )
+    via_runtime = plan_runtime_window(
+        bar=8,
+        bar_count=8,
+        loop_start_bar=None,
+        loop_end_bar=None,
+        loop_enabled=False,
+        intensity=0.5,
+        state_id="state-combat",
+        context=_context(repetition=3),
+        deadline_tick=8 * tpb,
+        continuous=True,
+        virtual_bar=9,
+        last_compiled_bar_end_tick=8 * tpb,
+        ticks_per_bar_assumed=tpb,
+    )
+    assert via_runtime.anchor_bar == 9
+    assert via_runtime.target_start_bar == 14
+    assert via_runtime.target_end_bar == 21
+    assert via_runtime.target_start_bar > 8
+    assert via_runtime.fallback_kind == FALLBACK_MOTIF
+    assert direct.anchor_bar == via_runtime.anchor_bar
+    assert direct.target_start_bar == via_runtime.target_start_bar
+
+
+def test_continuous_in_score_keeps_playback_bar_anchor() -> None:
+    window = plan_runtime_window(
+        bar=1,
+        bar_count=16,
+        loop_start_bar=None,
+        loop_end_bar=None,
+        loop_enabled=False,
+        intensity=0.4,
+        state_id="state-exploration",
+        context=_context(),
+        deadline_tick=5 * _ticks(),
+        continuous=True,
+        virtual_bar=99,
+    )
+    assert window.anchor_bar == 1
+    assert window.target_start_bar == 6
+    assert WARNING_VIRTUAL_TIMELINE not in window.warnings

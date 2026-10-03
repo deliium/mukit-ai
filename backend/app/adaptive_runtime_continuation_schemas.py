@@ -25,6 +25,7 @@ from pydantic import (
 from app.adaptive_runtime_continuation_settings import (
     load_adaptive_runtime_continuation_settings,
 )
+from app.adaptive_runtime_music_state_schemas import AdaptiveRuntimeMusicStateV1
 from app.adaptive_score_schemas import (
     ADAPTIVE_SCORE_ERROR_CODES,
     AdaptiveScoreError,
@@ -224,6 +225,8 @@ class AdaptiveRuntimeContinuationV1(_Strict):
     runtime_state_id: str
     intensity: float = Field(ge=0, le=1)
     context: AdaptiveRuntimeContextV1
+    music_state: AdaptiveRuntimeMusicStateV1 | None = None
+    continuous: bool = False
     warnings: list[AdaptiveTransitionScheduleWarningV1] = Field(
         default_factory=list,
         max_length=8,
@@ -382,12 +385,22 @@ class AdaptiveRuntimeContinuationStartRequest(_Strict):
 
     expected_document_revision: int = Field(ge=1)
     mode: ContinuationMode
+    continuous: bool = False
 
     @field_validator("expected_document_revision", mode="before")
     @classmethod
     def reject_bool_revision(cls, value: object) -> object:
         _reject_bool(value, model=cls.__name__, field="expected_document_revision")
         return value
+
+    @field_validator("continuous", mode="before")
+    @classmethod
+    def reject_non_bool_continuous(cls, value: object) -> object:
+        if isinstance(value, bool) or value is None:
+            return False if value is None else value
+        # Reject truthy strings / ints — latch must be an explicit boolean.
+        log_adaptive_schema_failure(cls.__name__, "continuous", "adaptive_score_invalid")
+        raise ValueError("continuous must be a boolean")
 
 
 def _validation_field(exc: ValidationError) -> str:
@@ -486,6 +499,27 @@ def parse_adaptive_runtime_continuation(data: object) -> AdaptiveRuntimeContinua
     context = body.get("context")
     if isinstance(context, dict):
         _reject_forbidden_keys(context, _CONTEXT_FORBIDDEN_KEYS, "AdaptiveRuntimeContextV1")
+    music_state = body.get("music_state")
+    if music_state is not None:
+        if not isinstance(music_state, dict):
+            log_adaptive_schema_failure(
+                "AdaptiveRuntimeContinuationV1",
+                "music_state",
+                "adaptive_score_invalid",
+            )
+            raise AdaptiveScoreError(
+                "adaptive_score_invalid",
+                ADAPTIVE_SCORE_ERROR_CODES["adaptive_score_invalid"],
+                http_status=422,
+                details={"field": "music_state"},
+            )
+        from app.adaptive_runtime_music_state_schemas import (
+            parse_adaptive_runtime_music_state,
+        )
+
+        # Re-validate nested MusicState so forbidden note keys surface as
+        # embedded_note_material rather than a generic invalid body.
+        body = {**body, "music_state": parse_adaptive_runtime_music_state(music_state)}
     try:
         return AdaptiveRuntimeContinuationV1.model_validate(body)
     except ValidationError as exc:

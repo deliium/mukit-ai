@@ -32,6 +32,8 @@ WARNING_TRUNCATED = "continuation_truncated"
 WARNING_UNBOUNDED = "continuation_material_unbounded"
 WARNING_METER = "continuation_meter_assumed_constant"
 WARNING_NOT_RUNNING = "playback_not_running"
+WARNING_VIRTUAL_TIMELINE = "continuation_virtual_timeline"
+WARNING_GUARD_DUPLICATE = "continuation_guard_duplicate"
 
 WARNING_MESSAGES: dict[str, str] = {
     WARNING_NOT_RUNNING: "Adaptive playback is not running.",
@@ -44,6 +46,8 @@ WARNING_MESSAGES: dict[str, str] = {
     WARNING_OUTSIDE_LOOP: "The target window sits outside the published loop.",
     WARNING_UNBOUNDED: "The state material has no bar span.",
     WARNING_METER: "The target window keeps the meter at the deadline tick.",
+    WARNING_VIRTUAL_TIMELINE: "Generating past the stored composition bar count.",
+    WARNING_GUARD_DUPLICATE: "Model buffer matched the last applied digest.",
 }
 
 
@@ -235,6 +239,24 @@ def update_runtime_context(
     )
 
 
+def virtual_bar_deadline_tick(
+    *,
+    target_start_bar: int,
+    bar_count: int,
+    last_compiled_bar_end_tick: int,
+    ticks_per_bar_assumed: int,
+) -> int:
+    """Constant-tempo deadline for a target that starts past stored ``bar_count``.
+
+    Does not call ``bar_start_tick``. ``last_compiled_bar_end_tick`` is the end
+    of bar ``bar_count`` (start of the first virtual bar).
+    """
+    if target_start_bar <= bar_count or bar_count < 1 or ticks_per_bar_assumed < 1:
+        return max(0, last_compiled_bar_end_tick)
+    offset = target_start_bar - bar_count - 1
+    return max(0, last_compiled_bar_end_tick + offset * ticks_per_bar_assumed)
+
+
 def plan_runtime_window(
     *,
     bar: int,
@@ -249,8 +271,22 @@ def plan_runtime_window(
     play_bars: int | None = None,
     generate_bars: int | None = None,
     extra_warnings: list[str] | None = None,
+    continuous: bool = False,
+    virtual_bar: int | None = None,
+    playback_at_end: bool = False,
+    loop_wrapping_at_end: bool = False,
+    last_compiled_bar_end_tick: int | None = None,
+    ticks_per_bar_assumed: int | None = None,
 ) -> RuntimeWindowPlan:
-    """Map playback bar ``N`` to reserved ``N..N+4`` and target ``N+5..N+12``."""
+    """Map playback bar ``N`` to reserved / target windows.
+
+    When ``continuous`` is false, past-end targets stay idle with
+    ``continuation_window_past_end``. When continuous and the legacy planner
+    would idle — or playback is at end / looping at end — the anchor becomes
+    ``virtual_bar`` (default ``bar_count + 1``) and the target may extend past
+    stored ``bar_count``. ``playback.bar`` is never required to exceed
+    ``bar_count``.
+    """
     settings = load_adaptive_runtime_continuation_settings()
     reserved_length = play_bars if play_bars is not None else settings.play_bars
     target_length = generate_bars if generate_bars is not None else settings.generate_bars
@@ -259,6 +295,19 @@ def plan_runtime_window(
     warnings = list(extra_warnings or [])
 
     if bar_count < 1:
+        if continuous:
+            return plan_continuous_window(
+                bar_count=1,
+                virtual_bar=max(1, virtual_bar or 1),
+                intensity=intensity,
+                state_id=state_id,
+                context=context,
+                play_bars=reserved_length,
+                generate_bars=target_length,
+                last_compiled_bar_end_tick=max(0, last_compiled_bar_end_tick or 0),
+                ticks_per_bar_assumed=max(1, ticks_per_bar_assumed or 1),
+                extra_warnings=warnings,
+            )
         plan = RuntimeWindowPlan(
             anchor_bar=anchor,
             reserved_start_bar=1,
@@ -278,13 +327,38 @@ def plan_runtime_window(
             runtime_state_id=state_id,
             repetition_count=context.repetition_count,
         )
-        _log_window(plan, len(context.theme_ids))
+        _log_window(plan, len(context.theme_ids), continuous=False, virtual_bar=None)
         return plan
 
     reserved_start = min(anchor, bar_count)
     reserved_end = min(bar_count, reserved_start + reserved_length - 1)
     target_start = anchor + reserved_length
-    if target_start > bar_count:
+    legacy_idle = target_start > bar_count
+    use_virtual = continuous and (
+        legacy_idle or playback_at_end or loop_wrapping_at_end
+    )
+    if use_virtual:
+        resolved_virtual = virtual_bar if virtual_bar is not None else bar_count + 1
+        end_tick = (
+            last_compiled_bar_end_tick
+            if last_compiled_bar_end_tick is not None
+            else max(0, deadline_tick)
+        )
+        tpb = ticks_per_bar_assumed if ticks_per_bar_assumed is not None else 1
+        return plan_continuous_window(
+            bar_count=bar_count,
+            virtual_bar=max(1, resolved_virtual),
+            intensity=intensity,
+            state_id=state_id,
+            context=context,
+            play_bars=reserved_length,
+            generate_bars=target_length,
+            last_compiled_bar_end_tick=max(0, end_tick),
+            ticks_per_bar_assumed=max(1, tpb),
+            extra_warnings=warnings,
+        )
+
+    if legacy_idle:
         plan = RuntimeWindowPlan(
             anchor_bar=anchor,
             reserved_start_bar=reserved_start,
@@ -304,7 +378,7 @@ def plan_runtime_window(
             runtime_state_id=state_id,
             repetition_count=context.repetition_count,
         )
-        _log_window(plan, len(context.theme_ids))
+        _log_window(plan, len(context.theme_ids), continuous=False, virtual_bar=None)
         return plan
 
     target_end = min(bar_count, target_start + target_length - 1)
@@ -339,7 +413,65 @@ def plan_runtime_window(
         runtime_state_id=state_id,
         repetition_count=context.repetition_count,
     )
-    _log_window(plan, len(context.theme_ids))
+    _log_window(plan, len(context.theme_ids), continuous=False, virtual_bar=None)
+    return plan
+
+
+def plan_continuous_window(
+    *,
+    bar_count: int,
+    virtual_bar: int,
+    intensity: float,
+    state_id: str,
+    context: AdaptiveRuntimeContextV1,
+    last_compiled_bar_end_tick: int,
+    ticks_per_bar_assumed: int,
+    play_bars: int | None = None,
+    generate_bars: int | None = None,
+    extra_warnings: list[str] | None = None,
+) -> RuntimeWindowPlan:
+    """Non-idle virtual timeline past stored ``bar_count``. Pure integers only."""
+    settings = load_adaptive_runtime_continuation_settings()
+    reserved_length = play_bars if play_bars is not None else settings.play_bars
+    target_length = generate_bars if generate_bars is not None else settings.generate_bars
+    anchor = max(1, virtual_bar)
+    order = fallback_order(context.repetition_count)
+    warnings = merge_warning_codes(
+        list(extra_warnings or []),
+        [WARNING_VIRTUAL_TIMELINE, WARNING_METER],
+    )
+    reserved_start = anchor
+    reserved_end = reserved_start + reserved_length - 1
+    target_start = anchor + reserved_length
+    target_end = target_start + target_length - 1
+    deadline = virtual_bar_deadline_tick(
+        target_start_bar=target_start,
+        bar_count=max(1, bar_count),
+        last_compiled_bar_end_tick=last_compiled_bar_end_tick,
+        ticks_per_bar_assumed=ticks_per_bar_assumed,
+    )
+    kind = order[0]
+    # Virtual targets are outside the authored loop by definition; continuous
+    # still schedules accompaniment / motif buffers as audible.
+    audible = kind != FALLBACK_REUSE_LOOP
+    plan = RuntimeWindowPlan(
+        anchor_bar=anchor,
+        reserved_start_bar=reserved_start,
+        reserved_end_bar=reserved_end,
+        target_start_bar=target_start,
+        target_end_bar=target_end,
+        deadline_tick=deadline,
+        fallback_order=order,
+        fallback_kind=kind,
+        job_status="pending",
+        applicable=True,
+        audible=audible,
+        warnings=tuple(warnings),
+        intensity=intensity,
+        runtime_state_id=state_id,
+        repetition_count=context.repetition_count,
+    )
+    _log_window(plan, len(context.theme_ids), continuous=True, virtual_bar=anchor)
     return plan
 
 
@@ -468,7 +600,13 @@ def _audible(*, fallback_kind: str, outside_loop: bool, target_start_bar: int | 
     return True
 
 
-def _log_window(plan: RuntimeWindowPlan, theme_count: int) -> None:
+def _log_window(
+    plan: RuntimeWindowPlan,
+    theme_count: int,
+    *,
+    continuous: bool = False,
+    virtual_bar: int | None = None,
+) -> None:
     logger.debug(
         "Planned adaptive runtime window",
         extra={
@@ -477,5 +615,8 @@ def _log_window(plan: RuntimeWindowPlan, theme_count: int) -> None:
             "fallback_kind": plan.fallback_kind,
             "repetition_count": plan.repetition_count,
             "theme_count": theme_count,
+            "continuous": continuous,
+            "virtual_bar": virtual_bar,
+            "warning_codes": list(plan.warnings),
         },
     )

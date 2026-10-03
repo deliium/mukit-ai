@@ -1,7 +1,7 @@
 """Env-overridable caps for adaptive runtime symbolic continuation.
 
-Counts, deadlines, and the intensity epsilon only. This module never reads
-note events, harmony labels, or buffer JSON.
+Counts, deadlines, intensity epsilon, and continuous-mode flags only. This
+module never reads note events, harmony labels, or buffer JSON.
 """
 
 from __future__ import annotations
@@ -10,10 +10,17 @@ import logging
 import math
 import os
 from dataclasses import dataclass
+from typing import Mapping
 
 logger = logging.getLogger(__name__)
 
 _LOGGED_CAPS = False
+_LOGGED_CONTINUOUS = False
+
+ADAPTIVE_CONTINUOUS_ENABLED_ENV = "ADAPTIVE_CONTINUOUS_ENABLED"
+ADAPTIVE_ENGINE_CONTINUOUS_ENABLED_ENV = "ADAPTIVE_ENGINE_CONTINUOUS_ENABLED"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_RECOGNIZED_OFF = frozenset({"", "0"})
 
 
 @dataclass(frozen=True)
@@ -27,6 +34,8 @@ class AdaptiveRuntimeContinuationSettings:
     latency_budget_ms: int = 50
     intensity_epsilon: float = 0.25
     max_buffer_events: int = 512
+    adaptive_continuous_enabled: bool = False
+    adaptive_engine_continuous_enabled: bool = False
 
 
 def _positive_int(
@@ -90,12 +99,49 @@ def _epsilon(source: dict[str, str], key: str, default: float) -> float:
     return parsed
 
 
+def _parse_truthy(raw: str | None, *, code: str) -> bool:
+    text = "" if raw is None else str(raw).strip().lower()
+    if text in _TRUTHY:
+        return True
+    if text in _RECOGNIZED_OFF:
+        return False
+    logger.warning(
+        "Adaptive continuous flag unrecognized; treating as off",
+        extra={"code": code},
+    )
+    return False
+
+
+def adaptive_continuous_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Studio continuous / virtual timeline flag. Default off."""
+    source = env if env is not None else os.environ
+    return _parse_truthy(
+        source.get(ADAPTIVE_CONTINUOUS_ENABLED_ENV),
+        code="adaptive_continuous_flag_unrecognized",
+    )
+
+
+def adaptive_engine_continuous_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Engine continuous maintain proxy flag. Default off."""
+    source = env if env is not None else os.environ
+    return _parse_truthy(
+        source.get(ADAPTIVE_ENGINE_CONTINUOUS_ENABLED_ENV),
+        code="adaptive_engine_continuous_flag_unrecognized",
+    )
+
+
 def load_adaptive_runtime_continuation_settings(
     env: dict[str, str] | None = None,
 ) -> AdaptiveRuntimeContinuationSettings:
-    """Load caps. DEBUG logs the numbers once per process when reading the environment."""
-    global _LOGGED_CAPS
+    """Load caps and continuous flags.
+
+    DEBUG logs numeric caps once per process. INFO logs continuous booleans
+    once per process. Never logs MusicState or buffer material.
+    """
+    global _LOGGED_CAPS, _LOGGED_CONTINUOUS
     source = env if env is not None else os.environ
+    continuous = adaptive_continuous_enabled(source)
+    engine_continuous = adaptive_engine_continuous_enabled(source)
     settings = AdaptiveRuntimeContinuationSettings(
         play_bars=_positive_int(
             source,
@@ -144,6 +190,8 @@ def load_adaptive_runtime_continuation_settings(
             floor=1,
             ceiling=4096,
         ),
+        adaptive_continuous_enabled=continuous,
+        adaptive_engine_continuous_enabled=engine_continuous,
     )
     if env is None and not _LOGGED_CAPS:
         _LOGGED_CAPS = True
@@ -157,6 +205,27 @@ def load_adaptive_runtime_continuation_settings(
                 "latency_budget_ms": settings.latency_budget_ms,
                 "intensity_epsilon": settings.intensity_epsilon,
                 "max_buffer_events": settings.max_buffer_events,
+            },
+        )
+    if env is None and not _LOGGED_CONTINUOUS:
+        _LOGGED_CONTINUOUS = True
+        logger.info(
+            "Adaptive continuous settings loaded",
+            extra={
+                "adaptive_continuous_enabled": settings.adaptive_continuous_enabled,
+                "adaptive_engine_continuous_enabled": (
+                    settings.adaptive_engine_continuous_enabled
+                ),
+            },
+        )
+    elif env is not None:
+        logger.info(
+            "Adaptive continuous settings loaded",
+            extra={
+                "adaptive_continuous_enabled": settings.adaptive_continuous_enabled,
+                "adaptive_engine_continuous_enabled": (
+                    settings.adaptive_engine_continuous_enabled
+                ),
             },
         )
     return settings
