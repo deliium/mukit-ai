@@ -1,0 +1,24 @@
+{
+  "schema_version": "browser.model.manifest.v1",
+  "model_id": "browser:symbolic-features-v1",
+  "profile_id": "symbolic.features.v1",
+  "algorithm_version": "symbolic.features.v1.algo.1",
+  "ops": ["embed"],
+  "asset_kind": "none",
+  "asset_url": "",
+  "sha256": "",
+  "size_bytes": 0,
+  "input_spec": {
+    "composition": "composition.v2",
+    "scope": "composition.embed_scope.v1",
+    "max_note_count": 20000
+  },
+  "output_spec": {
+    "card": "composition.embedding.v1",
+    "dims": 81,
+    "projection_id": "none",
+    "distance_metric": "cosine"
+  },
+  "webgpu_optional": true,
+  "webgpu_sub_path": "batched_cosine_wgsl"
+}

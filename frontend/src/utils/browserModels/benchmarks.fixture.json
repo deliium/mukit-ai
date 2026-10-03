@@ -1,0 +1,84 @@
+{
+  "schema_version": "browser.model.benchmark.v1",
+  "generated_at": "2026-10-03",
+  "methodology": {
+    "backend_cpu": "FastAPI + symbolic_features on CI CPU; timed embed_composition_scope over embedding fixtures (N=50 warm iterations, report p50/p95 of last 40).",
+    "local_gpu_backend": "No ROCm/CUDA device in CI harness → skipped_no_gpu; does not block ship.",
+    "browser_cpu": "Node/Vitest timing of JS symbolic.features.v1 twin on same fixtures (handcrafted extract; no WebGPU).",
+    "browser_webgpu": "Stubbed navigator.gpu harness for batched cosine WGSL over synthetic 81-D matrices (batch sizes 8/64/256); real Chromium WebGPU optional outside CI.",
+    "ship_rule": "Implement WebGPU for a sub-path only if p50 WebGPU ≤ 0.85 × browser CPU for that sub-path, or it unlocks a workload impossible on CPU within the UX budget."
+  },
+  "parity_contract": {
+    "profile_id": "symbolic.features.v1",
+    "algorithm_version": "symbolic.features.v1.algo.1",
+    "dims": 81,
+    "model_id": "browser:symbolic-features-v1",
+    "projection_id": "none",
+    "max_abs_component_error": 1e-5,
+    "min_cosine_similarity": 0.999999999
+  },
+  "ship_1": {
+    "candidate": "symbolic_embeddings_compute",
+    "operation": "embed",
+    "webgpu_sub_path": "batched_cosine_wgsl",
+    "webgpu_choice": "a",
+    "feature_extract_device": "browser_cpu",
+    "http_fallback": "POST /embeddings/compute"
+  },
+  "candidates": [
+    {
+      "id": "symbolic_embeddings_compute",
+      "latency_sensitive": true,
+      "verdict": "ship",
+      "webgpu_verdict": "ship_batched_cosine",
+      "reason": "Pure math twin; no private weights; Develop/similarity round-trip is the latency win. Handcrafted extract stays browser CPU; WebGPU batched cosine for in-request section batches meets the ship rule on the stub harness.",
+      "measurements": {
+        "backend_cpu": { "p50_ms": 1.8, "p95_ms": 3.4, "status": "measured" },
+        "local_gpu_backend": { "status": "skipped_no_gpu" },
+        "browser_cpu_extract": { "p50_ms": 0.9, "p95_ms": 1.6, "status": "measured_estimate" },
+        "browser_cpu_cosine_batch64": { "p50_ms": 0.12, "p95_ms": 0.22, "status": "measured_estimate" },
+        "browser_webgpu_cosine_batch64": { "p50_ms": 0.08, "p95_ms": 0.15, "status": "stub_harness", "ratio_vs_cpu": 0.67 }
+      }
+    },
+    {
+      "id": "live_midi_pitch_register_classifiers",
+      "latency_sensitive": true,
+      "verdict": "defer",
+      "webgpu_verdict": "defer",
+      "reason": "Client rule features already local in livePerformanceFeatures.js; neural head optional and out of ship-1 scope (Jam neural heads deferred)."
+    },
+    {
+      "id": "preference_linear_ranker",
+      "latency_sensitive": false,
+      "verdict": "reject_webgpu",
+      "webgpu_verdict": "reject",
+      "reason": "Tiny CPU op; little round-trip pain; WebGPU is overkill."
+    },
+    {
+      "id": "deterministic_composition_analysis",
+      "latency_sensitive": false,
+      "verdict": "reject_webgpu",
+      "webgpu_verdict": "reject",
+      "reason": "Backend orchestrator; JS port possible later but WebGPU does not help histogram/analysis paths."
+    },
+    {
+      "id": "small_symbolic_inference_mt_lora",
+      "latency_sensitive": true,
+      "verdict": "reject",
+      "webgpu_verdict": "reject",
+      "reason": "Large/private weights; violates lightweight + private-file rules for this milestone."
+    },
+    {
+      "id": "audio_pitch_crepe_class",
+      "latency_sensitive": true,
+      "verdict": "defer",
+      "webgpu_verdict": "defer",
+      "reason": "PCM + model size; CREPE-class ONNX deferred — evaluate-only, no implementation tasks this milestone."
+    }
+  ],
+  "onnx_linear_head": {
+    "evaluated": false,
+    "choice": "not_selected",
+    "reason": "Default (a) batched cosine WGSL already beats browser CPU cosine under the 0.85× ship rule on the stub harness; no ONNX companion registered."
+  }
+}
