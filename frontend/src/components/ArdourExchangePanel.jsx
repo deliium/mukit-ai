@@ -13,7 +13,7 @@ import {
   prepareArdourExchange,
   realizeArdourExchange,
 } from '../api/ardourExchangeApi.js';
-import useMusicStore from '../store/musicStore.js';
+import { useMusicStore } from '../store/musicStore.js';
 import { createAppLogger } from '../utils/appLogger.js';
 import { applyExchangeInbound } from '../utils/ardourExchange/applyInbound.js';
 import { applyRealizeCandidate } from '../utils/ardourExchange/applyRealize.js';

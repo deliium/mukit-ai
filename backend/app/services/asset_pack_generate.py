@@ -21,7 +21,7 @@ from app.asset_pack_schemas import (
     AssetPackPlanV1,
     AssetPackPropagateOp,
 )
-from app.composition_schemas import CompositionV2
+from app.composition_schemas import CompositionV2, reconcile_motifs_for_removed_event_ids
 from app.db.connection import get_connection, get_project_db_path
 from app.musical_universe_schemas import (
     MusicalUniverseError,
@@ -106,16 +106,16 @@ def first_pitched_track_id(composition: CompositionV2) -> str | None:
 
 
 def _reuse_track_candidates(composition: CompositionV2) -> list[str]:
-    """Prefer non-melody pitched tracks so Theme A outro on melody does not overlap."""
+    """Prefer melody/lead landing track, then other pitched non-drum tracks."""
+    preferred = first_pitched_track_id(composition)
     pitched = [
-        track
+        track.id
         for track in composition.tracks
         if not track.is_drum and track.role not in {"drums", "percussion"}
     ]
-    non_melody = [t.id for t in pitched if t.role not in {"melody", "lead"}]
-    melody = [t.id for t in pitched if t.role in {"melody", "lead"}]
-    other = [t.id for t in pitched if t.id not in non_melody and t.id not in melody]
-    return non_melody + other + melody
+    if not preferred:
+        return pitched
+    return [preferred] + [tid for tid in pitched if tid != preferred]
 
 
 def discover_seed_motif(
@@ -313,13 +313,19 @@ def _clear_track_for_reuse(
 ) -> CompositionV2:
     """Clear one track so mechanical Theme A reuse has room (no overlap)."""
     composition = _load_composition(project_id, db_path)
+    removed_event_ids: set[str] = set()
     new_tracks = []
     for track in composition.tracks:
         if track.id == track_id:
+            removed_event_ids = {event.id for event in track.events if getattr(event, "id", None)}
             new_tracks.append(track.model_copy(update={"events": []}))
         else:
             new_tracks.append(track)
-    cleared = composition.model_copy(update={"tracks": new_tracks})
+    motifs = composition.motifs or []
+    if removed_event_ids and motifs:
+        reconciled = reconcile_motifs_for_removed_event_ids(motifs, removed_event_ids)
+        motifs = reconciled.motifs
+    cleared = composition.model_copy(update={"tracks": new_tracks, "motifs": motifs})
     cas = _branch_cas(db_path, project_id)
     with get_connection(db_path) as conn:
         try:
@@ -359,7 +365,7 @@ def _reuse_into_slot(
             "asset_pack_generate_failed",
             "Destination has no pitched track for theme reuse",
         )
-    # Prefer clearing a non-melody track so reuse has an empty landing lane.
+    # Clear the preferred (melody/lead) landing lane so reuse has empty space.
     landing_track = track_ids[0]
     composition = _clear_track_for_reuse(
         destination_project_id,
