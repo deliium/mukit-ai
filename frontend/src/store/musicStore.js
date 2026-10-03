@@ -74,6 +74,8 @@ import {
   fetchAudioRecoveryAssetBlobUrl,
   fetchAudioRecoveryAssetJson,
   fetchBoundAudioRecovery,
+  fetchNeuralAudioStemBlob,
+  getNeuralAudioStemSet,
 } from '../api/musicApi.js';
 import { briefFingerprint } from '../utils/autonomousControl.js';
 import { mintOperationRunId } from '../utils/operationSummaryText.js';
@@ -238,7 +240,9 @@ import {
   PLAYBACK_SOURCE_DEVELOPMENT,
   PLAYBACK_SOURCE_GENERATION,
   PLAYBACK_SOURCE_PERFORMANCE,
+  PLAYBACK_SOURCE_SPATIAL,
   PLAYBACK_SOURCE_VERSION,
+  PLAYBACK_SOURCE_WORKING,
   exclusiveAuditionPatch,
   resolvePlaybackSource,
 } from '../utils/playbackSource.js';
@@ -250,6 +254,27 @@ import {
   realizePerformancePlan,
 } from '../api/performanceApi.js';
 import { applyRealizationToScheduleComposition } from '../utils/performanceConductor/scheduleApply.js';
+import {
+  compileSpatialScene,
+  createSpatialScene,
+  getSpatialScene,
+  listSpatialPresets,
+  listSpatialScenes,
+  updateSpatialScene,
+} from '../api/spatialSceneApi.js';
+import {
+  buildSpatialMixMapFromScene,
+  buildSpatialMixerOverridesFromPreview,
+  setActiveSpatialMixByTrackId,
+} from '../utils/spatialMusic/spatialApply.js';
+import {
+  buildSpatialCompileBody,
+  prepareSceneStemSpatialPlayers,
+  sceneHasStemSources,
+  sceneHasTrackSources,
+} from '../utils/spatialMusic/spatialAudition.js';
+import { teardownAllStemSpatialPlayers } from '../utils/spatialMusic/stemSpatialPlayer.js';
+import { validateSpatialSceneBody } from '../utils/spatialMusic/sceneValidation.js';
 import {
   AI_CANDIDATE_STATUS,
   aiCandidateLogFields,
@@ -496,7 +521,22 @@ export const initialPerformanceState = {
   performanceCompare: null,
 };
 
+export const initialSpatialState = {
+  spatialScenes: [],
+  spatialPresets: [],
+  spatialSelectedSceneId: null,
+  spatialSelectedScene: null,
+  spatialDocumentRevision: null,
+  spatialStatus: 'idle',
+  spatialError: '',
+  spatialAuditionActive: false,
+  spatialPreview: null,
+  spatialStale: { composition: false, stem_set: false },
+};
+
 let performanceRequestSeq = 0;
+let spatialRequestSeq = 0;
+const spatialLogger = createAppLogger('spatialMusic');
 
 let adaptiveScoreRequestSeq = 0;
 let adaptivePlaybackMemory = null;
@@ -1754,6 +1794,7 @@ export const useMusicStore = create((set, get) => ({
   ...initialHarmonyUiState,
   ...initialAdaptiveScoreState,
   ...initialPerformanceState,
+  ...initialSpatialState,
   ...initialReharmonizePreviewState,
   multiAgentStatus: 'idle',
   multiAgentError: '',
@@ -13282,6 +13323,330 @@ export const useMusicStore = create((set, get) => ({
     }
   },
 
+  clearSpatialAudition: () => {
+    spatialLogger.debug('Clearing spatial audition');
+    setActiveSpatialMixByTrackId(null);
+    teardownAllStemSpatialPlayers();
+    set({
+      spatialAuditionActive: false,
+      spatialPreview: null,
+      spatialStale: { composition: false, stem_set: false },
+    });
+  },
+
+  loadSpatialStudio: async () => {
+    const projectId = get().currentProjectId;
+    spatialRequestSeq += 1;
+    const requestId = spatialRequestSeq;
+    if (!projectId) {
+      set({ ...initialSpatialState });
+      return;
+    }
+    spatialLogger.debug('Loading spatial studio', { projectId, requestId });
+    set({ spatialStatus: 'loading', spatialError: '' });
+    try {
+      const [listed, catalog] = await Promise.all([
+        listSpatialScenes(projectId),
+        listSpatialPresets(projectId),
+      ]);
+      if (get().currentProjectId !== projectId || requestId !== spatialRequestSeq) {
+        return;
+      }
+      const scenes = Array.isArray(listed?.scenes) ? listed.scenes : [];
+      const presets = Array.isArray(catalog?.presets) ? catalog.presets : [];
+      const selected = get().spatialSelectedSceneId;
+      const stillSelected = scenes.some((s) => s.id === selected)
+        ? selected
+        : (scenes[0]?.id || null);
+      let selectedScene = get().spatialSelectedScene;
+      let documentRevision = get().spatialDocumentRevision;
+      if (stillSelected) {
+        const got = await getSpatialScene(projectId, stillSelected);
+        if (get().currentProjectId !== projectId || requestId !== spatialRequestSeq) {
+          return;
+        }
+        selectedScene = got?.scene || null;
+        documentRevision = got?.document_revision ?? null;
+      } else {
+        selectedScene = null;
+        documentRevision = null;
+      }
+      set({
+        spatialScenes: scenes,
+        spatialPresets: presets,
+        spatialSelectedSceneId: stillSelected,
+        spatialSelectedScene: selectedScene,
+        spatialDocumentRevision: documentRevision,
+        spatialStatus: 'ready',
+        spatialError: '',
+      });
+      spatialLogger.info('Spatial studio loaded', {
+        sceneCount: scenes.length,
+        presetCount: presets.length,
+      });
+    } catch (error) {
+      if (get().currentProjectId !== projectId || requestId !== spatialRequestSeq) {
+        return;
+      }
+      spatialLogger.warn('Spatial studio load failed', { code: error.code || null });
+      set({
+        spatialStatus: 'error',
+        spatialError: error.message || 'Failed to load spatial scenes',
+      });
+    }
+  },
+
+  cloneSpatialPreset: async (presetId) => {
+    const projectId = get().currentProjectId;
+    const composition = get().editedMusicJson;
+    if (!projectId || !composition) {
+      set({ spatialError: 'Open a project with a composition to clone a preset' });
+      return null;
+    }
+    spatialLogger.info('Cloning spatial preset', { presetId });
+    set({ spatialStatus: 'loading', spatialError: '' });
+    try {
+      const created = await createSpatialScene(projectId, {
+        preset_id: presetId,
+        composition,
+        name: String(presetId),
+      });
+      await get().loadSpatialStudio();
+      const sceneId = created?.scene?.id || null;
+      if (sceneId) {
+        set({
+          spatialSelectedSceneId: sceneId,
+          spatialSelectedScene: created.scene,
+          spatialDocumentRevision: created.document_revision,
+        });
+      }
+      spatialLogger.info('Cloned spatial preset', { presetId, sceneId });
+      return created;
+    } catch (error) {
+      spatialLogger.warn('Clone spatial preset failed', { code: error.code || null });
+      set({
+        spatialStatus: 'error',
+        spatialError: error.message || 'Clone failed',
+      });
+      return null;
+    }
+  },
+
+  selectSpatialScene: async (sceneId) => {
+    get().clearSpatialAudition();
+    const projectId = get().currentProjectId;
+    if (!projectId || !sceneId) {
+      set({
+        spatialSelectedSceneId: null,
+        spatialSelectedScene: null,
+        spatialDocumentRevision: null,
+      });
+      return;
+    }
+    set({ spatialSelectedSceneId: sceneId, spatialStatus: 'loading', spatialError: '' });
+    try {
+      const got = await getSpatialScene(projectId, sceneId);
+      set({
+        spatialSelectedScene: got?.scene || null,
+        spatialDocumentRevision: got?.document_revision ?? null,
+        spatialStatus: 'ready',
+      });
+    } catch (error) {
+      set({
+        spatialStatus: 'error',
+        spatialError: error.message || 'Failed to load scene',
+      });
+    }
+  },
+
+  updateSpatialSourceMix: async (sourceId, patch) => {
+    const projectId = get().currentProjectId;
+    const scene = get().spatialSelectedScene;
+    const revision = get().spatialDocumentRevision;
+    if (!projectId || !scene || !sourceId || revision == null) return null;
+    const sources = (scene.sources || []).map((src) => (
+      src.id === sourceId ? { ...src, ...patch } : src
+    ));
+    const nextScene = { ...scene, sources };
+    const validation = validateSpatialSceneBody(nextScene);
+    if (!validation.ok) {
+      set({ spatialError: validation.code || 'spatial_scene_invalid' });
+      return null;
+    }
+    try {
+      const updated = await updateSpatialScene(projectId, scene.id, {
+        scene: nextScene,
+        expected_document_revision: revision,
+      });
+      set({
+        spatialSelectedScene: updated.scene,
+        spatialDocumentRevision: updated.document_revision,
+        spatialError: '',
+      });
+      if (get().spatialAuditionActive) {
+        await get().setSpatialAuditionActive(true);
+      }
+      return updated;
+    } catch (error) {
+      set({ spatialError: error.message || 'Update failed' });
+      return null;
+    }
+  },
+
+  setSpatialAuditionActive: async (active) => {
+    const projectId = get().currentProjectId;
+    const sceneId = get().spatialSelectedSceneId;
+    const scene = get().spatialSelectedScene;
+    const composition = get().editedMusicJson;
+    spatialLogger.debug('Spatial audition toggle', { active: Boolean(active), sceneId });
+
+    if (!active) {
+      set({
+        ...exclusiveAuditionPatch(PLAYBACK_SOURCE_WORKING),
+        spatialAuditionActive: false,
+        spatialPreview: null,
+        spatialStale: { composition: false, stem_set: false },
+      });
+      setActiveSpatialMixByTrackId(null);
+      teardownAllStemSpatialPlayers();
+      return;
+    }
+
+    if (!projectId || !sceneId || !scene) {
+      set({ spatialError: 'Select a scene to audition' });
+      return;
+    }
+    const needsTracks = sceneHasTrackSources(scene);
+    const needsStems = sceneHasStemSources(scene);
+    if (needsTracks && !composition) {
+      set({ spatialError: 'Composition required to audition track sources' });
+      return;
+    }
+
+    set({ spatialStatus: 'loading', spatialError: '' });
+    teardownAllStemSpatialPlayers();
+    try {
+      let stemSet = null;
+      if (needsStems) {
+        const stemSetId = scene.source_stem_set_id;
+        if (!stemSetId) {
+          set({
+            spatialStatus: 'error',
+            spatialError: 'Scene stem sources require source_stem_set_id',
+            spatialAuditionActive: false,
+            spatialPreview: null,
+          });
+          return;
+        }
+        try {
+          stemSet = await getNeuralAudioStemSet(stemSetId);
+          spatialLogger.debug('Loaded stem-set for spatial compile', {
+            stemSetId,
+            stemCount: Array.isArray(stemSet?.stems) ? stemSet.stems.length : 0,
+          });
+        } catch (stemError) {
+          spatialLogger.warn('Stem-set load failed for spatial audition', {
+            stemSetId,
+            message: stemError?.message || String(stemError),
+          });
+          set({
+            spatialStatus: 'error',
+            spatialError: stemError.message || 'Failed to load stem-set metadata',
+            spatialAuditionActive: false,
+            spatialPreview: null,
+          });
+          return;
+        }
+      }
+
+      const compileBody = buildSpatialCompileBody({
+        scene,
+        composition: needsTracks ? composition : null,
+        stemSet,
+        atTick: 0,
+      });
+      const compiled = await compileSpatialScene(projectId, sceneId, compileBody);
+      const preview = compiled?.preview || null;
+      const { overrides } = buildSpatialMixerOverridesFromPreview(preview);
+      const mixMap = buildSpatialMixMapFromScene(scene);
+      setActiveSpatialMixByTrackId(mixMap);
+
+      // Apply compiled stereo onto preview mixer scope (Panner3D uses mix map in engine).
+      const nextPreviewControls = { ...(get().previewTrackControls || {}) };
+      for (const [trackId, control] of Object.entries(overrides)) {
+        nextPreviewControls[trackId] = {
+          ...(nextPreviewControls[trackId] || {}),
+          ...control,
+        };
+      }
+
+      let stemPrep = { prepared: 0, skipped: 0, failed: 0 };
+      if (needsStems) {
+        const engine = getLivePlaybackEngine();
+        const Tone = engine?.getTone?.() || null;
+        const master = engine?.getMasterInput?.() || null;
+        if (!Tone || !master) {
+          spatialLogger.warn('Spatial stem audition skipped — playback engine unavailable', {
+            code: 'stem_engine_unavailable',
+          });
+          stemPrep = { prepared: 0, skipped: 0, failed: 0, reasons: ['stem_engine_unavailable'] };
+        } else {
+          try {
+            if (typeof Tone.start === 'function') {
+              await Tone.start();
+            }
+          } catch {
+            // AudioContext may already be running.
+          }
+          stemPrep = await prepareSceneStemSpatialPlayers({
+            Tone,
+            scene,
+            preview,
+            masterDestination: master,
+            fetchStemArrayBuffer: async (stemId) => {
+              const blob = await fetchNeuralAudioStemBlob(stemId);
+              if (!blob || typeof blob.arrayBuffer !== 'function') {
+                throw new Error('stem_blob_unavailable');
+              }
+              return blob.arrayBuffer();
+            },
+          });
+          spatialLogger.info('Spatial stem players prepared', {
+            prepared: stemPrep.prepared,
+            skipped: stemPrep.skipped,
+            failed: stemPrep.failed,
+          });
+        }
+      }
+
+      set({
+        ...exclusiveAuditionPatch(PLAYBACK_SOURCE_SPATIAL),
+        spatialAuditionActive: true,
+        spatialPreview: preview,
+        spatialStale: preview?.stale || { composition: false, stem_set: false },
+        previewTrackControls: nextPreviewControls,
+        spatialStatus: 'ready',
+        spatialError: '',
+      });
+      spatialLogger.info('Spatial audition active', {
+        sceneId,
+        sourceCount: preview?.metrics?.source_count ?? 0,
+        stemPrepared: stemPrep.prepared,
+        stale: Boolean(preview?.stale?.composition || preview?.stale?.stem_set),
+      });
+    } catch (error) {
+      spatialLogger.warn('Spatial compile failed', { code: error.code || null });
+      setActiveSpatialMixByTrackId(null);
+      teardownAllStemSpatialPlayers();
+      set({
+        spatialStatus: 'error',
+        spatialError: error.message || 'Compile failed',
+        spatialAuditionActive: false,
+        spatialPreview: null,
+      });
+    }
+  },
+
   loadAdaptiveScore: async () => {
     const projectId = get().currentProjectId;
     adaptiveScoreRequestSeq += 1;
@@ -14685,6 +15050,8 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
 
   cancelAutosaveTimer();
   cancelAnalysisLifecycle();
+  setActiveSpatialMixByTrackId(null);
+  teardownAllStemSpatialPlayers();
   const prev = get();
   const historyFields = historyStateFromProject(project);
   set({
@@ -14695,6 +15062,7 @@ function hydrateProject(set, get, project, { openComposer = true, markSaved = tr
     ...clearedVersionHistoryState(),
     ...initialMusicalReferenceSessionState,
     ...initialPerformanceState,
+    ...initialSpatialState,
     activeView: openComposer ? 'composer' : get().activeView,
     generatedMusicJson: composition,
     editedMusicJson: composition,

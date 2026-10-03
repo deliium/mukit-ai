@@ -135,6 +135,7 @@ test('exclusiveAuditionPatch clears competitors', () => {
     reharmonizeAuditionActive: false,
     multiAgentAuditionActive: false,
     performanceAuditionActive: false,
+    spatialAuditionActive: false,
   });
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_DEVELOPMENT, 'source'), {
     arrangementAuditionMode: 'source',
@@ -145,6 +146,7 @@ test('exclusiveAuditionPatch clears competitors', () => {
     reharmonizeAuditionActive: false,
     multiAgentAuditionActive: false,
     performanceAuditionActive: false,
+    spatialAuditionActive: false,
   });
   assert.deepEqual(exclusiveAuditionPatch(PLAYBACK_SOURCE_WORKING, 'source'), {
     developmentAuditionActive: false,
@@ -156,6 +158,7 @@ test('exclusiveAuditionPatch clears competitors', () => {
     reharmonizeAuditionActive: false,
     multiAgentAuditionActive: false,
     performanceAuditionActive: false,
+    spatialAuditionActive: false,
   });
 });
 
@@ -236,6 +239,21 @@ test('exclusiveAuditionPatch performance clears competing modes', () => {
   assert.equal(patch.versionAuditionActive, false);
   assert.equal(patch.generationAuditionActive, false);
   assert.equal(patch.performanceAuditionActive, false);
+  assert.equal(patch.spatialAuditionActive, false);
+});
+
+test('resolvePlaybackSource wires spatial audition with preview mixer', () => {
+  const resolved = resolvePlaybackSource({
+    editedMusicJson: working,
+    spatialAuditionActive: true,
+    spatialSelectedSceneId: 'sscene_abc',
+    performanceAuditionActive: false,
+  });
+  assert.equal(resolved.source, 'spatial');
+  assert.equal(resolved.sourceKind, 'spatial');
+  assert.equal(resolved.sourceId, 'sscene_abc');
+  assert.equal(resolved.mixerScope, PLAYBACK_MIXER_SCOPE_PREVIEW);
+  assert.equal(resolved.composition, working);
 });
 
 test('resolvePlaybackSource wires multi-agent pass audition', () => {

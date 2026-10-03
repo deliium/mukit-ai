@@ -21,6 +21,10 @@ import {
 import { prepareTrackInstrumentAdapters } from './playbackInstrumentLoader.js';
 import { secondsToPlaybackPosition, ticksToPlaybackSeconds } from './playbackPosition.js';
 import { clampSeekSecondsToLoop, normalizePlaybackLoop } from './playbackLoop.js';
+import {
+  createSpatialPannerNode,
+  getActiveSpatialMix,
+} from './spatialMusic/spatialApply.js';
 
 const RELOCATION_FADE_SECONDS = 0.02;
 /** Disable per-track meters above this route count (CPU budget). */
@@ -565,7 +569,27 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
         volumeGain = new Tone.Gain(midiVolumeToGain(persistedVolume));
         // Session mute/solo/trim only — canonical volume stays on volumeGain.
         uiGain = new Tone.Gain(state.effectiveGain);
-        panner = new Tone.Panner(state.panStereo || 0);
+        // Optional SpatialMix: prefer Panner3D when audition mix is active; else Tone.Panner.
+        // FOA is never computed here — API compile is the FOA authority.
+        const spatialMix = getActiveSpatialMix(state.trackId);
+        if (spatialMix && !spatialMix.muted) {
+          const created = createSpatialPannerNode(Tone, spatialMix);
+          if (created.node) {
+            panner = created.node;
+            log('debug', 'Spatial Panner3D route', {
+              trackId: state.trackId,
+              reason: created.reason,
+            });
+          } else {
+            panner = new Tone.Panner(state.panStereo || 0);
+            log('debug', 'Spatial stereo panner fallback', {
+              trackId: state.trackId,
+              reason: created.reason,
+            });
+          }
+        } else {
+          panner = new Tone.Panner(state.panStereo || 0);
+        }
         const initialSend = state.audible
           ? Math.max(0, Math.min(1, Number(state.reverbSend) || 0))
           : 0;
@@ -1571,6 +1595,10 @@ export function createPlaybackEngine({ Tone, logger = console } = {}) {
     getOperationEpoch,
     getSourceKey,
     invalidateSource,
+    /** Shared master bus for spatial stem players (same path as track graphs). */
+    getMasterInput: () => ensureMasterGain(),
+    /** Tone module injected at engine create (shared Transport owner). */
+    getTone: () => Tone,
     dispose,
   };
 }

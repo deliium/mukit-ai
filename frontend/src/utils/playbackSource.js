@@ -13,6 +13,7 @@ export const PLAYBACK_SOURCE_ARRANGEMENT = 'arrangement';
 export const PLAYBACK_SOURCE_VERSION = 'version';
 export const PLAYBACK_SOURCE_GENERATION = 'generation';
 export const PLAYBACK_SOURCE_PERFORMANCE = 'performance';
+export const PLAYBACK_SOURCE_SPATIAL = 'spatial';
 
 /** Fine-grained audition kinds (subset of coarse `source` for AI previews). */
 export const PLAYBACK_SOURCE_KIND_WORKING = 'working';
@@ -25,6 +26,7 @@ export const PLAYBACK_SOURCE_KIND_MOTIF = 'motif';
 export const PLAYBACK_SOURCE_KIND_REHARMONIZE = 'reharmonize';
 export const PLAYBACK_SOURCE_KIND_MULTI_AGENT = 'multi_agent';
 export const PLAYBACK_SOURCE_KIND_PERFORMANCE = 'performance';
+export const PLAYBACK_SOURCE_KIND_SPATIAL = 'spatial';
 
 /** Mixer control buckets — AI preview kinds share one ephemeral scope. */
 export const PLAYBACK_MIXER_SCOPE_WORKING = 'working';
@@ -66,6 +68,7 @@ export function mixerScopeForSourceKind(sourceKind) {
     case PLAYBACK_SOURCE_KIND_REHARMONIZE:
     case PLAYBACK_SOURCE_KIND_MULTI_AGENT:
     case PLAYBACK_SOURCE_KIND_PERFORMANCE:
+    case PLAYBACK_SOURCE_KIND_SPATIAL:
       return PLAYBACK_MIXER_SCOPE_PREVIEW;
     case PLAYBACK_SOURCE_KIND_WORKING:
     default:
@@ -94,6 +97,8 @@ export function coarseSourceForKind(sourceKind) {
       return PLAYBACK_SOURCE_GENERATION;
     case PLAYBACK_SOURCE_KIND_PERFORMANCE:
       return PLAYBACK_SOURCE_PERFORMANCE;
+    case PLAYBACK_SOURCE_KIND_SPATIAL:
+      return PLAYBACK_SOURCE_SPATIAL;
     case PLAYBACK_SOURCE_KIND_WORKING:
     default:
       return PLAYBACK_SOURCE_WORKING;
@@ -164,6 +169,17 @@ export function resolvePlaybackSource(state, deps = {}) {
       PLAYBACK_SOURCE_KIND_PERFORMANCE,
       planId,
       state.performanceScheduleComposition,
+    );
+  }
+
+  if (state?.spatialAuditionActive) {
+    const sceneId = state.spatialSelectedSceneId != null
+      ? String(state.spatialSelectedSceneId)
+      : EMPTY_SOURCE_ID;
+    return buildPlaybackSourceResult(
+      PLAYBACK_SOURCE_KIND_SPATIAL,
+      sceneId,
+      state.editedMusicJson ?? null,
     );
   }
 
@@ -312,6 +328,7 @@ export function exclusiveAuditionPatch(source, arrangementSourceMode = 'source')
     reharmonizeAuditionActive: false,
     multiAgentAuditionActive: false,
     performanceAuditionActive: false,
+    spatialAuditionActive: false,
   };
   if (source === PLAYBACK_SOURCE_ARRANGEMENT) {
     return {
@@ -331,6 +348,7 @@ export function exclusiveAuditionPatch(source, arrangementSourceMode = 'source')
       reharmonizeAuditionActive: false,
       multiAgentAuditionActive: false,
       performanceAuditionActive: false,
+      spatialAuditionActive: false,
     };
   }
   if (source === PLAYBACK_SOURCE_PERFORMANCE) {
@@ -340,6 +358,15 @@ export function exclusiveAuditionPatch(source, arrangementSourceMode = 'source')
       versionAuditionActive: false,
       ...clearAiPreviews,
       // Caller sets performanceAuditionActive true after this patch.
+    };
+  }
+  if (source === PLAYBACK_SOURCE_SPATIAL) {
+    return {
+      developmentAuditionActive: false,
+      arrangementAuditionMode: arrangementSourceMode,
+      versionAuditionActive: false,
+      ...clearAiPreviews,
+      // Caller sets spatialAuditionActive true after this patch.
     };
   }
   if (source === PLAYBACK_SOURCE_DEVELOPMENT) {
