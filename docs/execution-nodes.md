@@ -61,6 +61,7 @@ Optional profile: `compose.execution-node.yml` (`--profile execution-node`). The
 
 ## See also
 
+- [AI job scheduling](ai-job-scheduling.md) — capability-aware placement across controller-local and trusted-LAN peers
 - [AI Runtime](ai-runtime.md)
 - [Local AI](local-ai.md)
 - [Observability](observability.md)

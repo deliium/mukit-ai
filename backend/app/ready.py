@@ -203,6 +203,9 @@ def build_readiness_report() -> dict[str, Any]:
     from app.services.execution_node_service import execution_nodes_readiness_block
 
     execution_nodes_block = execution_nodes_readiness_block()
+    from app.scheduling_settings import ai_scheduling_readiness_block
+
+    ai_scheduling_block = ai_scheduling_readiness_block()
     ready = bool(db_ok and catalog_ok)
     report = {
         "status": "ready" if ready else "not_ready",
@@ -219,6 +222,7 @@ def build_readiness_report() -> dict[str, Any]:
         },
         "local_ai": local_ai_block,
         "execution_nodes": execution_nodes_block,
+        "ai_scheduling": ai_scheduling_block,
         "ai": ai_summary,
         "wav": {
             "ready": wav_ready,

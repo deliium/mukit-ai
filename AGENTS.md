@@ -29,12 +29,14 @@ mukit-ai/
 │   │   ├── ai_runtime_schemas.py  # GET /ai/models DTOs
 │   │   ├── execution_node_schemas.py  # execution.node.v1 + task DTOs (non-playable)
 │   │   ├── execution_node_settings.py  # AI_EXECUTION_NODES_* flag / token / role
+│   │   ├── scheduling_schemas.py  # scheduling.policy/job/candidate/decision.v1
+│   │   ├── scheduling_settings.py  # AI_SCHEDULING_* flag / modes / local hints
 │   │   ├── agent_artifact_settings.py  # AGENT_ARTIFACT_TEMP_* retention / inspect caps
 │   │   ├── video_scoring_schemas.py   # video.asset.v1 + video.scoring.v1
 │   │   ├── film_score_schemas.py      # film.score.plan.v1 + preview/commit DTOs
 │   │   ├── film_score_adapt_schemas.py  # film.score.adaptation.v1 + preview/commit DTOs
 │   │   ├── video_scoring_settings.py  # VIDEO_ASSET_ROOT / VIDEO_ASSET_MAX_UPLOAD_BYTES
-│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + reference_features + live_performance + video_scoring + film_score + ai_models + ai_agents + plugins + collaboration + adaptive_scores + adaptive_engine HTTP API
+│   │   ├── routers/         # Projects + imports + transcription + audio_recovery + neural_audio + mix_analysis + mix_plan + analysis + critique + motifs + harmony + arrangement + development + embeddings + composer_profiles + preferences + ai_scheduling + reference_features + live_performance + video_scoring + film_score + ai_models + ai_agents + plugins + collaboration + adaptive_scores + adaptive_engine HTTP API
 │   │   ├── services/        # Domain + orchestration (incl. composition_critique, adaptive_score_*, adaptive_playback*, agent_artifact_workspace, import, audio_transcription, audio_recovery, neural_audio_render, neural_audio_stems, mix_analysis, mix_plan, video_scoring_store, video_container_probe, video_scoring_map, film_score_tempo, film_score_accents, film_score_workflow, film_score_adapt, analysis, motifs, theme, harmony, reharmonization, arrangement, embedding, fake_llm)
 │   │   ├── llm_settings.py  # Env → LLM provider settings (bootstraps ai_runtime registry)
 │   │   ├── composition_schemas.py  # composition.v1 / composition.v2 contracts (incl. optional motifs)
@@ -158,7 +160,14 @@ mukit-ai/
 | `backend/app/routers/execution_nodes.py` | `POST/GET/DELETE /ai/execution-nodes` |
 | `backend/app/routers/execution_worker.py` | Worker `/execution/v1/*` typed inference |
 | `backend/app/ai_runtime/runtimes/execution_node.py` | `runtime=execution_node` LanguageModel adapter |
-| `backend/app/ai_runtime/invoke_text.py` | `ainvoke_text_for_resolved` generate/edit seam |
+| `backend/app/ai_runtime/invoke_text.py` | `ainvoke_text_for_resolved` generate/edit seam (bounded reschedule for schedule / execution_node) |
+| `backend/app/scheduling_schemas.py` | `scheduling.policy/job/candidate/decision/attempt.v1` DTOs (non-playable) |
+| `backend/app/scheduling_settings.py` | `AI_SCHEDULING_*` flag, modes, local resource hints. Default off |
+| `backend/app/services/ai_job_scheduler.py` | Pure `schedule_ai_job` (no FastAPI/SQLite/LLM) |
+| `backend/app/services/scheduling_candidates.py` | Registry + ExecutionNode → `SchedulingCandidateV1` |
+| `backend/app/services/scheduling_policy_store.py` | SQLite singleton policy CAS. `ai_agents/` does not import it |
+| `backend/app/services/ai_job_reschedule.py` | Bounded reschedule without trust escalation |
+| `backend/app/routers/ai_scheduling.py` | `GET/PUT /ai/scheduling/policy`, `POST /ai/scheduling/preview` |
 | `backend/app/services/preference_store.py` | Settings, pending ballots, choices, and the linear ranker. `ai_agents/` does not import it |
 | `frontend/src/components/PreferenceLearningPanel.jsx` | Profiles-tab inspect, toggles, and reset. Opening the tab does not record a choice |
 | `backend/app/routers/reference_features.py` | `POST /reference-features/analyze` (dimension-masked reference reports) |
@@ -339,6 +348,7 @@ mukit-ai/
 |----------|------|-------------|
 | README | `README.md` | Install, features, env vars, run instructions |
 | AI Runtime | `docs/ai-runtime.md` | Capability registry, operation routing, `/ai/models`, fallback, provenance |
+| AI job scheduling | `docs/ai-job-scheduling.md` | Capability-aware placement (`resolution_path=schedule`); trust boundaries; reschedule; no SPA |
 | Plugin SDK | `docs/plugin-sdk.md` | In-process plugins via `PLUGIN_PATHS`; `runtime=plugin` on `/ai/models`; no marketplace |
 | Multi-agent (V4) | `docs/multi-agent.md` | Specialized agents above runtime; workflow preview; Apply CAS |
 | Autonomous composer | `docs/autonomous-composer.md` | One brief to a durable multi-section project; Guided checkpoints and pause stay on the same run; spine preview stays preview-only |
