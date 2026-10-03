@@ -83,11 +83,13 @@
 - [x] **V5 AI performance / conductor layer** — A durable `performance.plan.v1` conductor sidecar that projects tempo rubato, dynamics, phrasing, articulation, pedaling, microtiming, accent, and orchestral balance onto a performed event stream without rewriting canonical pitch or harmony. Deterministic presets first (`intimate` / `dramatic` / `restrained` / `mechanical`); optional AI augmentation later. Multiple distinguishable performances per Composition; before/after audition; derived storage only. No `composition.v5`
 - [x] **V5 Spatial music scene and preview** — Project-scoped `spatial.scene.v1` with SpatialMix metadata (azimuth, elevation, distance, spread, optional motion) for tracks and/or completed neural stems. Deterministic `spatial.preview.v1` stereo + FOA Ambisonic-compatible coefficients; synchronized Web Audio / Tone preview without rewriting `composition.v2` notes or stem WAVs. Not a Dolby Atmos workstation. No `composition.v5`
 - [x] **V5 Model Lab for training and evaluating musical AI models** — Opt-in research control plane (`MODEL_LAB_ENABLED`) over corpus Music Transformer experiments: select existing dataset versions + tokenizer/architecture presets, Lab-capped train/eval/listen/compare, Lab-tab wizard, explicit register as `lab:{id}` on `/ai/models`. No shell/argv; never writes `DATASET_ROOT` or `composition.v2` notes; Personal Composer stays Profiles. No `composition.v5`
+- [x] **V5 Controlled multi-model candidate generation and arbitration** — Opt-in ensemble fan-out (`ENSEMBLE_ARBITRATION_ENABLED`) across explicit ready `symbolic_composer` ids for one client-supplied `composition.plan.v1` + hard constraints; hard validate before critic annotate and in-process preference rank; selection modes `auto_suggest` / `human` / `top_n`; session-only `ensemble.arbitration.v1` until Generate-panel `applyGenerationCandidate`. Status not on `/ready`; no Collab C; no `score_pending` / ballot surface; never invents `composition.v5`
 
 ## Completed
 
 | Milestone | Date |
 |-----------|------|
+| V5 Controlled multi-model candidate generation and arbitration | 2026-10-04 |
 | V5 Model Lab for training and evaluating musical AI models | 2026-10-04 |
 | V5 Spatial music scene and preview | 2026-10-04 |
 | V5 AI performance / conductor layer | 2026-10-04 |
