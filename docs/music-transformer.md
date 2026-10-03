@@ -89,7 +89,7 @@ Training supports resume (model + optimizer + scheduler + scaler + step), gradie
 
 Validation data: prefer dataset `splits/validation`; for flat fixtures use `val_fraction` in train config or CLI `--val-inputs path.json …`. Empty val → skip val metrics with WARN (no fake val loss).
 
-**Training never runs inside the FastAPI web process.** Use offline CLI or the Compose `training` profile (stub / host torch image).
+**Offline CLI remains the primary train path** (Compose `training` profile / host torch). **Opt-in Model Lab** may train in-process when `MODEL_LAB_ENABLED=1` — typed HTTP wrapping the same experiment APIs, with Lab caps and a fake CI engine. See [model-lab.md](model-lab.md).
 
 ## Symbolic evaluation (not musical quality)
 

@@ -29,6 +29,7 @@ A full-stack LLM music composer that generates and edits canonical playable `com
 - **Soundtrack asset packs**: One franchise brief → inspectable AssetPackPlan → explicit generate of independent projects (Main Theme, Menu, Combat, …) sharing a Musical Universe + optional Composer Profile + production targets; Agents-tab panel; partial regenerate (details: [docs/asset-packs.md](docs/asset-packs.md))
 - **Reference features**: Select dimension masks (`density`, `texture`, …) and optional preserve/borrow/regenerate policy (with strengths) for generate/develop/edit soft conditioning; derived `reference.features.v1` only — no melody copy (details: [docs/reference-features.md](docs/reference-features.md))
 - **Hybrid generation**: Optional pipeline where the LLM plans (`composition.plan.v1`) and a symbolic composer writes notes; select Hybrid in the Music Generator when a ready `symbolic_composer` is available (details: [docs/hybrid-generation.md](docs/hybrid-generation.md))
+- **Model Lab**: Opt-in Lab tab for small corpus Music Transformer experiments (dataset → tokenizer → architecture → train → eval → register); never shell; never mutates the working score (details: [docs/model-lab.md](docs/model-lab.md))
 - **Multi-agent (V4)**: Specialized cooperating agents (Creative Director → … → Critic) return typed session artifacts; Apply uses `multi-agent-apply` CAS only (details: [docs/multi-agent.md](docs/multi-agent.md))
 - **Composition Arrangement**: Orchestrate selected tracks / piano-to-ensemble and related texture ops via the Arrange tab (`GET /composition/arrangement/instruments`, `POST /composition/arrangement/preview`); session-only candidates until Apply / Apply-as-branch (details: [docs/composition-arrangement.md](docs/composition-arrangement.md))
 - **Safe AI Preview**: Full generation, AI region edit, and other substantial AI workflows keep candidates outside the canonical working composition until explicit Apply; Versions tab supports compare, audition, branch checkout, and restore
@@ -92,6 +93,7 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Spatial music: `SPATIAL_PREVIEW_MAX_SOURCES` / `SPATIAL_PREVIEW_MAX_MOTION_KEYFRAMES` (defaults 32 / 64). Details: [docs/spatial-music.md](docs/spatial-music.md).
 - Ardour companion: `ARDOUR_COMPANION_*` (default off; process-memory OSC session). Details: [docs/ardour-companion.md](docs/ardour-companion.md).
 - Ardour session exchange: `ARDOUR_EXCHANGE_*` (default off; MIDI/stem packages under `ARDOUR_EXCHANGE_ROOT`). Details: [docs/ardour-session-exchange.md](docs/ardour-session-exchange.md).
+- Model Lab: `MODEL_LAB_*` (default off; corpus MT research UI under `MODEL_LAB_ROOT`). Details: [docs/model-lab.md](docs/model-lab.md).
 - Acceptance commands: see `docs/testing.md` (`./scripts/run_tests.sh`, pytest, Playwright, Docker persistence scripts). Studio runbook: [docs/v4-studio-operations.md](docs/v4-studio-operations.md).
 
 ## Installation (host-local optional)
@@ -377,6 +379,7 @@ mukit-ai/
 | [Symbolic datasets](docs/datasets.md) | Offline licensed corpus pipeline (`DATASET_ROOT`, CLI build/verify) |
 | [Symbolic tokenizer](docs/tokenizer.md) | Composition V2 ↔ token ids (`tokenizer.v1`, CLI encode/decode) |
 | [Symbolic Music Transformer](docs/music-transformer.md) | PyTorch decoder-only LM train/generate (`tokenizer.v1` binding) |
+| [Model Lab](docs/model-lab.md) | Opt-in corpus MT research UI; register `lab:{id}`; no shell / `composition.v5` |
 | [Musical workflow evaluation](docs/workflow-evaluation.md) | Versioned V3/V4 brief suite, hard-metric regression, blinded listening |
 | [V4 studio operations](docs/v4-studio-operations.md) | Fake-mode studio scenarios, migration ladder, backup CLI, opt-in Docker |
 | [Hybrid generation](docs/hybrid-generation.md) | LLM plan + symbolic notes pipelines, seeds, provenance, repair lanes |
