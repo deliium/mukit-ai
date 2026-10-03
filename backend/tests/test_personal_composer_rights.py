@@ -11,7 +11,9 @@ from app.composition_schemas import CompositionV2
 from app.db import initialize_database
 from app.db.connection import reset_database_initialization_cache
 from app.personal_composer_schemas import PersonalComposerError
+from app.rights_governance_schemas import project_allowed_uses
 from app.services import personal_composer_service as service
+from app.services import rights_governance_store as rights_store
 from app.services.collaboration_access import (
     reset_request_actor_header,
     set_request_actor_header,
@@ -74,6 +76,84 @@ def test_attested_projects_write_a_snapshot_without_pitch_in_the_index(studio):
     assert len(index["items"]) == 2
     for item in index["items"]:
         assert (studio["root"] / job.adapter_id / "snapshot" / item["relative_path"]).is_file()
+
+
+def test_registry_reference_only_refuses_train(studio):
+    rights_store.upsert_rights_entry(
+        {
+            "schema_version": "rights.registry.entry.v1",
+            "entry_id": "rights_" + "aa" * 8,
+            "source_kind": "project",
+            "source_id": studio["etude"],
+            "ownership_class": "licensed",
+            "use_policy": "reference_only",
+            "allowed_uses": project_allowed_uses("reference_only"),
+            "verification_status": "verified",
+            "entry_version": 1,
+            "created_at": "2026-10-03T00:00:00Z",
+            "updated_at": "2026-10-03T00:00:00Z",
+        },
+        db_path=studio["db"],
+    )
+    body = _body(
+        studio,
+        [studio["etude"]],
+        {studio["etude"]: _owned(studio["etude"])},
+    )
+    with pytest.raises(PersonalComposerError) as exc:
+        service.start_personal_composer(body)
+    assert exc.value.code == "personal_rights_refused"
+    assert exc.value.details["use_policy"] == "reference_only"
+    assert rights_store.get_rights_entry("project", studio["etude"], db_path=studio["db"]).use_policy == (
+        "reference_only"
+    )
+
+
+def test_successful_train_writeback_training_allowed(studio):
+    body = _body(
+        studio,
+        [studio["etude"]],
+        {studio["etude"]: _owned(studio["etude"])},
+    )
+    assert rights_store.get_rights_entry("project", studio["etude"], db_path=studio["db"]) is None
+    job = service.start_personal_composer(body)
+    assert job.status == "complete"
+    stored = rights_store.get_rights_entry("project", studio["etude"], db_path=studio["db"])
+    assert stored is not None
+    assert stored.use_policy == "training_allowed"
+    assert stored.ownership_class == "user_owned"
+    model_data = studio["root"] / job.adapter_id / "model.data.provenance.manifest.json"
+    assert model_data.is_file()
+    payload = json.loads(model_data.read_text(encoding="utf-8"))
+    assert payload["manifest_kind"] == "personal_adapter_train"
+    assert payload["sources"][0]["use_policy"] == "training_allowed"
+
+
+def test_registry_wins_over_contradictory_request_train_claim(studio):
+    rights_store.upsert_rights_entry(
+        {
+            "schema_version": "rights.registry.entry.v1",
+            "entry_id": "rights_" + "bb" * 8,
+            "source_kind": "project",
+            "source_id": studio["sketch"],
+            "ownership_class": "unknown",
+            "use_policy": "no_training",
+            "allowed_uses": [],
+            "verification_status": "unverified",
+            "entry_version": 1,
+            "created_at": "2026-10-03T00:00:00Z",
+            "updated_at": "2026-10-03T00:00:00Z",
+        },
+        db_path=studio["db"],
+    )
+    body = _body(
+        studio,
+        [studio["sketch"]],
+        {studio["sketch"]: _owned(studio["sketch"])},
+    )
+    with pytest.raises(PersonalComposerError) as exc:
+        service.start_personal_composer(body)
+    assert exc.value.code == "personal_rights_refused"
 
 
 def test_unknown_status_writes_no_snapshot_directory(studio):

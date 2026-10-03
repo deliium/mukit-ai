@@ -202,6 +202,8 @@ class DatasetItemV1(StrictModel):
     dataset_name: str = Field(..., min_length=1)
     provenance: DatasetProvenance
     train_eligible: bool
+    # Optional sidecar override (Part H). Not folded into dataset_version_id digests.
+    use_policy: Literal["training_allowed", "reference_only", "no_training"] | None = None
     labels: DatasetLabels = Field(default_factory=DatasetLabels)
     instruments: list[DatasetInstrumentSummary] = Field(default_factory=list)
     composition: CompositionV2 | None = None

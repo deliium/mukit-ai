@@ -11,7 +11,8 @@ from app.dataset.dedup import cluster_items
 from app.dataset.errors import DatasetError, DatasetIngestError
 from app.dataset.ingest import ingest_source
 from app.dataset.manifest import build_manifest, compute_build_digests, verify_dataset_dir
-from app.dataset.provenance import summarize_eligibility
+from app.dataset.provenance import summarize_eligibility, summarize_eligibility_by_use_policy
+from app.dataset.rights_index import item_to_rights_entry, write_rights_siblings
 from app.dataset.schemas import (
     DatasetExampleV1,
     DatasetItemV1,
@@ -99,6 +100,12 @@ def run_build(
 
     summarize_eligibility(
         [(item.provenance.status, item.train_eligible) for item in items]
+    )
+    summarize_eligibility_by_use_policy(
+        [
+            (item_to_rights_entry(item).use_policy, item.train_eligible)
+            for item in items
+        ]
     )
 
     # Dedup / cluster
@@ -216,6 +223,9 @@ def run_build(
     store.write_manifest(manifest)
     store.write_yaml(store.version_dir / "config.snapshot.yaml", config.model_dump(mode="json"))
     store.write_build_id(version_id)
+
+    # Rights siblings (not folded into dataset.manifest.v1 digests)
+    write_rights_siblings(version_dir, items, dataset_version_id=version_id)
 
     # Self-verify
     verify_dataset_dir(store)

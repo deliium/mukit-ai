@@ -1,0 +1,8 @@
+{
+  "provenance_status": "verified_redistributable",
+  "license_spdx": "CC-BY-4.0",
+  "license": "CC-BY-4.0",
+  "source_url": "https://example.invalid/fixtures/reference-only",
+  "composer": "Reference Only Fixture",
+  "use_policy": "reference_only"
+}

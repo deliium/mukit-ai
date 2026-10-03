@@ -36,10 +36,17 @@ from app.personal_composer_settings import (
     load_personal_composer_settings,
 )
 from app.services.collaboration_access import authorize_current
-from app.services.personal_composer_rights import (
-    evaluate_project_rights,
-    require_selected_projects,
+from app.rights_governance_schemas import (
+    ModelDataProvenanceManifestV1,
+    ModelDataProvenanceSourceV1,
+    rights_digest_prefix,
 )
+from app.services.personal_composer_rights import (
+    build_writeback_entry,
+    require_selected_projects,
+    resolve_and_evaluate_project_train,
+)
+from app.services.rights_governance_store import upsert_rights_entry
 from app.services.personal_composer_snapshot import (
     persist_snapshot_documents,
     plan_snapshot_documents,
@@ -253,10 +260,15 @@ def start_personal_composer(payload: dict[str, Any]) -> PersonalTrainingJobV1:
         if actor_id:
             owner_actor_id = actor_id
     documents = _load_documents(project_ids)
-    rights = {
-        project_id: evaluate_project_rights(project_id, parsed["rights"].get(project_id))
+    resolved_rights = [
+        resolve_and_evaluate_project_train(
+            project_id,
+            parsed["rights"].get(project_id),
+            db_path=_db_path(),
+        )
         for project_id in project_ids
-    }
+    ]
+    rights = {item.project_id: item.provenance for item in resolved_rights}
     adapter_id = f"pcomp_{secrets.token_hex(8)}"
     snapshot, encoded = plan_snapshot_documents(adapter_id=adapter_id, documents=documents)
     if not settings.fake:
@@ -310,6 +322,39 @@ def start_personal_composer(payload: dict[str, Any]) -> PersonalTrainingJobV1:
             json.dumps(manifest.model_dump(mode="json"), sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
         )
+        model_data = ModelDataProvenanceManifestV1(
+            manifest_kind="personal_adapter_train",
+            subject_id=adapter_id,
+            sources=[
+                ModelDataProvenanceSourceV1(
+                    entry_id=item.entry.entry_id,
+                    source_kind="project",
+                    source_id=item.project_id,
+                    ownership_class=item.entry.ownership_class,
+                    use_policy="training_allowed",
+                    rights_digest_prefix=rights_digest_prefix(item.entry.rights_digest),
+                )
+                for item in resolved_rights
+            ],
+            excluded_source_counts_by_use_policy={},
+            created_at=utc_now_iso(),
+        )
+        (adapter_dir / "model.data.provenance.manifest.json").write_text(
+            json.dumps(model_data.model_dump(mode="json"), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        # Task 4b: write-back registry upsert only after successful snapshot.
+        for item in resolved_rights:
+            writeback = build_writeback_entry(item)
+            upsert_rights_entry(writeback, db_path=_db_path())
+            logger.info(
+                "Personal composer rights write-back",
+                extra={
+                    "entry_id": writeback.entry_id,
+                    "project_id": item.project_id,
+                    "use_policy": writeback.use_policy,
+                },
+            )
     except Exception:
         logger.error(
             "Personal composer snapshot persist failed",

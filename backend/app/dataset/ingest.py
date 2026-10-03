@@ -123,6 +123,8 @@ def ingest_source(
     train_eligible = compute_train_eligible(
         source.provenance,
         eligibility=config.eligibility,
+        use_policy_override=source.use_policy,
+        source_id=source.source_id,
     )
     instruments = [
         DatasetInstrumentSummary(
@@ -150,6 +152,7 @@ def ingest_source(
         dataset_name=config.dataset_name,
         provenance=source.provenance,
         train_eligible=train_eligible,
+        use_policy=source.use_policy,  # type: ignore[arg-type]
         labels=source.labels,
         instruments=instruments,
         composition=composition if config.normalization.embed_composition_in_item else None,
@@ -174,6 +177,7 @@ def ingest_source(
             "note_count": note_count,
             "bar_count": composition.bar_count,
             "provenance_status": source.provenance.status,
+            "use_policy": source.use_policy,
             "train_eligible": train_eligible,
             "elapsed_ms": elapsed_ms,
             "issue_codes": issue_codes[:20],

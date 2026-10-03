@@ -6,12 +6,11 @@ import logging
 import random
 from collections import defaultdict
 
-from app.dataset.provenance import assert_train_split_policy
+from app.dataset.provenance import assert_train_split_policy, map_item_rights_entry
 from app.dataset.schemas import (
     DatasetEligibilityPolicy,
     DatasetExampleV1,
     DatasetItemV1,
-    ProvenanceStatus,
     SplitJsonlRow,
     SplitName,
 )
@@ -69,11 +68,18 @@ def assign_splits(
     # Verify no cluster spans multiple splits (by construction).
     assert len(cluster_to_split) == len(set(cluster_to_split))
 
-    train_statuses: list[ProvenanceStatus] = []
+    train_entries = []
     for cid in train_ids:
         for item in clusters[cid]:
-            train_statuses.append(item.provenance.status)
-    assert_train_split_policy(train_statuses, eligibility=eligibility)
+            train_entries.append(
+                map_item_rights_entry(
+                    item.provenance,
+                    use_policy_override=item.use_policy,
+                    source_id=item.item_id,
+                    include_non_trainable_in_eval=eligibility.include_non_trainable_in_eval,
+                )
+            )
+    assert_train_split_policy(train_entries, eligibility=eligibility)
 
     rows: dict[SplitName, list[SplitJsonlRow]] = {
         "train": [],

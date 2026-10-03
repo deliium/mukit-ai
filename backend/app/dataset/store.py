@@ -34,6 +34,7 @@ class DatasetVersionStore:
         self.blobs_dir = self.version_dir / "blobs" / "v2"
         self.splits_dir = self.version_dir / "splits"
         self.sources_dir = self.version_dir / "sources"
+        self.rights_dir = self.version_dir / "rights"
 
     def ensure_layout(self) -> None:
         for path in (
@@ -43,6 +44,7 @@ class DatasetVersionStore:
             self.blobs_dir,
             self.splits_dir,
             self.sources_dir,
+            self.rights_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
         logger.debug(

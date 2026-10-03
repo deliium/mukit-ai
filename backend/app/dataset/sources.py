@@ -37,6 +37,7 @@ class CataloguedSource:
     provenance: DatasetProvenance
     labels: DatasetLabels
     display_filename: str
+    use_policy: str | None = None
 
 
 def load_pipeline_config(path: Path) -> DatasetPipelineConfig:
@@ -142,7 +143,7 @@ def _expand_entry(
         )
 
     for path in paths:
-        provenance, labels = _resolve_metadata(
+        provenance, labels, use_policy = _resolve_metadata(
             path,
             entry=entry,
             config=config,
@@ -154,6 +155,7 @@ def _expand_entry(
             provenance=provenance,
             labels=labels,
             display_filename=path.name[:120],
+            use_policy=use_policy,
         )
 
 
@@ -162,7 +164,7 @@ def _resolve_metadata(
     *,
     entry: DatasetPipelineSource,
     config: DatasetPipelineConfig,
-) -> tuple[DatasetProvenance, DatasetLabels]:
+) -> tuple[DatasetProvenance, DatasetLabels, str | None]:
     sidecar = _load_sidecar(path)
     status = _first_status(
         sidecar.get("provenance_status") or sidecar.get("status"),
@@ -212,7 +214,26 @@ def _resolve_metadata(
         labels = entry.labels
     else:
         labels = DatasetLabels()
-    return provenance, labels
+
+    use_policy_raw = sidecar.get("use_policy")
+    use_policy: str | None = None
+    if isinstance(use_policy_raw, str) and use_policy_raw.strip():
+        use_policy = use_policy_raw.strip()
+        if use_policy not in {"training_allowed", "reference_only", "no_training"}:
+            logger.error(
+                "Invalid sidecar use_policy; fail closed",
+                extra={"source_basename": path.name},
+            )
+            raise DatasetProvenanceError(
+                "provenance_invalid",
+                f"Invalid use_policy for {path.name}",
+                details={"source_basename": path.name},
+            )
+        logger.debug(
+            "Sidecar use_policy loaded",
+            extra={"source_basename": path.name, "use_policy": use_policy},
+        )
+    return provenance, labels, use_policy
 
 
 def _load_sidecar(path: Path) -> dict[str, Any]:
