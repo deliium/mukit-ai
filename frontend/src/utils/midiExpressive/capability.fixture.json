@@ -1,0 +1,61 @@
+{
+  "schema": "midi.capability.v1",
+  "as_of": "2026-10-03",
+  "default_transport": "midi1_bytes",
+  "mpe_default_enabled": false,
+  "mpe_default_zone": {
+    "master_channel": 1,
+    "member_channel_low": 2,
+    "member_channel_high": 16,
+    "source": "default"
+  },
+  "vite_midi_expressive_enabled_default": true,
+  "tick_offset_relative_to": "event.start_tick",
+  "velocity": {
+    "midi1_promote": "clamp(midi7,0,127) << 9",
+    "midi1_promote_max_u16": 65024,
+    "commit_degrade": "clamp(round(velocity_u16 / 512), 1, 127)",
+    "ump_velocity_u16": "clamp(ump_velocity_u16, 0, 65535) pass-through (no << 9)"
+  },
+  "ump_ship_subset_kinds": [
+    "ump_midi2_note_on",
+    "ump_midi2_note_off",
+    "ump_midi2_poly_pressure",
+    "ump_midi2_control_change",
+    "ump_midi2_channel_pressure",
+    "ump_midi2_pitch_bend"
+  ],
+  "ump_message_type": 4,
+  "browser_matrix": {
+    "chromium": {
+      "web_midi_1": true,
+      "ump_web_api": false,
+      "notes": "MIDIMessageEvent.data is MIDI 1.0 bytes as of 2026-10"
+    },
+    "firefox": {
+      "web_midi_1": true,
+      "ump_web_api": false,
+      "notes": "May require Site Permission Add-on on first grant"
+    },
+    "safari": {
+      "web_midi_1": false,
+      "ump_web_api": false,
+      "notes": "Native API often absent; QWERTY test input remains"
+    }
+  },
+  "ci_simulated_only": [
+    "mpe_multichannel_bend_pressure",
+    "ump_ship_subset_packets",
+    "ump_api_absent_default",
+    "expressive_disabled_legacy_path"
+  ],
+  "reason_codes": [
+    "available",
+    "unsupported",
+    "insecure_context",
+    "permission_denied",
+    "ump_api_absent",
+    "mpe_zone_default",
+    "expressive_disabled"
+  ]
+}

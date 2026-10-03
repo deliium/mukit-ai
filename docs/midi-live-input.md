@@ -17,14 +17,62 @@ Browser-only performance capture into canonical `composition.v2`. Play a MIDI ke
 
 ## Support matrix
 
-| Environment | Notes |
-|-------------|--------|
-| Chrome / Edge / Opera | Web MIDI on secure contexts (HTTPS or localhost) |
-| Firefox | May require a flag or remain unsupported — UI offers Test input |
-| Safari | Often unsupported — Test input still works |
-| Headless CI / insecure HTTP | Probe returns `unsupported` / `insecure_context`; no crash |
+| Environment | Web MIDI 1.0 (`requestMIDIAccess`) | UMP / MIDI 2.0 Web API | MPE-over-MIDI1 | Notes |
+|-------------|------------------------------------|------------------------|----------------|--------|
+| Chrome / Edge / Opera | Yes on secure contexts (HTTPS or localhost) | **Absent** as of 2026-10 — `MIDIMessageEvent.data` is MIDI 1.0 bytes only | Yes via user **MPE mapping** toggle (default **off**) | Default production path |
+| Firefox | Yes from 108+; first grant may require Site Permission Add-on | **Absent** | Same MPE toggle | Treat missing API / deny as `unsupported` / `permission_denied` |
+| Safari | Native API often missing; extension-only if present | **Absent** | Same when Web MIDI works | **Test input** (QWERTY) always available |
+| Headless CI / insecure HTTP | Probe → `unsupported` / `insecure_context` | Stubbed `ump_api_absent` | Simulated multi-channel streams only | No hardware required |
 
-Reason codes: `available`, `unsupported`, `insecure_context`, `permission_denied`.
+Legacy Web MIDI reason codes: `available`, `unsupported`, `insecure_context`, `permission_denied`.
+
+### Expressive MIDI locks (ship contract)
+
+Frozen for V5 expressive performance input. Implementation must not invent alternate math or a full UMP/WASM stack.
+
+| Lock | Value |
+|------|--------|
+| Default transport | `midi1_bytes` whenever Web MIDI is available |
+| UMP transport | `ump_experimental` **only** when the capability probe finds a real UMP/MIDI 2.0 entry point; otherwise `ump_api_absent` and stay on MIDI 1.0 bytes |
+| MPE mapping | Optional user toggle; default **off** (legacy channel-voice note keys); when on, default zone = master ch **1** (0-based 0), members **2–16** (0-based 1–15) |
+| `VITE_MIDI_EXPRESSIVE_ENABLED` | Default `true`; falsy forces legacy note-on/off + CC64-only parse/commit |
+| Curve `tick_offset` | **Relative to** the referenced note’s `start_tick` (absolute = `event.start_tick + tick_offset`) |
+| Playable source | Always `tracks[].events[]`; optional `note_performances[]` never invents pitches |
+
+#### Velocity promote / degrade
+
+| Path | Rule |
+|------|------|
+| MIDI 1.0 → `velocity_u16` | `velocity_u16 = clamp(midi7, 0, 127) << 9` (max promoted **65024**, not 65535) |
+| Commit degrade → V2 `velocity` | For note-on attacks: `midi7 = clamp(round(velocity_u16 / 512), 1, 127)`; `velocity_u16 == 0` stays note-off |
+| UMP / true 16-bit → `velocity_u16` | Pass-through: `velocity_u16 = clamp(ump_velocity_u16, 0, 65535)` (do **not** apply `<< 9`); degrade still uses `/ 512` |
+
+#### UMP ship-subset packet kinds (closed list)
+
+Pure JS decode only — **no** vendored UMP/WASM stack. CI uses simulated 32-bit word packets; production browsers typically never activate this path until a probeable API exists.
+
+| Kind id | UMP message type | Opcode (MIDI 2.0 Channel Voice) | Emits |
+|---------|------------------|-------------------------------|--------|
+| `ump_midi2_note_on` | `0x4` | `0x9` | `note_on` + 16-bit velocity |
+| `ump_midi2_note_off` | `0x4` | `0x8` | `note_off` |
+| `ump_midi2_poly_pressure` | `0x4` | `0xA` | `pressure` (poly) |
+| `ump_midi2_control_change` | `0x4` | `0xB` | `control_change` (incl. CC64 → sustain) |
+| `ump_midi2_channel_pressure` | `0x4` | `0xD` | `pressure` (channel) |
+| `ump_midi2_pitch_bend` | `0x4` | `0xE` | `pitch_bend` |
+
+All other UMP message types/opcodes → `ignored` with a stable reason (never throw).
+
+#### Simulated-only in CI
+
+| Scenario | How CI covers it |
+|----------|------------------|
+| Ordinary MIDI 1.0 melody + CC64 | Injected 3-byte streams / fake `requestMIDIAccess` |
+| MPE-like per-note bend/pressure | Simulated multi-channel MIDI 1.0 with MPE toggle on |
+| High-res / UMP note-on | Simulated UMP word packets through the ship-subset decoder (no `navigator` UMP API) |
+| UMP API absent | Default probe: `transport=midi1_bytes`, `high_res_velocity=false`, reason `ump_api_absent` |
+| Expressive disabled | `VITE_MIDI_EXPRESSIVE_ENABLED` falsy → legacy kinds only |
+
+Machine-readable echo: `frontend/src/utils/midiExpressive/capability.fixture.json`.
 
 ## Record flow
 
@@ -64,9 +112,16 @@ Disabled while focus is in inputs / textarea / contenteditable (same guard as pi
 
 ## Privacy
 
-- `requestMIDIAccess({ sysex: false })` — no SysEx.
-- Logs use namespaces `midiInput` / `midiCapture` with counts, phase, and truncated device ids only — never full MIDI dumps or composition JSON at INFO.
-- Optional `localStorage` key `midiInput:v1` stores last device id preference only (non-secret).
+- `requestMIDIAccess({ sysex: false })` — no SysEx (MPE zone is user toggle / default, never SysEx device config).
+- Logs use namespaces `midiInput` / `midiCapture` / `midiExpressive` with counts, phase, transport, and truncated device ids only — never full MIDI/UMP dumps, full takes, or composition JSON at INFO.
+- Optional `localStorage` key `midiInput:v1` stores last device id and **MPE mapping** preference only (non-secret; MPE default **off**).
+
+## Expressive commit / export
+
+- Optional `tracks[].note_performances[]` references committed `event_id` values; playable pitches stay in `events[]` only.
+- Curve `tick_offset` values are relative to the note’s `start_tick`.
+- SMF export ignores `note_performances` and emits projection issue `performance_expression_omitted` when any rows are present.
+- Strip metadata anytime — remaining notes stay valid `composition.v2` with MIDI 1.0 `velocity` 1–127.
 
 ## Manual acceptance checklist
 

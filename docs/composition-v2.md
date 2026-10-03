@@ -108,6 +108,21 @@ Within one track, each chain must have exactly one `start` and one `stop`, zero 
 | `dynamic_marks` | `[{tick, level}]` — levels `ppp` … `fff` |
 | `sustain_pedals` | `[{start_tick, duration_ticks}]` — binary, half-open, non-overlapping |
 | `automation` | At most one lane each for `volume`, `pan`, `expression` |
+| `note_performances` | Optional `[{event_id, velocity_u16?, pitch_cents?, pressure?, controllers?}]` — performance metadata only; see below |
+
+### Optional note performance metadata
+
+Additive track field `note_performances` (default absent / `[]`). It references existing `tracks[].events[].id` values and must never invent playable pitches. Consumers may ignore it; SMF export uses canonical note `velocity` only and may emit `performance_expression_omitted` when rows are present.
+
+| Rule | Detail |
+|------|--------|
+| Orphan `event_id` | Validation error on persist/validate |
+| `velocity_u16` | When set, `event.velocity` MUST equal `clamp(round(velocity_u16 / 512), 1, 127)` |
+| `tick_offset` | **Relative to** the referenced event’s `start_tick` |
+| Caps | ≤ 32 points per curve; ≤ 8 distinct controller ids per note |
+| Import / generate | Leave absent or `[]` — never invent from file MIDI or prompts |
+
+Live capture details and degrade tables: **[midi-live-input.md](midi-live-input.md)**.
 
 Each automation lane: `{parameter, interpolation, points}` where `interpolation` is `step` or `linear` and each point is `{tick, value}`. Point ticks are strictly increasing and `> 0`. Volume/expression values are `0..127`; pan is `-64..63`. Static `volume`, `pan`, and `expression` are tick-zero state.
 
