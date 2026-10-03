@@ -8,6 +8,8 @@ Playable pitches live **only** in `tracks[].events[]`. Timeline metadata, marker
 
 Browser Tone.js playback (instruments, mixer, ambience) is another projection layer: session-only and never persisted into V2. See [browser-playback.md](browser-playback.md). Server FluidSynth WAV export remains separate.
 
+Expressive reinterpretation without mutating note identities uses the sidecar [performance conductor](performance-conductor.md) (`performance.plan.v1` → session `performance.realization.v1`). There is no `composition.v5`.
+
 **Derived musical analysis** (`composition.analysis.v1`) is a separate sidecar from `POST /analysis/composition`. It is not a V2 field, is not persisted in projects, and is not consumed by playback or export. See [composition-analysis.md](composition-analysis.md).
 
 ## Version dispatch
@@ -341,6 +343,8 @@ Staged generation, region editing, and V1 compatibility details: [composition-v1
 ## See Also
 
 - [Composition Editor](composition-editor.md) — piano-roll selection, clipboard, transforms, cursor/loop
+- [Browser playback](browser-playback.md) — Tone.js session projection
+- [Performance conductor](performance-conductor.md) — durable plans / session realizations without pitch rewrite
 - [Composition Development](composition-development.md) — continue / add section / vary with multi-candidate preview
 - [Composition Arrangement](composition-arrangement.md) — instrumentation / texture redistribution preview (catalog not persisted)
 - [Composition Analysis](composition-analysis.md) — deterministic sidecar report (not part of canonical V2)

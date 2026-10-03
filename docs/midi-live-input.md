@@ -1,4 +1,4 @@
-[← Browser Playback](browser-playback.md) · [Back to README](../README.md) · [Composition Editor →](composition-editor.md)
+[← Performance conductor](performance-conductor.md) · [Back to README](../README.md) · [Composition Editor →](composition-editor.md)
 
 # MIDI Live Input (Web MIDI Performance Capture)
 
@@ -122,6 +122,7 @@ Disabled while focus is in inputs / textarea / contenteditable (same guard as pi
 - Curve `tick_offset` values are relative to the note’s `start_tick`.
 - SMF export ignores `note_performances` and emits projection issue `performance_expression_omitted` when any rows are present.
 - Strip metadata anytime — remaining notes stay valid `composition.v2` with MIDI 1.0 `velocity` 1–127.
+- The [performance conductor](performance-conductor.md) is a separate sidecar that reinterprets notes for audition; ship-1 ignores `note_performances[]` and does not replace capture.
 
 ## Manual acceptance checklist
 
@@ -141,6 +142,7 @@ Frontend: `VITE_LOG_LEVEL` gates `midiInput` / `midiCapture` via `appLogger`. Se
 
 - [Composition Editor](composition-editor.md) — piano-roll edit after capture
 - [Browser Playback](browser-playback.md) — Tone.js audition of committed notes
+- [Performance conductor](performance-conductor.md) — durable expressive reinterpretation (orthogonal to capture)
 - [Co-performance](co-performance.md) — live stream + accompaniment (exclusive with record-take)
 - [AI Jam](ai-jam.md) — jam modes / multi-track Commit on co-performance
 - [MIDI / MusicXML import](import.md) — file ingest (separate path)

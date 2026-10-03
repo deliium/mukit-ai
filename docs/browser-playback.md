@@ -1,4 +1,4 @@
-[← Composition Editor](composition-editor.md) · [Back to README](../README.md) · [Testing →](testing.md)
+[← Composition Editor](composition-editor.md) · [Back to README](../README.md) · [Performance conductor →](performance-conductor.md)
 
 # Browser Playback
 
@@ -77,13 +77,22 @@ Use `VITE_LOG_LEVEL` (`appLogger`). Log bounded source keys, profile/fallback re
 
 The repository root `LICENSE` file is currently CC0 1.0 text while `README.md` historically claimed MIT. That pre-existing inconsistency is flagged for owner resolution and is separate from browser sample-pack licensing in `THIRD_PARTY_NOTICES.md`. This feature does not change the project license.
 
+Performance conductor audition uses `PLAYBACK_SOURCE_KIND_PERFORMANCE` (mixer scope `preview`) with a schedule-apply helper over API `performance.realization.v1` deltas — see [performance-conductor.md](performance-conductor.md). Rubato is tick deltas, not `Tone.Transport.bpm`.
+
 ## Related files
 
 - `frontend/src/utils/tonePlaybackEngine.js`
 - `frontend/src/utils/playbackTracks.js` / `playbackEvents.js` / `playbackSource.js`
+- `frontend/src/utils/performanceConductor/scheduleApply.js` / `PerformancePanel.jsx`
 - `frontend/src/utils/playbackInstrumentAdapters.js` / `browserPlaybackAssets.js`
 - `frontend/src/utils/playbackMixerControls.js`
 - `frontend/src/utils/midiMetronome.js` — ephemeral count-in / click track for live MIDI record ([midi-live-input.md](midi-live-input.md))
 - `frontend/src/components/PlaybackControls.jsx` / `TrackPlaybackControls.jsx` / `MidiInputPanel.jsx` / `CoPerformancePanel.jsx`
 - `frontend/src/utils/livePlaybackEngineAccess.js` / `liveAccompanimentScheduler.js` — co-performance additive live layer ([co-performance.md](co-performance.md))
 - `frontend/e2e/playback-mixer.spec.js` / `midi-live-input.spec.js`
+
+## See Also
+
+- [Composition V2](composition-v2.md) — canonical playable score
+- [Performance conductor](performance-conductor.md) — plan realize → schedule-apply audition
+- [MIDI live input](midi-live-input.md) — capture into V2 (orthogonal to conductor)

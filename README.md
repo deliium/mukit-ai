@@ -87,6 +87,7 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Neural audio render: `NEURAL_AUDIO_*` + optional `compose.neural-audio.yml --profile neural-audio`. Details: [docs/neural-audio-rendering.md](docs/neural-audio-rendering.md).
 - Mix analysis: `MIX_ANALYSIS_*` (read-only DSP over stem/mix WAVs). Details: [docs/mix-analysis.md](docs/mix-analysis.md).
 - Mix plans: `MIX_PLAN_*` (new mix revisions; never overwrite stems). Details: [docs/ai-assisted-mixing.md](docs/ai-assisted-mixing.md).
+- Performance conductor: `PERFORMANCE_CONDUCTOR_AI_ENABLED` (default false; optional AI param patches only). Details: [docs/performance-conductor.md](docs/performance-conductor.md).
 - Acceptance commands: see `docs/testing.md` (`./scripts/run_tests.sh`, pytest, Playwright, Docker persistence scripts). Studio runbook: [docs/v4-studio-operations.md](docs/v4-studio-operations.md).
 
 ## Installation (host-local optional)
@@ -320,6 +321,7 @@ mukit-ai/
 │   ├── audio-symbolic-alignment.md
 │   ├── neural-audio-rendering.md
 │   ├── mix-analysis.md
+│   ├── performance-conductor.md
 │   ├── composition-v1.md
 │   ├── project-persistence.md
 │   ├── testing.md
@@ -339,6 +341,7 @@ mukit-ai/
 | [Composition V2](docs/composition-v2.md) | Operational canonical contract, migration, export fidelity |
 | [Composition Editor](docs/composition-editor.md) | Piano-roll multi-note editing, clipboard, cursor/loop |
 | [Browser playback](docs/browser-playback.md) | Tone.js projection, mixer, samples vs FluidSynth export |
+| [Performance conductor](docs/performance-conductor.md) | Durable plans + session realizations; same notes, different performances |
 | [MIDI live input](docs/midi-live-input.md) | Web MIDI / QWERTY performance capture into V2 |
 | [Co-performance](docs/co-performance.md) | Live stream, horizon accompaniment, degradation, predict |
 | [AI Jam](docs/ai-jam.md) | Jam modes, belief/hysteresis, multi-track Commit, fallback |
