@@ -91,8 +91,20 @@ class ResolvedModel:
 
     descriptor: ModelDescriptor
     operation: AiOperation
-    resolution_path: Literal["explicit", "legacy", "op_default", "global", "fallback"]
+    resolution_path: Literal[
+        "explicit",
+        "legacy",
+        "op_default",
+        "global",
+        "fallback",
+        "schedule",
+    ]
     requested_model_id: str | None
     resolved_model_id: str
     fallback_applied: bool = False
     generation_parameters: GenerationParameters | None = None
+    schedule_policy: str | None = None
+    schedule_reason_codes: tuple[str, ...] = ()
+    schedule_attempt: int | None = None
+    schedule_trust_boundary: str | None = None
+    schedule_node_id: str | None = None

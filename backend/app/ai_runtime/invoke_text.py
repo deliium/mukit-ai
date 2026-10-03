@@ -1,7 +1,8 @@
 """Unified text completion seam for resolved models.
 
 Generate/edit call this helper so ``runtime=execution_node`` never builds
-ChatOpenAI against the typed worker surface.
+ChatOpenAI against the typed worker surface. Schedule-path and execution-node
+invokes may reschedule once on node loss without trust escalation.
 """
 
 from __future__ import annotations
@@ -30,6 +31,88 @@ async def ainvoke_text_for_resolved(
     timeout_seconds: int | None = None,
 ) -> str:
     """Return completion text for ``resolved`` without logging the prompt body."""
+    from app.services.ai_job_reschedule import (
+        failed_node_id,
+        is_reschedulable_failure,
+        max_attempts_for,
+        resolve_reschedule_attempt,
+        should_wrap_for_reschedule,
+    )
+
+    if not should_wrap_for_reschedule(resolved):
+        return await _ainvoke_once(
+            resolved,
+            prompt,
+            purpose=purpose,
+            provider=provider,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
+        )
+
+    attempts = max_attempts_for(resolved)
+    current = resolved
+    excluded_nodes: list[str] = []
+    excluded_models: list[str] = []
+    last_exc: BaseException | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            logger.debug(
+                "ainvoke_text_for_resolved attempt",
+                extra={
+                    "runtime": current.descriptor.runtime,
+                    "model_id": current.resolved_model_id,
+                    "purpose": purpose,
+                    "attempt_index": attempt,
+                    "resolution_path": current.resolution_path,
+                },
+            )
+            return await _ainvoke_once(
+                current,
+                prompt,
+                purpose=purpose,
+                provider=provider,
+                temperature=temperature,
+                timeout_seconds=timeout_seconds,
+            )
+        except ModelUnavailableError as exc:
+            last_exc = exc
+            if not is_reschedulable_failure(exc) or attempt >= attempts:
+                raise
+            node_id = failed_node_id(current)
+            if node_id:
+                excluded_nodes.append(node_id)
+            excluded_models.append(current.resolved_model_id)
+            logger.warning(
+                "ainvoke reschedule after failure",
+                extra={
+                    "failure_code": getattr(exc, "code", None),
+                    "failed_model_id": current.resolved_model_id,
+                    "failed_node_id": node_id,
+                    "attempt_index": attempt,
+                    "max_attempts": attempts,
+                },
+            )
+            current = resolve_reschedule_attempt(
+                current,
+                exclude_node_ids=excluded_nodes,
+                exclude_model_ids=excluded_models,
+                attempt_index=attempt + 1,
+            )
+
+    assert last_exc is not None
+    raise last_exc
+
+
+async def _ainvoke_once(
+    resolved: ResolvedModel,
+    prompt: str,
+    *,
+    purpose: str,
+    provider: LLMProviderSettings | None = None,
+    temperature: float | None = None,
+    timeout_seconds: int | None = None,
+) -> str:
     runtime = resolved.descriptor.runtime
     logger.debug(
         "ainvoke_text_for_resolved branch",

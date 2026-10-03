@@ -114,3 +114,45 @@ def test_llm_model_selection_accepts_model_id():
     sel = LLMModelSelection(model_id="openai:gpt-4o-mini")
     assert sel.model_id == "openai:gpt-4o-mini"
     assert sel.provider is None
+
+
+def test_schedule_resolution_path_when_enabled(monkeypatch):
+    from app.ai_runtime.capabilities import ModelCapability
+    from app.ai_runtime.types import ModelDescriptor, ModelHealth
+    from app.services import scheduling_candidates as candidates_mod
+
+    monkeypatch.setattr(candidates_mod, "_load_projected_nodes", lambda: {})
+    descriptor = ModelDescriptor(
+        id="local:llama-planner",
+        display_name="llama",
+        provider="local",
+        runtime="local_openai_compatible",
+        primary_capability=ModelCapability.LANGUAGE_PLANNER,
+        locality="local",
+        model_version=None,
+        supported_operations=(AiOperation.GENERATE_PLANNER, AiOperation.GENERATE),
+        status="ready",
+        health=ModelHealth(status="ready", credentials_present=True),
+        limits={
+            "memory_available_mb": 4096,
+            "device_class": "igpu",
+            "estimated_latency_ms": 40,
+        },
+        provider_model="llama",
+    )
+    registry_mod.register_model(descriptor, overwrite=True)
+    env = {
+        "AI_SCHEDULING_ENABLED": "1",
+        "AI_SCHEDULING_DEFAULT_MODE": "prefer_local",
+        "AI_SCHEDULING_LOCAL_MEMORY_AVAILABLE_MB": "4096",
+        "AI_SCHEDULING_LOCAL_DEVICE_CLASS": "igpu",
+        "AI_SCHEDULING_LOCAL_ESTIMATED_LATENCY_MS": "40",
+    }
+    resolved = resolve_model_for_operation(
+        AiOperation.GENERATE_PLANNER,
+        None,
+        env=env,
+        collapse_reserved_generate=False,
+    )
+    assert resolved.resolution_path == "schedule"
+    assert resolved.resolved_model_id == "local:llama-planner"

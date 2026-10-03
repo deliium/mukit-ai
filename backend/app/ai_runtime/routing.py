@@ -27,7 +27,14 @@ from .types import GenerationParameters, ModelDescriptor, ResolvedModel
 
 logger = logging.getLogger(__name__)
 
-ResolutionPath = Literal["explicit", "legacy", "op_default", "global", "fallback"]
+ResolutionPath = Literal[
+    "explicit",
+    "legacy",
+    "op_default",
+    "global",
+    "fallback",
+    "schedule",
+]
 
 _current_resolved: ContextVar[ResolvedModel | None] = ContextVar("ai_runtime_resolved", default=None)
 
@@ -47,6 +54,9 @@ class ModelSelectionInput:
     model_id: str | None = None
     provider: str | None = None
     model: str | None = None
+    estimated_memory_mb: int | None = None
+    prefer_device_class: str | None = None
+    privacy_class: str | None = None
 
     @classmethod
     def from_selection(cls, selection: Any | None) -> ModelSelectionInput:
@@ -61,11 +71,17 @@ class ModelSelectionInput:
                 model_id=_clean(model_id),
                 provider=_clean(selection.get("provider")),
                 model=_clean(selection.get("model")),
+                estimated_memory_mb=_optional_int(selection.get("estimated_memory_mb")),
+                prefer_device_class=_clean(selection.get("prefer_device_class")),
+                privacy_class=_clean(selection.get("privacy_class")),
             )
         return cls(
             model_id=_clean(model_id),
             provider=_clean(getattr(selection, "provider", None)),
             model=_clean(getattr(selection, "model", None)),
+            estimated_memory_mb=_optional_int(getattr(selection, "estimated_memory_mb", None)),
+            prefer_device_class=_clean(getattr(selection, "prefer_device_class", None)),
+            privacy_class=_clean(getattr(selection, "privacy_class", None)),
         )
 
 
@@ -108,19 +124,22 @@ def resolve_model_for_operation(
         },
     )
 
+    schedule_meta: dict[str, Any] | None = None
     try:
-        descriptor, path, primary_requested = _resolve_primary(effective_op, sel, source)
+        descriptor, path, primary_requested, schedule_meta = _resolve_primary(
+            effective_op, sel, source
+        )
         requested_id = requested_id or primary_requested
         _assert_supports_operation(descriptor, effective_op)
         _assert_available(descriptor)
-        resolved = ResolvedModel(
+        resolved = _build_resolved(
             descriptor=descriptor,
             operation=operation,
-            resolution_path=path,
-            requested_model_id=requested_id,
-            resolved_model_id=descriptor.id,
-            fallback_applied=False,
+            path=path,
+            requested_id=requested_id,
             generation_parameters=generation_parameters,
+            schedule_meta=schedule_meta,
+            fallback_applied=False,
         )
         logger.info(
             "AI model resolved",
@@ -131,6 +150,8 @@ def resolve_model_for_operation(
                 "primary_capability": descriptor.primary_capability,
                 "runtime": descriptor.runtime,
                 "fallback_applied": False,
+                "schedule_policy": resolved.schedule_policy,
+                "schedule_attempt": resolved.schedule_attempt,
             },
         )
         return resolved
@@ -144,6 +165,7 @@ def resolve_model_for_operation(
                 "error_code": getattr(primary_exc, "code", None),
             },
         )
+        max_trust_rank = _max_trust_rank_for_fallback(sel, source, schedule_meta)
         fallback_ids = _fallback_model_ids(effective_op, source)
         if not fallback_ids:
             if isinstance(primary_exc, (ModelUnavailableError, CapabilityMismatchError)):
@@ -156,7 +178,7 @@ def resolve_model_for_operation(
         # Capture op_default / global attempted id for provenance when selection was empty.
         if requested_id is None:
             try:
-                _, _, primary_requested = _resolve_primary(effective_op, sel, source)
+                _, _, primary_requested, _ = _resolve_primary(effective_op, sel, source)
                 requested_id = primary_requested
             except Exception:  # noqa: BLE001
                 pass
@@ -164,16 +186,26 @@ def resolve_model_for_operation(
         for fallback_id in fallback_ids:
             try:
                 descriptor = get_model(fallback_id, env=source)
+                if not _fallback_trust_allowed(descriptor, max_trust_rank):
+                    logger.warning(
+                        "Fallback candidate refused by trust clamp",
+                        extra={
+                            "operation": str(operation),
+                            "fallback_model_id": fallback_id,
+                            "max_trust_rank": max_trust_rank,
+                        },
+                    )
+                    continue
                 _assert_supports_operation(descriptor, effective_op)
                 _assert_available(descriptor)
-                resolved = ResolvedModel(
+                resolved = _build_resolved(
                     descriptor=descriptor,
                     operation=operation,
-                    resolution_path="fallback",
-                    requested_model_id=requested_id,
-                    resolved_model_id=descriptor.id,
-                    fallback_applied=True,
+                    path="fallback",
+                    requested_id=requested_id,
                     generation_parameters=generation_parameters,
+                    schedule_meta=None,
+                    fallback_applied=True,
                 )
                 logger.warning(
                     "AI model fallback applied",
@@ -389,7 +421,7 @@ def resolution_public_fields(resolved: ResolvedModel | None) -> dict[str, Any]:
     """Additive response fields for operation endpoints (ids only)."""
     if resolved is None:
         return {}
-    return {
+    fields: dict[str, Any] = {
         "model_id": resolved.resolved_model_id,
         "requested_model_id": resolved.requested_model_id,
         "resolved_model_id": resolved.resolved_model_id,
@@ -398,7 +430,13 @@ def resolution_public_fields(resolved: ResolvedModel | None) -> dict[str, Any]:
         "capability": str(resolved.descriptor.primary_capability),
         "operation": str(resolved.operation),
         "model_version": resolved.descriptor.model_version,
+        "resolution_path": resolved.resolution_path,
     }
+    if resolved.resolution_path == "schedule" or resolved.schedule_policy:
+        fields["schedule_policy"] = resolved.schedule_policy
+        fields["schedule_reason_codes"] = list(resolved.schedule_reason_codes)
+        fields["schedule_attempt"] = resolved.schedule_attempt
+    return fields
 
 
 def default_operation_routes(env: Mapping[str, str] | None = None) -> dict[str, str | None]:
@@ -483,10 +521,10 @@ def _resolve_primary(
     operation: AiOperation,
     sel: ModelSelectionInput,
     env: Mapping[str, str],
-) -> tuple[ModelDescriptor, ResolutionPath, str | None]:
+) -> tuple[ModelDescriptor, ResolutionPath, str | None, dict[str, Any] | None]:
     if sel.model_id:
         logger.info("Resolution path: explicit model_id", extra={"model_id": sel.model_id})
-        return get_model(sel.model_id, env=env), "explicit", sel.model_id
+        return get_model(sel.model_id, env=env), "explicit", sel.model_id, None
 
     if sel.provider:
         model_name = sel.model
@@ -495,7 +533,7 @@ def _resolve_primary(
             try:
                 descriptor = get_model(mid, env=env)
                 logger.info("Resolution path: legacy provider+model", extra={"model_id": mid})
-                return descriptor, "legacy", mid
+                return descriptor, "legacy", mid, None
             except ModelNotFoundError:
                 # Allow legacy override of model string for a registered provider slot.
                 matches = [
@@ -525,7 +563,7 @@ def _resolve_primary(
                         "Resolution path: legacy provider with model override",
                         extra={"model_id": mid, "provider": base.provider},
                     )
-                    return overridden, "legacy", mid
+                    return overridden, "legacy", mid, None
                 raise
         matches = [
             m
@@ -537,16 +575,21 @@ def _resolve_primary(
                 "Resolution path: legacy provider default model",
                 extra={"model_id": matches[0].id},
             )
-            return matches[0], "legacy", matches[0].id
+            return matches[0], "legacy", matches[0].id, None
         raise ModelNotFoundError(
             f"No registered model for provider {sel.provider}",
             code="model_not_found",
         )
 
+    from app.scheduling_settings import scheduling_enabled
+
+    if scheduling_enabled(env):
+        return _resolve_via_schedule(operation, sel, env)
+
     op_default = (env.get(operation_env_key(operation)) or "").strip()
     if op_default:
         logger.info("Resolution path: op_default", extra={"model_id": op_default, "operation": str(operation)})
-        return get_model(op_default, env=env), "op_default", op_default
+        return get_model(op_default, env=env), "op_default", op_default, None
 
     default_id = get_default_model_id(env)
     if default_id:
@@ -554,7 +597,7 @@ def _resolve_primary(
             descriptor = get_model(default_id, env=env)
             if operation in descriptor.supported_operations:
                 logger.info("Resolution path: global default", extra={"model_id": default_id})
-                return descriptor, "global", default_id
+                return descriptor, "global", default_id, None
             logger.debug(
                 "Global default does not support operation; continuing search",
                 extra={
@@ -573,12 +616,145 @@ def _resolve_primary(
     ready = list_models(operation=operation, status="ready", env=env)
     if ready:
         logger.info("Resolution path: global first ready", extra={"model_id": ready[0].id})
-        return ready[0], "global", ready[0].id
+        return ready[0], "global", ready[0].id, None
 
     raise ModelUnavailableError(
         f"No models available for operation {operation}",
         code="model_unavailable",
     )
+
+
+def _resolve_via_schedule(
+    operation: AiOperation,
+    sel: ModelSelectionInput,
+    env: Mapping[str, str],
+) -> tuple[ModelDescriptor, ResolutionPath, str | None, dict[str, Any]]:
+    from app.ai_runtime.capabilities import default_capability_for_operation
+    from app.scheduling_schemas import SchedulingJobV1
+    from app.services.ai_job_scheduler import schedule_ai_job
+    from app.services.scheduling_candidates import build_scheduling_candidates
+    from app.services.scheduling_policy_store import get_policy
+
+    policy = get_policy(env=env)
+    job = SchedulingJobV1(
+        operation=str(operation),
+        required_capability=str(default_capability_for_operation(operation)),
+        privacy_class=(
+            sel.privacy_class
+            if sel.privacy_class in {"private", "allow_public"}
+            else "private"
+        ),
+        estimated_memory_mb=sel.estimated_memory_mb,
+        prefer_device_class=(
+            sel.prefer_device_class
+            if sel.prefer_device_class in {"cpu", "igpu", "dgpu"}
+            else None
+        ),
+    )
+    candidates = build_scheduling_candidates(env=env, reload=False)
+    decision = schedule_ai_job(job, candidates, policy, attempt_index=1)
+    meta = {
+        "schedule_policy": decision.policy_mode,
+        "schedule_reason_codes": tuple(decision.reason_codes),
+        "schedule_attempt": decision.attempt_index,
+        "schedule_trust_boundary": decision.trust_boundary,
+        "schedule_node_id": decision.selected_node_id,
+    }
+    if not decision.selected_model_id:
+        logger.warning(
+            "Schedule path found no eligible candidate",
+            extra={
+                "operation": str(operation),
+                "policy_mode": decision.policy_mode,
+                "reason_codes": decision.reason_codes,
+            },
+        )
+        raise ModelUnavailableError(
+            f"No eligible scheduled model for operation {operation}",
+            code="model_unavailable",
+        )
+    descriptor = get_model(decision.selected_model_id, env=env)
+    logger.info(
+        "Resolution path: schedule",
+        extra={
+            "model_id": descriptor.id,
+            "policy_mode": decision.policy_mode,
+            "trust_boundary": decision.trust_boundary,
+            "eligible_count": decision.eligible_count,
+        },
+    )
+    return descriptor, "schedule", descriptor.id, meta
+
+
+def _build_resolved(
+    *,
+    descriptor: ModelDescriptor,
+    operation: AiOperation,
+    path: ResolutionPath,
+    requested_id: str | None,
+    generation_parameters: GenerationParameters | None,
+    schedule_meta: dict[str, Any] | None,
+    fallback_applied: bool,
+) -> ResolvedModel:
+    meta = schedule_meta or {}
+    return ResolvedModel(
+        descriptor=descriptor,
+        operation=operation,
+        resolution_path=path,
+        requested_model_id=requested_id,
+        resolved_model_id=descriptor.id,
+        fallback_applied=fallback_applied,
+        generation_parameters=generation_parameters,
+        schedule_policy=meta.get("schedule_policy"),
+        schedule_reason_codes=tuple(meta.get("schedule_reason_codes") or ()),
+        schedule_attempt=meta.get("schedule_attempt"),
+        schedule_trust_boundary=meta.get("schedule_trust_boundary"),
+        schedule_node_id=meta.get("schedule_node_id"),
+    )
+
+
+def _max_trust_rank_for_fallback(
+    sel: ModelSelectionInput,
+    env: Mapping[str, str],
+    schedule_meta: dict[str, Any] | None,
+) -> int | None:
+    """Return max allowed trust rank for AI_FALLBACK after schedule exhaustion.
+
+    ``None`` means no clamp (scheduling off / explicit pin path).
+    """
+    from app.scheduling_schemas import TRUST_RANK
+    from app.scheduling_settings import scheduling_enabled
+
+    if not scheduling_enabled(env):
+        return None
+    if sel.model_id or sel.provider:
+        return None
+    if schedule_meta and schedule_meta.get("schedule_trust_boundary"):
+        return TRUST_RANK.get(str(schedule_meta["schedule_trust_boundary"]), 0)
+    # Schedule found nothing: private jobs cannot fall through to public_cloud.
+    privacy = sel.privacy_class if sel.privacy_class in {"private", "allow_public"} else "private"
+    if privacy == "private":
+        return TRUST_RANK["trusted_lan"]
+    from app.services.scheduling_policy_store import get_policy
+
+    policy = get_policy(env=env)
+    if not policy.allow_public_cloud:
+        return TRUST_RANK["trusted_lan"]
+    return TRUST_RANK["public_cloud"]
+
+
+def _fallback_trust_allowed(descriptor: ModelDescriptor, max_trust_rank: int | None) -> bool:
+    if max_trust_rank is None:
+        return True
+    from app.scheduling_schemas import TRUST_RANK, trust_boundary_for_runtime
+
+    node_id = (descriptor.limits or {}).get("execution_node_id")
+    boundary = trust_boundary_for_runtime(
+        runtime=str(descriptor.runtime),
+        locality=str(descriptor.locality),
+        has_execution_node_id=bool(node_id),
+    )
+    return TRUST_RANK.get(boundary, 99) <= max_trust_rank
 
 
 def _assert_supports_operation(descriptor: ModelDescriptor, operation: AiOperation) -> None:
@@ -630,3 +806,15 @@ def _clean(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    return number
