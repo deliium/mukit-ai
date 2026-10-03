@@ -1,4 +1,4 @@
-[← Composition Editor](composition-editor.md) · [Back to README](../README.md) · [Performance conductor →](performance-conductor.md)
+[← Composition Editor](composition-editor.md) · [Back to README](../README.md) · [Performance conductor →](performance-conductor.md) · [Spatial music →](spatial-music.md)
 
 # Browser Playback
 
@@ -79,6 +79,8 @@ The repository root `LICENSE` file is currently CC0 1.0 text while `README.md` h
 
 Performance conductor audition uses `PLAYBACK_SOURCE_KIND_PERFORMANCE` (mixer scope `preview`) with a schedule-apply helper over API `performance.realization.v1` deltas — see [performance-conductor.md](performance-conductor.md). Rubato is tick deltas, not `Tone.Transport.bpm`.
 
+Spatial audition uses `PLAYBACK_SOURCE_KIND_SPATIAL` (mixer scope `preview`) with API-compiled stereo / optional `Panner3D` — see [spatial-music.md](spatial-music.md). SpatialMix never rewrites notes or stem WAVs.
+
 ## Related files
 
 - `frontend/src/utils/tonePlaybackEngine.js`
@@ -95,4 +97,5 @@ Performance conductor audition uses `PLAYBACK_SOURCE_KIND_PERFORMANCE` (mixer sc
 
 - [Composition V2](composition-v2.md) — canonical playable score
 - [Performance conductor](performance-conductor.md) — plan realize → schedule-apply audition
+- [Spatial music](spatial-music.md) — scene compile → Panner3D / compiled-stereo audition
 - [MIDI live input](midi-live-input.md) — capture into V2 (orthogonal to conductor)

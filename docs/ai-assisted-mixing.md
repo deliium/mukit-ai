@@ -92,3 +92,4 @@ Tone fixtures for role hash checks live in `backend/tests/fixtures/audio/mix_pla
 - [mix-analysis.md](mix-analysis.md) — measurements and observations this compiler reads
 - [neural-audio-rendering.md](neural-audio-rendering.md) — stem WAVs that stay read-only inputs
 - [browser-playback.md](browser-playback.md) — ephemeral Tone mixer (different surface)
+- [spatial-music.md](spatial-music.md) — 3D SpatialMix scene preview (orthogonal; does not widen `mix.plan.v1`)

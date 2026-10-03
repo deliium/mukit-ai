@@ -88,6 +88,7 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Mix analysis: `MIX_ANALYSIS_*` (read-only DSP over stem/mix WAVs). Details: [docs/mix-analysis.md](docs/mix-analysis.md).
 - Mix plans: `MIX_PLAN_*` (new mix revisions; never overwrite stems). Details: [docs/ai-assisted-mixing.md](docs/ai-assisted-mixing.md).
 - Performance conductor: `PERFORMANCE_CONDUCTOR_AI_ENABLED` (default false; optional AI param patches only). Details: [docs/performance-conductor.md](docs/performance-conductor.md).
+- Spatial music: `SPATIAL_PREVIEW_MAX_SOURCES` / `SPATIAL_PREVIEW_MAX_MOTION_KEYFRAMES` (defaults 32 / 64). Details: [docs/spatial-music.md](docs/spatial-music.md).
 - Acceptance commands: see `docs/testing.md` (`./scripts/run_tests.sh`, pytest, Playwright, Docker persistence scripts). Studio runbook: [docs/v4-studio-operations.md](docs/v4-studio-operations.md).
 
 ## Installation (host-local optional)
@@ -342,6 +343,7 @@ mukit-ai/
 | [Composition Editor](docs/composition-editor.md) | Piano-roll multi-note editing, clipboard, cursor/loop |
 | [Browser playback](docs/browser-playback.md) | Tone.js projection, mixer, samples vs FluidSynth export |
 | [Performance conductor](docs/performance-conductor.md) | Durable plans + session realizations; same notes, different performances |
+| [Spatial music](docs/spatial-music.md) | SpatialMix scenes + stereo/FOA preview; notes and stem WAVs unchanged |
 | [MIDI live input](docs/midi-live-input.md) | Web MIDI / QWERTY performance capture into V2 |
 | [Co-performance](docs/co-performance.md) | Live stream, horizon accompaniment, degradation, predict |
 | [AI Jam](docs/ai-jam.md) | Jam modes, belief/hysteresis, multi-track Commit, fallback |
