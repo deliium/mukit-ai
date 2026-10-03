@@ -181,3 +181,5 @@ export function dimensionLabel(dimensionId) {
   const found = REFERENCE_FEATURE_DIMENSIONS.find((item) => item.id === dimensionId);
   return found?.label || dimensionId;
 }
+
+export { formatReferenceRightsRefuseMessage } from './personalComposerForm.js';

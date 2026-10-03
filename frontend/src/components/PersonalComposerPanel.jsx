@@ -9,7 +9,10 @@ import {
   stopPersonalComposer,
 } from '../api/personalComposerApi.js';
 import { listProjects } from '../api/projectApi.js';
+import { getRightsGovernanceEntry } from '../api/rightsGovernanceApi.js';
 import {
+  formatPersonalComposerRefuseMessage,
+  hydrateRightsDraftFromRegistry,
   rightsForRequest,
   selectionEligible,
 } from '../utils/personalComposerForm.js';
@@ -165,10 +168,28 @@ export default function PersonalComposerPanel() {
   const eligible = selectionEligible(selectedIds, rightsById, displayName);
 
   const toggle = (projectId) => {
-    setSelected((current) => ({ ...current, [projectId]: !current[projectId] }));
+    const nextChecked = !selected[projectId];
+    setSelected((current) => ({ ...current, [projectId]: nextChecked }));
     setRights((current) => (
       current[projectId] ? current : { ...current, [projectId]: emptyRights() }
     ));
+    // Hydrate GET registry when present — never upserts on open/select.
+    if (nextChecked) {
+      getRightsGovernanceEntry('project', projectId)
+        .then((entry) => {
+          if (!entry) return;
+          setRights((current) => ({
+            ...current,
+            [projectId]: hydrateRightsDraftFromRegistry(
+              current[projectId] || emptyRights(),
+              entry,
+            ),
+          }));
+        })
+        .catch(() => {
+          // Missing registry row is expected; attestation form remains.
+        });
+    }
   };
 
   const patchRights = (projectId, patch) => {
@@ -195,7 +216,7 @@ export default function PersonalComposerPanel() {
       setMessage('Training finished.');
       await load();
     } catch (error) {
-      setMessage(error.message || 'Training failed');
+      setMessage(formatPersonalComposerRefuseMessage(error));
     } finally {
       setBusy(false);
     }
@@ -249,6 +270,18 @@ export default function PersonalComposerPanel() {
             </span>
             {checked ? (
               <Row>
+                {draft.use_policy ? (
+                  <Hint data-testid={`rights-use-policy-${project.id}`}>
+                    Registry:
+                    {' '}
+                    {draft.ownership_class || '—'}
+                    {' / '}
+                    {draft.use_policy}
+                    {' / '}
+                    {draft.verification_status || '—'}
+                    {draft.use_policy === 'reference_only' ? ' (not trainable)' : ''}
+                  </Hint>
+                ) : null}
                 <Select
                   aria-label={`Provenance for ${project.name || project.id}`}
                   value={draft.status}

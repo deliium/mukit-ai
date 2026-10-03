@@ -184,6 +184,7 @@ import {
   collectMultiRefBorrowRows,
   loadConditioningSession,
 } from '../utils/referenceConditioningPolicy.js';
+import { formatReferenceRightsRefuseMessage } from '../utils/personalComposerForm.js';
 import { listAnalysisSectionOptions } from '../utils/compositionAnalysis.js';
 import { normalizeCritiqueResult } from '../utils/compositionCritique.js';
 import {
@@ -8696,7 +8697,11 @@ export const useMusicStore = create((set, get) => ({
           scope: reference.scope,
           expected_fingerprint: reference.sourceFingerprint || undefined,
           mode: reference.mode || 'prompt_features',
-        }).catch(async () => {
+        }).catch(async (resolveError) => {
+          // Rights refuse must not fall back to an ungated inline embed.
+          if (resolveError?.code === 'rights_reference_refused') {
+            throw resolveError;
+          }
           // Fallback: embed the already-loaded reference composition inline.
           const embedded = await computeEmbedding(refComposition, reference.scope);
           return {
@@ -8743,9 +8748,11 @@ export const useMusicStore = create((set, get) => ({
       if (requestId !== get().musicalReferenceRequestId) {
         return null;
       }
-      const message = error instanceof EmbeddingApiError
-        ? error.message
-        : (error.message || 'Failed to score musical reference');
+      const message = error?.code === 'rights_reference_refused'
+        ? formatReferenceRightsRefuseMessage(error)
+        : (error instanceof EmbeddingApiError
+          ? error.message
+          : (error.message || 'Failed to score musical reference'));
       embeddingLogger.error('Musical reference score failed', {
         code: error.code || null,
       });
@@ -9158,9 +9165,11 @@ export const useMusicStore = create((set, get) => ({
       if (requestId !== get().developmentRequestId) {
         return false;
       }
-      const message = error instanceof DevelopmentApiError
-        ? error.message
-        : (error.message || 'Development preview failed');
+      const message = error?.code === 'rights_reference_refused'
+        ? formatReferenceRightsRefuseMessage(error)
+        : (error instanceof DevelopmentApiError
+          ? error.message
+          : (error.message || 'Development preview failed'));
       console.error('[musicStore] Development preview failed', {
         requestId,
         code: error.code || null,
