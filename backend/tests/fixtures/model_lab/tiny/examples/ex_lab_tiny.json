@@ -1,0 +1,31 @@
+{
+  "composition": {
+    "harmony": [],
+    "key_signature": "C",
+    "schema_version": "composition.v2",
+    "sections": [],
+    "tempo": 120,
+    "time_signature": "4/4",
+    "title": "Lab Tiny",
+    "tracks": [
+      {
+        "channel": 0,
+        "events": [
+          {
+            "duration": 480,
+            "pitch": 60,
+            "start": 0,
+            "type": "note",
+            "velocity": 80
+          }
+        ],
+        "id": "t1",
+        "name": "melody",
+        "program": 0
+      }
+    ]
+  },
+  "example_id": "ex_lab_tiny",
+  "parent_item_id": "item_lab_tiny",
+  "schema_version": "dataset.example.v1"
+}

@@ -1,0 +1,25 @@
+{
+  "counts": {
+    "clusters": 1,
+    "examples": 1,
+    "excluded_items": 0,
+    "items": 1,
+    "sources": 1,
+    "test_examples": 0,
+    "train_eligible_items": 1,
+    "train_examples": 1,
+    "validation_examples": 0
+  },
+  "created_at": "2026-10-04T00:00:00Z",
+  "dataset_name": "lab_fixture_tiny",
+  "dataset_version_id": "lab_fixture_tiny_v1",
+  "digests": {
+    "config_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+    "item_content_digests_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "version_payload_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "fingerprint_profile": "default",
+  "pipeline_version": "dataset.pipeline.v1",
+  "schema_version": "dataset.manifest.v1",
+  "split_seed": 42
+}

@@ -97,6 +97,8 @@ def test_forbidden_persistence_imports_in_ai_agents():
         "from app.services.asset_pack_generate",
         "from app.services.asset_pack_brief",
         "from app.services.personal_composer_store",
+        "from app.services.model_lab_store",
+        "from app.model_lab_settings",
         "from app.services.preference_store",
         "from app.services.ardour_exchange_store",
         "from app.services.ardour_exchange_ingest",
