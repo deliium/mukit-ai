@@ -38,6 +38,16 @@ def build_scheduling_candidates(
     for descriptor in list_models(env=env):
         if descriptor.status != "ready":
             continue
+        if str(descriptor.runtime) == "browser_model":
+            logger.debug(
+                "scheduling candidate skipped",
+                extra={
+                    "model_id": descriptor.id,
+                    "runtime": "browser_model",
+                    "skip_reason": "browser_model_not_server_executable",
+                },
+            )
+            continue
         candidate = _project_descriptor(descriptor, nodes_by_id, active)
         if candidate is None:
             continue

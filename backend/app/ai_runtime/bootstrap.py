@@ -179,6 +179,15 @@ def build_registry_from_env(
             },
         )
 
+    # Discovery-only BrowserModel rows (SPA executes; server never selects).
+    from .runtimes.browser_model import register_browser_models
+
+    browser_count = register_browser_models(models)
+    logger.info(
+        "Browser model bootstrap complete",
+        extra={"browser_model_count": browser_count},
+    )
+
     # Symbolic composers: fake tiny (always ready) + Music Transformer (checkpoint-gated).
     from .runtimes.music_transformer import (
         default_fake_symbolic_descriptor,

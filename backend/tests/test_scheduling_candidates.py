@@ -126,6 +126,42 @@ def test_local_hints_do_not_override_descriptor_limits(monkeypatch) -> None:
     assert built[0].estimated_latency_ms == 10
 
 
+def test_browser_model_runtime_never_emitted_as_candidate(monkeypatch) -> None:
+    monkeypatch.setattr(candidates_mod, "_load_projected_nodes", lambda: {})
+    _register(
+        ModelDescriptor(
+            id="browser:symbolic-features-v1",
+            display_name="browser embed",
+            provider="browser",
+            runtime="browser_model",
+            primary_capability=ModelCapability.EMBEDDING,
+            locality="local",
+            model_version=None,
+            supported_operations=(AiOperation.EMBED,),
+            status="ready",
+            health=ModelHealth(status="ready", credentials_present=False),
+            limits={"server_executable": False},
+        )
+    )
+    _register(
+        ModelDescriptor(
+            id="local:llama",
+            display_name="llama",
+            provider="local",
+            runtime="local_openai_compatible",
+            primary_capability=ModelCapability.LANGUAGE_PLANNER,
+            locality="local",
+            model_version=None,
+            supported_operations=(AiOperation.GENERATE_PLANNER,),
+            status="ready",
+            health=ModelHealth(status="ready", credentials_present=True),
+            limits={},
+        )
+    )
+    built = candidates_mod.build_scheduling_candidates(env={})
+    assert [c.model_id for c in built] == ["local:llama"]
+
+
 def test_local_hints_never_apply_to_execution_node(monkeypatch) -> None:
     node = SimpleNamespace(
         node_id="node_bbbbbbbbbbbbbbbb",

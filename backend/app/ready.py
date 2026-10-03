@@ -100,6 +100,53 @@ def _ai_registry_summary() -> dict[str, Any]:
         }
 
 
+def _browser_models_readiness_block() -> dict[str, Any]:
+    """Soft registry-only BrowserModel note. Never scans SPA public/ or fails ready."""
+    try:
+        from app.ai_runtime.registry import list_models, reload_registry
+
+        reload_registry()
+        browser_rows = [m for m in list_models() if str(m.runtime) == "browser_model"]
+        model_ids = [m.id for m in browser_rows][:16]
+        digest_prefixes: list[str] = []
+        for model in browser_rows:
+            limits = dict(model.limits or {})
+            prefix = limits.get("asset_digest_prefix")
+            if isinstance(prefix, str) and prefix.strip():
+                digest_prefixes.append(prefix.strip()[:16])
+            else:
+                # Public algorithm identity when asset_kind=none (no weight digest).
+                algo = limits.get("algorithm_version")
+                if isinstance(algo, str) and algo.strip():
+                    digest_prefixes.append(algo.strip()[:24])
+        block = {
+            "descriptor_count": len(browser_rows),
+            "model_ids": model_ids,
+            "limits_digest_prefixes": digest_prefixes[:16],
+            "server_executable": False,
+        }
+        logger.debug(
+            "Readiness browser_models block assembled",
+            extra={
+                "descriptor_count": block["descriptor_count"],
+                "model_id_count": len(model_ids),
+            },
+        )
+        return block
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Readiness browser_models block failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return {
+            "descriptor_count": 0,
+            "model_ids": [],
+            "limits_digest_prefixes": [],
+            "server_executable": False,
+            "error_type": type(exc).__name__,
+        }
+
+
 def build_readiness_report() -> dict[str, Any]:
     """Collect non-secret readiness flags for GET /ready."""
     logger.info("Readiness check started")
@@ -206,6 +253,7 @@ def build_readiness_report() -> dict[str, Any]:
     from app.scheduling_settings import ai_scheduling_readiness_block
 
     ai_scheduling_block = ai_scheduling_readiness_block()
+    browser_models_block = _browser_models_readiness_block()
     ready = bool(db_ok and catalog_ok)
     report = {
         "status": "ready" if ready else "not_ready",
@@ -223,6 +271,7 @@ def build_readiness_report() -> dict[str, Any]:
         "local_ai": local_ai_block,
         "execution_nodes": execution_nodes_block,
         "ai_scheduling": ai_scheduling_block,
+        "browser_models": browser_models_block,
         "ai": ai_summary,
         "wav": {
             "ready": wav_ready,

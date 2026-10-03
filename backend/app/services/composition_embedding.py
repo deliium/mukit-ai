@@ -522,6 +522,22 @@ def _resolve_embedding_model(model_id: str | None) -> SymbolicFeaturesEmbeddingM
             "embedding_text_stub_rejected",
             details={"requested_model_id": requested},
         )
+    if requested.startswith("browser:") or requested == "browser:symbolic-features-v1":
+        logger.debug(
+            "Embedding resolve refused browser_model",
+            extra={
+                "requested_model_id": requested,
+                "skip_reason": "browser_model_not_server_executable",
+            },
+        )
+        raise EmbeddingModelUnavailableError(
+            "embedding_model_unavailable",
+            details={
+                "requested_model_id": requested,
+                "runtime": "browser_model",
+                "skip_reason": "browser_model_not_server_executable",
+            },
+        )
     if fake_mode_enabled() or (
         requested and (requested.startswith(f"{FAKE_PROVIDER}:") or "fake" in requested.lower())
     ):
@@ -564,6 +580,23 @@ def _resolve_embedding_model(model_id: str | None) -> SymbolicFeaturesEmbeddingM
         ) from exc
 
     descriptor = resolved.descriptor
+    if str(descriptor.runtime) == "browser_model":
+        logger.debug(
+            "Embedding resolve refused browser_model descriptor",
+            extra={
+                "resolved_model_id": descriptor.id,
+                "runtime": "browser_model",
+                "skip_reason": "browser_model_not_server_executable",
+            },
+        )
+        raise EmbeddingModelUnavailableError(
+            "embedding_model_unavailable",
+            details={
+                "resolved_model_id": descriptor.id,
+                "runtime": "browser_model",
+                "skip_reason": "browser_model_not_server_executable",
+            },
+        )
     if descriptor.runtime != SYMBOLIC_FEATURES_RUNTIME:
         logger.error(
             "Resolved embed model is not symbolic_features runtime",
