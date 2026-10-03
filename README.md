@@ -90,6 +90,7 @@ Secrets stay in `.env` / Compose and are passed **only to the backend**. Fronten
 - Performance conductor: `PERFORMANCE_CONDUCTOR_AI_ENABLED` (default false; optional AI param patches only). Details: [docs/performance-conductor.md](docs/performance-conductor.md).
 - Spatial music: `SPATIAL_PREVIEW_MAX_SOURCES` / `SPATIAL_PREVIEW_MAX_MOTION_KEYFRAMES` (defaults 32 / 64). Details: [docs/spatial-music.md](docs/spatial-music.md).
 - Ardour companion: `ARDOUR_COMPANION_*` (default off; process-memory OSC session). Details: [docs/ardour-companion.md](docs/ardour-companion.md).
+- Ardour session exchange: `ARDOUR_EXCHANGE_*` (default off; MIDI/stem packages under `ARDOUR_EXCHANGE_ROOT`). Details: [docs/ardour-session-exchange.md](docs/ardour-session-exchange.md).
 - Acceptance commands: see `docs/testing.md` (`./scripts/run_tests.sh`, pytest, Playwright, Docker persistence scripts). Studio runbook: [docs/v4-studio-operations.md](docs/v4-studio-operations.md).
 
 ## Installation (host-local optional)
@@ -346,6 +347,7 @@ mukit-ai/
 | [Performance conductor](docs/performance-conductor.md) | Durable plans + session realizations; same notes, different performances |
 | [Spatial music](docs/spatial-music.md) | SpatialMix scenes + stereo/FOA preview; notes and stem WAVs unchanged |
 | [Ardour companion](docs/ardour-companion.md) | Live Ardour OSC transport/mixer companion; feedback-observed; no note rewrite |
+| [Ardour session exchange](docs/ardour-session-exchange.md) | Selected MIDI region packages; ingest/realize/prepare; Lua operator-install only |
 | [MIDI live input](docs/midi-live-input.md) | Web MIDI / QWERTY performance capture into V2 |
 | [Co-performance](docs/co-performance.md) | Live stream, horizon accompaniment, degradation, predict |
 | [AI Jam](docs/ai-jam.md) | Jam modes, belief/hysteresis, multi-track Commit, fallback |

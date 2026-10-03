@@ -29,9 +29,11 @@ On connect, Mukit sends locked `/set_surface` args:
 |-----|-------|---------|
 | `bank_size` | `16` | Bank of 16 strips |
 | `strip_types` | `159` | Normal strip set |
-| `feedback` | `8219` | `1+2+8+16+8192` (buttons, values, heartbeat, master, select) |
+| `feedback` | `9243` | Foundation `8219` + `1024` (position in samples). `/position/samples` may arrive as int or digit string |
 | `gainmode` | `0` | Locked ship-1 value |
 | `port` | feedback port | So Ardour targets Mukit’s listen port |
+
+After connect, Mukit may send `/strip/list`; `end_route_list` can supply `sample_rate` for exchange session context.
 
 ## Mukit environment
 
@@ -85,11 +87,12 @@ Transport, locate, record-arm, strip select/name, fader/pan/mute/solo, and feedb
 
 ## Honesty limits
 
-- No bidirectional note sync over OSC.
+- No bidirectional continuous note sync over OSC.
 - No auto-import of Ardour sessions into `composition.v2`.
+- Selected-region material exchange is a separate package path — see [ardour-session-exchange.md](ardour-session-exchange.md) (Lua export/import + `/ardour/exchange/*`). Mukit still never edits `.ardour` XML.
 - No Tone.js transport coupling to Ardour playhead in ship-1.
 - No multi-DAW abstraction; Ardour-only.
-- `ai_agents/` must not import companion OSC/session modules.
+- `ai_agents/` must not import companion or exchange modules.
 
 ## UI
 
@@ -97,6 +100,7 @@ Studio tab **Ardour**: host / ports / permission checkbox / Connect·Disconnect,
 
 ## See also
 
+- [ardour-session-exchange.md](ardour-session-exchange.md) — selected-region package exchange (ingest / realize / prepare)
 - [daw-interoperability.md](daw-interoperability.md) — SMF / MusicXML / WAV handoff + Ardour import steps
 - [composition-v2.md](composition-v2.md) — playable score contract
 - `backend/examples/ardour/README.md` — Lua install notes

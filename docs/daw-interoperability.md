@@ -92,7 +92,7 @@ Sections never invent notes — only meta markers. Projection reports list omiss
 
 ## Ardour (file import)
 
-Live transport/mixer control is a separate OSC companion — see [ardour-companion.md](ardour-companion.md). Asset exchange still uses file export/import:
+Live transport/mixer control is a separate OSC companion — see [ardour-companion.md](ardour-companion.md). Selected MIDI **region** round-trip (manifest + `material.mid`, cello counter-melody realize, aligned prepare) is documented in [ardour-session-exchange.md](ardour-session-exchange.md). Whole-score asset exchange still uses file export/import:
 
 1. In Mukit **Export**, download **Standard MIDI** (primary), **MusicXML** (notation), and/or **WAV** (FluidSynth bounce).
 2. In Ardour: **Session → Import** (or drag the file into the editor).
@@ -151,6 +151,7 @@ sequenceDiagram
 
 - [composition-v2.md](composition-v2.md) — score contract + projection codes
 - [ardour-companion.md](ardour-companion.md) — live Ardour OSC companion (V5)
+- [ardour-session-exchange.md](ardour-session-exchange.md) — selected-region package exchange (V5)
 - [import.md](import.md) — MIDI/MusicXML ingress
 - [browser-playback.md](browser-playback.md) — Tone.js (not a DAW bridge)
 - [testing.md](testing.md) — V1/V2/V3 Docker gates

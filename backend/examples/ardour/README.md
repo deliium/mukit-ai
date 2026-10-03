@@ -17,7 +17,17 @@ No secrets belong in these files. Do not paste API keys or composition JSON into
 |------|---------|
 | `add_named_location_marker.lua` | Add a named location marker at the edit point / playhead |
 | `list_track_count.lua` | Print the number of routes/tracks to the script log |
+| `export_selected_midi_region.lua` | Export selected MIDI region → exchange package (`manifest.json` + `material.mid`) under `ARDOUR_EXCHANGE_ROOT` |
+| `import_exchange_package.lua` | Import prepared package at `start_samples` / same bars (`ARDOUR_EXCHANGE_PACKAGE`) |
+
+### Exchange root path
+
+Point both Lua and the Mukit backend at the same host directory via `ARDOUR_EXCHANGE_ROOT` (Compose bind-mount into the backend container). See `docs/ardour-session-exchange.md`.
+
+### SMF export approach
+
+`export_selected_midi_region.lua` prefers Ardour Editor/Session MIDI export APIs when available; otherwise it documents a minimal Type-0 SMF writer from the MIDI model. Adapt note extraction to your Ardour Lua bindings. Refuse empty selection.
 
 ## Relation to Mukit companion
 
-Transport, mixer fader/pan/mute/solo, and master record-arm use the OSC companion (`docs/ardour-companion.md`). Use these Lua recipes only when you need session housekeeping OSC does not cover cleanly.
+Transport, mixer fader/pan/mute/solo, and master record-arm use the OSC companion (`docs/ardour-companion.md`). Selected-region material exchange uses these Lua recipes plus `/ardour/exchange/*` (`docs/ardour-session-exchange.md`). Mukit never remote-executes Lua and never edits `.ardour` session XML.

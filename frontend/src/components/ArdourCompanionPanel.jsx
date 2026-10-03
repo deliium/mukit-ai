@@ -20,6 +20,7 @@ import {
   formatArdourStatusBanner,
   startArdourStatusPoll,
 } from '../utils/ardourCompanion/controls.js';
+import ArdourExchangePanel from './ArdourExchangePanel.jsx';
 
 const logger = createAppLogger('ardourCompanion');
 
@@ -359,6 +360,7 @@ const ArdourCompanionPanel = () => {
           ))}
         </tbody>
       </Table>
+      <ArdourExchangePanel />
     </Wrap>
   );
 };
