@@ -48,6 +48,7 @@ from .routers.musical_universe import router as musical_universe_router
 from .routers.musical_dependency import router as musical_dependency_router
 from .routers.personal_composer import router as personal_composer_router
 from .routers.performance_plans import router as performance_plans_router
+from .routers.spatial_scenes import router as spatial_scenes_router
 from .reference_feature_schemas import (
     ReferenceFeatureError,
     map_reference_feature_error_to_http,
@@ -253,6 +254,7 @@ if not _worker_only:
     app.include_router(musical_dependency_router)
     app.include_router(personal_composer_router)
     app.include_router(performance_plans_router)
+    app.include_router(spatial_scenes_router)
     app.add_exception_handler(RequestValidationError, adaptive_engine_validation_handler)
 
     _mt_settings = load_music_transformer_settings()
