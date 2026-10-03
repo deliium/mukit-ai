@@ -350,6 +350,7 @@ mukit-ai/
 | [AI-assisted mixing](docs/ai-assisted-mixing.md) | Preview, compare, and apply non-destructive mix revisions |
 | [Composition Development](docs/composition-development.md) | Continue / add section / vary; multi-candidate preview + Apply |
 | [Symbolic embeddings](docs/embeddings.md) | Handcrafted musical feature embeddings, similarity, reference conditioning |
+| [Browser WebGPU inference](docs/browser-webgpu-inference.md) | Browser-local symbolic embed twin, WebGPU cosine, public asset policy |
 | [Composer profiles](docs/composer-profiles.md) | Durable preference profiles, soft generate conditioning, derive/promote |
 | [Reference features](docs/reference-features.md) | Dimension masks + preserve/borrow/regenerate policy for generate/develop/edit |
 | [Composition Arrangement](docs/composition-arrangement.md) | Instrumentation / texture redistribution; catalog + preview + Apply |

@@ -141,6 +141,7 @@ or home-absolute paths.
 ## See also
 
 - [AI Runtime](ai-runtime.md) — capability registry / `AI_OP_EMBED`
+- [Browser WebGPU inference](browser-webgpu-inference.md) — SPA BrowserModelHost twin + HTTP fallback
 - [Composition Development](composition-development.md) — `style_reference` on preview
 - [Reference features](reference-features.md) — dimension masks for selective conditioning
 - [Composer profiles](composer-profiles.md) — durable soft preferences

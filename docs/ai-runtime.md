@@ -153,7 +153,7 @@ backend/app/ai_runtime/
   local_health.py   # Bounded sidecar probe (no weight download)
 ```
 
-See also: [Execution nodes](execution-nodes.md) for `runtime=execution_node` LAN peers, [AI job scheduling](ai-job-scheduling.md) for `resolution_path=schedule` when `AI_SCHEDULING_ENABLED` is on, `.ai-factory/ARCHITECTURE.md` (Composition/LLM module), `.env.example`.
+See also: [Execution nodes](execution-nodes.md) for `runtime=execution_node` LAN peers, [AI job scheduling](ai-job-scheduling.md) for `resolution_path=schedule` when `AI_SCHEDULING_ENABLED` is on, [Browser WebGPU inference](browser-webgpu-inference.md) for discovery-only `runtime=browser_model` (SPA executes; never scheduled), `.ai-factory/ARCHITECTURE.md` (Composition/LLM module), `.env.example`.
 
 ## Migration notes
 

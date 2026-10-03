@@ -76,14 +76,15 @@ mukit-ai/
 │       ├── api/             # musicApi, projectApi
 │       ├── components/      # Workspace, generator, import, analysis, motifs, arrangement, piano-roll/, playback, MidiInputPanel, CoPerformancePanel (AI Jam), AudioInputPanel, AudioRecoveryPanel, VideoScoringPanel (Picture tab), FilmScorePanel (Agents tab), NeuralAudioRenderPanel (incl. Mix Analysis + Mix assist), …
 │       ├── store/           # Zustand musicStore (composition transactions + session previews + MIDI/audio sessions)
-│       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture, mixAnalysisUi, mixPlanUi helpers
+│       └── utils/           # validation, editor, playback, analysis, motif, harmony, arrangement, midiInput*/midiCapture, audioCapture, mixAnalysisUi, mixPlanUi, browserModels/ helpers
+│   └── public/browser-models/ # Public BrowserModel manifests/assets only (never private weight trees)
 ├── clients/                 # Adaptive music engine clients. They do not import backend/app or frontend/src
 │   ├── fixtures/            # Shared public session, command, ack, error, and phase JSON
 │   ├── python/              # Package mukit-adaptive, import mukit_adaptive
 │   └── typescript/          # Private package @mukit/adaptive-music
 ├── scripts/                 # run_tests.sh, v1/v2/v3_docker_acceptance.sh, dataset_build.sh
 ├── datasets/                # DATASET_ROOT default (gitignored corpora; .gitkeep only)
-├── docs/                    # composition.v2/v1, ai-runtime, plugin-sdk, multi-agent, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, audio-recovery, video-scoring, neural-audio-rendering, mix-analysis, analysis, arrangement, import, datasets, persistence, testing, codebase map
+├── docs/                    # composition.v2/v1, ai-runtime, browser-webgpu-inference, plugin-sdk, multi-agent, hybrid-generation, daw-interoperability, editor, midi-live-input, audio-transcription, audio-recovery, video-scoring, neural-audio-rendering, mix-analysis, analysis, arrangement, import, datasets, persistence, testing, codebase map
 ├── .ai-factory/             # DESCRIPTION, ARCHITECTURE, plans, config
 ├── docker-compose.yml
 ├── compose.dev.yml
@@ -134,6 +135,12 @@ mukit-ai/
 | `frontend/src/api/videoScoringApi.js` | Picture asset and scoring HTTP client |
 | `frontend/src/utils/videoScoringMap.js` | Frontend twin of the video ↔ tick map |
 | `frontend/src/components/NeuralAudioRenderPanel.jsx` | Render with AI jobs / download (egress only) |
+| `frontend/src/utils/browserModels/browserModelHost.js` | SPA BrowserModelHost: probe, manifest, ship-1 embed twin, HTTP fallback |
+| `frontend/src/utils/browserModels/symbolicFeaturesV1.js` | JS twin of `symbolic.features.v1` (browser CPU; golden parity) |
+| `frontend/src/utils/browserModels/webgpu/batchedCosine.js` | Optional WebGPU batched cosine WGSL for in-request batches |
+| `frontend/public/browser-models/` | Public `browser.model.manifest.v1` assets only (no private weights) |
+| `backend/app/ai_runtime/runtimes/browser_model.py` | Discovery-only `runtime=browser_model` registry descriptors |
+| `docs/browser-webgpu-inference.md` | Benchmarks, asset policy, fallback, compatibility |
 | `frontend/src/utils/midiInputAccess.js` | Lazy Web MIDI access + device registry |
 | `frontend/src/utils/midiPerformanceCapture.js` | Session take buffer (raw ticks) |
 | `frontend/src/utils/midiTakeApply.js` | Timeline extend + batch commit into V2 |
@@ -385,6 +392,7 @@ mukit-ai/
 | Symbolic datasets | `docs/datasets.md` | Offline `DATASET_ROOT` corpus pipeline, provenance, CLI |
 | Symbolic tokenizer | `docs/tokenizer.md` | Composition V2 ↔ token ids, quantization, CLI, versioning |
 | Symbolic embeddings | `docs/embeddings.md` | Handcrafted musical feature embeddings, similarity, reference conditioning |
+| Browser WebGPU inference | `docs/browser-webgpu-inference.md` | BrowserModelHost, ship-1 embed twin, WebGPU cosine, public asset policy |
 | Composer profiles | `docs/composer-profiles.md` | Durable preference profiles, soft generate conditioning, derive/promote |
 | Explicit preference learning | `docs/preference-learning.md` | Opt-in ballots over development and arrangement candidates. A choice does not update `composer.profile.v1`. `ai_agents/` does not import `preference_store` |
 | Personal symbolic composer | `docs/personal-symbolic-composer.md` | Opt-in LoRA adapter on selected owned scores; optional hybrid composer |

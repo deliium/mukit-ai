@@ -73,11 +73,13 @@
 - [x] **V5 Explicit preference learning** — Opt-in records of which generated alternative the user chose among a development or arrangement ballot. A lightweight ranker orders later ballots from those choices, and the user can still select any candidate. Inspect and reset stay available. The score stays `composition.v2`. A choice is not a genre label and not a `composer.profile.v1`. No `composition.v5`
 - [x] **V5 Distributed AI execution nodes** — Trusted LAN ExecutionNode registration with authenticated heartbeat, capability/model discovery, availability TTL, and typed remote `LanguageModel` inference through `runtime=execution_node`. No arbitrary remote shell. Task cancel cooperates with operation traces. The score stays `composition.v2`. No `composition.v5`
 - [x] **V5 Capability-aware AI job scheduling** — Deterministic placement of LanguageModel jobs across controller-local and trusted-LAN ExecutionNode runtimes by required capability, installed model, memory, GPU class, estimated latency, job priority, and user policy (`prefer_local` / `fastest_available` / `memory_safe` / `fixed_node`). Private workloads never escalate to public cloud unless explicitly allowed. Node loss triggers bounded reschedule without silent trust escalation. The score stays `composition.v2`. No `composition.v5`
+- [x] **V5 Browser WebGPU inference for lightweight AI** — Evaluate latency-sensitive lightweight capabilities against backend CPU, local GPU backend, and browser WebGPU; register `runtime=browser_model` through the existing model abstraction with load/cache/capability detection and HTTP fallback; ship at least one public browser-local model (default: symbolic embedding compute) without exposing private server weights. The score stays `composition.v2`. No `composition.v5`
 
 ## Completed
 
 | Milestone | Date |
 |-----------|------|
+| V5 Browser WebGPU inference for lightweight AI | 2026-10-03 |
 | V5 Capability-aware AI job scheduling | 2026-10-03 |
 | V5 Explicit preference learning | 2026-10-03 |
 | V5 Distributed AI execution nodes | 2026-10-03 |
