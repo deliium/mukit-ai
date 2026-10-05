@@ -4,6 +4,7 @@ import {
   backendBaseUrl,
   createProjectAndGenerateExpressive,
   getStoreSnapshot,
+  openExportTab,
 } from './helpers.js';
 
 /**
@@ -44,6 +45,7 @@ test.describe('Neural audio render (fake)', () => {
     const snapshot = await createProjectAndGenerateExpressive(page);
     expect(snapshot?.schemaVersion).toBe('composition.v2');
 
+    await openExportTab(page);
     await expect(page.getByTestId('export-wav')).toContainText(/deterministic/i);
     await expect(page.getByTestId('neural-audio-render-panel')).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId('neural-audio-disclaimer')).toContainText(/not note-perfect|approximate/i);

@@ -9,6 +9,8 @@ import {
   createProjectAndGenerateExpressive,
   editMelodyNoteViaStore,
   getStoreSnapshot,
+  openExportTab,
+  openTransportTab,
 } from './helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -78,6 +80,7 @@ test.describe('Audio-symbolic alignment round-trip (fake)', () => {
     const projectId = snapshot?.projectId || snapshot?.currentProjectId;
     expect(projectId).toBeTruthy();
 
+    await openTransportTab(page);
     await page.getByTestId('audio-recovery-panel').scrollIntoViewIfNeeded();
     await page.getByTestId('audio-recovery-file-input').setInputFiles(FIXTURE_WAV);
     await expect(page.getByTestId('audio-recovery-apply-bind')).toBeVisible({ timeout: 60000 });
@@ -162,6 +165,7 @@ test.describe('Audio-symbolic alignment round-trip (fake)', () => {
     await expect(page.getByTestId('audio-alignment-waveform')).toBeVisible({ timeout: 15000 });
 
     // Neural render of current composition, then edit → soft-stale, re-render, source sha stable.
+    await openExportTab(page);
     await page.getByTestId('neural-audio-render-panel').scrollIntoViewIfNeeded();
     const modelSelect = page.getByTestId('neural-audio-model');
     await expect

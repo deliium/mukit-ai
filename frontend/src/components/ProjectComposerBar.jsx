@@ -25,12 +25,20 @@ const Group = styled.div`
 const Chip = styled.span`
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 0.8rem;
   font-weight: 600;
   background: ${(props) => props.$bg};
   color: ${(props) => props.$color};
+`;
+
+const StatusDot = styled.span`
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
 `;
 
 const Button = styled.button`
@@ -69,6 +77,9 @@ const ProjectComposerBar = () => {
   const activeBranchName = useMusicStore((state) => state.activeBranchName);
   const saveStatus = useMusicStore((state) => state.saveStatus);
   const saveError = useMusicStore((state) => state.saveError);
+  const apiStatus = useMusicStore((state) => state.apiStatus);
+  const llmModelsLoaded = useMusicStore((state) => state.llmModelsLoaded);
+  const availableLlmModels = useMusicStore((state) => state.availableLlmModels);
   const goHome = useMusicStore((state) => state.goHome);
   const saveCurrentProject = useMusicStore((state) => state.saveCurrentProject);
   const reloadCurrentProject = useMusicStore((state) => state.reloadCurrentProject);
@@ -94,13 +105,8 @@ const ProjectComposerBar = () => {
   }
 
   const status = STATUS_STYLES[saveStatus] || STATUS_STYLES.unsaved;
-  const openVersions = () => {
-    console.debug('[ProjectComposerBar] Open Versions tab', { projectId: currentProjectId });
-    useMusicStore.setState((state) => ({
-      composerTabRequest: 'versions',
-      composerTabRequestSeq: (state.composerTabRequestSeq || 0) + 1,
-    }));
-  };
+  const apiHealthy = apiStatus === 'healthy';
+  const llmReady = llmModelsLoaded && availableLlmModels.length > 0;
 
   const onSaveAsBranch = async () => {
     const name = conflictBranchName.trim();
@@ -193,14 +199,28 @@ const ProjectComposerBar = () => {
             </Button>
           </>
         ) : null}
-        <Button
-          type="button"
-          $secondary
-          data-testid="open-versions"
-          onClick={openVersions}
+        <Chip
+          data-testid="api-status-chip"
+          $bg={apiHealthy ? '#dcfce7' : '#fee2e2'}
+          $color={apiHealthy ? '#166534' : '#991b1b'}
+          title="Backend liveness (/health)"
         >
-          History
-        </Button>
+          <StatusDot />
+          {apiHealthy ? 'API healthy' : apiStatus === 'checking' ? 'API checking…' : 'API down'}
+        </Chip>
+        <Chip
+          data-testid="llm-status-chip"
+          $bg={llmReady ? '#e0e7ff' : '#fef3c7'}
+          $color={llmReady ? '#3730a3' : '#92400e'}
+          title="LLM providers configured on backend"
+        >
+          <StatusDot />
+          {llmReady
+            ? `LLM ready (${availableLlmModels.length})`
+            : llmModelsLoaded
+              ? 'LLM not configured'
+              : 'LLM checking…'}
+        </Chip>
         <Button
           type="button"
           data-testid="save-project"

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { createProjectAndGenerateExpressive } from './helpers.js';
+import { createProjectAndGenerateExpressive, openTransportTab } from './helpers.js';
 
 /**
  * Live MIDI input smoke — no real Web MIDI required.
@@ -28,6 +28,7 @@ test.describe('MIDI live input panel', () => {
     const snapshot = await createProjectAndGenerateExpressive(page);
     expect(snapshot?.schemaVersion).toBe('composition.v2');
 
+    await openTransportTab(page);
     await expect(page.getByTestId('midi-input-panel')).toBeVisible({ timeout: 60_000 });
     requestMidiCalled = await page.evaluate(() => Boolean(window.__MUKIT_MIDI_ACCESS_CALLED__));
     expect(requestMidiCalled).toBe(false);

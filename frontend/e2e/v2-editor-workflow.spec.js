@@ -6,6 +6,7 @@ import {
   getEditorPerfSnapshot,
   getEditorWorkflowSnapshot,
   openPianoRollTab,
+  openTransportTab,
   seedLargeScoreEditorProject,
   waitForCompositionNotes,
 } from './helpers.js';
@@ -90,6 +91,7 @@ test('V2 editor workflow: select → transform → loop → play from cursor →
   expect(afterTransforms.undoDepth).toBeGreaterThan(beforeCopy.undoDepth);
 
   // Loop from selection + play from cursor.
+  await openTransportTab(page);
   await page.getByTestId('playback-set-loop').click();
   await expect.poll(async () => (await getEditorWorkflowSnapshot(page))?.playbackLoop?.enabled).toBe(true);
   const loop = (await getEditorWorkflowSnapshot(page)).playbackLoop;
@@ -103,6 +105,8 @@ test('V2 editor workflow: select → transform → loop → play from cursor →
   await expect.poll(async () => (await getEditorWorkflowSnapshot(page))?.playbackStatus, {
     timeout: 15_000,
   }).toMatch(/idle|paused/);
+
+  await openPianoRollTab(page);
 
   // Undo/redo the transform stack.
   const undoTarget = Math.max(1, afterTransforms.undoDepth - beforeCopy.undoDepth);
@@ -204,12 +208,15 @@ test('V2 editor performance: viewport culling and single-commit drag', async ({
 
   // Playback cursor should not thrash the note layer (bounded extra renders).
   const rendersAfterDrag = afterDrag.noteLayerRenderCount;
+  await openTransportTab(page);
   await page.getByTestId('playback-play').click();
   await page.waitForTimeout(600);
   await page.getByTestId('playback-stop').click();
   const afterPlay = await getEditorPerfSnapshot(page);
   const extraRenders = (afterPlay?.noteLayerRenderCount ?? 0) - rendersAfterDrag;
   expect(extraRenders).toBeLessThan(40);
+
+  await openPianoRollTab(page);
 
   // Alt+drag box select latency budget.
   const grid = page.getByTestId('piano-roll-grid');
@@ -238,6 +245,8 @@ test('V2 editor mobile width remains usable', async ({ page, request }) => {
 
   await expect(page.getByTestId('piano-roll-grid')).toBeVisible();
   await expect(page.getByTestId('piano-roll-selection-inspector')).toBeVisible();
+  await expect(page.getByTestId('composer-tab-transport')).toBeVisible();
+  await openTransportTab(page);
   await expect(page.getByTestId('playback-from-cursor')).toBeVisible();
 
   const overflow = await page.evaluate(() => ({

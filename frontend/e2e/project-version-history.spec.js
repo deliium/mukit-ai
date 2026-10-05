@@ -101,7 +101,7 @@ async function seedChorusVaryProject(request, name) {
 }
 
 async function openVersionsTab(page) {
-  await page.getByTestId('open-versions').click();
+  await page.getByTestId('composer-tab-versions').click();
   await page.getByTestId('project-versions-panel').waitFor({ state: 'visible', timeout: 30_000 });
   console.info('[e2e-versions] Opened Versions tab');
 }

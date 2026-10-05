@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 import {
   createProjectAndGenerateExpressive,
   getStoreSnapshot,
+  openTransportTab,
 } from './helpers.js';
 
 test.describe.configure({ mode: 'serial' });
@@ -24,6 +25,7 @@ test('playback mixer: play, mute/solo/trim/pan/send, collapse, non-persistence',
   expect(before?.schemaVersion).toBe('composition.v2');
   expect(before?.trackCount).toBeGreaterThanOrEqual(3);
 
+  await openTransportTab(page);
   const mixer = page.getByTestId('playback-mixer');
   await expect(mixer).toBeVisible();
   await expect(page.getByTestId('playback-mixer-collapse')).toBeVisible();

@@ -6,6 +6,8 @@ import { expect, test } from '@playwright/test';
 import {
   assertSchemaV2,
   getStoreSnapshot,
+  openExportTab,
+  openTransportTab,
   waitForAiEditSuccess,
   waitForCompositionNotes,
 } from './helpers.js';
@@ -64,6 +66,7 @@ test('import user journey: MIDI import → play → notation → failed replace 
   expect(imported.importReport?.summary?.detected_format).toBe('midi');
   await expect(page.getByTestId('import-report-summary').first()).toBeVisible();
 
+  await openTransportTab(page);
   await page.getByTestId('playback-play').click();
   await expect.poll(async () => (await getStoreSnapshot(page))?.playbackStatus, { timeout: 20_000 }).toMatch(
     /playing|loading|idle/,
@@ -123,6 +126,7 @@ test('import user journey: MIDI import → play → notation → failed replace 
   await page.getByTestId('save-project').click();
   await expect.poll(async () => (await getStoreSnapshot(page))?.saveStatus, { timeout: 15_000 }).toBe('saved');
 
+  await openExportTab(page);
   const musicxmlDownload = page.waitForEvent('download', { timeout: 60_000 });
   await page.getByTestId('export-musicxml').click();
   expect(await (await musicxmlDownload).failure()).toBeNull();

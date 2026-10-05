@@ -7,6 +7,7 @@ import { expect, test } from '@playwright/test';
 import {
   backendBaseUrl,
   createProjectAndGenerateExpressive,
+  openTransportTab,
 } from './helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -90,6 +91,7 @@ test.describe('Audio recovery (fake)', () => {
     const snapshot = await createProjectAndGenerateExpressive(page);
     expect(snapshot?.schemaVersion).toBe('composition.v2');
 
+    await openTransportTab(page);
     await expect(page.getByTestId('audio-recovery-panel')).toBeVisible({ timeout: 60_000 });
     micCalled = await page.evaluate(() => Boolean(window.__MUKIT_GET_USER_MEDIA_CALLED__));
     expect(micCalled).toBe(false);
@@ -111,6 +113,7 @@ test.describe('Audio recovery (fake)', () => {
     const snapshot = await createProjectAndGenerateExpressive(page);
     expect(snapshot?.schemaVersion).toBe('composition.v2');
 
+    await openTransportTab(page);
     await expect(page.getByTestId('audio-recovery-panel')).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId('audio-recovery-phase-status')).toContainText(/Phase:\s*idle/i);
 

@@ -29,6 +29,7 @@ import ComposerProfilesPanel from './ComposerProfilesPanel.jsx';
 import PersonalComposerPanel from './PersonalComposerPanel.jsx';
 import ModelLabPanel from './ModelLabPanel.jsx';
 import PreferenceLearningPanel from './PreferenceLearningPanel.jsx';
+import GeneratePanel from './GeneratePanel.jsx';
 import { useMusicStore } from '../store/musicStore.js';
 
 const PluginsPanel = lazy(() => import('./PluginsPanel.jsx'));
@@ -40,20 +41,6 @@ const Workspace = styled.div`
   margin-top: 16px;
   min-width: 0;
   max-width: 100%;
-`;
-
-const StickyTransport = styled.div`
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  padding: 12px;
-  background: rgba(248, 250, 252, 0.96);
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  backdrop-filter: blur(6px);
-  max-height: min(48vh, 520px);
-  overflow: auto;
-  min-width: 0;
 `;
 
 const SectionTitle = styled.h3`
@@ -92,17 +79,14 @@ const Panel = styled.section`
   box-sizing: border-box;
 `;
 
-const SideActions = styled.div`
-  display: grid;
-  gap: 12px;
+const TransportPanelBody = styled.div`
+  overflow: auto;
   min-width: 0;
-
-  @media (min-width: 1100px) {
-    grid-template-columns: 1fr 1fr;
-  }
 `;
 
 const TABS = [
+  { id: 'generate', label: 'Generate' },
+  { id: 'transport', label: 'Transport & tracks' },
   { id: 'piano', label: 'Piano roll' },
   { id: 'notation', label: 'Notation' },
   { id: 'versions', label: 'Versions' },
@@ -122,14 +106,18 @@ const TABS = [
   { id: 'spatial', label: 'Spatial' },
   { id: 'ardour', label: 'Ardour' },
   { id: 'picture', label: 'Picture' },
+  { id: 'export', label: 'Export' },
 ];
 
+const VERSIONS_TAB_INDEX = TABS.findIndex((tab) => tab.id === 'versions');
+
 /**
- * Laptop-oriented composer shell: sticky transport, primary piano roll,
- * tabbed notation / advanced JSON / analysis, AI edit + export alongside.
+ * Composer shell: Generate first, then Transport & tracks, then piano roll
+ * and the remaining studio tabs. GeneratePanel and PlaybackControls stay
+ * mounted while hidden so form state and Tone survive tab switches.
  */
 const ComposerWorkspace = () => {
-  const [activeTab, setActiveTab] = useState('piano');
+  const [activeTab, setActiveTab] = useState('generate');
   const setAnalysisTabVisible = useMusicStore((state) => state.setAnalysisTabVisible);
   const composerTabRequest = useMusicStore((state) => state.composerTabRequest);
   const composerTabRequestSeq = useMusicStore((state) => state.composerTabRequestSeq);
@@ -137,7 +125,11 @@ const ComposerWorkspace = () => {
   const loadCollaborationStatus = useMusicStore((state) => state.loadCollaborationStatus);
   const tabs = useMemo(
     () => (collaborationEnabled
-      ? [...TABS.slice(0, 3), { id: 'collaborate', label: 'Collaborate' }, ...TABS.slice(3)]
+      ? [
+        ...TABS.slice(0, VERSIONS_TAB_INDEX + 1),
+        { id: 'collaborate', label: 'Collaborate' },
+        ...TABS.slice(VERSIONS_TAB_INDEX + 1),
+      ]
       : TABS),
     [collaborationEnabled],
   );
@@ -218,15 +210,6 @@ const ComposerWorkspace = () => {
 
   return (
     <Workspace>
-      <StickyTransport>
-        <SectionTitle>Transport & tracks</SectionTitle>
-        <PlaybackControls />
-        <MidiInputPanel />
-        <CoPerformancePanel />
-        <AudioInputPanel />
-        <AudioRecoveryPanel />
-      </StickyTransport>
-
       <TabRow
         ref={tablistRef}
         role="tablist"
@@ -266,6 +249,18 @@ const ComposerWorkspace = () => {
             hidden={!selected}
             data-testid={`composer-panel-${tab.id}`}
           >
+            {/* Keep generate + transport mounted while hidden so form / Tone survive tab switches. */}
+            {tab.id === 'generate' ? <GeneratePanel /> : null}
+            {tab.id === 'transport' ? (
+              <TransportPanelBody>
+                <SectionTitle>Transport & tracks</SectionTitle>
+                <PlaybackControls />
+                <MidiInputPanel />
+                <CoPerformancePanel />
+                <AudioInputPanel />
+                <AudioRecoveryPanel />
+              </TransportPanelBody>
+            ) : null}
             {tab.id === 'piano' && selected ? <PianoRollEditor /> : null}
             {tab.id === 'notation' && selected ? <NotationViewer /> : null}
             {tab.id === 'advanced' && selected ? (
@@ -285,6 +280,13 @@ const ComposerWorkspace = () => {
             {tab.id === 'spatial' && selected ? <SpatialScenePanel /> : null}
             {tab.id === 'ardour' && selected ? <ArdourCompanionPanel /> : null}
             {tab.id === 'picture' && selected ? <VideoScoringPanel /> : null}
+            {tab.id === 'export' && selected ? (
+              <>
+                <SectionTitle>Export</SectionTitle>
+                <ExportControls />
+                <NeuralAudioRenderPanel />
+              </>
+            ) : null}
             {tab.id === 'develop' && selected ? <CompositionDevelopmentPanel /> : null}
             {tab.id === 'arrange' && selected ? <ArrangementPanel /> : null}
             {tab.id === 'agents' && selected ? <MultiAgentPanel /> : null}
@@ -310,14 +312,7 @@ const ComposerWorkspace = () => {
         );
       })}
 
-      <SideActions>
-        <AiRegionEditPanel />
-        <div>
-          <SectionTitle>Export</SectionTitle>
-          <ExportControls />
-          <NeuralAudioRenderPanel />
-        </div>
-      </SideActions>
+      <AiRegionEditPanel />
     </Workspace>
   );
 };

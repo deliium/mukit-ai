@@ -4,6 +4,8 @@ import {
   createProjectAndGenerate,
   editMelodyNoteViaStore,
   getStoreSnapshot,
+  openExportTab,
+  openTransportTab,
   waitForCompositionNotes,
 } from './helpers.js';
 
@@ -31,6 +33,7 @@ test('V1 user journey: generate → play → notation → edit → AI edit → s
   expect(before?.schemaVersion).toBe('composition.v2');
 
   // Playback (Tone needs a user gesture — Play click)
+  await openTransportTab(page);
   await page.getByTestId('playback-play').click();
   await expect.poll(async () => (await getStoreSnapshot(page))?.playbackStatus, { timeout: 20_000 }).toMatch(
     /playing|loading/,
@@ -54,6 +57,7 @@ test('V1 user journey: generate → play → notation → edit → AI edit → s
   expect(editResult.afterPitch).not.toBe(editResult.beforePitch);
 
   // Hear/verify edit: play again after edit
+  await openTransportTab(page);
   await page.getByTestId('playback-play').click();
   await expect.poll(async () => (await getStoreSnapshot(page))?.playbackStatus, { timeout: 15_000 }).toMatch(
     /playing|loading|idle/,
@@ -80,6 +84,7 @@ test('V1 user journey: generate → play → notation → edit → AI edit → s
   await expect.poll(async () => (await getStoreSnapshot(page))?.saveStatus, { timeout: 15_000 }).toBe('saved');
 
   // Exports — MusicXML + MIDI must download; WAV soft-fails without FluidSynth
+  await openExportTab(page);
   for (const [testid, ext] of [
     ['export-musicxml', /musicxml|xml/i],
     ['export-midi', /\.mid/i],

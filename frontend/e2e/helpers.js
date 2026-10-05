@@ -262,6 +262,7 @@ export async function createProjectAndGenerate(page, {
 } = {}) {
   await page.goto('/');
   await page.getByTestId('new-project').click();
+  await openGenerateTab(page);
   await page.getByTestId('llm-model-select').waitFor({ state: 'visible', timeout: 30_000 });
   await pickFakeProvider(page);
   await prepareFakeLlmPrompt(page, { durationBars, instruments, sections });
@@ -513,6 +514,27 @@ export async function openAnalysisTab(page) {
   await page.getByTestId('composer-tab-analysis').click();
   await page.getByTestId('composition-analysis-panel').waitFor({ state: 'visible', timeout: 30_000 });
   console.info('[e2e-analysis] Opened Analysis tab');
+}
+
+/** Transport & tracks is a composer tab; open it before interacting with playback / MIDI / recovery. */
+export async function openTransportTab(page) {
+  await openComposerTab(page, 'transport');
+  await page.getByTestId('composer-panel-transport').waitFor({ state: 'visible', timeout: 30_000 });
+  console.info('[e2e-transport] Opened Transport & tracks tab');
+}
+
+/** Generate is the first composer tab; ensure it is selected before generate/import controls. */
+export async function openGenerateTab(page) {
+  await openComposerTab(page, 'generate');
+  await page.getByTestId('composer-panel-generate').waitFor({ state: 'visible', timeout: 30_000 });
+  console.info('[e2e-generate] Opened Generate tab');
+}
+
+/** Export / Render with AI tab (after Picture). */
+export async function openExportTab(page) {
+  await openComposerTab(page, 'export');
+  await page.getByTestId('composer-panel-export').waitFor({ state: 'visible', timeout: 30_000 });
+  console.info('[e2e-export] Opened Export tab');
 }
 
 export async function openComposerTab(page, tabId) {

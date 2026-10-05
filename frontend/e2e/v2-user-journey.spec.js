@@ -8,6 +8,8 @@ import {
   editMelodyNoteViaStore,
   getExpressiveMetadataFromStore,
   getStoreSnapshot,
+  openExportTab,
+  openTransportTab,
   waitForAiEditSuccess,
   waitForCompositionNotes,
 } from './helpers.js';
@@ -38,6 +40,7 @@ test('V2 user journey: expressive generate → play tempo change → edit expres
   const expressiveBefore = await getExpressiveMetadataFromStore(page);
   expect(expressiveBefore?.schemaVersion).toBe('composition.v2');
 
+  await openTransportTab(page);
   await page.getByTestId('playback-play').click();
   await expect.poll(async () => (await getStoreSnapshot(page))?.playbackStatus, { timeout: 20_000 }).toMatch(
     /playing|loading/,
@@ -64,6 +67,7 @@ test('V2 user journey: expressive generate → play tempo change → edit expres
   expect(editResult.ok).toBeTruthy();
   expect(editResult.afterPitch).not.toBe(editResult.beforePitch);
 
+  await openTransportTab(page);
   await page.getByTestId('playback-play').click();
   await expect.poll(async () => (await getStoreSnapshot(page))?.playbackStatus, { timeout: 15_000 }).toMatch(
     /playing|loading|idle/,
@@ -83,6 +87,7 @@ test('V2 user journey: expressive generate → play tempo change → edit expres
   await page.getByTestId('save-project').click();
   await expect.poll(async () => (await getStoreSnapshot(page))?.saveStatus, { timeout: 15_000 }).toBe('saved');
 
+  await openExportTab(page);
   const musicxmlDownload = page.waitForEvent('download', { timeout: 60_000 });
   await page.getByTestId('export-musicxml').click();
   const musicxmlFile = await musicxmlDownload;

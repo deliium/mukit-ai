@@ -2,7 +2,6 @@ import React, { useCallback, useEffect } from 'react';
 import styled from 'styled-components';
 import MusicGenerator from './components/MusicGenerator.jsx';
 import ProjectBrowser from './components/ProjectBrowser.jsx';
-import WorkspaceChrome from './components/WorkspaceChrome.jsx';
 import { getHealth, getLlmModels } from './api/musicApi.js';
 import { projectIsDirtyForUnload, useMusicStore } from './store/musicStore.js';
 
@@ -16,7 +15,7 @@ const AppContainer = styled.div`
 `;
 
 const MainContent = styled.div`
-  max-width: 1440px;
+  width: 100%;
   margin: 0 auto;
 `;
 
@@ -27,6 +26,9 @@ const Card = styled.div`
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.28);
   border: 1px solid rgba(255, 255, 255, 0.35);
   min-height: calc(100vh - 88px);
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
 `;
 
 function App() {
@@ -85,7 +87,6 @@ function App() {
   return (
     <AppContainer>
       <MainContent>
-        <WorkspaceChrome />
         <Card>
           {activeView === 'home' ? <ProjectBrowser /> : <MusicGenerator />}
         </Card>
